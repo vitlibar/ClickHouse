@@ -18,3 +18,5 @@ private:
     const ColumnNumbers & column_numbers;
     size_t result;
 };
+
+}
