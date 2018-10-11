@@ -10,6 +10,7 @@
 #include <DataTypes/DataTypeArray.h>
 #include <Functions/FunctionFactory.h>
 #include <Functions/IFunction.h>
+#include <Processors/Executors/SequentialTransformExecutor.h>
 
 #include <set>
 #include <optional>
