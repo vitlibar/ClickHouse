@@ -12,6 +12,8 @@ public:
     RemoveConstantsTransform(Block input_header, const ColumnNumbers & arguments_to_remain_constants,
                              const ColumnNumbers & column_numbers, size_t result);
 
+    String getName() const override { return "RemoveConstantsTransform"; }
+
 protected:
     void transform(Block & block) override;
 

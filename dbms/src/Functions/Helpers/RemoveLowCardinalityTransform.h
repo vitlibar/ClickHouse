@@ -19,7 +19,7 @@ public:
         bool can_be_executed_on_default_arguments,
         PreparedFunctionLowCardinalityResultCachePtr cache);
 
-    void setCache(PreparedFunctionLowCardinalityResultCachePtr cache_) { cache = std::move(cache_); }
+    String getName() const override { return "RemoveLowCardinalityTransform"; }
 
 protected:
     Blocks transform(Blocks && blocks) override;

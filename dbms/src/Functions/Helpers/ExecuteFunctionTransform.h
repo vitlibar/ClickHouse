@@ -18,6 +18,8 @@ public:
         const ColumnNumbers & column_numbers,
         size_t result);
 
+    String getName() const override { return "ExecuteFunctionTransform"; }
+
 protected:
     void transform(Block & block) override;
 

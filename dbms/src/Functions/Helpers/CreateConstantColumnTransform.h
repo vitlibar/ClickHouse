@@ -16,6 +16,8 @@ public:
     {
     }
 
+    String getName() const override { return "CreateConstantColumnTransform"; }
+
 protected:
     void transform(Block & block) override
     {

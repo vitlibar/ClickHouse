@@ -20,6 +20,8 @@ public:
             bool can_be_executed_on_default_arguments,
             PreparedFunctionLowCardinalityResultCachePtr cache);
 
+    String getName() const override { return "WrapLowCardinalityTransform"; }
+
 protected:
     Blocks transform(Blocks && blocks) override;
 
