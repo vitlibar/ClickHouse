@@ -47,7 +47,7 @@ Block wrapNullable(Blocks && blocks, const ColumnNumbers & column_numbers, size_
     for (size_t i = 0; i < num_args; ++i)
         wrapByPosition(column_numbers[i], i);
 
-    wrapByPosition(result, num_args);
+    wrapByPosition(result, result);
 
     return block;
 }
