@@ -1,4 +1,4 @@
-#include <Functions/Helpers/WrapNullableTransform.h>
+#include <Processors/FunctionProcessing/WrapNullableTransform.h>
 
 #include <DataTypes/DataTypesNumber.h>
 #include <DataTypes/DataTypeNullable.h>
