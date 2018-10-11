@@ -51,4 +51,6 @@ private:
     OutputPort & pipeline_output;
 };
 
+using SequentialTransformExecutorPtr = std::shared_ptr<SequentialTransformExecutor>;
+
 }

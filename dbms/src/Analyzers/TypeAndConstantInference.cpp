@@ -31,7 +31,7 @@
 #include <unordered_map>
 #include <vector>
 #include <memory>
-#include <Processors/Executors/SequentialTransformExecutor.h>
+
 
 namespace DB
 {
@@ -256,8 +256,7 @@ void processFunction(const String & column_name, ASTPtr & ast, TypeAndConstantIn
         size_t result_position = argument_numbers.size();
         block_with_constants.insert({nullptr, expression_info.data_type, column_name});
 
-        block_with_constants.setNumRows(1);
-        function_ptr->createPipeline(block_with_constants, argument_numbers, result_position, 0)->execute(block_with_constants);
+        function_ptr->execute(block_with_constants, argument_numbers, result_position, 1);
 
         const auto & result_column = block_with_constants.getByPosition(result_position).column;
         if (result_column->isColumnConst())

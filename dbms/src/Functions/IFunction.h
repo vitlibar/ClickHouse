@@ -9,7 +9,7 @@
 #include <Core/ColumnNumbers.h>
 #include <DataTypes/IDataType.h>
 #include <Processors/IProcessor.h>
-
+#include <Processors/Executors/SequentialTransformExecutor.h>
 
 namespace llvm
 {
@@ -64,8 +64,6 @@ protected:
 };
 
 using ValuePlaceholders = std::vector<std::function<llvm::Value * ()>>;
-class SequentialTransformExecutor;
-using SequentialTransformExecutorPtr = std::shared_ptr<SequentialTransformExecutor>;
 
 /// Function with known arguments and return type.
 class IFunctionBase
@@ -85,6 +83,12 @@ public:
 
     virtual SequentialTransformExecutorPtr createPipeline(Block & block, const ColumnNumbers & arguments,
                                                           size_t result, size_t low_cardinality_cache_size);
+
+    void execute(Block & block, const ColumnNumbers & arguments, size_t result, size_t num_rows)
+    {
+        block.setNumRows(num_rows);
+        prepare(block, arguments, result)->execute(block);
+    }
 
     /// TODO: make const
 //    virtual void execute(Block & block, const ColumnNumbers & arguments, size_t result, size_t input_rows_count)

@@ -428,7 +428,7 @@ void ExpressionAction::execute(Block & block, std::unordered_map<std::string, si
 
                     Block tmp_block{src_col, {{}, src_col.type, {}}};
 
-                    function_builder->build({src_col})->prepare(tmp_block, {0}, 1)->execute(tmp_block, {0}, 1, src_col.column->size());
+                    function_builder->build({src_col})->execute(tmp_block, {0}, 1, src_col.column->size());
                     non_empty_array_columns[name] = tmp_block.safeGetByPosition(1).column;
                 }
 
