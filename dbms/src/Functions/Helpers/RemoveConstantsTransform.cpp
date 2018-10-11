@@ -14,7 +14,7 @@ static Block removeConstants(
 {
     for (auto number : column_numbers)
     {
-        const ColumnWithTypeAndName & col = block.getByPosition(number);
+        ColumnWithTypeAndName & col = block.getByPosition(number);
 
         if (!col.column)
             continue;

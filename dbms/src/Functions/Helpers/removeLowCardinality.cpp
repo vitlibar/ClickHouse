@@ -6,7 +6,6 @@
 #include <Columns/ColumnLowCardinality.h>
 
 #include <DataTypes/DataTypeArray.h>
-#include <DataTypes/DataTypeConst.h>
 #include <DataTypes/DataTypeTuple.h>
 #include <DataTypes/DataTypeLowCardinality.h>
 
