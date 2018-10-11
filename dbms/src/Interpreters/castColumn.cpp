@@ -2,6 +2,7 @@
 #include <Interpreters/ExpressionActions.h>
 #include <DataTypes/DataTypeString.h>
 #include <Functions/FunctionFactory.h>
+#include <Processors/Executors/SequentialTransformExecutor.h>
 
 
 namespace DB
@@ -32,7 +33,8 @@ ColumnPtr castColumn(const ColumnWithTypeAndName & arg, const DataTypePtr & type
     ColumnsWithTypeAndName arguments{ temporary_block.getByPosition(0), temporary_block.getByPosition(1) };
     auto func_cast = func_builder_cast->build(arguments);
 
-    func_cast->execute(temporary_block, {0, 1}, 2, arg.column->size());
+    temporary_block.setNumRows(arg.column->size());
+    func_cast->createPipeline(temporary_block, {0, 1}, 2, 0)->execute(temporary_block);
     return temporary_block.getByPosition(2).column;
 }
 
