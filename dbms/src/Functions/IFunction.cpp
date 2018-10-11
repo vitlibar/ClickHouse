@@ -124,11 +124,12 @@ SequentialTransformExecutorPtr IFunctionBase::createPipeline(Block & block, cons
 
     std::function<ProcessorPtr(const Block & header)> executeWithoutLowCardinality;
 
-    auto executePreparedFunction = [&](const Block & header)
+    auto executePreparedFunction = [&](const Block & header) -> ProcessorPtr
     {
         auto function = prepare(header, arguments, result);
         auto processor = std::make_shared<ExecuteFunctionTransform>(function, header, arguments, result);
         processors.emplace_back(processor);
+        return processor;
     };
 
     auto executeRemoveNullable = [&](const Block & header) -> ProcessorPtr
@@ -212,7 +213,7 @@ SequentialTransformExecutorPtr IFunctionBase::createPipeline(Block & block, cons
         if (auto remove_nullable = executeRemoveNullable(header))
             return remove_nullable;
 
-        executePreparedFunction(header);
+        return executePreparedFunction(header);
     };
 
     auto executeRemoveLowCardinality = [&](const Block & header) -> ProcessorPtr
