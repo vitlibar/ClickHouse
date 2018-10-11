@@ -136,7 +136,7 @@ SequentialTransformExecutorPtr IFunctionBase::createPipeline(Block & block, cons
         if (arguments.empty() || !useDefaultImplementationForNulls())
             return nullptr;
 
-        NullPresence null_presence = getNullPresense(block, arguments);
+        NullPresence null_presence = getNullPresense(header, arguments);
 
         if (null_presence.has_null_constant)
         {
@@ -157,7 +157,7 @@ SequentialTransformExecutorPtr IFunctionBase::createPipeline(Block & block, cons
             auto & in_func_result = exec_function_head->getInputs().at(0);
             auto & out_func_result = exec_function_tail->getOutputs().at(0);
 
-            Blocks wrap_nullable_headers = {output_port_func_result.getHeader(), out_null_maps.getHeader()};
+            Blocks wrap_nullable_headers = {out_func_result.getHeader(), out_null_maps.getHeader()};
             auto wrap_nullable = std::make_shared<WrapNullableTransform>(wrap_nullable_headers, arguments, result);
             auto & in_wrap_nullable = wrap_nullable->getInputs().at(0);
             auto & in_null_maps = wrap_nullable->getInputs().at(1);
@@ -179,7 +179,7 @@ SequentialTransformExecutorPtr IFunctionBase::createPipeline(Block & block, cons
         ColumnNumbers arguments_to_remain_constants = getArgumentsThatAreAlwaysConstant();
         checkArgumentsToRemainConstantsAreConstants(header, arguments, arguments_to_remain_constants, getName());
 
-        if (arguments.empty() || !useDefaultImplementationForConstants() || !allArgumentsAreConstants(block, args))
+        if (arguments.empty() || !useDefaultImplementationForConstants() || !allArgumentsAreConstants(header, arguments))
             return nullptr;
 
         auto remove_constants = std::make_shared<RemoveConstantsTransform>(
@@ -206,19 +206,19 @@ SequentialTransformExecutorPtr IFunctionBase::createPipeline(Block & block, cons
 
     executeWithoutLowCardinality = [&](const Block & header) -> ProcessorPtr
     {
-        if (auto remove_constants = executeRemoveConstants(block))
+        if (auto remove_constants = executeRemoveConstants(header))
             return remove_constants;
 
-        if (auto remove_nullable = executeRemoveNullable(block))
+        if (auto remove_nullable = executeRemoveNullable(header))
             return remove_nullable;
 
-        executePreparedFunction(block);
+        executePreparedFunction(header);
     };
 
     auto executeRemoveLowCardinality = [&](const Block & header) -> ProcessorPtr
     {
         if (!useDefaultImplementationForLowCardinalityColumns())
-            return executeWithoutLowCardinality(block);
+            return executeWithoutLowCardinality(header);
 
         bool can_be_executed_on_default_arguments = canBeExecutedOnDefaultArguments();
         auto cache = std::make_shared<PreparedFunctionLowCardinalityResultCache>(low_cardinality_cache_size);
