@@ -1,4 +1,4 @@
-#pragma once;
+#pragma once
 
 #include <Core/Block.h>
 #include <Processors/ISimpleTransform.h>
@@ -26,7 +26,7 @@ private:
     size_t position;
     Field value;
 
-    static Block createConstColumn(Block && block, size_t position, const Filed & value)
+    static Block createConstColumn(Block && block, size_t position, const Field & value)
     {
         auto & col = block.getByPosition(position);
         col.column = col.type->createColumnConst(block.getNumRows(), value);
