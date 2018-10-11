@@ -1,3 +1,5 @@
+#pragma once
+
 #include <Columns/IColumnUnique.h>
 #include <Common/LRUCache.h>
 #include <memory>

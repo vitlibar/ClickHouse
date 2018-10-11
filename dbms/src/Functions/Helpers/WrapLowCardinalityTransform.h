@@ -1,4 +1,4 @@
-#pragma once;
+#pragma once
 
 #include <Processors/ITransform.h>
 #include <Core/ColumnNumbers.h>
