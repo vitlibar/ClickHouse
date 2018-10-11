@@ -12,16 +12,16 @@
 
 #include <Functions/IFunction.h>
 #include <Functions/FunctionHelpers.h>
-#include <Functions/Helpers/ExecuteFunctionTransform.h>
-#include <Functions/Helpers/RemoveConstantsTransform.h>
-#include <Functions/Helpers/RemoveLowCardinalityTransform.h>
-#include <Functions/Helpers/RemoveNullableTransform.h>
-#include <Functions/Helpers/WrapConstantsTransform.h>
-#include <Functions/Helpers/WrapLowCardinalityTransform.h>
-#include <Functions/Helpers/WrapNullableTransform.h>
-#include <Functions/Helpers/CreateConstantColumnTransform.h>
-#include <Functions/Helpers/removeLowCardinality.h>
-#include <Functions/Helpers/PreparedFunctionLowCardinalityResultCache.h>
+#include <Processors/FunctionProcessing/ExecuteFunctionTransform.h>
+#include <Processors/FunctionProcessing/RemoveConstantsTransform.h>
+#include <Processors/FunctionProcessing/RemoveLowCardinalityTransform.h>
+#include <Processors/FunctionProcessing/RemoveNullableTransform.h>
+#include <Processors/FunctionProcessing/WrapConstantsTransform.h>
+#include <Processors/FunctionProcessing/WrapLowCardinalityTransform.h>
+#include <Processors/FunctionProcessing/WrapNullableTransform.h>
+#include <Processors/FunctionProcessing/CreateConstantColumnTransform.h>
+#include <Processors/FunctionProcessing/removeLowCardinality.h>
+#include <Processors/FunctionProcessing/PreparedFunctionLowCardinalityResultCache.h>
 
 #include <Processors/Executors/SequentialTransformExecutor.h>
 
