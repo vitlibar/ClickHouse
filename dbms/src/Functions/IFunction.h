@@ -83,7 +83,8 @@ public:
     /// sample_block should contain data types of arguments and values of constants, if relevant.
     virtual PreparedFunctionPtr prepare(const Block & sample_block, const ColumnNumbers & arguments, size_t result) const = 0;
 
-    virtual SequentialTransformExecutorPtr execute(Block & block, const ColumnNumbers & arguments, size_t result);
+    virtual SequentialTransformExecutorPtr execute(Block & block, const ColumnNumbers & arguments,
+                                                   size_t result, size_t low_cardinality_cache_size);
 
     /// TODO: make const
 //    virtual void execute(Block & block, const ColumnNumbers & arguments, size_t result, size_t input_rows_count)
@@ -397,11 +398,6 @@ protected:
     {
         return function->executeImpl(block, arguments, result, input_rows_count);
     }
-    bool useDefaultImplementationForNulls() const final { return function->useDefaultImplementationForNulls(); }
-    bool useDefaultImplementationForConstants() const final { return function->useDefaultImplementationForConstants(); }
-    bool useDefaultImplementationForLowCardinalityColumns() const final { return function->useDefaultImplementationForLowCardinalityColumns(); }
-    ColumnNumbers getArgumentsThatAreAlwaysConstant() const final { return function->getArgumentsThatAreAlwaysConstant(); }
-    bool canBeExecutedOnDefaultArguments() const override { return function->canBeExecutedOnDefaultArguments(); }
 
 private:
     std::shared_ptr<IFunction> function;
@@ -445,6 +441,13 @@ public:
     {
         return function->getMonotonicityForRange(type, left, right);
     }
+
+    bool useDefaultImplementationForNulls() const final { return function->useDefaultImplementationForNulls(); }
+    bool useDefaultImplementationForConstants() const final { return function->useDefaultImplementationForConstants(); }
+    bool useDefaultImplementationForLowCardinalityColumns() const final { return function->useDefaultImplementationForLowCardinalityColumns(); }
+    ColumnNumbers getArgumentsThatAreAlwaysConstant() const final { return function->getArgumentsThatAreAlwaysConstant(); }
+    bool canBeExecutedOnDefaultArguments() const override { return function->canBeExecutedOnDefaultArguments(); }
+
 private:
     std::shared_ptr<IFunction> function;
     DataTypes arguments;

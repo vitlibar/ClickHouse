@@ -25,8 +25,8 @@ using NamesWithAliases = std::vector<NameWithAlias>;
 
 class Join;
 
-class IPreparedFunction;
-using PreparedFunctionPtr = std::shared_ptr<IPreparedFunction>;
+class SequentialTransformExecutor;
+using SequentialTransformExecutorPtr = std::shared_ptr<SequentialTransformExecutor>;
 
 class IFunctionBase;
 using FunctionBasePtr = std::shared_ptr<IFunctionBase>;
@@ -93,8 +93,8 @@ public:
     FunctionBuilderPtr function_builder;
     /// Can be used after action was added to ExpressionActions if we want to get function signature or properties like monotonicity.
     FunctionBasePtr function_base;
-    /// Prepared function which is used in function execution.
-    PreparedFunctionPtr function;
+    /// Part of pipeline which is used in function execution.
+    SequentialTransformExecutorPtr function_executor;
     Names argument_names;
     bool is_function_compiled = false;
 

@@ -10,8 +10,12 @@ namespace DB
 class RemoveLowCardinalityTransform : public ITransform
 {
 public:
-    RemoveLowCardinalityTransform(Block input_header, const ColumnNumbers & column_numbers, size_t result,
-                                  bool can_be_executed_on_default_arguments);
+    RemoveLowCardinalityTransform(
+        Block input_header,
+        const ColumnNumbers & column_numbers,
+        size_t result,
+        bool can_be_executed_on_default_arguments,
+        PreparedFunctionLowCardinalityResultCachePtr cache);
 
     void setCache(PreparedFunctionLowCardinalityResultCachePtr cache_) { cache = std::move(cache_); }
 

@@ -1,21 +1,17 @@
 #include <Common/config.h>
 #include <Common/typeid_cast.h>
-#include <Common/LRUCache.h>
+
 #include <Columns/ColumnConst.h>
 #include <Columns/ColumnNullable.h>
-#include <DataTypes/DataTypeArray.h>
+#include <Columns/ColumnLowCardinality.h>
+
 #include <DataTypes/DataTypeNothing.h>
 #include <DataTypes/DataTypeNullable.h>
-#include <DataTypes/DataTypeTuple.h>
-#include <DataTypes/Native.h>
 #include <DataTypes/DataTypeLowCardinality.h>
-#include <DataTypes/getLeastSupertype.h>
-#include <Columns/ColumnArray.h>
-#include <Columns/ColumnConst.h>
-#include <Columns/ColumnTuple.h>
-#include <Columns/ColumnLowCardinality.h>
-#include <Functions/FunctionHelpers.h>
+#include <DataTypes/Native.h>
 
+#include <Functions/IFunction.h>
+#include <Functions/FunctionHelpers.h>
 #include <Functions/Helpers/ExecuteFunctionTransform.h>
 #include <Functions/Helpers/RemoveConstantsTransform.h>
 #include <Functions/Helpers/RemoveLowCardinalityTransform.h>
@@ -24,10 +20,11 @@
 #include <Functions/Helpers/WrapLowCardinalityTransform.h>
 #include <Functions/Helpers/WrapNullableTransform.h>
 #include <Functions/Helpers/CreateConstantColumnTransform.h>
+#include <Functions/Helpers/PreparedFunctionLowCardinalityResultCache.h>
+#include <Functions/Helpers/removeLowCardinality.h>
+
 #include <Processors/Executors/SequentialTransformExecutor.h>
 
-#include <Functions/IFunction.h>
-#include <Interpreters/ExpressionActions.h>
 #include <IO/WriteHelpers.h>
 #include <ext/range.h>
 #include <ext/collection_cast.h>
@@ -52,57 +49,6 @@ namespace ErrorCodes
     extern const int ILLEGAL_COLUMN;
 }
 
-static DataTypePtr recursiveRemoveLowCardinality(const DataTypePtr & type)
-{
-    if (!type)
-        return type;
-
-    if (const auto * array_type = typeid_cast<const DataTypeArray *>(type.get()))
-        return std::make_shared<DataTypeArray>(recursiveRemoveLowCardinality(array_type->getNestedType()));
-
-    if (const auto * tuple_type = typeid_cast<const DataTypeTuple *>(type.get()))
-    {
-        DataTypes elements = tuple_type->getElements();
-        for (auto & element : elements)
-            element = recursiveRemoveLowCardinality(element);
-
-        if (tuple_type->haveExplicitNames())
-            return std::make_shared<DataTypeTuple>(elements, tuple_type->getElementNames());
-        else
-            return std::make_shared<DataTypeTuple>(elements);
-    }
-
-    if (const auto * low_cardinality_type = typeid_cast<const DataTypeLowCardinality *>(type.get()))
-        return low_cardinality_type->getDictionaryType();
-
-    return type;
-}
-
-static ColumnPtr recursiveRemoveLowCardinality(const ColumnPtr & column)
-{
-    if (!column)
-        return column;
-
-    if (const auto * column_array = typeid_cast<const ColumnArray *>(column.get()))
-        return ColumnArray::create(recursiveRemoveLowCardinality(column_array->getDataPtr()), column_array->getOffsetsPtr());
-
-    if (const auto * column_const = typeid_cast<const ColumnConst *>(column.get()))
-        return ColumnConst::create(recursiveRemoveLowCardinality(column_const->getDataColumnPtr()), column_const->size());
-
-    if (const auto * column_tuple = typeid_cast<const ColumnTuple *>(column.get()))
-    {
-        Columns columns = column_tuple->getColumns();
-        for (auto & element : columns)
-            element = recursiveRemoveLowCardinality(element);
-        return ColumnTuple::create(columns);
-    }
-
-    if (const auto * column_low_cardinality = typeid_cast<const ColumnLowCardinality *>(column.get()))
-        return column_low_cardinality->convertToFullColumn();
-
-    return column;
-}
-
 namespace
 {
 
@@ -111,23 +57,6 @@ struct NullPresence
     bool has_nullable = false;
     bool has_null_constant = false;
 };
-
-NullPresence getNullPresense(const Block & block, const ColumnNumbers & args)
-{
-    NullPresence res;
-
-    for (const auto & arg : args)
-    {
-        const auto & elem = block.getByPosition(arg);
-
-        if (!res.has_nullable)
-            res.has_nullable = elem.type->isNullable();
-        if (!res.has_null_constant)
-            res.has_null_constant = elem.type->onlyNull();
-    }
-
-    return res;
-}
 
 NullPresence getNullPresense(const ColumnsWithTypeAndName & args)
 {
@@ -167,7 +96,8 @@ void checkArgumentsToRemainConstantsAreConstants(
 }
 
 
-SequentialTransformExecutorPtr IFunctionBase::execute(Block & block, const ColumnNumbers & arguments, size_t result)
+SequentialTransformExecutorPtr IFunctionBase::execute(Block & block, const ColumnNumbers & arguments,
+                                                      size_t result, size_t low_cardinality_cache_size)
 {
     Processors processors;
 
@@ -269,8 +199,11 @@ SequentialTransformExecutorPtr IFunctionBase::execute(Block & block, const Colum
         if (!useDefaultImplementationForLowCardinalityColumns())
             return executeWithoutLowCardinality(block);
 
+        bool can_be_executed_on_default_arguments = canBeExecutedOnDefaultArguments();
+        auto cache = std::make_shared<PreparedFunctionLowCardinalityResultCache>(low_cardinality_cache_size);
+
         auto remove_low_cardinality = std::make_shared<RemoveLowCardinalityTransform>(
-                header, arguments, result, canBeExecutedOnDefaultArguments());
+                header, arguments, result, can_be_executed_on_default_arguments, cache);
         auto & out_remove_low_cardinality = remove_low_cardinality->getOutputs().at(0);
         auto & out_positions = remove_low_cardinality->getOutputs().at(1);
 
@@ -281,8 +214,9 @@ SequentialTransformExecutorPtr IFunctionBase::execute(Block & block, const Colum
         auto & in_func_result = exec_function_head->getInputs().at(0);
         auto & out_func_result = exec_function_tail->getOutputs().at(0);
 
-        Blocks wrap_lc_headers = {out_func_result.ghetHeader(), out_positions.getHeader()};
-        auto wrap_low_cardinality = std::make_shared<WrapLowCardinalityTransform>(wrap_lc_headers, arguments, result);
+        Blocks headers = {out_func_result.getHeader(), out_positions.getHeader()};
+        auto wrap_low_cardinality = std::make_shared<WrapLowCardinalityTransform>(
+                headers, arguments, result, can_be_executed_on_default_arguments, cache);
         auto & in_wrap_low_cardinality = wrap_low_cardinality->getInputs().at(0);
         auto & in_positions = wrap_low_cardinality->getInputs().at(1);
 
@@ -303,18 +237,6 @@ SequentialTransformExecutorPtr IFunctionBase::execute(Block & block, const Colum
     return std::make_shared<SequentialTransformExecutor>(processors, input, output);
 }
 
-void FunctionBuilderImpl::checkNumberOfArguments(size_t number_of_arguments) const
-{
-    if (isVariadic())
-        return;
-
-    size_t expected_number_of_arguments = getNumberOfArguments();
-
-    if (number_of_arguments != expected_number_of_arguments)
-        throw Exception("Number of arguments for function " + getName() + " doesn't match: passed "
-                        + toString(number_of_arguments) + ", should be " + toString(expected_number_of_arguments),
-                        ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH);
-}
 
 DataTypePtr FunctionBuilderImpl::getReturnTypeWithoutLowCardinality(const ColumnsWithTypeAndName & arguments) const
 {
@@ -449,4 +371,18 @@ DataTypePtr FunctionBuilderImpl::getReturnType(const ColumnsWithTypeAndName & ar
 
     return getReturnTypeWithoutLowCardinality(arguments);
 }
+
+void FunctionBuilderImpl::checkNumberOfArguments(size_t number_of_arguments) const
+{
+    if (isVariadic())
+        return;
+
+    size_t expected_number_of_arguments = getNumberOfArguments();
+
+    if (number_of_arguments != expected_number_of_arguments)
+        throw Exception("Number of arguments for function " + getName() + " doesn't match: passed "
+                        + toString(number_of_arguments) + ", should be " + toString(expected_number_of_arguments),
+                        ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH);
+}
+
 }

@@ -138,12 +138,17 @@ static Block wrapLowCardinality(Blocks && blocks, const ColumnNumbers & column_n
 
 
 WrapLowCardinalityTransform::WrapLowCardinalityTransform(
-    Blocks input_headers, const ColumnNumbers & column_numbers, size_t result, bool can_be_executed_on_default_arguments)
+    Blocks input_headers,
+    const ColumnNumbers & column_numbers,
+    size_t result,
+    bool can_be_executed_on_default_arguments,
+    PreparedFunctionLowCardinalityResultCachePtr cache)
     : ITransform({input_headers},
                  {wrapLowCardinality(Blocks(input_headers), column_numbers, result, can_be_executed_on_default_arguments, nullptr)})
     , column_numbers(column_numbers)
     , result(result)
     , can_be_executed_on_default_arguments(can_be_executed_on_default_arguments)
+    , cache(std::move(cache))
 {
 }
 

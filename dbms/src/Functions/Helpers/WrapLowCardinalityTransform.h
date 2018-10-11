@@ -10,8 +10,12 @@ namespace DB
 class WrapLowCardinalityTransform : public ITransform
 {
 public:
-    WrapLowCardinalityTransform(Blocks input_headers, const ColumnNumbers & column_numbers, size_t result,
-                                bool can_be_executed_on_default_arguments);
+    WrapLowCardinalityTransform(
+        Blocks input_headers,
+        const ColumnNumbers & column_numbers,
+        size_t result,
+        bool can_be_executed_on_default_arguments,
+        PreparedFunctionLowCardinalityResultCachePtr cache);
 
 protected:
     Blocks transform(Blocks && blocks) override;
