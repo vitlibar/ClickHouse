@@ -2,7 +2,9 @@
 
 #include <Processors/ITransform.h>
 #include <Core/ColumnNumbers.h>
-#include <Functions/Helpers/PreparedFunctionLowCardinalityResultCache.h>
+
+class PreparedFunctionLowCardinalityResultCache;
+using PreparedFunctionLowCardinalityResultCachePtr = std::shared_ptr<PreparedFunctionLowCardinalityResultCache>;
 
 namespace DB
 {

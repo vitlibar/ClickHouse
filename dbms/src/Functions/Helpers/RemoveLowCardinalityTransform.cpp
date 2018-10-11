@@ -1,5 +1,6 @@
 #include <Functions/Helpers/RemoveLowCardinalityTransform.h>
 #include <Functions/Helpers/removeLowCardinality.h>
+#include <Functions/Helpers/PreparedFunctionLowCardinalityResultCache.h>
 #include <Functions/FunctionHelpers.h>
 
 #include <Columns/ColumnLowCardinality.h>
