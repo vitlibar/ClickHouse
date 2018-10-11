@@ -3,11 +3,11 @@
 #include <Processors/ITransform.h>
 #include <Core/ColumnNumbers.h>
 
-class PreparedFunctionLowCardinalityResultCache;
-using PreparedFunctionLowCardinalityResultCachePtr = std::shared_ptr<PreparedFunctionLowCardinalityResultCache>;
-
 namespace DB
 {
+
+class PreparedFunctionLowCardinalityResultCache;
+using PreparedFunctionLowCardinalityResultCachePtr = std::shared_ptr<PreparedFunctionLowCardinalityResultCache>;
 
 class WrapLowCardinalityTransform : public ITransform
 {
