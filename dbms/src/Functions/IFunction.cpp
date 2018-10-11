@@ -10,8 +10,6 @@
 #include <DataTypes/DataTypeLowCardinality.h>
 #include <DataTypes/Native.h>
 
-#include <Poco/Bugcheck.h>
-
 #include <Functions/IFunction.h>
 #include <Functions/FunctionHelpers.h>
 #include <Functions/Helpers/ExecuteFunctionTransform.h>
@@ -22,7 +20,6 @@
 #include <Functions/Helpers/WrapLowCardinalityTransform.h>
 #include <Functions/Helpers/WrapNullableTransform.h>
 #include <Functions/Helpers/CreateConstantColumnTransform.h>
-#include <Functions/Helpers/PreparedFunctionLowCardinalityResultCache.h>
 #include <Functions/Helpers/removeLowCardinality.h>
 
 #include <Processors/Executors/SequentialTransformExecutor.h>
@@ -50,6 +47,10 @@ namespace ErrorCodes
     extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
     extern const int ILLEGAL_COLUMN;
 }
+
+class PreparedFunctionLowCardinalityResultCache;
+using PreparedFunctionLowCardinalityResultCachePtr = std::shared_ptr<PreparedFunctionLowCardinalityResultCache>;
+PreparedFunctionLowCardinalityResultCachePtr createPreparedFunctionLowCardinalityResultCache(size_t cache_size);
 
 namespace
 {
@@ -202,7 +203,7 @@ SequentialTransformExecutorPtr IFunctionBase::createPipeline(Block & block, cons
             return executeWithoutLowCardinality(block);
 
         bool can_be_executed_on_default_arguments = canBeExecutedOnDefaultArguments();
-        auto cache = std::make_shared<PreparedFunctionLowCardinalityResultCache>(low_cardinality_cache_size);
+        auto cache = createPreparedFunctionLowCardinalityResultCache(low_cardinality_cache_size);
 
         auto remove_low_cardinality = std::make_shared<RemoveLowCardinalityTransform>(
                 header, arguments, result, can_be_executed_on_default_arguments, cache);
