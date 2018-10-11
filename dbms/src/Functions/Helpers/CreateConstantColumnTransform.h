@@ -9,7 +9,7 @@ namespace DB
 class CreateConstantColumnTransform : public ISimpleTransform
 {
 public:
-    CreateConstantColumnTransform(Block header, size_t position, Filed value)
+    CreateConstantColumnTransform(Block header, size_t position, Field value)
         : ISimpleTransform(header, createConstColumn(Block(header), position, value))
         , position(position)
         , value(value)

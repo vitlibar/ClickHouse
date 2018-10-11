@@ -1,5 +1,7 @@
 #include <Columns/IColumnUnique.h>
+#include <Common/LRUCache.h>
 #include <memory>
+#include <Common/SipHash.h>
 
 namespace DB
 {
