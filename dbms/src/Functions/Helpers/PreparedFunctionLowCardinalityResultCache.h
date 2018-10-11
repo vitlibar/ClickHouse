@@ -62,6 +62,5 @@ private:
 };
 
 using PreparedFunctionLowCardinalityResultCachePtr = std::shared_ptr<PreparedFunctionLowCardinalityResultCache>;
-PreparedFunctionLowCardinalityResultCachePtr createPreparedFunctionLowCardinalityResultCache(size_t cache_size);
 
 }

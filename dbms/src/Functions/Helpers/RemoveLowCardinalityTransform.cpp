@@ -16,11 +16,6 @@
 namespace DB
 {
 
-PreparedFunctionLowCardinalityResultCachePtr createPreparedFunctionLowCardinalityResultCache(size_t cache_size)
-{
-    return std::make_shared<PreparedFunctionLowCardinalityResultCache>(cache_size);
-}
-
 static const ColumnLowCardinality * findLowCardinalityArgument(const Block & block, const ColumnNumbers & args)
 {
     const ColumnLowCardinality * result_column = nullptr;
