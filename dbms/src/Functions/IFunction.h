@@ -82,19 +82,13 @@ public:
     virtual PreparedFunctionPtr prepare(const Block & sample_block, const ColumnNumbers & arguments, size_t result) const = 0;
 
     virtual SequentialTransformExecutorPtr createPipeline(Block & block, const ColumnNumbers & arguments,
-                                                          size_t result, size_t low_cardinality_cache_size);
+                                                          size_t result, size_t low_cardinality_cache_size) const;
 
     void execute(Block & block, const ColumnNumbers & arguments, size_t result, size_t num_rows)
     {
         block.setNumRows(num_rows);
-        prepare(block, arguments, result)->execute(block);
+        createPipeline(block, arguments, result, 0)->execute(block);
     }
-
-    /// TODO: make const
-//    virtual void execute(Block & block, const ColumnNumbers & arguments, size_t result, size_t input_rows_count)
-//    {
-//        return prepare(block, arguments, result)->execute(block, arguments, result, input_rows_count);
-//    }
 
 #if USE_EMBEDDED_COMPILER
 

@@ -97,7 +97,7 @@ void checkArgumentsToRemainConstantsAreConstants(
 
 
 SequentialTransformExecutorPtr IFunctionBase::createPipeline(Block & block, const ColumnNumbers & arguments,
-                                                             size_t result, size_t low_cardinality_cache_size)
+                                                             size_t result, size_t low_cardinality_cache_size) const
 {
     Processors processors;
 
