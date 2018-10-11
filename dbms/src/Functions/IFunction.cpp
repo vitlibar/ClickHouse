@@ -10,6 +10,8 @@
 #include <DataTypes/DataTypeLowCardinality.h>
 #include <DataTypes/Native.h>
 
+#include <Poco/Bugcheck.h>
+
 #include <Functions/IFunction.h>
 #include <Functions/FunctionHelpers.h>
 #include <Functions/Helpers/ExecuteFunctionTransform.h>
