@@ -83,8 +83,8 @@ public:
     /// sample_block should contain data types of arguments and values of constants, if relevant.
     virtual PreparedFunctionPtr prepare(const Block & sample_block, const ColumnNumbers & arguments, size_t result) const = 0;
 
-    virtual SequentialTransformExecutorPtr execute(Block & block, const ColumnNumbers & arguments,
-                                                   size_t result, size_t low_cardinality_cache_size);
+    virtual SequentialTransformExecutorPtr createPipeline(Block & block, const ColumnNumbers & arguments,
+                                                          size_t result, size_t low_cardinality_cache_size);
 
     /// TODO: make const
 //    virtual void execute(Block & block, const ColumnNumbers & arguments, size_t result, size_t input_rows_count)

@@ -10,8 +10,7 @@ class SequentialTransformExecutor
 {
 public:
     SequentialTransformExecutor(const Processors & processors, InputPort & pipeline_input, OutputPort & pipeline_output)
-        : IProcessor({pipeline_input.getHeader()}, {pipeline_output.getHeader()})
-        , executor(processors)
+        : executor(processors)
         , input(pipeline_output.getHeader())
         , output(pipeline_input.getHeader())
         , pipeline_input(pipeline_input)

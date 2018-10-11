@@ -206,7 +206,7 @@ void ExpressionAction::prepare(Block & sample_block, const Settings & settings)
             }
 
             tmp_block.insert({nullptr, result_type, result_name});
-            function_executor = function_base->execute(tmp_block, arguments, arguments.size(), settings.max_threads);
+            function_executor = function_base->createPipeline(tmp_block, arguments, arguments.size(), settings.max_threads);
 
             /// If all arguments are constants, and function is suitable to be executed in 'prepare' stage - execute function.
             if (all_const && function_base->isSuitableForConstantFolding())
