@@ -117,6 +117,67 @@ void checkArgumentsToRemainConstantsAreConstants(
 }
 
 
+ColumnPtr wrapInNullable(const ColumnPtr & src, const Block & block, const ColumnNumbers & args, size_t result, size_t input_rows_count)
+{
+    ColumnPtr result_null_map_column;
+
+    /// If result is already nullable.
+    ColumnPtr src_not_nullable = src;
+
+    if (src->onlyNull())
+        return src;
+    else if (src->isColumnNullable())
+    {
+        src_not_nullable = static_cast<const ColumnNullable &>(*src).getNestedColumnPtr();
+        result_null_map_column = static_cast<const ColumnNullable &>(*src).getNullMapColumnPtr();
+    }
+
+    for (const auto & arg : args)
+    {
+        const ColumnWithTypeAndName & elem = block.getByPosition(arg);
+        if (!elem.type->isNullable())
+            continue;
+
+        /// Const Nullable that are NULL.
+        if (elem.column->onlyNull())
+            return block.getByPosition(result).type->createColumnConst(input_rows_count, Null());
+
+        if (elem.column->isColumnConst())
+            continue;
+
+        if (elem.column->isColumnNullable())
+        {
+            const ColumnPtr & null_map_column = static_cast<const ColumnNullable &>(*elem.column).getNullMapColumnPtr();
+            if (!result_null_map_column)
+            {
+                result_null_map_column = null_map_column;
+            }
+            else
+            {
+                MutableColumnPtr mutable_result_null_map_column = (*std::move(result_null_map_column)).mutate();
+
+                NullMap & result_null_map = static_cast<ColumnUInt8 &>(*mutable_result_null_map_column).getData();
+                const NullMap & src_null_map = static_cast<const ColumnUInt8 &>(*null_map_column).getData();
+
+                for (size_t i = 0, size = result_null_map.size(); i < size; ++i)
+                    if (src_null_map[i])
+                        result_null_map[i] = 1;
+
+                result_null_map_column = std::move(mutable_result_null_map_column);
+            }
+        }
+    }
+
+    if (!result_null_map_column)
+        return makeNullable(src);
+
+    if (src_not_nullable->isColumnConst())
+        return ColumnNullable::create(src_not_nullable->convertToFullColumnIfConst(), result_null_map_column);
+    else
+        return ColumnNullable::create(src_not_nullable, result_null_map_column);
+}
+
+
 SequentialTransformExecutorPtr IFunctionBase::createPipeline(Block & block, const ColumnNumbers & arguments,
                                                              size_t result, size_t low_cardinality_cache_size) const
 {
