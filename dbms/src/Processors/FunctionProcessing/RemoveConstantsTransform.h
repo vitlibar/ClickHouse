@@ -18,8 +18,8 @@ protected:
     void transform(Block & block) override;
 
 private:
-    const ColumnNumbers & arguments_to_remain_constants;
-    const ColumnNumbers & column_numbers;
+    ColumnNumbers arguments_to_remain_constants;
+    ColumnNumbers column_numbers;
     size_t result;
 };
 

@@ -17,7 +17,7 @@ protected:
     void transform(Block & block) override;
 
 private:
-    const ColumnNumbers & column_numbers;
+    ColumnNumbers column_numbers;
     size_t result;
 };
 

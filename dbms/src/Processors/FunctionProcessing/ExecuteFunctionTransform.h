@@ -25,7 +25,7 @@ protected:
 
 private:
     PreparedFunctionPtr prepared_function;
-    const ColumnNumbers & column_numbers;
+    ColumnNumbers column_numbers;
     size_t result;
 };
 
