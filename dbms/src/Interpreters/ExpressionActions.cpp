@@ -212,7 +212,7 @@ void ExpressionAction::prepare(Block & sample_block, const Settings & settings)
             if (all_const && function_base->isSuitableForConstantFolding())
             {
                 tmp_block.setNumRows(sample_block.rows());
-                function_executor->execute(sample_block);
+                function_executor->execute(tmp_block);
                 size_t result_position = sample_block.columns();
                 sample_block.insert(std::move(tmp_block.getByPosition(arguments.size())));
 

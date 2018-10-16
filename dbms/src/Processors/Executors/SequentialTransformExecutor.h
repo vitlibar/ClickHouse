@@ -23,6 +23,7 @@ public:
     void execute(Block & block)
     {
         output.push(std::move(block));
+        input.setNeeded();
 
         auto status = executor.prepare();
         while (status != IProcessor::Status::NeedData)
