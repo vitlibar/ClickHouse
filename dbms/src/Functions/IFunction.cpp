@@ -97,8 +97,11 @@ NullPresence getNullPresense(const ColumnsWithTypeAndName & args)
 bool allArgumentsAreConstants(const Block & block, const ColumnNumbers & args)
 {
     for (auto arg : args)
-        if (!block.getByPosition(arg).column->isColumnConst())
+    {
+        auto & column = block.getByPosition(arg).column;
+        if (!column || !column->isColumnConst())
             return false;
+    }
     return true;
 }
 
