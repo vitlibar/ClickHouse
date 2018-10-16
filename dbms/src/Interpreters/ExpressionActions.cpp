@@ -232,6 +232,8 @@ void ExpressionAction::prepare(Block & sample_block, const Settings & settings)
                         col.column = col.column->cloneResized(1);
                 }
             }
+            else
+                sample_block.insert({nullptr, result_type, result_name});
 
             break;
         }
