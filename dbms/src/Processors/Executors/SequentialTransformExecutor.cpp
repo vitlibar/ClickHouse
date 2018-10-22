@@ -15,6 +15,13 @@ public:
 
     Block generate() override { return std::move(input_block); }
     String getName() const override { return "SequentialTransformSource"; }
+    Status prepare() override
+    {
+        if (!input_block)
+            return IProcessor::Status::NeedData;
+
+        return ISource::prepare();
+    }
 
     Block input_block;
 };
