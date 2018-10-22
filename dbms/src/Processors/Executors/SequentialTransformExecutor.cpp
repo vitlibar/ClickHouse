@@ -61,9 +61,10 @@ void SequentialTransformExecutor::execute(Block & block)
     *input_block = std::move(block);
     output_block->clear();
 
-    auto status = executor->prepare();
     while (!(*output_block))
     {
+        auto status = executor->prepare();
+
         if (status == IProcessor::Status::Ready)
             executor->work();
         else if (status == IProcessor::Status::Async)
@@ -75,8 +76,6 @@ void SequentialTransformExecutor::execute(Block & block)
         else
             throw Exception("Unexpected status for SequentialTransformExecutor: " + std::to_string(int(status)),
                             ErrorCodes::LOGICAL_ERROR);
-
-        status = executor->prepare();
     }
 
     block = std::move(*output_block);
