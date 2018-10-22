@@ -14,6 +14,7 @@ public:
     explicit SequentialTransformSource(Block header) : ISource(std::move(header)) {}
 
     Block generate() override { return std::move(input_block); }
+    String getName() const override { return "SequentialTransformSource"; }
 
     Block input_block;
 };
@@ -24,6 +25,7 @@ public:
     explicit SequentialTransformSink(Block header) : ISink(std::move(header)) {}
 
     void consume(Block block) override { output_block = std::move(block); }
+    String getName() const override { return "SequentialTransformSink"; }
 
     Block output_block;
 };
