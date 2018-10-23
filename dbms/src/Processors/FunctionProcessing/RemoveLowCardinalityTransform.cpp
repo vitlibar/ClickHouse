@@ -99,7 +99,7 @@ static Blocks removeLowCardinality(Block && block, const ColumnNumbers & column_
                                    bool can_be_executed_on_default_arguments,
                                    const PreparedFunctionLowCardinalityResultCachePtr & cache)
 {
-    ColumnWithTypeAndName & res = block.getByPosition(result);
+    ColumnWithTypeAndName & res = block.safeGetByPosition(result);
 
     Block block_without_low_cardinality = block.cloneWithoutColumns();
     block_without_low_cardinality.setNumRows(block.getNumRows());
