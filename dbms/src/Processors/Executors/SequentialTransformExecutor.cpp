@@ -8,28 +8,37 @@ namespace DB
 namespace
 {
 
-class SequentialTransformSource : public ISource
+class SequentialTransformSource : public IProcessor
 {
 public:
-    Block & input_block;
 
-    explicit SequentialTransformSource(Block header) : ISource(std::move(header)), input_block(current_block) {}
+    explicit SequentialTransformSource(Block header) : IProcessor({}, {std::move(header)}), output(outputs.front()) {}
 
-    Block generate() override { return std::move(input_block); }
     String getName() const override { return "SequentialTransformSource"; }
 
     Status prepare() override
     {
-        auto status = ISource::prepare();
-        if (status == IProcessor::Status::Finished)
-        {
-            status = IProcessor::Status::NeedData;
-            finished = false;
-        }
+        if (output.hasData())
+            return Status::PortFull;
 
-        return status;
+        if (!output.isNeeded())
+            return Status::Unneeded;
+
+        if (!input_block)
+            return Status::NeedData;
+
+        return Status::Ready;
     }
 
+    void work() override
+    {
+        output.push(std::move(input_block));
+    }
+
+    Block input_block;
+
+protected:
+    OutputPort & output;
 };
 
 class SequentialTransformSink : public ISink
