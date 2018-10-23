@@ -400,8 +400,20 @@ void ExpressionAction::execute(Block & block, std::unordered_map<std::string, si
             ProfileEvents::increment(ProfileEvents::FunctionExecute);
             if (is_function_compiled)
                 ProfileEvents::increment(ProfileEvents::CompiledFunctionExecute);
-            tmp_block.setNumRows(input_rows_count);
-            function_executor->execute(tmp_block);
+
+            if (function)
+            {
+                ColumnNumbers arguments(argument_names.size());
+                for (size_t i = 0; i < argument_names.size(); ++i)
+                    arguments[i] = i;
+
+                function->execute(tmp_block, arguments, arguments.size(), input_rows_count);
+            }
+            else
+            {
+                tmp_block.setNumRows(input_rows_count);
+                function_executor->execute(tmp_block);
+            }
             block.insert(std::move(tmp_block.getByPosition(argument_names.size())));
 
             break;
@@ -934,6 +946,7 @@ void ExpressionActions::finalize(const Names & output_columns)
                         action.added_column = result.column;
                         action.function_builder = nullptr;
                         action.function_base = nullptr;
+                        action.function = nullptr;
                         action.function_executor = nullptr;
                         action.argument_names.clear();
                         in.clear();
