@@ -2,6 +2,7 @@
 
 #include <Processors/Executors/SequentialPipelineExecutor.h>
 #include <Common/EventCounter.h>
+#include <mutex>
 
 namespace DB
 {
@@ -17,6 +18,8 @@ private:
     ProcessorPtr executor;
     Block * input_block;
     Block * output_block;
+
+    std::mutex mutex;
 };
 
 using SequentialTransformExecutorPtr = std::shared_ptr<SequentialTransformExecutor>;

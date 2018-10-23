@@ -73,6 +73,8 @@ SequentialTransformExecutor::SequentialTransformExecutor(Processors processors, 
 
 void SequentialTransformExecutor::execute(Block & block)
 {
+    std::lock_guard<std::mutex> guard(mutex);
+
     *input_block = std::move(block);
     output_block->clear();
 
