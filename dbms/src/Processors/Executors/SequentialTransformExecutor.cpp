@@ -11,19 +11,25 @@ namespace
 class SequentialTransformSource : public ISource
 {
 public:
-    explicit SequentialTransformSource(Block header) : ISource(std::move(header)) {}
+    Block & input_block;
+
+    explicit SequentialTransformSource(Block header) : ISource(std::move(header)), input_block(current_block) {}
 
     Block generate() override { return std::move(input_block); }
     String getName() const override { return "SequentialTransformSource"; }
+
     Status prepare() override
     {
-        if (!input_block)
-            return IProcessor::Status::NeedData;
+        auto status = ISource::prepare();
+        if (status == IProcessor::Status::Finished)
+        {
+            status = IProcessor::Status::NeedData;
+            finished = false;
+        }
 
-        return ISource::prepare();
+        return status;
     }
 
-    Block input_block;
 };
 
 class SequentialTransformSink : public ISink
