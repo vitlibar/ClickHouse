@@ -5,6 +5,7 @@
 #include <Formats/FormatFactory.h>
 #include <Formats/BlockOutputStreamFromRowOutputStream.h>
 
+#include <iostream>
 
 namespace DB
 {
@@ -21,6 +22,8 @@ void BinaryRowOutputStream::flush()
 
 void BinaryRowOutputStream::writeField(const IColumn & column, const IDataType & type, size_t row_num)
 {
+    //std::cout << "BinaryRowOutputStream::writeField" << std::endl;
+    //throw std::exception();
     type.serializeBinary(column, row_num, ostr);
 }
 
