@@ -24,6 +24,7 @@
 #include <Interpreters/InterpreterFactory.h>
 #include <Interpreters/ProcessList.h>
 #include <Interpreters/QueryLog.h>
+#include <Interpreters/InterpreterSetQuery.h>
 #include <Interpreters/executeQuery.h>
 #include "DNSCacheUpdater.h"
 
@@ -475,6 +476,9 @@ void executeQuery(
         if (streams.in)
         {
             const ASTQueryWithOutput * ast_query_with_output = dynamic_cast<const ASTQueryWithOutput *>(ast.get());
+
+            if (ast_query_with_output && ast_query_with_output->settings)
+                InterpreterSetQuery(ast_query_with_output->settings, context).executeForCurrentContext();
 
             WriteBuffer * out_buf = &ostr;
             std::optional<WriteBufferFromFile> out_file_buf;

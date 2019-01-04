@@ -56,6 +56,7 @@
 #include <Parsers/formatAST.h>
 #include <Parsers/parseQuery.h>
 #include <Interpreters/Context.h>
+#include <Interpreters/InterpreterSetQuery.h>
 #include <Client/Connection.h>
 #include <Common/InterruptListener.h>
 #include <Functions/registerFunctions.h>
@@ -219,6 +220,10 @@ private:
         APPLY_FOR_SETTINGS(EXTRACT_SETTING)
 #undef EXTRACT_SETTING
 
+        /// Set path for format schema files
+        auto format_schema_path = Poco::File(config().getString("format_schema_path", home_path + "/.clickhouse-client/format_schemas"));
+        if (format_schema_path.isDirectory())
+            context.setFormatSchemaPath(format_schema_path.path() + "/");
     }
 
 
@@ -1186,6 +1191,10 @@ private:
             /// The query can specify output format or output file.
             if (ASTQueryWithOutput * query_with_output = dynamic_cast<ASTQueryWithOutput *>(&*parsed_query))
             {
+                if (query_with_output->settings)
+                {
+                    InterpreterSetQuery(query_with_output->settings, context).executeForCurrentContext();
+                }
                 if (query_with_output->out_file != nullptr)
                 {
                     const auto & out_file_node = typeid_cast<const ASTLiteral &>(*query_with_output->out_file);

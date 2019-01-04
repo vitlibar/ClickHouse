@@ -15,6 +15,11 @@ void ASTQueryWithOutput::cloneOutputOptions(ASTQueryWithOutput & cloned) const
         cloned.format = format->clone();
         cloned.children.push_back(cloned.format);
     }
+    if (settings)
+    {
+        cloned.settings = settings->clone();
+        cloned.children.push_back(cloned.settings);
+    }
 }
 
 void ASTQueryWithOutput::formatImpl(const FormatSettings & s, FormatState & state, FormatStateStacked frame) const
