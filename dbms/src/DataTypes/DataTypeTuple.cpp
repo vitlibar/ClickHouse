@@ -407,6 +407,15 @@ void DataTypeTuple::deserializeBinaryBulkWithMultipleStreams(
     settings.path.pop_back();
 }
 
+void DataTypeTuple::serializeProtobuf(const IColumn & column, size_t row_num,
+                                      const ProtobufField & field, google::protobuf::Message & destination) const
+{
+    (void)column;
+    (void)row_num;
+    (void)destination;
+    (void)field;
+}
+
 MutableColumnPtr DataTypeTuple::createColumn() const
 {
     size_t size = elems.size();

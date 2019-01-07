@@ -134,6 +134,17 @@ void DataTypeDecimal<T>::deserializeBinaryBulk(IColumn & column, ReadBuffer & is
 
 
 template <typename T>
+void DataTypeDecimal<T>::serializeProtobuf(const IColumn & column, size_t row_num,
+                                           const ProtobufField & field, google::protobuf::Message & destination) const
+{
+    (void)column;
+    (void)row_num;
+    (void)destination;
+    (void)field;
+}
+
+
+template <typename T>
 Field DataTypeDecimal<T>::getDefault() const
 {
     return DecimalField(T(0), scale);

@@ -403,7 +403,9 @@ namespace ErrorCodes
     extern const int NULL_POINTER_DEREFERENCE = 426;
     extern const int CANNOT_COMPILE_REGEXP = 427;
     extern const int UNKNOWN_LOG_LEVEL = 428;
-    extern const int CANNOT_PARSE_FORMAT_SCHEMA = 429;
+    extern const int CANNOT_PARSE_PROTOBUF_SCHEMA = 429;
+    extern const int REQUIRED_FIELD_OF_PROTOBUF_MESSAGE = 430;
+    extern const int CANNOT_CONVERT_TO_PROTOBUF_TYPE = 431;
 
     extern const int KEEPER_EXCEPTION = 999;
     extern const int POCO_EXCEPTION = 1000;

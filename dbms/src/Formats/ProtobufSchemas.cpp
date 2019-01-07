@@ -12,7 +12,7 @@ namespace DB
 namespace ErrorCodes
 {
     extern const int BAD_ARGUMENTS;
-    extern const int CANNOT_PARSE_FORMAT_SCHEMA;
+    extern const int CANNOT_PARSE_PROTOBUF_SCHEMA;
 }
 
 ProtobufSchemas::ProtobufSchemas()
@@ -82,7 +82,7 @@ void ProtobufSchemas::AddError(const String & filename, int line, int column, co
 {
     throw Exception("Cannot parse '" + proto_directory + "/" + filename + "' file, found an error at line " +
                     std::to_string(line) + ", column " + std::to_string(column) + ". " + message,
-                    ErrorCodes::CANNOT_PARSE_FORMAT_SCHEMA);
+                    ErrorCodes::CANNOT_PARSE_PROTOBUF_SCHEMA);
 }
 
 }

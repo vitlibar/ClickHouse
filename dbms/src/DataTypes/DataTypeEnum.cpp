@@ -223,6 +223,16 @@ void DataTypeEnum<Type>::deserializeBinaryBulk(
 }
 
 template <typename Type>
+void DataTypeEnum<Type>::serializeProtobuf(const IColumn & column, size_t row_num,
+                                           const ProtobufField & field, google::protobuf::Message & destination) const
+{
+    (void)column;
+    (void)row_num;
+    (void)destination;
+    (void)field;
+}
+
+template <typename Type>
 Field DataTypeEnum<Type>::getDefault() const
 {
     return values.front().second;

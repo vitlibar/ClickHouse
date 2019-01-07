@@ -140,6 +140,15 @@ void DataTypeDateTime::deserializeTextCSV(IColumn & column, ReadBuffer & istr, c
     static_cast<ColumnUInt32 &>(column).getData().push_back(x);
 }
 
+void DataTypeDateTime::serializeProtobuf(const IColumn & column, size_t row_num,
+                                         const ProtobufField & field, google::protobuf::Message & destination) const
+{
+    (void)column;
+    (void)row_num;
+    (void)destination;
+    (void)field;
+}
+
 bool DataTypeDateTime::equals(const IDataType & rhs) const
 {
     /// DateTime with different timezones are equal, because:

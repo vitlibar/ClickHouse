@@ -248,6 +248,16 @@ void DataTypeAggregateFunction::deserializeTextCSV(IColumn & column, ReadBuffer 
 }
 
 
+void DataTypeAggregateFunction::serializeProtobuf(const IColumn & column, size_t row_num,
+                                                  const ProtobufField & field, google::protobuf::Message & destination) const
+{
+    (void)column;
+    (void)row_num;
+    (void)destination;
+    (void)field;
+}
+
+
 MutableColumnPtr DataTypeAggregateFunction::createColumn() const
 {
     return ColumnAggregateFunction::create(function);

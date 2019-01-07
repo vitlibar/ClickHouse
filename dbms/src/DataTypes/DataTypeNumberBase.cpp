@@ -1,4 +1,4 @@
-#include <type_traits>
+﻿#include <type_traits>
 #include <DataTypes/DataTypeNumberBase.h>
 #include <Columns/ColumnVector.h>
 #include <Columns/ColumnConst.h>
@@ -200,6 +200,67 @@ void DataTypeNumberBase<T>::deserializeBinaryBulk(IColumn & column, ReadBuffer &
     size_t size = istr.readBig(reinterpret_cast<char*>(&x[initial_size]), sizeof(typename ColumnVector<T>::value_type) * limit);
     x.resize(initial_size + size / sizeof(typename ColumnVector<T>::value_type));
 }
+
+
+template <typename T>
+void DataTypeNumberBase<T>::serializeProtobuf(const IColumn & column, size_t row_num,
+                                              const ProtobufField & field, google::protobuf::Message & destination) const
+{
+#if 0
+    const T & value = static_cast<const ColumnVector<T> &>(column).getElement(row_num);
+    switch (field.cpp_type())
+    {
+        case google::protobuf::FieldDescriptor::CPPTYPE_INT32:
+        {
+            int32_t
+            castNumeric<int32_t
+            int32_t value = static_cast<int32_t>(element);
+            if (static_cast<T>(value) != element)
+            if (field.is_repeated())
+                message.GetReflection()->AddInt32(&message, &field, value);
+            else
+                message.GetReflection()->SetInt32(&message, &field, value);
+            break;
+        }
+        case google::protobuf::FieldDescriptor::CPPTYPE_UINT32:
+        case google::protobuf::FieldDescriptor::CPPTYPE_INT64:
+        case google::protobuf::FieldDescriptor::CPPTYPE_UINT64:
+        case google::protobuf::FieldDescriptor::CPPTYPE_FLOAT:
+        case google::protobuf::FieldDescriptor::CPPTYPE_DOUBLE:
+        case google::protobuf::FieldDescriptor::CPPTYPE_BOOL:
+        {
+            bool value_as_bool = (value != 0);
+            if (field.is_repeated())
+                message.GetReflection()->AddBool(&message, &field, value_as_bool);
+            else
+                message.GetReflection()->SetBool(&message, &field, value_as_bool);
+            break;
+        }
+
+        case google::protobuf::FieldDescriptor::CPPTYPE_STRING:
+        {
+            WriteBufferFromOwnString buf;
+            writeText(value, buf);
+            if (field.is_repeated())
+                message.GetReflection()->AddString(&message, &field, value);
+            else
+                message.GetReflection()->SetString(&message, &field, value);
+            break;
+        }
+        default:
+            throw Exception("Cannot convert data type " + getName() + " to protobuf type " + field.type_name(),
+                            ErrorCodes::CANNOT_CONVERT_TO_PROTOBUF_TYPE);
+
+
+    }
+#endif
+
+    (void)column;
+    (void)row_num;
+    (void)destination;
+    (void)field;
+}
+
 
 template <typename T>
 MutableColumnPtr DataTypeNumberBase<T>::createColumn() const

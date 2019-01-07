@@ -311,6 +311,12 @@ void DataTypeNullable::serializeTextXML(const IColumn & column, size_t row_num, 
         nested_data_type->serializeTextXML(col.getNestedColumn(), row_num, ostr, settings);
 }
 
+void DataTypeNullable::serializeProtobuf(const IColumn & column, size_t row_num,
+                                         const ProtobufField & field, google::protobuf::Message & destination) const
+{
+    nested_data_type->serializeProtobuf(column, row_num, field, destination);
+}
+
 MutableColumnPtr DataTypeNullable::createColumn() const
 {
     return ColumnNullable::create(nested_data_type->createColumn(), ColumnUInt8::create());

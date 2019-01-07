@@ -202,6 +202,16 @@ void DataTypeFixedString::deserializeTextCSV(IColumn & column, ReadBuffer & istr
 }
 
 
+void DataTypeFixedString::serializeProtobuf(const IColumn & column, size_t row_num,
+                                            const ProtobufField & field, google::protobuf::Message & destination) const
+{
+    (void)column;
+    (void)row_num;
+    (void)destination;
+    (void)field;
+}
+
+
 MutableColumnPtr DataTypeFixedString::createColumn() const
 {
     return ColumnFixedString::create(n);

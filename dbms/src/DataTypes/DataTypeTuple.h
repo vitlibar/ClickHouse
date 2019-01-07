@@ -77,6 +77,9 @@ public:
             DeserializeBinaryBulkSettings & settings,
             DeserializeBinaryBulkStatePtr & state) const override;
 
+    void serializeProtobuf(const IColumn & column, size_t row_num,
+                           const ProtobufField & field, google::protobuf::Message & destination) const override;
+
     MutableColumnPtr createColumn() const override;
 
     Field getDefault() const override;

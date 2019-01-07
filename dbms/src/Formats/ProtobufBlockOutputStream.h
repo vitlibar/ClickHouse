@@ -1,8 +1,8 @@
 #pragma once
 
-#include <string>
 #include <DataStreams/IBlockOutputStream.h>
 #include <Formats/FormatSettings.h>
+#include <Formats/ProtobufZeroCopyOutputStreamFromWriteBuffer.h>
 #include <Core/Block.h>
 
 
@@ -18,15 +18,13 @@ class Message;
 namespace DB
 {
 
-class WriteBuffer;
-
 /** TODO */
 class ProtobufBlockOutputStream : public IBlockOutputStream
 {
 public:
     ProtobufBlockOutputStream(WriteBuffer & buffer_,
                               const Block & header_,
-                              const google::protobuf::Message* format_prototype_,
+                              const google::protobuf::Message* message_prototype_,
                               const FormatSettings & format_settings_);
 
     Block getHeader() const override { return header; }
@@ -35,10 +33,9 @@ public:
     std::string getContentType() const override { return "application/octet-stream"; }
 
 private:
-    class OutputStream;
-    std::unique_ptr<OutputStream> stream;
+    ProtobufZeroCopyOutputStreamFromWriteBuffer ostrm;
     const Block header;
-    const google::protobuf::Message* format_prototype;
+    const google::protobuf::Message* message_prototype;
     const FormatSettings format_settings;
 };
 
