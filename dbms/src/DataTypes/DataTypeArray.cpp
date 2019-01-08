@@ -430,13 +430,11 @@ void DataTypeArray::deserializeTextCSV(IColumn & column, ReadBuffer & istr, cons
 }
 
 
-void DataTypeArray::serializeProtobuf(const IColumn & column, size_t row_num,
-                                      const ProtobufField & field, google::protobuf::Message & destination) const
+void DataTypeArray::serializeProtobuf(const IColumn & column, size_t row_num, ProtobufFieldWriter & protobuf) const
 {
     (void)column;
     (void)row_num;
-    (void)destination;
-    (void)field;
+    (void)protobuf;
 }
 
 

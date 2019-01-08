@@ -72,13 +72,11 @@ void DataTypeDate::deserializeTextCSV(IColumn & column, ReadBuffer & istr, const
     static_cast<ColumnUInt16 &>(column).getData().push_back(value.getDayNum());
 }
 
-void DataTypeDate::serializeProtobuf(const IColumn & column, size_t row_num,
-                                     const ProtobufField & field, google::protobuf::Message & destination) const
+void DataTypeDate::serializeProtobuf(const IColumn & column, size_t row_num, ProtobufFieldWriter & protobuf) const
 {
     (void)column;
     (void)row_num;
-    (void)destination;
-    (void)field;
+    (void)protobuf;
 }
 
 bool DataTypeDate::equals(const IDataType & rhs) const

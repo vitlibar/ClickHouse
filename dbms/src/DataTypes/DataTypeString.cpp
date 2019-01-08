@@ -7,7 +7,7 @@
 #include <Common/typeid_cast.h>
 
 #include <Formats/FormatSettings.h>
-#include <Formats/ProtobufField.h>
+#include <Formats/ProtobufFieldWriter.h>
 #include <DataTypes/DataTypeString.h>
 #include <DataTypes/DataTypeFactory.h>
 
@@ -304,10 +304,9 @@ void DataTypeString::deserializeTextCSV(IColumn & column, ReadBuffer & istr, con
 }
 
 
-void DataTypeString::serializeProtobuf(const IColumn & column, size_t row_num,
-                                       const ProtobufField & field, google::protobuf::Message & destination) const
+void DataTypeString::serializeProtobuf(const IColumn & column, size_t row_num, ProtobufFieldWriter & protobuf) const
 {
-    field.SetString(destination, static_cast<const ColumnString &>(column).getDataAt(row_num).toString());
+    protobuf.writeString(static_cast<const ColumnString &>(column).getDataAt(row_num).toString());
 }
 
 

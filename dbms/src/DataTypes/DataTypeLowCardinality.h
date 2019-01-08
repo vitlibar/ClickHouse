@@ -110,13 +110,11 @@ public:
         serializeImpl(column, row_num, ostr, &IDataType::serializeTextXML, settings);
     }
 
-    void serializeProtobuf(const IColumn & column, size_t row_num,
-                           const ProtobufField & field, google::protobuf::Message & destination) const override
+    void serializeProtobuf(const IColumn & column, size_t row_num, ProtobufFieldWriter & protobuf) const override
     {
         (void)column;
         (void)row_num;
-        (void)destination;
-        (void)field;
+        (void)protobuf;
     }
 
     MutableColumnPtr createColumn() const override;

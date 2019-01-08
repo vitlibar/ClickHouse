@@ -56,8 +56,7 @@ public:
     void serializeTextXML(const IColumn & column, size_t row_num, WriteBuffer & ostr, const FormatSettings &) const override;
     void serializeTextCSV(const IColumn & column, size_t row_num, WriteBuffer & ostr, const FormatSettings &) const override;
     void deserializeTextCSV(IColumn & column, ReadBuffer & istr, const FormatSettings & settings) const override;
-    void serializeProtobuf(const IColumn & column, size_t row_num,
-                           const ProtobufField & field, google::protobuf::Message & destination) const override;
+    void serializeProtobuf(const IColumn & column, size_t row_num, ProtobufFieldWriter & protobuf) const override;
 
     MutableColumnPtr createColumn() const override;
 

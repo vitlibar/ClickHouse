@@ -1,5 +1,6 @@
 #include <IO/WriteBufferFromString.h>
 #include <Formats/FormatSettings.h>
+#include <Formats/ProtobufFieldWriter.h>
 #include <DataTypes/DataTypeEnum.h>
 #include <DataTypes/DataTypeFactory.h>
 #include <Parsers/IAST.h>
@@ -223,13 +224,10 @@ void DataTypeEnum<Type>::deserializeBinaryBulk(
 }
 
 template <typename Type>
-void DataTypeEnum<Type>::serializeProtobuf(const IColumn & column, size_t row_num,
-                                           const ProtobufField & field, google::protobuf::Message & destination) const
+void DataTypeEnum<Type>::serializeProtobuf(const IColumn & column, size_t row_num,  ProtobufFieldWriter & protobuf) const
 {
-    (void)column;
-    (void)row_num;
-    (void)destination;
-    (void)field;
+    protobuf.prepareEnumValueMapping(values);
+    protobuf.writeEnum(static_cast<const ColumnType &>(column).getData()[row_num]);
 }
 
 template <typename Type>

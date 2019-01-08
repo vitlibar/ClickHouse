@@ -1,7 +1,7 @@
 #include <boost/algorithm/string.hpp>
 #include <Formats/FormatFactory.h>
 #include <Formats/ProtobufBlockOutputStream.h>
-#include <Formats/ProtobufField.h>
+#include <Formats/ProtobufFieldWriter.h>
 #include <Formats/ProtobufSchemas.h>
 #include <google/protobuf/io/zero_copy_stream.h>
 #include <google/protobuf/util/delimited_message_util.h>
@@ -34,7 +34,7 @@ void ProtobufBlockOutputStream::flush()
 
 void ProtobufBlockOutputStream::write(const Block & block)
 {
-    std::vector<std::pair<const ColumnWithTypeAndName*, std::unique_ptr<ProtobufField>>> mapping;
+    std::vector<std::pair<const ColumnWithTypeAndName*, std::unique_ptr<ProtobufFieldWriter>>> column_mapping;
     const auto* descriptor = message_prototype->GetDescriptor();
     for (int i = 0; i != descriptor->field_count(); ++i)
     {
@@ -42,7 +42,7 @@ void ProtobufBlockOutputStream::write(const Block & block)
         if (block.has(field->name()))
         {
             const ColumnWithTypeAndName & column = block.getByName(field->name());
-            mapping.emplace_back(&column, std::make_unique<ProtobufField>(field));
+            column_mapping.emplace_back(&column, ProtobufFieldWriter::create(field));
         }
         else if (field->is_required())
         {
@@ -57,11 +57,12 @@ void ProtobufBlockOutputStream::write(const Block & block)
     {
         std::unique_ptr<google::protobuf::Message> message(message_prototype->New());
 
-        for (const auto & pr : mapping)
+        for (const auto & pr : column_mapping)
         {
             const auto & column = *pr.first;
-            const auto & field = *pr.second;
-            column.type->serializeProtobuf(*column.column, row_num, field, *message);
+            auto & protobuf_writer = *pr.second;
+            protobuf_writer.setDestinationMessage(message.get());
+            column.type->serializeProtobuf(*column.column, row_num, protobuf_writer);
         }
 
         if (!message->IsInitialized())

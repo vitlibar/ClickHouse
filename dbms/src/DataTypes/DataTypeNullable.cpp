@@ -311,10 +311,9 @@ void DataTypeNullable::serializeTextXML(const IColumn & column, size_t row_num, 
         nested_data_type->serializeTextXML(col.getNestedColumn(), row_num, ostr, settings);
 }
 
-void DataTypeNullable::serializeProtobuf(const IColumn & column, size_t row_num,
-                                         const ProtobufField & field, google::protobuf::Message & destination) const
+void DataTypeNullable::serializeProtobuf(const IColumn & column, size_t row_num, ProtobufFieldWriter & protobuf) const
 {
-    nested_data_type->serializeProtobuf(column, row_num, field, destination);
+    nested_data_type->serializeProtobuf(column, row_num, protobuf);
 }
 
 MutableColumnPtr DataTypeNullable::createColumn() const

@@ -6,15 +6,6 @@
 #include <Core/Field.h>
 
 
-namespace google
-{
-namespace protobuf
-{
-class Message;
-}
-}
-
-
 namespace DB
 {
 
@@ -31,7 +22,7 @@ using MutableColumnPtr = COWPtr<IColumn>::MutablePtr;
 using DataTypePtr = std::shared_ptr<const IDataType>;
 using DataTypes = std::vector<DataTypePtr>;
 
-class ProtobufField;
+class ProtobufFieldWriter;
 
 
 /** Properties of data type.
@@ -266,8 +257,7 @@ public:
     }
 
     /** Serialize to a protobuf. */
-    virtual void serializeProtobuf(const IColumn & column, size_t row_num,
-                                   const ProtobufField & field, google::protobuf::Message & destination) const = 0;
+    virtual void serializeProtobuf(const IColumn & column, size_t row_num, ProtobufFieldWriter & protobuf) const = 0;
 
     /** Create empty column for corresponding type.
       */
