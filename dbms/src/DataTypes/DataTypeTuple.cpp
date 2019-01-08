@@ -409,9 +409,8 @@ void DataTypeTuple::deserializeBinaryBulkWithMultipleStreams(
 
 void DataTypeTuple::serializeProtobuf(const IColumn & column, size_t row_num, ProtobufFieldWriter & protobuf) const
 {
-    (void)column;
-    (void)row_num;
-    (void)protobuf;
+    for (const auto i : ext::range(0, ext::size(elems)))
+        elems[i]->serializeProtobuf(extractElementColumn(column, i), row_num, protobuf);
 }
 
 MutableColumnPtr DataTypeTuple::createColumn() const

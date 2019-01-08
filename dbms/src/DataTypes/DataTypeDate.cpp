@@ -4,6 +4,7 @@
 #include <Columns/ColumnsNumber.h>
 #include <DataTypes/DataTypeDate.h>
 #include <DataTypes/DataTypeFactory.h>
+#include <Formats/ProtobufFieldWriter.h>
 
 
 namespace DB
@@ -74,9 +75,8 @@ void DataTypeDate::deserializeTextCSV(IColumn & column, ReadBuffer & istr, const
 
 void DataTypeDate::serializeProtobuf(const IColumn & column, size_t row_num, ProtobufFieldWriter & protobuf) const
 {
-    (void)column;
-    (void)row_num;
-    (void)protobuf;
+    const DayNum date(static_cast<const ColumnUInt16 &>(column).getData()[row_num]);
+    protobuf.writeDate(date);
 }
 
 bool DataTypeDate::equals(const IDataType & rhs) const

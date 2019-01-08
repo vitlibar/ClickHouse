@@ -1,3 +1,4 @@
+#include <boost/numeric/conversion/cast.hpp>
 #include <Common/Exception.h>
 #include <Formats/ProtobufFieldWriter.h>
 #include <google/protobuf/message.h>
@@ -22,22 +23,32 @@ ProtobufFieldWriter::ProtobufFieldWriter(const google::protobuf::FieldDescriptor
 ProtobufFieldWriter::~ProtobufFieldWriter() = default;
 
 void ProtobufFieldWriter::writeString(const String &) { throwCannotConvertType("String"); }
-void ProtobufFieldWriter::writeInt8(Int8 value) { throwCannotConvertType(TypeName<decltype(value)>::get()); }
-void ProtobufFieldWriter::writeUInt8(UInt8 value) { throwCannotConvertType(TypeName<decltype(value)>::get()); }
-void ProtobufFieldWriter::writeInt16(Int16 value) { throwCannotConvertType(TypeName<decltype(value)>::get()); }
-void ProtobufFieldWriter::writeUInt16(UInt16 value) { throwCannotConvertType(TypeName<decltype(value)>::get()); }
-void ProtobufFieldWriter::writeInt32(Int32 value) { throwCannotConvertType(TypeName<decltype(value)>::get()); }
-void ProtobufFieldWriter::writeUInt32(UInt32 value) { throwCannotConvertType(TypeName<decltype(value)>::get()); }
-void ProtobufFieldWriter::writeInt64(Int64 value) { throwCannotConvertType(TypeName<decltype(value)>::get()); }
-void ProtobufFieldWriter::writeUInt64(UInt64 value) { throwCannotConvertType(TypeName<decltype(value)>::get()); }
-void ProtobufFieldWriter::writeUInt128(UInt128 value) { throwCannotConvertType(TypeName<decltype(value)>::get()); }
-void ProtobufFieldWriter::writeFloat32(Float32 value) { throwCannotConvertType(TypeName<decltype(value)>::get()); }
-void ProtobufFieldWriter::writeFloat64(Float64 value) { throwCannotConvertType(TypeName<decltype(value)>::get()); }
 
-void ProtobufFieldWriter::prepareEnumValueMappingInt8(const std::vector<std::pair<std::string, Int8>> &) {}
-void ProtobufFieldWriter::prepareEnumValueMappingInt16(const std::vector<std::pair<std::string, Int16>> &) {}
+void ProtobufFieldWriter::writeNumber(Int8 value) { throwCannotConvertType(TypeName<decltype(value)>::get()); }
+void ProtobufFieldWriter::writeNumber(UInt8 value) { throwCannotConvertType(TypeName<decltype(value)>::get()); }
+void ProtobufFieldWriter::writeNumber(Int16 value) { throwCannotConvertType(TypeName<decltype(value)>::get()); }
+void ProtobufFieldWriter::writeNumber(UInt16 value) { throwCannotConvertType(TypeName<decltype(value)>::get()); }
+void ProtobufFieldWriter::writeNumber(Int32 value) { throwCannotConvertType(TypeName<decltype(value)>::get()); }
+void ProtobufFieldWriter::writeNumber(UInt32 value) { throwCannotConvertType(TypeName<decltype(value)>::get()); }
+void ProtobufFieldWriter::writeNumber(Int64 value) { throwCannotConvertType(TypeName<decltype(value)>::get()); }
+void ProtobufFieldWriter::writeNumber(UInt64 value) { throwCannotConvertType(TypeName<decltype(value)>::get()); }
+void ProtobufFieldWriter::writeNumber(UInt128 value) { throwCannotConvertType(TypeName<decltype(value)>::get()); }
+void ProtobufFieldWriter::writeNumber(Float32 value) { throwCannotConvertType(TypeName<decltype(value)>::get()); }
+void ProtobufFieldWriter::writeNumber(Float64 value) { throwCannotConvertType(TypeName<decltype(value)>::get()); }
 
+void ProtobufFieldWriter::prepareEnumMapping(const std::vector<std::pair<std::string, Int8>> &) {}
+void ProtobufFieldWriter::prepareEnumMapping(const std::vector<std::pair<std::string, Int16>> &) {}
+
+void ProtobufFieldWriter::writeEnum(Int8) { throwCannotConvertType("Enum"); }
 void ProtobufFieldWriter::writeEnum(Int16) { throwCannotConvertType("Enum"); }
+
+void ProtobufFieldWriter::writeUUID(const UUID &) { throwCannotConvertType("UUID"); }
+void ProtobufFieldWriter::writeDate(DayNum) { throwCannotConvertType("Date"); }
+void ProtobufFieldWriter::writeDateTime(time_t) { throwCannotConvertType("DateTime"); }
+
+void ProtobufFieldWriter::writeDecimal(Decimal32 decimal, UInt32) { throwCannotConvertType(TypeName<decltype(decimal)>::get()); }
+void ProtobufFieldWriter::writeDecimal(Decimal64 decimal, UInt32) { throwCannotConvertType(TypeName<decltype(decimal)>::get()); }
+void ProtobufFieldWriter::writeDecimal(Decimal128 decimal, UInt32) { throwCannotConvertType(TypeName<decltype(decimal)>::get()); }
 
 void ProtobufFieldWriter::throwCannotConvertType(const String & type_name)
 {
@@ -46,11 +57,19 @@ void ProtobufFieldWriter::throwCannotConvertType(const String & type_name)
                     ErrorCodes::CANNOT_CONVERT_TO_PROTOBUF_TYPE);
 }
 
-void ProtobufFieldWriter::throwCannotConvertValue(const String & value)
+template<typename T>
+void ProtobufFieldWriter::throwCannotConvertValue(const T & value)
 {
-    throw Exception("Could not convert value " + value + " to protobuf type " + descriptor->type_name() +
+    throw Exception("Could not convert value " + toString(value) + " to protobuf type " + descriptor->type_name() +
                     " (field: " + descriptor->name() + ").",
                     ErrorCodes::CANNOT_CONVERT_TO_PROTOBUF_TYPE);
+}
+
+void ProtobufFieldWriter::checkCanWriteField()
+{
+    if (!descriptor->is_repeated() && message->GetReflection()->HasField(message, descriptor))
+        throw Exception("Cannot add more than single value to the non-repeated field " + descriptor->name(),
+                        ErrorCodes::CANNOT_CONVERT_TO_PROTOBUF_TYPE);
 }
 
 
@@ -63,51 +82,70 @@ public:
     StringProtobufFieldWriter(const google::protobuf::FieldDescriptor* descriptor_)
         : ProtobufFieldWriter(descriptor_) {}
 
-    void writeString(const String & value) override
+    void writeString(const String & value) override { writeField(value); }
+
+    void writeNumber(Int8 value) override { writeNumberTemplate(value); }
+    void writeNumber(UInt8 value) override { writeNumberTemplate(value); }
+    void writeNumber(Int16 value) override { writeNumberTemplate(value); }
+    void writeNumber(UInt16 value) override { writeNumberTemplate(value); }
+    void writeNumber(Int32 value) override { writeNumberTemplate(value); }
+    void writeNumber(UInt32 value) override { writeNumberTemplate(value); }
+    void writeNumber(Int64 value) override { writeNumberTemplate(value); }
+    void writeNumber(UInt64 value) override { writeNumberTemplate(value); }
+    void writeNumber(Float32 value) override { writeNumberTemplate(value); }
+    void writeNumber(Float64 value) override { writeNumberTemplate(value); }
+
+    void prepareEnumMapping(const std::vector<std::pair<String, Int8>> & enum_values) override { prepareEnumMappingTemplate(enum_values); }
+    void prepareEnumMapping(const std::vector<std::pair<String, Int16>> & enum_values) override { prepareEnumMappingTemplate(enum_values); }
+    void writeEnum(Int8 value) override { writeEnum(static_cast<Int16>(value)); }
+
+    void writeEnum(Int16 value) override
     {
+        auto it = enum_value_to_name_map->find(value);
+        if (it == enum_value_to_name_map->end())
+            throwCannotConvertValue(value);
+        writeField(it->second);
+    }
+
+    void writeUUID(const UUID & value) override { writeString(toString(value)); }
+    void writeDate(DayNum date) override { writeString(toString(date)); }
+    void writeDateTime(time_t tm) override { writeString(toString(tm)); }
+
+    void writeDecimal(Decimal32 decimal, UInt32 scale) override { writeDecimalTemplate(decimal, scale); }
+    void writeDecimal(Decimal64 decimal, UInt32 scale) override { writeDecimalTemplate(decimal, scale); }
+    void writeDecimal(Decimal128 decimal, UInt32 scale) override { writeDecimalTemplate(decimal, scale); }
+
+private:
+    void writeField(const String & value)
+    {
+        checkCanWriteField();
         if (descriptor->is_repeated())
             message->GetReflection()->AddString(message, descriptor, value);
         else
             message->GetReflection()->SetString(message, descriptor, value);
     }
 
-    void writeInt8(Int8 value) override { writeString(toString(value)); }
-    void writeUInt8(UInt8 value) override { writeString(toString(value)); }
-    void writeInt16(Int16 value) override { writeString(toString(value)); }
-    void writeUInt16(UInt16 value) override { writeString(toString(value)); }
-    void writeInt32(Int32 value) override { writeString(toString(value)); }
-    void writeUInt32(UInt32 value) override { writeString(toString(value)); }
-    void writeInt64(Int64 value) override { writeString(toString(value)); }
-    void writeUInt64(UInt64 value) override { writeString(toString(value)); }
-    void writeFloat32(Float32 value) override { writeString(toString(value)); }
-    void writeFloat64(Float64 value) override { writeString(toString(value)); }
-
-    void prepareEnumValueMappingInt8(const std::vector<std::pair<String, Int8>> & data_type_enum_values) override
-    {
-        prepareEnumValueMappingInternal(data_type_enum_values);
-    }
-
-    void prepareEnumValueMappingInt16(const std::vector<std::pair<String, Int16>> & data_type_enum_values) override
-    {
-        prepareEnumValueMappingInternal(data_type_enum_values);
-    }
-
-    void writeEnum(Int16 value) override
-    {
-        auto it = enum_value_to_name_map->find(value);
-        if (it == enum_value_to_name_map->end())
-            throwCannotConvertValue(toString(value));
-        writeString(it->second);
-    }
-
-private:
     template<typename T>
-    void prepareEnumValueMappingInternal(const std::vector<std::pair<String, T>> & data_type_enum_values)
+    void writeNumberTemplate(T number)
+    {
+        writeField(toString(number));
+    }
+
+    template<typename T>
+    void writeDecimalTemplate(Decimal<T> decimal, UInt32 scale)
+    {
+        WriteBufferFromOwnString buf;
+        writeText(decimal, scale, buf);
+        writeField(buf.str());
+    }
+
+    template<typename T>
+    void prepareEnumMappingTemplate(const std::vector<std::pair<String, T>> & enum_values)
     {
         if (enum_value_to_name_map.has_value())
             return;
         enum_value_to_name_map.emplace();
-        for (const auto & name_value_pair : data_type_enum_values)
+        for (const auto & name_value_pair : enum_values)
             enum_value_to_name_map->emplace(name_value_pair.second, name_value_pair.first);
     }
 
@@ -118,100 +156,125 @@ private:
 
 // NumberProtobufFieldWriter ----------------------------------------------------------------------------
 
-template<typename T>
+template<typename ProtobufFieldType>
 class NumberProtobufFieldWriter : public ProtobufFieldWriter
 {
 public:
     NumberProtobufFieldWriter(const google::protobuf::FieldDescriptor* descriptor_)
         : ProtobufFieldWriter(descriptor_) {}
 
-    void writeString(const String & value) override { writeNumberInternal(parseFromString<T>(value)); }
+    void writeString(const String & value) override
+    {
+        ProtobufFieldType parsed;
+        try
+        {
+            parsed = parseFromString<ProtobufFieldType>(value);
+        }
+        catch(...)
+        {
+            throwCannotConvertValue("'" + value + "'");
+        }
+        writeField(parsed);
+    }
 
-    void writeInt8(Int8 value) override { writeNumberInternal(castNumeric(value)); }
-    void writeUInt8(UInt8 value) override { writeNumberInternal(castNumeric(value)); }
-    void writeInt16(Int16 value) override { writeNumberInternal(castNumeric(value)); }
-    void writeUInt16(UInt16 value) override { writeNumberInternal(castNumeric(value)); }
-    void writeInt32(Int32 value) override { writeNumberInternal(castNumeric(value)); }
-    void writeUInt32(UInt32 value) override { writeNumberInternal(castNumeric(value)); }
-    void writeInt64(Int64 value) override { writeNumberInternal(castNumeric(value)); }
-    void writeUInt64(UInt64 value) override { writeNumberInternal(castNumeric(value)); }
-    void writeFloat32(Float32 value) override { writeNumberInternal(castNumeric(value)); }
-    void writeFloat64(Float64 value) override { writeNumberInternal(castNumeric(value)); }
+    void writeNumber(Int8 value) override { writeNumberTemplate(value); }
+    void writeNumber(UInt8 value) override { writeNumberTemplate(value); }
+    void writeNumber(Int16 value) override { writeNumberTemplate(value); }
+    void writeNumber(UInt16 value) override { writeNumberTemplate(value); }
+    void writeNumber(Int32 value) override { writeNumberTemplate(value); }
+    void writeNumber(UInt32 value) override { writeNumberTemplate(value); }
+    void writeNumber(Int64 value) override { writeNumberTemplate(value); }
+    void writeNumber(UInt64 value) override { writeNumberTemplate(value); }
+    void writeNumber(Float32 value) override { writeNumberTemplate(value); }
+    void writeNumber(Float64 value) override { writeNumberTemplate(value); }
+
+    void writeEnum(Int8 value) override { writeEnum(static_cast<Int16>(value)); }
 
     void writeEnum(Int16 value) override
     {
-        if constexpr (!std::is_integral_v<T>)
+        if constexpr (!std::is_integral_v<ProtobufFieldType>)
            throwCannotConvertType("Enum");
-        writeInt16(value);
+        writeNumber(value);
     }
+
+    void writeDate(DayNum date) override { writeNumber(date); }
+    void writeDateTime(time_t tm) override { writeNumber(tm); }
+
+    void writeDecimal(Decimal32 decimal, UInt32 scale) override { writeDecimalTemplate(decimal, scale); }
+    void writeDecimal(Decimal64 decimal, UInt32 scale) override { writeDecimalTemplate(decimal, scale); }
+    void writeDecimal(Decimal128 decimal, UInt32 scale) override { writeDecimalTemplate(decimal, scale); }
 
 private:
-    template<typename From>
-    T castNumeric(From value)
+    template<typename T>
+    void writeDecimalTemplate(Decimal<T> decimal, UInt32 scale)
     {
-        if constexpr (std::is_same_v<T, From>)
-            return value;
-        if constexpr (std::is_integral_v<T> && std::is_integral_v<From>)
-        {
-            T converted = static_cast<T>(value);
-            if (static_cast<From>(converted) != value)
-                throwCannotConvertValue(toString(value));
-            return converted;
-        }
-        if constexpr (std::is_integral_v<T> && std::is_floating_point_v<From>)
-        {
-            if (!std::isfinite(value) || (value < std::numeric_limits<T>::min()) || (value > std::numeric_limits<T>::max()))
-                throwCannotConvertValue(toString(value));
-        }
-        return static_cast<T>(value);
+        if constexpr (std::is_integral_v<ProtobufFieldType>)
+            writeNumberTemplate(decimal.value / decimalScaleMultiplier<T>(scale));
+        else
+            writeNumberTemplate(double(decimal.value) * pow(10., -double(scale)));
     }
 
-    void writeNumberInternal(T value)
+    template<typename T>
+    void writeNumberTemplate(T value)
     {
-        if constexpr (std::is_same_v<T, Int32>)
+        ProtobufFieldType converted_value;
+        try
+        {
+            converted_value = boost::numeric_cast<ProtobufFieldType>(value);
+        }
+        catch (boost::numeric::bad_numeric_cast &)
+        {
+            throwCannotConvertValue(value);
+        }
+
+        writeField(converted_value);
+    }
+
+    void writeField(ProtobufFieldType value)
+    {
+        checkCanWriteField();
+        if constexpr (std::is_same_v<ProtobufFieldType, Int32>)
         {
             if (descriptor->is_repeated())
                 message->GetReflection()->AddInt32(message, descriptor, value);
             else
                 message->GetReflection()->SetInt32(message, descriptor, value);
         }
-        else if constexpr (std::is_same_v<T, UInt32>)
+        else if constexpr (std::is_same_v<ProtobufFieldType, UInt32>)
         {
             if (descriptor->is_repeated())
                 message->GetReflection()->AddUInt32(message, descriptor, value);
             else
                 message->GetReflection()->SetUInt32(message, descriptor, value);
         }
-        else if constexpr (std::is_same_v<T, Int64>)
+        else if constexpr (std::is_same_v<ProtobufFieldType, Int64>)
         {
             if (descriptor->is_repeated())
                 message->GetReflection()->AddInt64(message, descriptor, value);
             else
                 message->GetReflection()->SetInt64(message, descriptor, value);
         }
-        else if constexpr (std::is_same_v<T, UInt64>)
+        else if constexpr (std::is_same_v<ProtobufFieldType, UInt64>)
         {
             if (descriptor->is_repeated())
                 message->GetReflection()->AddUInt64(message, descriptor, value);
             else
                 message->GetReflection()->SetUInt64(message, descriptor, value);
         }
-        else if constexpr (std::is_same_v<T, float>)
+        else if constexpr (std::is_same_v<ProtobufFieldType, float>)
         {
             if (descriptor->is_repeated())
                 message->GetReflection()->AddFloat(message, descriptor, value);
             else
                 message->GetReflection()->SetFloat(message, descriptor, value);
         }
-        else if constexpr (std::is_same_v<T, double>)
+        else if constexpr (std::is_same_v<ProtobufFieldType, double>)
         {
             if (descriptor->is_repeated())
                 message->GetReflection()->AddDouble(message, descriptor, value);
             else
                 message->GetReflection()->SetDouble(message, descriptor, value);
         }
-        //else
-        //    std::static_assert(false);
     }
 };
 
@@ -228,27 +291,34 @@ public:
     void writeString(const String & value) override
     {
         if (value == "true")
-            writeBoolInternal(true);
+            writeField(true);
         else if (value == "false")
-            writeBoolInternal("false");
+            writeField(false);
         else
             throwCannotConvertValue("'" + value + "'");
     }
 
-    void writeInt8(Int8 value) override { writeBoolInternal(value != 0); }
-    void writeUInt8(UInt8 value) override { writeBoolInternal(value != 0); }
-    void writeInt16(Int16 value) override { writeBoolInternal(value != 0); }
-    void writeUInt16(UInt16 value) override { writeBoolInternal(value != 0); }
-    void writeInt32(Int32 value) override { writeBoolInternal(value != 0); }
-    void writeUInt32(UInt32 value) override { writeBoolInternal(value != 0); }
-    void writeInt64(Int64 value) override { writeBoolInternal(value != 0); }
-    void writeUInt64(UInt64 value) override { writeBoolInternal(value != 0); }
-    void writeFloat32(Float32 value) override { writeBoolInternal(value != 0); }
-    void writeFloat64(Float64 value) override { writeBoolInternal(value != 0); }
+    void writeNumber(Int8 value) override { writeNumberTemplate(value); }
+    void writeNumber(UInt8 value) override { writeNumberTemplate(value); }
+    void writeNumber(Int16 value) override { writeNumberTemplate(value); }
+    void writeNumber(UInt16 value) override { writeNumberTemplate(value); }
+    void writeNumber(Int32 value) override { writeNumberTemplate(value); }
+    void writeNumber(UInt32 value) override { writeNumberTemplate(value); }
+    void writeNumber(Int64 value) override { writeNumberTemplate(value); }
+    void writeNumber(UInt64 value) override { writeNumberTemplate(value); }
+    void writeNumber(Float32 value) override { writeNumberTemplate(value); }
+    void writeNumber(Float64 value) override { writeNumberTemplate(value); }
 
 private:
-    void writeBoolInternal(bool value)
+    template<typename T>
+    void writeNumberTemplate(T value)
     {
+        writeField(value != 0);
+    }
+
+    void writeField(bool value)
+    {
+        checkCanWriteField();
         if (descriptor->is_repeated())
             message->GetReflection()->AddBool(message, descriptor, value);
         else
@@ -271,47 +341,53 @@ public:
         const auto* enum_descriptor = descriptor->enum_type()->FindValueByName(value);
         if (!enum_descriptor)
             throwCannotConvertValue("'" + value + "'");
-        writeEnumInternal(enum_descriptor);
+        writeField(enum_descriptor);
     }
 
-    void writeInt8(Int8 value) override { writeEnumInternal(toInt(value)); }
-    void writeUInt8(UInt8 value) override { writeEnumInternal(toInt(value)); }
-    void writeInt16(Int16 value) override { writeEnumInternal(toInt(value)); }
-    void writeUInt16(UInt16 value) override { writeEnumInternal(toInt(value)); }
-    void writeInt32(Int32 value) override { writeEnumInternal(toInt(value)); }
-    void writeUInt32(UInt32 value) override { writeEnumInternal(toInt(value)); }
-    void writeInt64(Int64 value) override { writeEnumInternal(toInt(value)); }
-    void writeUInt64(UInt64 value) override { writeEnumInternal(toInt(value)); }
+    void writeNumber(Int8 value) override { writeNumberTemplate(toInt(value)); }
+    void writeNumber(UInt8 value) override { writeNumberTemplate(toInt(value)); }
+    void writeNumber(Int16 value) override { writeNumberTemplate(toInt(value)); }
+    void writeNumber(UInt16 value) override { writeNumberTemplate(toInt(value)); }
+    void writeNumber(Int32 value) override { writeNumberTemplate(toInt(value)); }
+    void writeNumber(UInt32 value) override { writeNumberTemplate(toInt(value)); }
+    void writeNumber(Int64 value) override { writeNumberTemplate(toInt(value)); }
+    void writeNumber(UInt64 value) override { writeNumberTemplate(toInt(value)); }
 
-    void prepareEnumValueMappingInt8(const std::vector<std::pair<String, Int8>> & data_type_enum_values) override
-    {
-        prepareEnumValueMappingInternal(data_type_enum_values);
-    }
-
-    void prepareEnumValueMappingInt16(const std::vector<std::pair<String, Int16>> & data_type_enum_values) override
-    {
-        prepareEnumValueMappingInternal(data_type_enum_values);
-    }
+    void prepareEnumMapping(const std::vector<std::pair<String, Int8>> & enum_values) override { prepareEnumMappingTemplate(enum_values); }
+    void prepareEnumMapping(const std::vector<std::pair<String, Int16>> & enum_values) override { prepareEnumMappingTemplate(enum_values); }
+    void writeEnum(Int8 value) override { writeEnum(static_cast<Int16>(value)); }
 
     void writeEnum(Int16 value) override
     {
         auto it = enum_value_to_descriptor_map->find(value);
         if (it == enum_value_to_descriptor_map->end())
-            throwCannotConvertValue(toString(value));
-        writeEnumInternal(it->second);
+            throwCannotConvertValue(value);
+        writeField(it->second);
     }
 
 private:
-    void writeEnumInternal(int value)
+    template<typename T>
+    void writeNumberTemplate(T value)
     {
-        const auto* enum_descriptor = descriptor->enum_type()->FindValueByNumber(value);
+        int value_as_int;
+        try
+        {
+            value_as_int = boost::numeric_cast<int>(value);
+        }
+        catch (boost::numeric::bad_numeric_cast &)
+        {
+            throwCannotConvertValue(value);
+        }
+
+        const auto* enum_descriptor = descriptor->enum_type()->FindValueByNumber(value_as_int);
         if (!enum_descriptor)
-            throwCannotConvertValue(toString(value));
-        writeEnumInternal(enum_descriptor);
+            throwCannotConvertValue(value);
+        writeField(enum_descriptor);
     }
 
-    void writeEnumInternal(const google::protobuf::EnumValueDescriptor* enum_descriptor)
+    void writeField(const google::protobuf::EnumValueDescriptor* enum_descriptor)
     {
+        checkCanWriteField();
         if (descriptor->is_repeated())
             message->GetReflection()->AddEnum(message, descriptor, enum_descriptor);
         else
@@ -319,21 +395,12 @@ private:
     }
 
     template<typename T>
-    int toInt(T value)
-    {
-        int value_as_int = static_cast<int>(value);
-        if (static_cast<T>(value_as_int) != value)
-            throwCannotConvertValue(toString(value));
-        return value_as_int;
-    }
-
-    template<typename T>
-    void prepareEnumValueMappingInternal(const std::vector<std::pair<String, T>> & data_type_enum_values)
+    void prepareEnumMappingTemplate(const std::vector<std::pair<String, T>> & enum_values)
     {
         if (enum_value_to_descriptor_map.has_value())
             return;
         enum_value_to_descriptor_map.emplace();
-        for (const auto & name_value_pair : data_type_enum_values)
+        for (const auto & name_value_pair : enum_values)
         {
             Int16 value = name_value_pair.second;
             const auto* enum_descriptor = descriptor->enum_type()->FindValueByName(name_value_pair.first);

@@ -6,6 +6,7 @@
 #include <Common/typeid_cast.h>
 #include <Columns/ColumnsNumber.h>
 #include <Formats/FormatSettings.h>
+#include <Formats/ProtobufFieldWriter.h>
 #include <DataTypes/DataTypeDateTime.h>
 #include <DataTypes/DataTypeFactory.h>
 
@@ -142,9 +143,8 @@ void DataTypeDateTime::deserializeTextCSV(IColumn & column, ReadBuffer & istr, c
 
 void DataTypeDateTime::serializeProtobuf(const IColumn & column, size_t row_num, ProtobufFieldWriter & protobuf) const
 {
-    (void)column;
-    (void)row_num;
-    (void)protobuf;
+    const time_t tm = static_cast<const ColumnUInt32 &>(column).getData()[row_num];
+    protobuf.writeDateTime(tm);
 }
 
 bool DataTypeDateTime::equals(const IDataType & rhs) const

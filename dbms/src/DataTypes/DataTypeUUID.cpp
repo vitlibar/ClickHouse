@@ -1,6 +1,7 @@
 #include <DataTypes/DataTypeUUID.h>
 #include <DataTypes/DataTypeFactory.h>
 #include <Columns/ColumnsNumber.h>
+#include <Formats/ProtobufFieldWriter.h>
 #include <IO/WriteHelpers.h>
 #include <IO/ReadHelpers.h>
 
@@ -73,9 +74,7 @@ void DataTypeUUID::deserializeTextCSV(IColumn & column, ReadBuffer & istr, const
 
 void DataTypeUUID::serializeProtobuf(const IColumn & column, size_t row_num, ProtobufFieldWriter & protobuf) const
 {
-    (void)column;
-    (void)row_num;
-    (void)protobuf;
+    protobuf.writeUUID(UUID(static_cast<const ColumnUInt128 &>(column).getData()[row_num]));
 }
 
 

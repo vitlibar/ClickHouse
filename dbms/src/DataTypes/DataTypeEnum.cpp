@@ -226,7 +226,7 @@ void DataTypeEnum<Type>::deserializeBinaryBulk(
 template <typename Type>
 void DataTypeEnum<Type>::serializeProtobuf(const IColumn & column, size_t row_num,  ProtobufFieldWriter & protobuf) const
 {
-    protobuf.prepareEnumValueMapping(values);
+    protobuf.prepareEnumMapping(values);
     protobuf.writeEnum(static_cast<const ColumnType &>(column).getData()[row_num]);
 }
 

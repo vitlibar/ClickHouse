@@ -6,6 +6,7 @@
 #include <Columns/ColumnConst.h>
 
 #include <Formats/FormatSettings.h>
+#include <Formats/ProtobufFieldWriter.h>
 #include <DataTypes/DataTypeFixedString.h>
 #include <DataTypes/DataTypeFactory.h>
 
@@ -204,9 +205,8 @@ void DataTypeFixedString::deserializeTextCSV(IColumn & column, ReadBuffer & istr
 
 void DataTypeFixedString::serializeProtobuf(const IColumn & column, size_t row_num, ProtobufFieldWriter & protobuf) const
 {
-    (void)column;
-    (void)row_num;
-    (void)protobuf;
+    const char * pos = reinterpret_cast<const char *>(&static_cast<const ColumnFixedString &>(column).getChars()[n * row_num]);
+    protobuf.writeString(String(pos, n));
 }
 
 
