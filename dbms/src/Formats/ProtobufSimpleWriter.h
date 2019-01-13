@@ -13,13 +13,12 @@ public:
     void setPackRepeatedAllowed(bool allowed);
 
     void newMessage();
-    void flush();
 
     void setCurrentField(UInt32 field_number, bool is_repeated);
     UInt32 currentFieldNumber() const { return current_field_number; }
     size_t numValues() const { return num_values; }
 
-    void addInt32NoTypeCheck(Int32 value);
+    void addInt32(Int32 value);
     void addUInt32(UInt32 value);
     void addSInt32(Int32 value);
 

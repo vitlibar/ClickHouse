@@ -15,7 +15,6 @@ public:
     const std::vector<const google::protobuf::FieldDescriptor*> & fieldsInWriteOrder() const;
 
     void newMessage();
-    void flush();
 
     const google::protobuf::FieldDescription* currentField() const;
     bool nextField();

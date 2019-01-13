@@ -9,8 +9,8 @@ namespace DB
 class ProtobufWriter::FieldSetter : private boost::noncopyable
 {
 public:
-    FieldSetter() = default;
-    void init(ProtobufSimpleWriter & simple_writer_, const google::protobuf::FieldDescriptor* descriptor_);
+    FieldSetter(ProtobufSimpleWriter & simple_writer_, const google::protobuf::FieldDescriptor* field_)
+        : simple_writer(simple_writer_), field(field_) {}
 
     virtual void addString(const String & value) { cannotConvertType("String"); }
 
@@ -39,52 +39,402 @@ public:
     virtual void addDecimal64(Decimal64 decimal, UInt32 scale) { cannotConvertType("Decimal64"); }
     virtual void addDecimal128(Decimal128 decimal, UInt32 scale) { cannotConvertType("Decimal128"); }
 
-    virtual void addDefaultIfDefined() = 0;
+    virtual void addDefaultIfDefined() {}
 
 protected:
-    void cannotConvertType(const String & type_name);
+    void cannotConvertType(const String & type_name)
+    {
+        throw Exception("Could not convert data type " + type_name + " to protobuf type " + descriptor->type_name() +
+                        " (field: " + descriptor->name() + ").",
+                        ErrorCodes::CANNOT_CONVERT_TO_PROTOBUF_TYPE);
+    }
 
-    template<typename T>
-    void cannotConvertValue(const T & value);
+    void cannotConvertValue(const String & value_as_string)
+    {
+        throw Exception("Could not convert value " + value_as_string + " to protobuf type " + descriptor->type_name() +
+                        " (field: " + descriptor->name() + ").",
+                        ErrorCodes::CANNOT_CONVERT_TO_PROTOBUF_TYPE);
+    }
 
     template<typename To, typename From>
-    To numericCast(From value);
+    To numericCast(From value)
+    {
+        To result;
+        try
+        {
+            result = boost::numeric_cast<To>(value);
+        }
+        catch (boost::numeric::bad_numeric_cast &)
+        {
+            cannotConvertValue(toString(value));
+        }
+        return result;
+    }
 
     template<typename To>
-    To parseFromString(const StringRef& str);
+    To parseFromString(const StringRef & str)
+    {
+        To result;
+        try
+        {
+            parsed = ::DB::parse<To>(str.data, str.size());
+        }
+        catch(...)
+        {
+            cannotConvertValue("'" + str.toString() + "'");
+        }
+        return result;
+    }
 
-    ProtobufSimpleWriter* simple_writer = nullptr;
-    const google::protobuf::FieldDescriptor* descriptor = nullptr;
+    ProtobufSimpleWriter & simple_writer;
+    const google::protobuf::FieldDescriptor* descriptor;
 };
 
+
+
+// StringFieldSetter ---------------------------------------------------------------------------------------------------
 
 class ProtobufWriter::StringFieldSetter : public FieldSetter
 {
+public:
+    StringFieldSetter(ProtobufSimpleWriter & simple_writer_, const google::protobuf::FieldDescriptor* field_)
+        : FieldSetter(simple_writer_, field_) {}
 
+    void addString(const StringRef & str) override { addStringImpl(str); }
+
+    void addInt8(Int8 value) override { convertToStringAndAdd(value); }
+    void addUInt8(UInt8 value) override { convertToStringAndAdd(value); }
+    void addInt16(Int16 value) override { convertToStringAndAdd(value); }
+    void addUInt16(UInt16 value) override { convertToStringAndAdd(value); }
+    void addInt32(Int32 value) override { convertToStringAndAdd(value); }
+    void addUInt32(UInt32 value) override { convertToStringAndAdd(value); }
+    void addInt64(Int64 value) override { convertToStringAndAdd(value); }
+    void addUInt64(UInt64 value) override { convertToStringAndAdd(value); }
+    void addFloat32(Float32 value) override { convertToStringAndAdd(value); }
+    void addFloat64(Float64 value) override { convertToStringAndAdd(value); }
+
+    void prepareEnumMappingInt8(const std::vector<std::pair<String, Int8>> & enum_values) override { prepareEnumMapping(enum_values); }
+    void prepareEnumMappingInt16(const std::vector<std::pair<String, Int16>> & enum_values) override { prepareEnumMapping(enum_values); }
+
+    void addEnumInt8(Int8 value) override { addEnumInt16(value); }
+
+    void addEnumInt16(Int16 value) override
+    {
+        auto it = enum_value_to_name_map->find(value);
+        if (it == enum_value_to_name_map->end())
+            cannotConvertValue(toString(value));
+        addStringImpl(it->second);
+    }
+
+    void addUUID(const UUID & value) override { convertToStringAndAdd(value); }
+    void addDate(DayNum date) override { convertToStringAndAdd(value); }
+    void addDateTime(time_t tm) override { convertToStringAndAdd(value); }
+
+    void addDecimal32(Decimal32 decimal, UInt32 scale) override { addDecimal(decimal, scale); }
+    void addDecimal64(Decimal64 decimal, UInt32 scale) override { addDecimal(decimal, scale); }
+    void addDecimal128(Decimal128 decimal, UInt32 scale) override { addDecimal(decimal, scale); }
+
+private:
+    void addStringImpl(const StringRef & str)
+    {
+        simple_writer.addString(str);
+    }
+
+    template<typename T>
+    void convertToStringAndAdd(T value)
+    {
+        writeText(to_string_conversion_buffer, value);
+        addStringImpl(flushBuffer());
+    }
+
+    template<typename T>
+    void addDecimal(const Decimal<T> & decimal, UInt32 scale)
+    {
+        writeText(decimal, scale, to_string_conversion_buffer);
+        addStringImpl(flushBuffer());
+    }
+
+    StringRef flushBuffer()
+    {
+        const char* data = to_string_conversion_buffer.str().data();
+        StringRef str(data, to_string_conversion_buffer.position() - data);
+        to_string_conversion_buffer.set(data, buffer.str().size());
+        return str;
+    }
+
+    template<typename T>
+    void prepareEnumMapping(const std::vector<std::pair<String, T>> & enum_values)
+    {
+        if (enum_value_to_name_map.has_value())
+            return;
+        enum_value_to_name_map.emplace();
+        for (const auto & name_value_pair : enum_values)
+            enum_value_to_name_map->emplace(name_value_pair.second, name_value_pair.first);
+    }
+
+    WriteBufferFromOwnString to_string_conversion_buffer;
+    std::optional<std::unordered_map<Int16, String>> enum_value_to_name_map;
 };
 
-class SInt32FieldSetter : public NumberFieldSetter<Int32>
+
+
+// BytesFieldSetter ---------------------------------------------------------------------------------------------------
+
+class ProtobufWriter::BytesFieldSetter : public FieldSetter
 {
 public:
-    void addFieldValue(Int32 value) override { simple_writer.addSInt32(value); }
+    BytesFieldSetter(ProtobufSimpleWriter & simple_writer_, const google::protobuf::FieldDescriptor* field_)
+        : FieldSetter(simple_writer_, field_) {}
 };
 
-class Int32FieldSetter : public NumberFieldSetter<Int32>
+
+
+// NumberProtobufFieldWriter -------------------------------------------------------------------------------------------
+
+template<typename T>
+class ProtobufWriter::NumberFieldSetter : public FieldSetter
 {
 public:
-    void addFieldValue(Int32 value) override { simple_writer.addInt32(value); }
+    NumberFieldSetter(ProtobufSimpleWriter & simple_writer_, const google::protobuf::FieldDescriptor* field_)
+        : FieldSetter(simple_writer_, field_) {
+        setupAddNumberImplFunction();
+    }
+
+    void addString(const StringRef & str) override { addNumberImpl(parseFromString<T>(str)); }
+
+    void addInt8(Int8 value) override { castNumericAndAdd(value); }
+    void addUInt8(UInt8 value) override { castNumericAndAdd(value); }
+    void addInt16(Int16 value) override { castNumericAndAdd(value); }
+    void addUInt16(UInt16 value) override { castNumericAndAdd(value); }
+    void addInt32(Int32 value) override { castNumericAndAdd(value); }
+    void addUInt32(UInt32 value) override { castNumericAndAdd(value); }
+    void addInt64(Int64 value) override { castNumericAndAdd(value); }
+    void addUInt64(UInt64 value) override { castNumericAndAdd(value); }
+    void addFloat32(Float32 value) override { castNumericAndAdd(value); }
+    void addFloat64(Float64 value) override { castNumericAndAdd(value); }
+
+    void addEnumInt8(Int8 value) override { addEnumInt16(value); }
+
+    void addEnumInt16(Int16 value) override
+    {
+        if constexpr (!std::is_integral_v<T>)
+           cannotConvertType("Enum");
+        castNumericAndAdd(value);
+    }
+
+    void addDate(DayNum date) override { castNumericAndAdd(date); }
+    void addDateTime(time_t tm) override { castNumericAndAdd(tm); }
+
+    void addDecimal32(Decimal32 decimal, UInt32 scale) override { addDecimal(decimal, scale); }
+    void addDecimal64(Decimal64 decimal, UInt32 scale) override { addDecimal(decimal, scale); }
+    void addDecimal128(Decimal128 decimal, UInt32 scale) override { addDecimal(decimal, scale); }
+
+private:
+    template<typename From>
+    void castNumericAndAdd(From value)
+    {
+        addNumberImpl(numericCast<T>(value));
+    }
+
+    template<typename S>
+    void addDecimal(const Decimal<S> & decimal, UInt32 scale)
+    {
+        if constexpr (std::is_integral_v<T>)
+            castNumberAndAdd(decimal.value / decimalScaleMultiplier<S>(scale));
+        else
+            castNumberAndAdd(double(decimal.value) * pow(10., -double(scale)));
+    }
+
+    void addNumberImpl(T value)
+    {
+        (simple_writer.*add_number_impl_function)(value);
+    }
+
+    void setupAddNumberImplFunction()
+    {
+        if constexpr (std::is_same_v<T, Int32>)
+        {
+            switch (field_->type())
+            {
+                case TYPE_INT32: add_number_impl_function = &ProtobufSimpleWriter::addInt32; break;
+                case TYPE_SINT32: add_number_impl_function = &ProtobufSimpleWriter::addSInt32; break;
+                case TYPE_SFIXED32: add_number_impl_function = &ProtobufSimpleWriter::addSFixed32; break;
+                default: assert(false);
+            }
+        }
+        else if constexpr (std::is_same_v<T, UInt32>)
+        {
+            switch (field_->type())
+            {
+                case TYPE_UINT32: add_number_impl_function = &ProtobufSimpleWriter::addUInt32; break;
+                case TYPE_FIXED32: add_number_impl_function = &ProtobufSimpleWriter::addFixed32; break;
+                default: assert(false);
+            }
+        }
+        else if constexpr (std::is_same_v<T, Int64>)
+        {
+            switch (field_->type())
+            {
+                case TYPE_INT64: add_number_impl_function = &ProtobufSimpleWriter::addInt64; break;
+                case TYPE_SINT64: add_number_impl_function = &ProtobufSimpleWriter::addSInt64; break;
+                case TYPE_SFIXED64: add_number_impl_function = &ProtobufSimpleWriter::addSFixed64; break;
+                default: assert(false);
+            }
+        }
+        else if constexpr (std::is_same_v<T, UInt64>)
+        {
+            switch (field_->type())
+            {
+                case TYPE_UINT64: add_number_impl_function = &ProtobufSimpleWriter::addUInt64; break;
+                case TYPE_FIXED64: add_number_impl_function = &ProtobufSimpleWriter::addFixed64; break;
+                default: assert(false);
+            }
+        }
+        else if constexpr (std::is_same_v<T, float>)
+        {
+            add_number_impl_function = &ProtobufSimpleWriter::addFloat;
+        }
+        else if constexpr (std::is_same_v<T, double>)
+        {
+            add_number_impl_function = &ProtobufSimpleWriter::addDouble;
+        }
+        else
+            assert(false);
+    }
+
+    void (ProtobufSimpleWriter::*add_number_impl_function(T value);
 };
 
-class SFixed32FieldSetter : public NumberFieldSetter<Int32>
+
+
+// BoolFieldSetter -----------------------------------------------------------------------------------------------------
+
+class ProtobufField::BoolFieldSetter : public FieldSetter
 {
 public:
-    void addFieldValue(Int32 value) override { simple_writer.addSFixed32(value); }
+    BoolFieldSetter(ProtobufSimpleWriter & simple_writer_, const google::protobuf::FieldDescriptor* field_)
+        : FieldSetter(simple_writer_, field_) {}
+
+    void addString(const StringRef & str) override
+    {
+        if (str == "true")
+            addBoolImpl(true);
+        else if (str == "false")
+            addBoolImpl(false);
+        else
+            cannotConvertValue("'" + str + "'");
+    }
+
+    void addInt8(Int8 value) override { convertToBoolAndAdd(value); }
+    void addUInt8(UInt8 value) override { convertToBoolAndAdd(value); }
+    void addInt16(Int16 value) override { convertToBoolAndAdd(value); }
+    void addUInt16(UInt16 value) override { convertToBoolAndAdd(value); }
+    void addInt32(Int32 value) override { convertToBoolAndAdd(value); }
+    void addUInt32(UInt32 value) override { convertToBoolAndAdd(value); }
+    void addInt64(Int64 value) override { convertToBoolAndAdd(value); }
+    void addUInt64(UInt64 value) override { convertToBoolAndAdd(value); }
+    void addFloat32(Float32 value) override { convertToBoolAndAdd(value); }
+    void addFloat64(Float64 value) override { convertToBoolAndAdd(value); }
+
+private:
+    template<typename T>
+    void convertToBoolAndAdd(T value)
+    {
+        addBoolImpl(value != 0);
+    }
+
+    void addBoolImpl(bool b)
+    {
+        simple_writer.addBool(b);
+    }
 };
 
-class FloatFieldSetter : public NumberFieldSetter<Float32>
+
+
+// EnumFieldSetter -----------------------------------------------------------------------------------------------------
+
+class ProtobufWriter::EnumFieldSetter : public FieldSetter
 {
 public:
-    void addFieldValue(Float32 value) override { simple_writer.addFloat(value); }
+    BoolFieldSetter(ProtobufSimpleWriter & simple_writer_, const google::protobuf::FieldDescriptor* field_)
+        : FieldSetter(simple_writer_, field_) {}
+
+    void addString(const StringRef & str) override
+    {
+        prepareEnumNameToNumberMap();
+        auto it = enum_name_to_number_map->find(value);
+        if (it == enum_name_to_number_map->end())
+            cannotConvertValue("'" + str + "'");
+        addEnumImpl(it->second);
+    }
+
+    void addInt8(Int8 value) override { convertToEnumAndAdd(value); }
+    void addUInt8(UInt8 value) override { convertToEnumAndAdd(value); }
+    void addInt16(Int16 value) override { convertToEnumAndAdd(value); }
+    void addUInt16(UInt16 value) override { convertToEnumAndAdd(value); }
+    void addInt32(Int32 value) override { convertToEnumAndAdd(value); }
+    void addUInt32(UInt32 value) override { convertToEnumAndAdd(value); }
+    void addInt64(Int64 value) override { convertToEnumAndAdd(value); }
+    void addUInt64(UInt64 value) override { convertToEnumAndAdd(value); }
+
+    void prepareEnumMappingInt8(const std::vector<std::pair<String, Int8>> & enum_values) override { prepareEnumMapping(enum_values); }
+    void prepareEnumMappingInt16(const std::vector<std::pair<String, Int16>> & enum_values) override { prepareEnumMapping(enum_values); }
+
+    void addEnumInt8(Int8 value) override { addEnumInt16(value); }
+
+    void addEnumInt16(Int16 value) override
+    {
+        auto it = enum_value_to_number_map->find(value);
+        if (it == enum_value_to_number_map->end())
+            cannotConvertValue(toString(value));
+        addEnumImpl(it->second);
+    }
+
+private:
+    template<typename T>
+    void convertToEnumAndAdd(T value)
+    {
+        const auto* enum_descriptor = descriptor->enum_type()->FindValueByNumber(numericCast<int>(value));
+        if (!enum_descriptor)
+            cannotConvertValue(toString(value));
+        addEnumImpl(enum_descriptor->number());
+    }
+
+    void addEnumImpl(int enum_number)
+    {
+        simple_writer.addInt32(enum_number);
+    }
+
+    void prepareEnumNameToNumberMap()
+    {
+        if (enum_name_to_number_map.has_value())
+            return;
+        enum_name_to_number_map.emplace();
+        const auto* enum_type = field->enum_type();)
+        for (int i = 0; i != enum_type->value_count(); ++i)
+        {
+            const auto* enum_value = enum_type->value(i);
+            enum_name_to_number_map->emplace(enum_value->name(), enum_value->number());
+        }
+    }
+
+    template<typename T>
+    void prepareEnumMapping(const std::vector<std::pair<String, T>> & enum_values)
+    {
+        if (enum_value_to_number_map.has_value())
+            return;
+        enum_value_to_number_map.emplace();
+        for (const auto & name_value_pair : enum_values)
+        {
+            Int16 value = name_value_pair.second;
+            const auto* enum_descriptor = descriptor->enum_type()->FindValueByName(name_value_pair.first);
+            if (enum_descriptor)
+                enum_value_to_number_map->emplace(value, enum_descriptor->number());
+        }
+    }
+
+    std::optional<std::unordered_map<StringRef, int>> enum_name_to_number_map;
+    std::optional<std::unordered_map<Int16, int>> enum_value_to_number_map;
 };
 
 
@@ -96,7 +446,12 @@ ProtobufWriter::ProtobufWriter(WriteBuffer & buf, const google::protobuf::FileDe
 {
     simple_writer.setRequiredFieldNotSetHandler(std::bind(&ProtobufWriter::requiredFieldNotSet, this));
     simple_writer.setPackRepeatedAllowed((file_descriptor->syntax() == FileDescriptor::SYNTAX_PROTO3) ||
-                                  file_descriptor->options().packed());
+                                         file_descriptor->options().packed());
+}
+
+ProtobufWriter::~ProtobufWriter()
+{
+    finishCurrentMessage();
 }
 
 void ProtobufWriter::setMessageType(const google::protobuf::Descriptor* descriptor)
@@ -120,24 +475,25 @@ void ProtobufWriter::setMessageType(const google::protobuf::Descriptor* descript
         std::unique_ptr<FieldSetter> setter;
         switch (field->type())
         {
-            case TYPE_INT32: setter = std::make_unique<Int32FieldSetter>(); break;
-            case TYPE_UINT32: setter = std::make_unique<UInt32FieldSetter>(); break;
-            case TYPE_SINT32: setter = std::make_unique<SInt32FieldSetter>(); break;
-            case TYPE_FIXED32: setter = std::make_unique<Fixed32FieldSetter>(); break;
-            case TYPE_SFIXED32: setter = std::make_unique<SFixed32FieldSetter>(); break;
-            case TYPE_INT64: setter = std::make_unique<Int64FieldSetter>(); break;
-            case TYPE_SINT64: setter = std::make_unique<SInt64FieldSetter>(); break;
-            case TYPE_FIXED64: setter = std::make_unique<Fixed64FieldSetter>(); break;
-            case TYPE_SFIXED64: setter = std::make_unique<SFixed64FieldSetter>(); break;
-            case TYPE_BOOL: setter = std::make_unique<BoolFieldSetter>(); break;
-            case TYPE_FLOAT: setter = std::make_unique<FloatFieldSetter>(); break;
-            case TYPE_DOUBLE: setter = std::make_unique<DoubleFieldSetter>(); break;
-            case TYPE_ENUM: setter = std::make_unique<EnumFieldSetter>(); break;
-            case TYPE_STRING: setter = std::make_unique<StringFieldSetter>(); break;
-            case TYPE_BYTES: setter = std::make_unique<BytesFieldSetter>(); break;
-            default: throw FIELD_NOT_SUPPORTED;
+            case TYPE_INT32:
+            case TYPE_SINT32:
+            case TYPE_SFIXED32: setter = std::make_unique<NumberFieldSetter<Int32>>(simple_writer, field); break;
+            case TYPE_UINT32:
+            case TYPE_FIXED32: setter = std::make_unique<NumberFieldSetter<UInt32>>(simple_writer, field); break;
+            case TYPE_INT64:
+            case TYPE_SFIXED64:
+            case TYPE_SINT64: setter = std::make_unique<NumberFieldSetter<Int64>>(simple_writer, field); break;
+            case TYPE_UINT64:
+            case TYPE_FIXED64: setter = std::make_unique<NumberFieldSetter<UInt64>>(simple_writer, field); break;
+            case TYPE_FLOAT: setter = std::make_unique<NumberFieldSetter<float>>(simple_writer, field); break;
+            case TYPE_DOUBLE: setter = std::make_unique<NumberFieldSetter<double>>(simple_writer, field); break;
+            case TYPE_BOOL: setter = std::make_unique<BoolFieldSetter>(simple_writer, field); break;
+            case TYPE_ENUM: setter = std::make_unique<EnumFieldSetter>(simple_writer, field); break;
+            case TYPE_STRING: setter = std::make_unique<StringFieldSetter>(simple_writer, field); break;
+            case TYPE_BYTES: setter = std::make_unique<BytesFieldSetter>(simple_writer, field); break;
+            default: throw Exception(String("Protobuf type ") + field->type_name() + " isn't supported.",
+                                     ErrorCodes::CANNOT_CONVERT_TO_PROTOBUF_TYPE);
         }
-        setter->init(simple_writer, field);
         field_setters.emplace_back(std::move(setter));
     }
 }
@@ -146,7 +502,6 @@ const std::vector<const google::protobuf::FieldDescriptor*> & ProtobufWriter::fi
 {
     return fields_in_write_order;
 }
-
 
 void ProtobufWriter::newMessage()
 {
@@ -159,12 +514,6 @@ void ProtobufWriter::newMessage()
     }
     current_field_index = 0;
     simple_writer.setCurrentField(currentField()->number(), currentField()->is_repeated());
-}
-
-void ProtobufWriter::flush()
-{
-    finishCurrentMessage();
-    simple_writer.flush();
 }
 
 void ProtobufWriter::finishCurrentMessage()
@@ -181,6 +530,11 @@ const google::protobuf::FieldDescription* ProtobufWriter::currentField() const
     return fields_in_write_order[current_field_index];
 }
 
+ProtobufWriter::FieldSetter* ProtobufWriter::currentFieldSetter() const
+{
+    return field_setters[current_field_index];
+}
+
 bool ProtobufWriter::nextField()
 {
     if (current_field_index >= fields_in_write_order.size() - 1)
@@ -194,90 +548,79 @@ bool ProtobufWriter::nextField()
 
 void ProtobufWriter::finishCurrentField()
 {
-    if (simple_writer.numValues() == 0)
+    size_t num_values = simple_writer.numValues();
+    if (num_values == 0)
     {
         if (currentField()->is_required())
-            throw REQUIRED_FIELD_NOT_SET
+            throw Exception("No data for the required field " + currentField->name(),
+                            ErrorCodes::NO_DATA_FOR_REQUIRED_PROTOBUF_FIELD);
         else
             currentField()->addDefaultIfDefined();
     }
-}
-
-void ProtobufWriter::checkCanAddValue()
-{
-    if ((simple.numValues() > 0) && !currentField()->is_repeated())
-        throw TOO_MANY_FOR_NOT_REPEATED;
+    else if (num_values > 1 && !currentField()->is_repeated())
+    {
+        throw Exception("Cannot add more than single value to the non-repeated field " + currentField()->name(),
+                        ErrorCodes::PROTOBUF_FIELD_NOT_REPEATED);
+    }
 }
 
 void ProtobufWriter::addNumber(Int8 value)
 {
-    checkCanAddValue();
     currentFieldSetter()->addInt8(value);
 }
 
 void ProtobufWriter::addNumber(UInt8 value)
 {
-    checkCanAddValue();
     currentFieldSetter()->addUInt8(value);
 }
 
 void ProtobufWriter::addNumber(Int16 value)
 {
-    checkCanAddValue();
     currentFieldSetter()->addInt16(value);
 }
 
 void ProtobufWriter::addNumber(UInt16 value)
 {
-    checkCanAddValue();
     currentFieldSetter()->addUInt16(value);
 }
 
 void ProtobufWriter::addNumber(Int32 value)
 {
-    checkCanAddValue();
     currentFieldSetter()->addInt32(value);
 }
 
 void ProtobufWriter::addNumber(UInt32 value)
 {
-    checkCanAddValue();
     currentFieldSetter()->addUInt32(value);
 }
 
 void ProtobufWriter::addNumber(Int64 value)
 {
-    checkCanAddValue();
     currentFieldSetter()->addInt64(value);
 }
 
 void ProtobufWriter::addNumber(UInt64 value)
 {
-    checkCanAddValue();
     currentFieldSetter()->addUInt64(value);
 }
 
 void ProtobufWriter::addNumber(UInt128 value)
 {
-    checkCanAddValue();
     currentFieldSetter()->addUInt128(value);
 }
 
 void ProtobufWriter::addNumber(Float32 value)
 {
-    checkCanAddValue();
     currentFieldSetter()->addFloat32(value);
 }
 
 void ProtobufWriter::addNumber(Float64 value)
 {
-    checkCanAddValue();
     currentFieldSetter()->addFloat64(value);
 }
 
 void ProtobufWriter::addString(const StringRef & str)
 {
-    checkCanAddValue();
     currentFieldSetter()->addString(str);
 }
 
@@ -293,48 +636,42 @@ void ProtobufWriter::prepareEnumMapping(const std::vector<std::pair<std::string,
 
 void ProtobufWriter::addEnum(Int8 value)
 {
-    checkCanAddValue();
     currentFieldSetter()->addEnumInt8(value);
 }
 
 void ProtobufWriter::addEnum(Int16 value)
 {
-    checkCanAddValue();
     currentFieldSetter()->addEnumInt16(value);
 }
 
 void ProtobufWriter::addUUID(const UUID & uuid)
 {
-    checkCanAddValue();
     currentFieldSetter()->addUUID(uuid);
 }
 
 void ProtobufWriter::addDate(DayNum date)
 {
-    checkCanAddValue();
     currentFieldSetter()->addUUID(value);
 }
 
 void ProtobufWriter::addDateTime(time_t tm)
 {
-    checkCanAddValue();
     currentFieldSetter()->addUUID(value);
 }
 
 void ProtobufWriter::addDecimal(Decimal32 decimal, UInt32 scale)
 {
-    checkCanAddValue();
     currentFieldSetter()->addDecimal32(decimal, scale);
 }
 
 void ProtobufWriter::addDecimal(Decimal128 decimal, UInt32 scale)
 {
-    checkCanAddValue();
     currentFieldSetter()->addDecimal64(decimal, scale);
 }
 
 void ProtobufWriter::addDecimal(Decimal128 decimal, UInt32 scale)
 {
-    checkCanAddValue();
     currentFieldSetter()->addDecimal128(decimal, scale);
+}
+
 }

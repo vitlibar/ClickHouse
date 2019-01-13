@@ -21,7 +21,7 @@ StringRef flushBuffer(WriteBufferFromOwnString & buffer)
 {
     const char* data = buffer.str().data();
     StringRef str(data, buffer.position() - data);
-    buffer.set(str.data(), str.size());
+    buffer.set(data, buffer.str().size());
     return str;
 }
 
@@ -108,7 +108,7 @@ ProtobufSimpleWriter::ProtobufSimpleWriter(WriteBuffer & out_)
 
 ~ProtobufSimpleWriter()
 {
-    flush();
+    finishCurrentMessage();
 }
 
 void ProtobufSimpleWriter::setPackRepeatedAllowed(bool allowed)
@@ -120,11 +120,6 @@ void ProtobufSimpleWriter::newMessage()
 {
     finishCurrentMessage();
     current_field_number = 0;
-}
-
-void ProtobufSimpleWriter::flush()
-{
-    finishCurrentMessage();
 }
 
 void ProtobufSimpleWriter::finishCurrentMessage()
