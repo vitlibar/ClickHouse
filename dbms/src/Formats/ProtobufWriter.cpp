@@ -271,6 +271,7 @@ public:
 
     void writeDecimal32(Decimal32 decimal, UInt32 scale) override { writeDecimal(decimal, scale); }
     void writeDecimal64(Decimal64 decimal, UInt32 scale) override { writeDecimal(decimal, scale); }
+    //void writeDecimal128(const Decimal128 & decimal, UInt32 scale) override { writeDecimal(decimal, scale); }
 
 private:
     template <typename From>
@@ -282,10 +283,26 @@ private:
     template <typename S>
     void writeDecimal(const Decimal<S> & decimal, UInt32 scale)
     {
-        if constexpr (std::is_integral_v<T>)
-            castNumericAndWriteField(decimal.value / decimalScaleMultiplier<S>(scale));
-        else
-            castNumericAndWriteField(double(decimal.value) * pow(10., -double(scale)));
+        //static_assert(std::is_integral_v<Int128>);
+        WriteBufferFromOwnString buf;
+        Int128 x = 1000000000;
+        x *= x;
+        x *= x;
+        writeText(Int128(6), buf);
+
+        try
+        {
+            if constexpr (std::is_integral_v<T>)
+                castNumericAndWriteField(decimal.value / decimalScaleMultiplier<S>(scale));
+            else
+                castNumericAndWriteField(double(decimal.value) * pow(10., -double(scale)));
+        }
+        catch(...)
+        {
+            WriteBufferFromOwnString buf;
+            writeText(decimal, scale, buf);
+            cannotConvertValue(buf.str());
+        }
     }
 
     void writeField(T value) { (simple_writer.*write_field_function)(value); }

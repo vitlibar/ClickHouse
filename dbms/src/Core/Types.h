@@ -166,3 +166,12 @@ template <> constexpr bool IsDecimalNumber<Decimal64> = true;
 template <> constexpr bool IsDecimalNumber<Decimal128> = true;
 
 }
+
+
+namespace std
+{
+template <> struct is_integral<__int128> : public std::true_type {};
+template <> struct is_signed<__int128> : public std::true_type {};
+template <> struct is_unsigned<__int128> : public std::false_type {};
+template <> struct is_arithmetic<__int128> : public std::true_type {};
+}
