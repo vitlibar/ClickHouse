@@ -27,7 +27,7 @@ The table below lists supported formats and how they can be used in `INSERT` and
 | [Native](#native) | ✔ | ✔ |
 | [Null](#null) | ✗ | ✔ |
 | [XML](#xml) | ✗ | ✔ |
-| [CapnProto](#capnproto) | ✔ | ✔ |
+| [CapnProto](#capnproto) | ✔ | ✗ |
 
 ## TabSeparated {#tabseparated}
 
@@ -568,9 +568,8 @@ Cap'n Proto is a binary message format similar to Protocol Buffers and Thrift, b
 
 Cap'n Proto messages are strictly typed and not self-describing, meaning they need an external schema description. The schema is applied on the fly and cached for each query.
 
-``` sql
-SELECT SearchPhrase, count() AS c FROM test.hits
-       GROUP BY SearchPhrase FORMAT CapnProto SETTINGS schema = 'schema:Message'
+``` bash
+clickhouse-client --query="INSERT INTO test.capnproto_input FORMAT CapnProto SETTINGS format_schema = 'schema:Message' < cat input.bin
 ```
 
 Where `schema.capnp` looks like this:

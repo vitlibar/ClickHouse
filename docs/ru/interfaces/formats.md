@@ -28,7 +28,7 @@ ClickHouse может принимать (`INSERT`) и отдавать (`SELECT
 [Native](#native) | ✔ | ✔ |
 [Null](#null) | ✗ | ✔ |
 [XML](#xml) | ✗ | ✔ |
-[CapnProto](#capnproto) | ✔ | ✔ |
+[CapnProto](#capnproto) | ✔ | ✗ |
 
 ## TabSeparated {#tabseparated}
 
@@ -567,9 +567,8 @@ Cap'n Proto - формат бинарных сообщений, похож на 
 
 Сообщения Cap'n Proto строго типизированы и не самоописывающиеся, т.е. нуждаются во внешнем описании схемы. Схема применяется "на лету" и кешируется для каждого запроса.
 
-``` sql
-SELECT SearchPhrase, count() AS c FROM test.hits
-       GROUP BY SearchPhrase FORMAT CapnProto SETTINGS schema = 'schema:Message'
+``` bash
+clickhouse-client --query="INSERT INTO test.capnproto_input FORMAT CapnProto SETTINGS format_schema = 'schema:Message' < cat input.bin
 ```
 
 Где `schema.capnp` выглядит следующим образом:

@@ -28,7 +28,7 @@ ClickHouse 可以接受多种数据格式，可以在 (`INSERT`) 以及 (`SELECT
 | [Native](#native) | ✔ | ✔ |
 | [Null](#null) | ✗ | ✔ |
 | [XML](#xml) | ✗ | ✔ |
-| [CapnProto](#capnproto) | ✔ | ✔ |
+| [CapnProto](#capnproto) | ✔ | ✗ |
 
 ## TabSeparated {#tabseparated}
 
@@ -573,9 +573,8 @@ Cap'n Proto 是一种二进制消息格式，类似 Protocol Buffers 和 Thrifti
 
 Cap'n Proto 消息格式是严格类型的，而不是自我描述，这意味着它们不需要外部的描述。这种格式可以实时地应用，并针对每个查询进行缓存。
 
-``` sql
-SELECT SearchPhrase, count() AS c FROM test.hits
-       GROUP BY SearchPhrase FORMAT CapnProto SETTINGS schema = 'schema:Message'
+``` bash
+clickhouse-client --query="INSERT INTO test.capnproto_input FORMAT CapnProto SETTINGS format_schema = 'schema:Message' < cat input.bin
 ```
 
 其中 `schema.capnp` 描述如下：

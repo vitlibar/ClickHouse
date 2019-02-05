@@ -30,7 +30,7 @@ Format | INSERT | SELECT
 [Native](formats.md#native) | ✔ | ✔ |
 [Null](formats.md#null) | ✗ | ✔ |
 [XML](formats.md#xml) | ✗ | ✔ |
-[CapnProto](formats.md#capnproto) | ✔ | ✔ |
+[CapnProto](formats.md#capnproto) | ✔ | ✗ |
 
 
 ## TabSeparated
@@ -552,9 +552,8 @@ Cap'n Proto یک فرمت پیام باینری شبیه به Protocol Buffer و
 
 </div>
 
-``` sql
-SELECT SearchPhrase, count() AS c FROM test.hits
-       GROUP BY SearchPhrase FORMAT CapnProto SETTINGS schema = 'schema:Message'
+``` bash
+clickhouse-client --query="INSERT INTO test.capnproto_input FORMAT CapnProto SETTINGS format_schema = 'schema:Message' < cat input.bin
 ```
 
 <div dir="rtl" markdown="1">
