@@ -286,7 +286,7 @@ ColumnWithTypeAndName correctNullability(ColumnWithTypeAndName && column, bool n
 {
     if (nullable)
         convertColumnToNullable(column);
-    return column;
+    return std::move(column);
 }
 
 
