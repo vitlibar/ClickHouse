@@ -40,6 +40,9 @@ struct BlockIO
     /// We provide the correct order of destruction.
     void reset()
     {
+        if (this == &rhs)
+            return *this;
+
         out.reset();
         in.reset();
         process_list_entry.reset();
