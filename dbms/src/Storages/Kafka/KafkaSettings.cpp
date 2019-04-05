@@ -17,16 +17,16 @@ void KafkaSettings::loadFromQuery(ASTStorage & storage_def)
 {
     if (storage_def.settings)
     {
-        for (const ASTSetQuery::Change & setting : storage_def.settings->changes)
+        for (const SettingChange & setting : storage_def.settings->changes)
         {
 #define SET(TYPE, NAME, DEFAULT, DESCRIPTION) \
-            else if (setting.name == #NAME) NAME.set(setting.value);
+            else if (setting.getName() == #NAME) NAME.set(setting.getValue());
 
             if (false) {}
             APPLY_FOR_KAFKA_SETTINGS(SET)
             else
                 throw Exception(
-                    "Unknown setting " + setting.name + " for storage " + storage_def.engine->name,
+                    "Unknown setting " + setting.getName() + " for storage " + storage_def.engine->name,
                     ErrorCodes::BAD_ARGUMENTS);
 #undef SET
         }

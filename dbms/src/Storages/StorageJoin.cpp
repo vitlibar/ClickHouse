@@ -139,21 +139,21 @@ void registerStorageJoin(StorageFactory & factory)
 
         if (args.storage_def && args.storage_def->settings)
         {
-            for (const ASTSetQuery::Change & setting : args.storage_def->settings->changes)
+            for (const auto & setting : args.storage_def->settings->changes)
             {
-                if (setting.name == "join_use_nulls")
-                    join_use_nulls.set(setting.value);
-                else if (setting.name == "max_rows_in_join")
-                    max_rows_in_join.set(setting.value);
-                else if (setting.name == "max_bytes_in_join")
-                    max_bytes_in_join.set(setting.value);
-                else if (setting.name == "join_overflow_mode")
-                    join_overflow_mode.set(setting.value);
-                else if (setting.name == "join_any_take_last_row")
-                    join_any_take_last_row.set(setting.value);
+                if (setting.getName() == "join_use_nulls")
+                    join_use_nulls.set(setting.getValue());
+                else if (setting.getName() == "max_rows_in_join")
+                    max_rows_in_join.set(setting.getValue());
+                else if (setting.getName() == "max_bytes_in_join")
+                    max_bytes_in_join.set(setting.getValue());
+                else if (setting.getName() == "join_overflow_mode")
+                    join_overflow_mode.set(setting.getValue());
+                else if (setting.getName() == "join_any_take_last_row")
+                    join_any_take_last_row.set(setting.getValue());
                 else
                     throw Exception(
-                        "Unknown setting " + setting.name + " for storage " + args.engine_name,
+                        "Unknown setting " + setting.getName() + " for storage " + args.engine_name,
                         ErrorCodes::BAD_ARGUMENTS);
             }
         }

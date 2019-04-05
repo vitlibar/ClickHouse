@@ -13,7 +13,7 @@ namespace DB
 
 
 /// Parse `name = value`.
-static bool parseNameValuePair(ASTSetQuery::Change & change, IParser::Pos & pos, Expected & expected)
+static std::optional<SettingChange> parseNameValuePair(IParser::Pos & pos, Expected & expected)
 {
     ParserIdentifier name_p;
     ParserLiteral value_p;
@@ -23,18 +23,17 @@ static bool parseNameValuePair(ASTSetQuery::Change & change, IParser::Pos & pos,
     ASTPtr value;
 
     if (!name_p.parse(pos, name, expected))
-        return false;
+        return {};
 
     if (!s_eq.ignore(pos, expected))
-        return false;
+        return {};
 
     if (!value_p.parse(pos, value, expected))
-        return false;
+        return {};
 
-    getIdentifierName(name, change.name);
-    change.value = value->as<ASTLiteral &>().value;
-
-    return true;
+    String change_name;
+    getIdentifierName(name, change_name);
+    return {{change_name, value->as<ASTLiteral &>().value}};
 }
 
 
@@ -50,24 +49,25 @@ bool ParserSetQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
             return false;
     }
 
-    ASTSetQuery::Changes changes;
+    SettingsChanges changes;
 
     while (true)
     {
         if (!changes.empty() && !s_comma.ignore(pos))
             break;
 
-        changes.push_back(ASTSetQuery::Change());
-
-        if (!parseNameValuePair(changes.back(), pos, expected))
+        auto change = parseNameValuePair(pos, expected);
+        if (!change)
             return false;
+
+        changes.push_back(std::move(change.value()));
     }
 
     auto query = std::make_shared<ASTSetQuery>();
     node = query;
 
     query->is_standalone = !parse_only_internals;
-    query->changes = changes;
+    query->changes = std::move(changes);
 
     return true;
 }

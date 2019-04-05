@@ -34,6 +34,7 @@
 #include <Interpreters/ExpressionActions.h>
 #include <Interpreters/ProcessList.h>
 #include <Interpreters/Cluster.h>
+#include <Interpreters/SettingsConstraints.h>
 #include <Interpreters/InterserverIOHandler.h>
 #include <Interpreters/Compiler.h>
 #include <Interpreters/SystemLog.h>
@@ -1027,27 +1028,67 @@ void Context::setSettings(const Settings & settings_)
 }
 
 
-void Context::setSetting(const String & name, const Field & value)
+void Context::setSetting(const String & name, const String & value)
 {
+    auto lock = getLock();
     if (name == "profile")
     {
-        auto lock = getLock();
-        settings.setProfile(value.safeGet<String>(), *shared->users_config);
+        settings.setProfile(value, *shared->users_config);
+        return;
     }
-    else
-        settings.set(name, value);
+    settings.set(name, value);
 }
 
 
-void Context::setSetting(const String & name, const std::string & value)
+void Context::setSetting(const String & name, const Field & value)
 {
+    auto lock = getLock();
     if (name == "profile")
     {
-        auto lock = getLock();
-        settings.setProfile(value, *shared->users_config);
+        settings.setProfile(value.safeGet<String>(), *shared->users_config);
+        return;
     }
-    else
-        settings.set(name, value);
+    settings.set(name, value);
+}
+
+
+void Context::applySettingChange(const SettingChange & change)
+{
+    setSetting(change.getName(), change.getValue());
+}
+
+
+void Context::applySettingsChanges(const SettingsChanges & changes)
+{
+    auto lock = getLock();
+    for (const SettingChange & change : changes)
+        applySettingChange(change);
+}
+
+
+void Context::setSettingChecked(const String & name, const Field & value, const Context * context_to_check_constraints)
+{
+    applySettingChangeChecked(SettingChange{name, value}, context_to_check_constraints);
+}
+
+
+void Context::applySettingChangeChecked(const SettingChange & change, const Context * context_to_check_constraints)
+{
+    if (!context_to_check_constraints)
+        context_to_check_constraints = this;
+    auto lock = getLock();
+    SettingsConstraints::check(context_to_check_constraints->settings, change);
+    applySettingChange(change);
+}
+
+
+void Context::applySettingsChangesChecked(const SettingsChanges & changes, const Context * context_to_check_constraints)
+{
+    if (!context_to_check_constraints)
+        context_to_check_constraints = this;
+    auto lock = getLock();
+    SettingsConstraints::check(context_to_check_constraints->settings, changes);
+    applySettingsChanges(changes);
 }
 
 

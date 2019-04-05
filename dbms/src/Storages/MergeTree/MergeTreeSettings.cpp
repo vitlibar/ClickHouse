@@ -26,7 +26,7 @@ void MergeTreeSettings::loadFromConfig(const String & config_elem, const Poco::U
     {
         String value = config.getString(config_elem + "." + key);
 
-#define SET(TYPE, NAME, DEFAULT) \
+#define SET(TYPE, NAME, DEFAULT, DESCRIPTION) \
         else if (key == #NAME) NAME.set(value);
 
         if (false) {}
@@ -41,16 +41,16 @@ void MergeTreeSettings::loadFromQuery(ASTStorage & storage_def)
 {
     if (storage_def.settings)
     {
-        for (const ASTSetQuery::Change & setting : storage_def.settings->changes)
+        for (const SettingChange & setting : storage_def.settings->changes)
         {
-#define SET(TYPE, NAME, DEFAULT) \
-            else if (setting.name == #NAME) NAME.set(setting.value);
+#define SET(TYPE, NAME, DEFAULT, DESCRIPTION) \
+            else if (setting.getName() == #NAME) NAME.set(setting.getValue());
 
             if (false) {}
             APPLY_FOR_MERGE_TREE_SETTINGS(SET)
             else
                 throw Exception(
-                    "Unknown setting " + setting.name + " for storage " + storage_def.engine->name,
+                    "Unknown setting " + setting.getName() + " for storage " + storage_def.engine->name,
                     ErrorCodes::BAD_ARGUMENTS);
 #undef SET
         }
@@ -62,13 +62,13 @@ void MergeTreeSettings::loadFromQuery(ASTStorage & storage_def)
         storage_def.set(storage_def.settings, settings_ast);
     }
 
-    ASTSetQuery::Changes & changes = storage_def.settings->changes;
+    SettingsChanges & changes = storage_def.settings->changes;
 
 #define ADD_IF_ABSENT(NAME)                                                                                   \
     if (std::find_if(changes.begin(), changes.end(),                                                          \
-                  [](const ASTSetQuery::Change & c) { return c.name == #NAME; })                              \
+                  [](const SettingChange & c) { return c.getName() == #NAME; })                              \
             == changes.end())                                                                                 \
-        changes.push_back(ASTSetQuery::Change{#NAME, NAME.value});
+        changes.push_back(SettingChange{#NAME, NAME.value});
 
     APPLY_FOR_IMMUTABLE_MERGE_TREE_SETTINGS(ADD_IF_ABSENT)
 #undef ADD_IF_ABSENT

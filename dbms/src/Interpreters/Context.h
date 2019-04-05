@@ -263,11 +263,16 @@ public:
     Settings getSettings() const;
     void setSettings(const Settings & settings_);
 
-    /// Set a setting by name.
+    /// Set settings by name.
+    void setSetting(const String & name, const String & value);
     void setSetting(const String & name, const Field & value);
+    void applySettingChange(const SettingChange & change);
+    void applySettingsChanges(const SettingsChanges & changes);
 
-    /// Set a setting by name. Read the value in text form from a string (for example, from a config, or from a URL parameter).
-    void setSetting(const String & name, const std::string & value);
+    /// Set settings by name after checking the constraints.
+    void setSettingChecked(const String & name, const Field & value, const Context * context_to_check_constraints = nullptr);
+    void applySettingChangeChecked(const SettingChange & change, const Context * context_to_check_constraints = nullptr);
+    void applySettingsChangesChecked(const SettingsChanges & changes, const Context * context_to_check_constraints = nullptr);
 
     const EmbeddedDictionaries & getEmbeddedDictionaries() const;
     const ExternalDictionaries & getExternalDictionaries() const;

@@ -805,8 +805,7 @@ private:
             {
                 if (!old_settings)
                     old_settings.emplace(context.getSettingsRef());
-                for (const auto & change : settings_ast.as<ASTSetQuery>()->changes)
-                    context.setSetting(change.name, change.value);
+                context.applySettingsChanges(settings_ast.as<ASTSetQuery>()->changes);
             };
             const auto * insert = parsed_query->as<ASTInsertQuery>();
             if (insert && insert->settings_ast)
@@ -833,10 +832,10 @@ private:
                 /// Save all changes in settings to avoid losing them if the connection is lost.
                 for (const auto & change : set_query->changes)
                 {
-                    if (change.name == "profile")
-                        current_profile = change.value.safeGet<String>();
+                    if (change.getName() == "profile")
+                        current_profile = change.getValue().get<String>();
                     else
-                        context.setSetting(change.name, change.value);
+                        context.applySettingChange(change);
                 }
             }
 
