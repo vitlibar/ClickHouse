@@ -34,7 +34,6 @@
 #include <Interpreters/ExpressionActions.h>
 #include <Interpreters/ProcessList.h>
 #include <Interpreters/Cluster.h>
-#include <Interpreters/SettingsConstraints.h>
 #include <Interpreters/InterserverIOHandler.h>
 #include <Interpreters/Compiler.h>
 #include <Interpreters/SystemLog.h>
@@ -620,14 +619,22 @@ void Context::calculateUserSettings()
     /// NOTE: we ignore global_context settings (from which it is usually copied)
     /// NOTE: global_context settings are immutable and not auto updated
     settings = Settings();
+    settings_constraints = SettingsConstraints();
 
     /// 2) Apply settings from default profile
     auto default_profile_name = getDefaultProfileName();
     if (profile != default_profile_name)
-        settings.setProfile(default_profile_name, *shared->users_config);
+        setProfile(default_profile_name);
 
     /// 3) Apply settings from current user
+    setProfile(profile);
+}
+
+
+void Context::setProfile(const String & profile)
+{
     settings.setProfile(profile, *shared->users_config);
+    settings_constraints.setProfile(profile, *shared->users_config);
 }
 
 
@@ -1033,7 +1040,7 @@ void Context::setSetting(const String & name, const String & value)
     auto lock = getLock();
     if (name == "profile")
     {
-        settings.setProfile(value, *shared->users_config);
+        setProfile(value);
         return;
     }
     settings.set(name, value);
@@ -1045,7 +1052,7 @@ void Context::setSetting(const String & name, const Field & value)
     auto lock = getLock();
     if (name == "profile")
     {
-        settings.setProfile(value.safeGet<String>(), *shared->users_config);
+        setProfile(value.safeGet<String>());
         return;
     }
     settings.set(name, value);
@@ -1077,7 +1084,7 @@ void Context::applySettingChangeChecked(const SettingChange & change, const Cont
     if (!context_to_check_constraints)
         context_to_check_constraints = this;
     auto lock = getLock();
-    SettingsConstraints::check(context_to_check_constraints->settings, change);
+    context_to_check_constraints->settings_constraints.check(context_to_check_constraints->settings, change);
     applySettingChange(change);
 }
 
@@ -1087,7 +1094,7 @@ void Context::applySettingsChangesChecked(const SettingsChanges & changes, const
     if (!context_to_check_constraints)
         context_to_check_constraints = this;
     auto lock = getLock();
-    SettingsConstraints::check(context_to_check_constraints->settings, changes);
+    context_to_check_constraints->settings_constraints.check(context_to_check_constraints->settings, changes);
     applySettingsChanges(changes);
 }
 
