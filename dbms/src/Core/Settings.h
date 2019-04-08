@@ -1,7 +1,7 @@
 #pragma once
 
 #include "SettingsCommon.h"
-#include "Core/SettingsChanges.h"
+#include "Common/SettingsChanges.h"
 #include <Core/Defines.h>
 
 

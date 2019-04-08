@@ -1,4 +1,4 @@
-#include <Core/SettingsChanges.h>
+#include <Common/SettingsChanges.h>
 
 #include <Common/FieldVisitors.h>
 #include <IO/ReadHelpers.h>

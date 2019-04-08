@@ -7,6 +7,7 @@
 
 #include <Common/Exception.h>
 #include <Common/UInt128.h>
+#include <Common/decimalScaleMultiplier.h>
 #include <Core/Types.h>
 #include <Core/Defines.h>
 #include <Core/UUID.h>
@@ -81,7 +82,7 @@ public:
 
     operator T() const { return dec; }
     T getValue() const { return dec; }
-    T getScaleMultiplier() const;
+    T getScaleMultiplier() const { return decimalScaleMultiplier<typename T::NativeType>(scale); }
     UInt32 getScale() const { return scale; }
 
     template <typename U>

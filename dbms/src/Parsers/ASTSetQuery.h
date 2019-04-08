@@ -1,7 +1,7 @@
 #pragma once
 
 #include <Common/FieldVisitors.h>
-#include <Core/SettingsChanges.h>
+#include <Common/SettingsChanges.h>
 #include <Parsers/IAST.h>
 
 

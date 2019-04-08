@@ -1,8 +1,8 @@
 #include <Interpreters/SettingsConstraints.h>
 
-#include <Core/Settings.h>
-#include <Core/SettingsChanges.h>
+#include <Common/SettingsChanges.h>
 #include <Common/FieldVisitors.h>
+#include <Core/Settings.h>
 #include <IO/WriteHelpers.h>
 #include <Poco/Util/AbstractConfiguration.h>
 
