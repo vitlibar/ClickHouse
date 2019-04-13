@@ -228,9 +228,34 @@ private:
             context.setFormatSchemaPath(Poco::Path(config().getString("format_schema_path")).toString());
     }
 
+#if 0
+    struct XBase
+    {
+        void* q;
+    };
+
+    struct X : public XBase
+    {
+        int a;
+    };
+
+    struct Y
+    {
+        X x;
+    };
+#endif
 
     int main(const std::vector<std::string> & /*args*/)
     {
+#if 0
+        X Y::*ptr = &Y::x;
+
+        XBase Y::*ptr2 = &Y::x;
+
+        (void)ptr;
+        (void)ptr2;
+#endif
+
         try
         {
             return mainImpl();

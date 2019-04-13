@@ -6,6 +6,7 @@
 #include <IO/ReadHelpers.h>
 #include <IO/WriteHelpers.h>
 
+#include <Common/SettingsChanges.h>
 
 
 namespace DB
@@ -544,5 +545,189 @@ void SettingLogsLevel::set(const String & x)
 {
     set(getValue(x));
 }
+
+
+
+namespace ErrorCodes
+{
+extern const int UNKNOWN_SETTING;
+}
+
+
+struct SettingsBase
+{
+public:
+    void setString(const String & name, const String & value) { (layout.getByName(name).set_string)(this, value); }
+    void setField(const String & name, const Field & value) { (layout.getByName(name).set_field)(this, value); }
+    void set(const String & name, const String & value) { setString(name, value); }
+    void set(const String & name, const Field & value) { setField(name, value); }
+
+    String getString(const String & name) const
+    {
+        String value;
+        getString(name, value);
+        return value;
+    }
+
+    Field getField(const String & name) const
+    {
+        String value;
+        getString(name, value);
+        return value;
+    }
+
+    void getString(const String & name, String & value) const { (layout.getByName(name).get_string)(this, value); }
+    void getField(const String & name, Field & value) const { (layout.getByName(name).get_field)(this, value); }
+    void get(const String & name, String & value) const { value = getString(name); }
+    void get(const String & name, Field & value) const { value = getField(name); }
+
+    bool tryGetString(const String & name, String & value) const
+    {
+        const auto * functions = layout.tryGetByName(name);
+        if (!functions)
+            return false;
+        (functions->get_string)(this, value);
+        return true;
+    }
+
+    bool tryGetField(const String & name, Field & value) const
+    {
+        const auto * functions = layout.tryGetByName(name);
+        if (!functions)
+            return false;
+        (functions->get_field)(this, value);
+        return true;
+    }
+
+    bool tryGet(const String & name, String & value) const { return tryGetString(name, value); }
+    bool tryGet(const String & name, Field & value) const { return tryGetField(name, value); }
+
+#if 0
+    SettingsChanges changes() const
+    {
+        SettingsChanges collected_changes;
+        for (const auto & entry : getLayout().getAll())
+        {
+            if (this->*maybe_changed_field.changed)
+                collected_changes.push_back({maybe_changed_field.name.toString(), (maybe_changed_field.get_field)(this)});
+        }
+        return collected_changes;
+    }
+#endif
+
+    void applyChange(const SettingChange & change)
+    {
+        (layout.getByName(change.getName()).set_field_unsafe)(this, change.getValue());
+    }
+
+    void applyChanges(const SettingsChanges & changes)
+    {
+        for (const SettingChange & change : changes)
+            applyChange(change);
+    }
+
+protected:
+    class Layout
+    {
+    public:
+        typedef void (*GetStringFunction)(const SettingsBase*, String &);
+        typedef void (*GetFieldFunction)(const SettingsBase*, Field &);
+        typedef bool (*IsChangedFunction)(const SettingsBase*);
+        typedef void (*SetStringFunction)(SettingsBase*, const String &);
+        typedef void (*SetFieldFunction)(SettingsBase*, const Field &);
+        typedef void (*SetFieldUnsafeFunction)(SettingsBase*, const Field &);
+
+        struct Functions
+        {
+            GetStringFunction get_string;
+            GetFieldFunction get_field;
+            IsChangedFunction is_changed;
+            SetStringFunction set_string;
+            SetFieldFunction set_field;
+            SetFieldUnsafeFunction set_field_unsafe;
+        };
+
+        const Functions & getByName(const String & name) const
+        {
+            const Functions * functions = tryGetByName(name);
+            if (!functions)
+                throw Exception("Unknown setting " + name, ErrorCodes::UNKNOWN_SETTING);
+            return *functions;
+        }
+
+        const Functions * tryGetByName(const String & name) const
+        {
+            auto it = functions_by_name.find(name);
+            if (it == functions_by_name.end())
+                return nullptr;
+            return &it->second;
+        }
+
+
+
+        template <typename SettingType, SettingType SettingsBase::*SettingPtr>
+        void add(StringRef name)
+        {
+            functions_by_name.emplace(name,
+                                      {&FunctionsImpl<SettingType, SettingPtr>::getString,
+                                       &FunctionsImpl<SettingType, SettingPtr>::getField,
+                                       &FunctionsImpl<SettingType, SettingPtr>::isChanged,
+                                       &FunctionsImpl<SettingType, SettingPtr>::setString,
+                                       &FunctionsImpl<SettingType, SettingPtr>::setField,
+                                       &FunctionsImpl<SettingType, SettingPtr>::setFieldUnsafe});
+
+        }
+
+    private:
+        template <typename SettingType, SettingType SettingsBase::*SettingPtr>
+        struct FunctionsImpl
+        {
+            static void getString(const SettingsBase* pSettings, String & value)
+            {
+                (pSettings->*SettingPtr)->getString(value);
+            }
+
+            static void getField(const SettingsBase* pSettings, Field & value)
+            {
+                (pSettings->*SettingPtr)->getField(value);
+            }
+
+            static bool isChanged(const SettingsBase* pSettings)
+            {
+                return (pSettings->*SettingPtr)->changed;
+            }
+
+            static void setString(SettingsBase* pSettings, const String & value)
+            {
+                (pSettings->*SettingPtr)->setString(value);
+            }
+
+            static void setField(SettingsBase* pSettings, const Field & value)
+            {
+                (pSettings->*SettingPtr)->setField(value);
+            }
+
+            static void setFieldUnsafe(SettingsBase* pSettings, const Field & value)
+            {
+                (pSettings->*SettingPtr)->setField(value);
+            }
+        };
+
+        template <typename SettingType, SettingType SettingsBase::*SettingPtr>
+        static size_t offsetToChanged()
+        {
+            SettingsBase * pSettings = reinterpret_cast<SettingsBase*>(1);
+            bool & changed = (pSettings->*SettingPtr)->changed;
+            return reinterpret_cast<const UInt8*>(&changed) - reinterpret_cast<const UInt8*>(pSettings);
+        }
+
+        std::unordered_map<StringRef, Functions> functions_by_name;
+        using NameAndFunctions = std::pair<StringRef, Functions>;
+        std::vector<std::pair<size_t, const NameAndFunctions*>> all_entries;
+    };
+
+    SettingsBase(const Layout & layout_) : layout(layout_) {}
+    const Layout & layout;
+};
 
 }

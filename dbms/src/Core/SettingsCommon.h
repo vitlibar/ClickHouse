@@ -366,4 +366,178 @@ public:
     void set(const String & x);
 };
 
+
+#if 0
+/** Base class for settings providing access to a setting by its name.
+  * There are macros DECLARE_SETTINGS and IMPLEMENT_SETTINGS, they helps to use this class,
+  * it's recommended to use them instead of using this class directly.
+  */
+class SettingsAccessByName
+{
+public:
+    SettingsAccessByName(const Dispatcher & dispatcher_) : dispatcher(dispatcher_) {}
+
+    void setString(const String & name, const String & value) { (dispatcher.getFunctions(name).set_string)(this, value); }
+    void setField(const String & name, const Field & value) { (dispatcher.getFunctions(name).set_field)(this, value); }
+    void set(const String & name, const String & value) { setString(name, value); }
+    void set(const String & name, const Field & value) { setField(name, value); }
+
+    String getString(const String & name) const
+    {
+        String value;
+        getString(name, value);
+        return value;
+    }
+
+    Field getField(const String & name) const
+    {
+        String value;
+        getString(name, value);
+        return value;
+    }
+
+    void getString(const String & name, String & value) const { (dispatcher.getFunctions(name).get_string)(this, value); }
+    void getField(const String & name, Field & value) const { (dispatcher.getFunctions(name).get_field)(this, value); }
+    void get(const String & name, String & value) const { value = getString(name); }
+    void get(const String & name, Field & value) const { value = getField(name); }
+
+    bool tryGetString(const String & name, String & value) const
+    {
+        const Functions * functions = dispatcher.tryGetFunctions(name);
+        if (!functions)
+            return false;
+        (functions->get_string)(this, value);
+        return true;
+    }
+
+    bool tryGetField(const String & name, Field & value) const
+    {
+        const Functions * functions = dispatcher.tryGetFunctions(name);
+        if (!functions)
+            return false;
+        (functions->get_field)(this, value);
+        return true;
+    }
+
+    bool tryGet(const String & name, String & value) const { return tryGetString(name, value); }
+    bool tryGet(const String & name, Field & value) const { return tryGetField(name, value); }
+
+    SettingsChanges changes() const
+    {
+        SettingsChanges collected_changes;
+        for (const auto & maybe_changed_field : dispatcher.changed_fields)
+        {
+            if (this->*maybe_changed_field.changed)
+                collected_changes.push_back({maybe_changed_field.name.toString(), (maybe_changed_field.get_field)(this)});
+        }
+        return collected_changes;
+    }
+
+    void applyChange(const SettingChange & change)
+    {
+        (dispatcher.getFunctions(change.name).set_field_unsafe)(change.value);
+    }
+
+    void applyChanges(const SettingsChanges & changes)
+    {
+        for (const SettingChange & change : changes)
+            applyChange(change);
+    }
+
+    void dumpToArrayColumns(IColumn * column_names, IColumn * column_values, bool changed_only = true);
+
+protected:
+    class Dispatcher
+    {
+    public:
+        typedef void (*SetStringFunction)(SettingsBase*, const String &);
+        typedef String (*GetStringFunction)(const SettingsBase*);
+        typedef Field (*GetFieldFunction)(const SettingsBase*);
+        typedef void (*SetFieldFunction)(SettingsBase*, const Field &);
+        typedef void (*SetFieldUnsafeFunction)(SettingsBase*, const Field &);
+        typedef bool (*WasChangedFunction)(const SettingBase*);
+
+        struct Functions
+        {
+            GetStringFunction get_string;
+            SetStringFunction set_string;
+            GetFieldFunction get_field;
+            SetFieldFunction set_field;
+            SetFieldUnsafeFunction set_field_unsafe;
+        };
+
+        struct ChangedField
+        {
+            StringRef name;
+            bool SettingsAccessByName::*changed;
+            GetFieldFunction get_field;
+        };
+
+        struct ChangedString
+        {
+            StringRef name;
+            bool SettingsAccessByName::*changed;
+            GetStringFunction get_string;
+        };
+
+        const Functions & getFunctions(const String & name) const
+        {
+            const Functions * functions = tryGetFunctions(name);
+            if (!functions)
+                throw Exception("Unknown setting " + name, ErrorCodes::UNKNOWN_SETTING);
+            return *functions;
+        }
+
+        const Functions * tryGetFunctions(const String & name) const
+        {
+            auto it = functions_by_name.find(name);
+            if (it == functions_by_name.end())
+                return nullptr;
+            return &it->second;
+        }
+
+        template<typename SettingType>
+        void addFunctions(StringRef name, SettingType SettingsAccessByName::*setting);
+
+     private:
+        std::unordered_map<StringRef, Functions> functions_by_name;
+        std::vector<ChangedField> changed_fields;
+        std::vector<ChangedString> changed_strings;
+    };
+
+private:
+    const Dispatcher & dispatcher;
+};
+#endif
+
+#if 0
+#define DECLARE_SETTINGS_MEMBER_VARIABLE_(TYPE, NAME, DEFAULT, DESCRIPTION) \
+    TYPE NAME {DEFAULT};
+
+#define IMPLEMENT_SETTINGS_ADD_FUNCTIONS_(TYPE, NAME, DEFAULT, DESCRIPTION) \
+    add<TYPE, &CLASS_NAME::NAME>(StringRef(#NAME, strlen(#NAME));
+
+
+#define DECLARE_SETTINGS(CLASS_NAME, APPLY_MACRO) \
+    class CLASS_NAME : public SettingsBase \
+    { \
+    public: \
+        CLASS_NAME(); \
+        APPLY_MACRO(DECLARE_SETTINGS_MEMBER_VARIABLE_) \
+    private: \
+        class Layout; \
+    };
+
+#define IMPLEMENT_SETTINGS(CLASS_NAME, APPLY_MACRO) \
+    class CLASS_NAME::Layout : public SettingsBase::Layout, public ext::singleton<CLASS_NAME::Layout> \
+    { \
+    public: \
+        Layout() \
+        { \
+            APPLY_MACRO(IMPLEMENT_SETTINGS_ADD_FUNCTIONS_) \
+        } \
+    }; \
+    \
+    CLASS_NAME::CLASS_NAME() : SettingsBase(Layout::instance()) {}
+#endif
 }
