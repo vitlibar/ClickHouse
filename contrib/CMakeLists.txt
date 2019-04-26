@@ -309,5 +309,5 @@ endif()
 if (USE_INTERNAL_HYPERSCAN_LIBRARY)
     add_subdirectory (hyperscan)
 endif()
-add_subdirectory (simdjson)
-set (SIMDJSON_BUILD_STATIC ON CACHE INTERNAL "")
+
+add_subdirectory (simdjson-cmake)
