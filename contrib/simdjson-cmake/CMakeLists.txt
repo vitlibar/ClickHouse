@@ -11,9 +11,8 @@ set(SIMDJSON_LIB_VERSION "0.0.1" CACHE STRING "simdjson library version")
 set(SIMDJSON_LIB_SOVERSION "0.0.1" CACHE STRING "simdjson library soversion")
 set(SIMDJSON_BUILD_STATIC ${MAKE_STATIC_LIBRARIES})
 
-set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/../simdjson/tools/cmake")
+set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}")
 find_package(Options)
-find_package(LTO)
 set(SIMDJSON_OPT_FLAGS "${OPT_FLAGS}" CACHE INTERNAL "" FORCE)
 
 add_subdirectory (../simdjson/src "${CMAKE_CURRENT_BINARY_DIR}/src")

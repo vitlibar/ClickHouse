@@ -303,6 +303,7 @@ public:
 
 void registerFunctionsJSON(FunctionFactory & factory)
 {
+    std::cout << "registerFunctionsJSON(): start" << std::endl;
     factory.registerFunction<FunctionJSONBase<JSONHasImpl, false>>();
     factory.registerFunction<FunctionJSONBase<JSONLengthImpl, false>>();
     factory.registerFunction<FunctionJSONBase<JSONTypeImpl, false>>();
@@ -316,5 +317,6 @@ void registerFunctionsJSON(FunctionFactory & factory)
     //     false
     // >>();
     factory.registerFunction<FunctionJSONBase<JSONExtractStringImpl, false>>();
+    std::cout << "registerFunctionsJSON(): end" << std::endl;
 }
 }
