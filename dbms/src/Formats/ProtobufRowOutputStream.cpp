@@ -1,21 +1,21 @@
-#include <Formats/FormatFactory.h>
-
 #include <Common/config.h>
 #if USE_PROTOBUF
 
 #include "ProtobufRowOutputStream.h"
 
 #include <Core/Block.h>
+#include <Interpreters/Context.h>
 #include <Formats/BlockOutputStreamFromRowOutputStream.h>
-#include <Formats/FormatSchemaInfo.h>
+#include <Formats/FormatFactory.h>
+#include <Formats/FormatSchemaLoader.h>
 #include <Formats/ProtobufSchemas.h>
 #include <google/protobuf/descriptor.h>
 
 
 namespace DB
 {
-ProtobufRowOutputStream::ProtobufRowOutputStream(WriteBuffer & out, const Block & header, const FormatSchemaInfo & format_schema)
-    : data_types(header.getDataTypes()), writer(out, ProtobufSchemas::instance().getMessageTypeForFormatSchema(format_schema), header.getNames())
+ProtobufRowOutputStream::ProtobufRowOutputStream(WriteBuffer & out, const Block & header, const google::protobuf::Descriptor * message_type)
+    : data_types(header.getDataTypes()), writer(out, message_type, header.getNames())
 {
     value_indices.resize(header.columns());
 }
@@ -37,8 +37,10 @@ void registerOutputFormatProtobuf(FormatFactory & factory)
     factory.registerOutputFormat(
         "Protobuf", [](WriteBuffer & buf, const Block & header, const Context & context, const FormatSettings &)
         {
+            const String format_schema_setting = context.getSettingsRef().format_schema.toString();
+            const auto * message_type = context.getFormatSchemaLoader().getProtobufSchema(format_schema_setting);
             return std::make_shared<BlockOutputStreamFromRowOutputStream>(
-                std::make_shared<ProtobufRowOutputStream>(buf, header, FormatSchemaInfo(context, "proto")), header);
+                std::make_shared<ProtobufRowOutputStream>(buf, header, message_type), header);
         });
 }
 

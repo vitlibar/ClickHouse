@@ -71,7 +71,7 @@ BlockInputStreams StorageSystemFormatSchemas::read(
         for (const String & path : paths)
         {
             String schema;
-            if (format_schema_loader.tryGetSchema(path, schema))
+            if (format_schema_loader.tryGetRawSchema(path, schema))
             {
                 res_columns[0]->insert(path);
                 res_columns[1]->insert(schema);

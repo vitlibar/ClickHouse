@@ -9,7 +9,7 @@ namespace google
 {
 namespace protobuf
 {
-    class Message;
+    class Descriptor;
 }
 }
 
@@ -17,7 +17,6 @@ namespace protobuf
 namespace DB
 {
 class Block;
-class FormatSchemaInfo;
 
 /** Stream designed to serialize data in the google protobuf format.
   * Each row is written as a separated message.
@@ -30,7 +29,7 @@ class FormatSchemaInfo;
 class ProtobufRowOutputStream : public IRowOutputStream
 {
 public:
-    ProtobufRowOutputStream(WriteBuffer & out, const Block & header, const FormatSchemaInfo & format_schema);
+    ProtobufRowOutputStream(WriteBuffer & out, const Block & header, const google::protobuf::Descriptor * message_type);
 
     void write(const Block & block, size_t row_num) override;
     std::string getContentType() const override { return "application/octet-stream"; }

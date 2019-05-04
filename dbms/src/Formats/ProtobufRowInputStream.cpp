@@ -1,19 +1,21 @@
 #include <Common/config.h>
 #if USE_PROTOBUF
 
+#include <Formats/ProtobufRowInputStream.h>
+
 #include <Core/Block.h>
+#include <Interpreters/Context.h>
 #include <Formats/BlockInputStreamFromRowInputStream.h>
 #include <Formats/FormatFactory.h>
-#include <Formats/FormatSchemaInfo.h>
-#include <Formats/ProtobufRowInputStream.h>
+#include <Formats/FormatSchemaLoader.h>
 #include <Formats/ProtobufSchemas.h>
 
 
 namespace DB
 {
 
-ProtobufRowInputStream::ProtobufRowInputStream(ReadBuffer & in_, const Block & header, const FormatSchemaInfo & format_schema)
-    : data_types(header.getDataTypes()), reader(in_, ProtobufSchemas::instance().getMessageTypeForFormatSchema(format_schema), header.getNames())
+ProtobufRowInputStream::ProtobufRowInputStream(ReadBuffer & in_, const Block & header, const google::protobuf::Descriptor * message_type)
+    : data_types(header.getDataTypes()), reader(in_, message_type, header.getNames())
 {
 }
 
@@ -67,17 +69,15 @@ void ProtobufRowInputStream::syncAfterError()
 
 void registerInputFormatProtobuf(FormatFactory & factory)
 {
-    factory.registerInputFormat("Protobuf", [](
-        ReadBuffer & buf,
-        const Block & sample,
-        const Context & context,
-        UInt64 max_block_size,
-        const FormatSettings & settings)
-    {
-        return std::make_shared<BlockInputStreamFromRowInputStream>(
-            std::make_shared<ProtobufRowInputStream>(buf, sample, FormatSchemaInfo(context, "proto")),
-            sample, max_block_size, settings);
-    });
+    factory.registerInputFormat(
+        "Protobuf",
+        [](ReadBuffer & buf, const Block & sample, const Context & context, UInt64 max_block_size, const FormatSettings & settings)
+        {
+            const String format_schema_setting = context.getSettingsRef().format_schema.toString();
+            const auto * message_type = context.getFormatSchemaLoader().getProtobufSchema(format_schema_setting);
+            return std::make_shared<BlockInputStreamFromRowInputStream>(
+                std::make_shared<ProtobufRowInputStream>(buf, sample, message_type), sample, max_block_size, settings);
+        });
 }
 
 }

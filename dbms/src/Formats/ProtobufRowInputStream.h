@@ -7,10 +7,17 @@
 #include <Formats/IRowInputStream.h>
 #include <Formats/ProtobufReader.h>
 
+namespace google
+{
+namespace protobuf
+{
+    class Descriptor;
+}
+}
+
 namespace DB
 {
 class Block;
-class FormatSchemaInfo;
 
 
 /** Stream designed to deserialize data from the google protobuf format.
@@ -24,7 +31,7 @@ class FormatSchemaInfo;
 class ProtobufRowInputStream : public IRowInputStream
 {
 public:
-    ProtobufRowInputStream(ReadBuffer & in_, const Block & header, const FormatSchemaInfo & format_schema);
+    ProtobufRowInputStream(ReadBuffer & in_, const Block & header, const google::protobuf::Descriptor * message_type);
     ~ProtobufRowInputStream() override;
 
     bool read(MutableColumns & columns, RowReadExtension & extra) override;
