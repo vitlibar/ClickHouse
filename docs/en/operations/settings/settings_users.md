@@ -85,22 +85,22 @@ To open access only from localhost, specify:
 
 ### user_name/databases
 
-In this section you can set up the filters, that apply for each row from the results of `SELECT` query. You can use any expression as a filter. The filtering is incompatible with `PREWHERE` operations and disables `WHERE→PREWHERE` optimization.
+In this section you can choouse which rows can be returned by `SELECT` query. This feature implements a kind of Row-Level Security in ClickHouse.
 
-**Examples**
+**Example**
 
-The following configurations sets that as a result of `SELECT` query the user sees just that rows where the value of field `a` equals to `1`.
-
-```
-<table1>
-    <filter>a = 1</filter>
-</table1>
-```
-
-The following configuration shows more complicated filter on several fields.
+The following configurations sets that the user `user1` can see only the rows of `table1` as a result of `SELECT` query where the value of field `id` equals to `1000`.
 
 ```
-<filtered_table2>
-    <filter>a + b &lt; 1 or c - d &gt; 5</filter>
-</filtered_table2>
+<user1>
+    <databases>
+        <database_name>
+            <table1>
+                <filter>id = 1000</filter>
+            </table1>
+        </database_name>
+    </databases>
+</user1>
 ```
+
+The filter is usually an expression with comparison and logical operators. You can use any conditional expression for the filter. The filtering is incompatible with `PREWHERE` operations and disables `WHERE→PREWHERE` optimization.
