@@ -20,30 +20,6 @@ namespace ErrorCodes
 IMPLEMENT_SETTINGS_COLLECTION(Settings, LIST_OF_SETTINGS)
 
 
-/** Set the settings from the profile (in the server configuration, many settings can be listed in one profile).
-    * The profile can also be set using the `set` functions, like the `profile` setting.
-    */
-void Settings::setProfile(const String & profile_name, const Poco::Util::AbstractConfiguration & config)
-{
-    String elem = "profiles." + profile_name;
-
-    if (!config.has(elem))
-        throw Exception("There is no profile '" + profile_name + "' in configuration file.", ErrorCodes::THERE_IS_NO_PROFILE);
-
-    Poco::Util::AbstractConfiguration::Keys config_keys;
-    config.keys(elem, config_keys);
-
-    for (const std::string & key : config_keys)
-    {
-        if (key == "constraints")
-            continue;
-        if (key == "profile")   /// Inheritance of one profile from another.
-            setProfile(config.getString(elem + "." + key), config);
-        else
-            set(key, config.getString(elem + "." + key));
-    }
-}
-
 void Settings::loadSettingsFromConfig(const String & path, const Poco::Util::AbstractConfiguration & config)
 {
     if (!config.has(path))

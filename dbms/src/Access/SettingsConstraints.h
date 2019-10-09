@@ -58,21 +58,33 @@ public:
     ~SettingsConstraints();
 
     void clear();
+    bool empty() const { return constraints_by_index.empty(); }
 
     void setMinValue(const String & name, const Field & min_value);
     void setMaxValue(const String & name, const Field & max_value);
     void setReadOnly(const String & name, bool read_only);
 
+    void merge(const SettingsConstraints & other);
+
+    struct Info
+    {
+        StringRef name;
+        Field min;
+        Field max;
+        bool read_only = false;
+    };
+    using Infos = std::vector<Info>;
+
+    Infos getInfo() const;
+
     void check(const Settings & current_settings, const SettingChange & change) const;
     void check(const Settings & current_settings, const SettingsChanges & changes) const;
 
-    /** Set multiple settings from "profile" (in server configuration file (users.xml), profiles contain groups of multiple settings).
-      * The profile can also be set using the `set` functions, like the profile setting.
-      */
-    void setProfile(const String & profile_name, const Poco::Util::AbstractConfiguration & config);
-
     /// Loads the constraints from configuration file, at "path" prefix in configuration.
     void loadFromConfig(const String & path, const Poco::Util::AbstractConfiguration & config);
+
+    friend bool operator ==(const SettingsConstraints & lhs, const SettingsConstraints & rhs);
+    friend bool operator !=(const SettingsConstraints & lhs, const SettingsConstraints & rhs) { return !(lhs == rhs); }
 
 private:
     struct Constraint
@@ -80,6 +92,9 @@ private:
         bool read_only = false;
         Field min_value;
         Field max_value;
+
+        bool operator ==(const Constraint & rhs) const;
+        bool operator !=(const Constraint & rhs) const { return !(*this == rhs); }
     };
 
     Constraint & getConstraintRef(size_t index);

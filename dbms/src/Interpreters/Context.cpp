@@ -25,6 +25,8 @@
 #include <Interpreters/ActionLocksManager.h>
 #include <Core/Settings.h>
 #include <Interpreters/ExpressionJIT.h>
+#include <Access/AccessControlManager.h>
+#include <Access/SettingsProfile.h>
 #include <Interpreters/UsersManager.h>
 #include <Interpreters/Quota.h>
 #include <Dictionaries/Embedded/GeoDictionariesLoader.h>
@@ -36,7 +38,6 @@
 #include <Interpreters/ProcessList.h>
 #include <Interpreters/Cluster.h>
 #include <Interpreters/InterserverIOHandler.h>
-#include <Interpreters/SettingsConstraints.h>
 #include <Interpreters/SystemLog.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/DDLWorker.h>
@@ -127,6 +128,7 @@ struct ContextShared
     mutable std::optional<ExternalModelsLoader> external_models_loader;
     String default_profile_name;                            /// Default profile name used for default values.
     String system_profile_name;                             /// Profile used by system processes
+    AccessControlManager access_control_manager;
     std::unique_ptr<UsersManager> users_manager;            /// Known users.
     Quotas quotas;                                          /// Known quotas for resource use.
     mutable UncompressedCachePtr uncompressed_cache;        /// The cache of decompressed blocks.
@@ -579,10 +581,23 @@ const Poco::Util::AbstractConfiguration & Context::getConfigRef() const
     return shared->config ? *shared->config : Poco::Util::Application::instance().config();
 }
 
+AccessControlManager & Context::getAccessControlManager()
+{
+    auto lock = getLock();
+    return shared->access_control_manager;
+}
+
+const AccessControlManager & Context::getAccessControlManager() const
+{
+    auto lock = getLock();
+    return shared->access_control_manager;
+}
+
 void Context::setUsersConfig(const ConfigurationPtr & config)
 {
     auto lock = getLock();
     shared->users_config = config;
+    shared->access_control_manager.loadFromConfig(shared->users_config);
     shared->users_manager->loadFromConfig(*shared->users_config);
     shared->quotas.loadFromConfig(*shared->users_config);
 }
@@ -645,11 +660,15 @@ void Context::calculateUserSettings()
 
 void Context::setProfile(const String & profile)
 {
-    settings.setProfile(profile, *shared->users_config);
+    auto settings_profile = getAccessControlManager().read<SettingsProfile>(profile);
+    if (!settings_profile->parent_profile.empty())
+        setProfile(settings_profile->parent_profile);
+
+    settings.applyChanges(settings_profile->settings);
 
     auto new_constraints
         = settings_constraints ? std::make_shared<SettingsConstraints>(*settings_constraints) : std::make_shared<SettingsConstraints>();
-    new_constraints->setProfile(profile, *shared->users_config);
+    new_constraints->merge(settings_profile->constraints);
     settings_constraints = std::move(new_constraints);
 }
 

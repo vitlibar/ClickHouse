@@ -1,4 +1,4 @@
-#include <Interpreters/SettingsConstraints.h>
+#include <Access/SettingsConstraints.h>
 #include <Core/Settings.h>
 #include <Common/FieldVisitors.h>
 #include <IO/WriteHelpers.h>
@@ -45,6 +45,38 @@ void SettingsConstraints::setMaxValue(const String & name, const Field & max_val
 {
     size_t setting_index = Settings::findIndexStrict(name);
     getConstraintRef(setting_index).max_value = Settings::castValueWithoutApplying(setting_index, max_value);
+}
+
+
+void SettingsConstraints::merge(const SettingsConstraints & other)
+{
+    for (const auto & [setting_index, other_constraint] : other.constraints_by_index)
+    {
+        auto & constraint = constraints_by_index[setting_index];
+        if (!other_constraint.min_value.isNull())
+            constraint.min_value = other_constraint.min_value;
+        if (!other_constraint.max_value.isNull())
+            constraint.max_value = other_constraint.max_value;
+        if (other_constraint.read_only)
+            constraint.read_only = true;
+    }
+}
+
+
+SettingsConstraints::Infos SettingsConstraints::getInfo() const
+{
+    Infos result;
+    result.reserve(constraints_by_index.size());
+    for (const auto & [setting_index, constraint] : constraints_by_index)
+    {
+        result.emplace_back();
+        Info & info = result.back();
+        info.name = Settings::getName(setting_index);
+        info.min = constraint.min_value;
+        info.max = constraint.max_value;
+        info.read_only = constraint.read_only;
+    }
+    return result;
 }
 
 
@@ -119,18 +151,6 @@ const SettingsConstraints::Constraint * SettingsConstraints::tryGetConstraint(si
 }
 
 
-void SettingsConstraints::setProfile(const String & profile_name, const Poco::Util::AbstractConfiguration & config)
-{
-    String parent_profile = "profiles." + profile_name + ".profile";
-    if (config.has(parent_profile))
-        setProfile(parent_profile, config); // Inheritance of one profile from another.
-
-    String path_to_constraints = "profiles." + profile_name + ".constraints";
-    if (config.has(path_to_constraints))
-        loadFromConfig(path_to_constraints, config);
-}
-
-
 void SettingsConstraints::loadFromConfig(const String & path_to_constraints, const Poco::Util::AbstractConfiguration & config)
 {
     if (!config.has(path_to_constraints))
@@ -159,4 +179,15 @@ void SettingsConstraints::loadFromConfig(const String & path_to_constraints, con
     }
 }
 
+
+bool SettingsConstraints::Constraint::operator==(const Constraint & rhs) const
+{
+    return (read_only == rhs.read_only) && (min_value == rhs.min_value) && (max_value == rhs.max_value);
+}
+
+
+bool operator ==(const SettingsConstraints & lhs, const SettingsConstraints & rhs)
+{
+    return lhs.constraints_by_index == rhs.constraints_by_index;
+}
 }

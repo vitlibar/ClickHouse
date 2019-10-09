@@ -77,6 +77,7 @@ using ActionLocksManagerPtr = std::shared_ptr<ActionLocksManager>;
 class ShellCommand;
 class ICompressionCodec;
 class SettingsConstraints;
+class AccessControlManager;
 
 class IOutputFormat;
 using OutputFormatPtr = std::shared_ptr<IOutputFormat>;
@@ -194,6 +195,9 @@ public:
     /// Global application configuration settings.
     void setConfig(const ConfigurationPtr & config);
     const Poco::Util::AbstractConfiguration & getConfigRef() const;
+
+    AccessControlManager & getAccessControlManager();
+    const AccessControlManager & getAccessControlManager() const;
 
     /** Take the list of users, quotas and configuration profiles from this config.
       * The list of users is completely replaced.
