@@ -26,8 +26,10 @@ public:
 private:
     NamesAndTypes readNamesAndTypesFromSource() const override;
     Strings readNamesOfSettingsProfiles() const;
+    Strings readNamesOfUsers() const;
     AttributesPtr readFromSource(const String & name, const Type & type) const override;
     AttributesPtr readSettingsProfile(const String & name) const;
+    AttributesPtr readUser(const String & name) const;
 
     Poco::AutoPtr<Poco::Util::AbstractConfiguration> config;
 };

@@ -1,5 +1,6 @@
 #include <Common/Config/ConfigProcessor.h>
-#include <Interpreters/UsersManager.h>
+#include <Access/AccessControlManager.h>
+#include <Access/User.h>
 #include <filesystem>
 #include <vector>
 #include <string>
@@ -197,11 +198,11 @@ void runOneTest(const TestDescriptor & test_descriptor)
         throw std::runtime_error(os.str());
     }
 
-    DB::UsersManager users_manager;
+    DB::AccessControlManager access_control_manager;
 
     try
     {
-        users_manager.loadFromConfig(*config);
+        access_control_manager.loadFromConfig(config);
     }
     catch (const Poco::Exception & ex)
     {
@@ -216,7 +217,7 @@ void runOneTest(const TestDescriptor & test_descriptor)
 
         try
         {
-            res = users_manager.hasAccessToDatabase(entry.user_name, entry.database_name);
+            res = access_control_manager.read<DB::User>(entry.user_name)->hasAccessToDatabase(entry.database_name);
         }
         catch (const Poco::Exception &)
         {

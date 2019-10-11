@@ -6,7 +6,6 @@
 #include <Core/Types.h>
 #include <DataStreams/IBlockStream_fwd.h>
 #include <Interpreters/ClientInfo.h>
-#include <Interpreters/Users.h>
 #include <Parsers/IAST_fwd.h>
 #include <Common/LRUCache.h>
 #include <Common/MultiVersion.h>
@@ -78,6 +77,7 @@ class ShellCommand;
 class ICompressionCodec;
 class SettingsConstraints;
 class AccessControlManager;
+struct User;
 
 class IOutputFormat;
 using OutputFormatPtr = std::shared_ptr<IOutputFormat>;
@@ -214,7 +214,7 @@ public:
     void setUser(const String & name, const String & password, const Poco::Net::SocketAddress & address, const String & quota_key);
 
     /// Used by MySQL Secure Password Authentication plugin.
-    std::shared_ptr<const User> getUser(const String & user_name);
+    std::shared_ptr<const User> getUser(const String & user_name) const;
 
     /// Compute and set actual user settings, client_info.current_user should be set
     void calculateUserSettings();

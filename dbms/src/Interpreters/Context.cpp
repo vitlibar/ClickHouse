@@ -27,7 +27,7 @@
 #include <Interpreters/ExpressionJIT.h>
 #include <Access/AccessControlManager.h>
 #include <Access/SettingsProfile.h>
-#include <Interpreters/UsersManager.h>
+#include <Access/User.h>
 #include <Interpreters/Quota.h>
 #include <Dictionaries/Embedded/GeoDictionariesLoader.h>
 #include <Interpreters/EmbeddedDictionaries.h>
@@ -129,7 +129,6 @@ struct ContextShared
     String default_profile_name;                            /// Default profile name used for default values.
     String system_profile_name;                             /// Profile used by system processes
     AccessControlManager access_control_manager;
-    std::unique_ptr<UsersManager> users_manager;            /// Known users.
     Quotas quotas;                                          /// Known quotas for resource use.
     mutable UncompressedCachePtr uncompressed_cache;        /// The cache of decompressed blocks.
     mutable MarkCachePtr mark_cache;                        /// Cache of marks in compressed files.
@@ -222,8 +221,6 @@ struct ContextShared
             std::cerr.flush();
             std::terminate();
         }
-
-        initialize();
     }
 
 
@@ -304,12 +301,6 @@ struct ContextShared
             return;
 
         trace_collector = std::make_unique<TraceCollector>(trace_log);
-    }
-
-private:
-    void initialize()
-    {
-        users_manager = std::make_unique<UsersManager>();
     }
 };
 
@@ -598,7 +589,6 @@ void Context::setUsersConfig(const ConfigurationPtr & config)
     auto lock = getLock();
     shared->users_config = config;
     shared->access_control_manager.loadFromConfig(shared->users_config);
-    shared->users_manager->loadFromConfig(*shared->users_config);
     shared->quotas.loadFromConfig(*shared->users_config);
 }
 
@@ -616,7 +606,8 @@ bool Context::hasUserProperty(const String & database, const String & table, con
     if (client_info.current_user.empty())
         return false;
 
-    const auto & props = shared->users_manager->getUser(client_info.current_user)->table_props;
+    auto user = getUser(client_info.current_user);
+    const auto & props = user->table_props;
 
     auto db = props.find(database);
     if (db == props.end())
@@ -631,16 +622,14 @@ bool Context::hasUserProperty(const String & database, const String & table, con
 
 const String & Context::getUserProperty(const String & database, const String & table, const String & name) const
 {
-    auto lock = getLock();
-    const auto & props = shared->users_manager->getUser(client_info.current_user)->table_props;
-    return props.at(database).at(table).at(name);
+    return getUser(client_info.current_user)->table_props.at(database).at(table).at(name);
 }
 
 void Context::calculateUserSettings()
 {
     auto lock = getLock();
 
-    String profile = shared->users_manager->getUser(client_info.current_user)->profile;
+    String profile = getUser(client_info.current_user)->profile;
 
     /// 1) Set default settings (hardcoded values)
     /// NOTE: we ignore global_context settings (from which it is usually copied)
@@ -672,16 +661,18 @@ void Context::setProfile(const String & profile)
     settings_constraints = std::move(new_constraints);
 }
 
-std::shared_ptr<const User> Context::getUser(const String & user_name)
+std::shared_ptr<const User> Context::getUser(const String & user_name) const
 {
-    return shared->users_manager->getUser(user_name);
+    return shared->access_control_manager.read<User>(user_name);
 }
 
 void Context::setUser(const String & name, const String & password, const Poco::Net::SocketAddress & address, const String & quota_key)
 {
     auto lock = getLock();
 
-    auto user_props = shared->users_manager->authorizeAndGetUser(name, password, address.host());
+    auto user = getUser(name);
+    user->allowed_client_hosts.checkContains(address.host(), name);
+    user->authentication.checkPassword(password, name);
 
     client_info.current_user = name;
     client_info.current_address = address;
@@ -692,7 +683,7 @@ void Context::setUser(const String & name, const String & password, const Poco::
 
     calculateUserSettings();
 
-    setQuota(user_props->quota, quota_key, name, address.host());
+    setQuota(user->quota, quota_key, name, address.host());
 }
 
 
@@ -719,14 +710,14 @@ bool Context::hasDatabaseAccessRights(const String & database_name) const
 {
     auto lock = getLock();
     return client_info.current_user.empty() || (database_name == "system") ||
-        shared->users_manager->hasAccessToDatabase(client_info.current_user, database_name);
+        getUser(client_info.current_user)->hasAccessToDatabase(database_name);
 }
 
 bool Context::hasDictionaryAccessRights(const String & dictionary_name) const
 {
     auto lock = getLock();
     return client_info.current_user.empty() ||
-        shared->users_manager->hasAccessToDictionary(client_info.current_user, dictionary_name);
+        getUser(client_info.current_user)->hasAccessToDictionary(dictionary_name);
 }
 
 void Context::checkDatabaseAccessRightsImpl(const std::string & database_name) const
@@ -737,7 +728,7 @@ void Context::checkDatabaseAccessRightsImpl(const std::string & database_name) c
          /// All users have access to the database system.
         return;
     }
-    if (!shared->users_manager->hasAccessToDatabase(client_info.current_user, database_name))
+    if (!getUser(client_info.current_user)->hasAccessToDatabase(database_name))
         throw Exception("Access denied to database " + database_name + " for user " + client_info.current_user , ErrorCodes::DATABASE_ACCESS_DENIED);
 }
 

@@ -1,31 +1,16 @@
 #pragma once
 
-#include <Core/Types.h>
+#include <Access/IAttributes.h>
 #include <Access/Authentication.h>
 #include <Access/AllowedClientHosts.h>
-
-#include <memory>
 #include <unordered_map>
 #include <unordered_set>
 
 
-namespace Poco
-{
-    namespace Util
-    {
-        class AbstractConfiguration;
-    }
-}
-
-
 namespace DB
 {
-/** User and ACL.
-  */
-struct User
+struct User : public IAttributes
 {
-    String name;
-
     /// Required password.
     Authentication authentication;
 
@@ -48,8 +33,12 @@ struct User
     using DatabaseMap = std::unordered_map<std::string /* database */, TableMap /* tables */>;
     DatabaseMap table_props;
 
-    User(const String & name_, const String & config_elem, const Poco::Util::AbstractConfiguration & config);
+    static const Type TYPE;
+    const Type & getType() const override { return TYPE; }
+    std::shared_ptr<IAttributes> clone() const override { return cloneImpl<User>(); }
+    bool equal(const IAttributes & other) const override;
+
+    bool hasAccessToDatabase(const String & database_name) const;
+    bool hasAccessToDictionary(const String & dictionary_name) const;
 };
-
-
 }

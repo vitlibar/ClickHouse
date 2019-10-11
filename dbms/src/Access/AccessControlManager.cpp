@@ -9,6 +9,7 @@ namespace DB
 namespace AccessControlNames
 {
     extern const size_t SETTINGS_PROFILE_NAMESPACE_IDX = 0;
+    extern const size_t USER_NAMESPACE_IDX = 1;
 }
 
 
