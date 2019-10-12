@@ -158,7 +158,7 @@ private:
 };
 
 
-struct Quota;
+struct QuotaEntry;
 
 /// Length of interval -> quota: maximum allowed and currently accumulated values for that interval (example: 3600 -> values for current hour).
 class QuotaForIntervals
@@ -220,7 +220,7 @@ using QuotaForIntervalsPtr = std::shared_ptr<QuotaForIntervals>;
 
 
 /// Quota key -> quotas (max and current values) for intervals. If quota doesn't have keys, then values stored at key 0.
-struct Quota
+struct QuotaEntry
 {
     using Container = std::unordered_map<UInt64, QuotaForIntervalsPtr>;
 
@@ -251,7 +251,7 @@ class Quotas
 {
 private:
     /// Name of quota -> quota.
-    using Container = std::unordered_map<String, Quota>;
+    using Container = std::unordered_map<String, QuotaEntry>;
     Container cont;
 
 public:

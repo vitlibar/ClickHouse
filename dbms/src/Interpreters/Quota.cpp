@@ -252,7 +252,7 @@ String QuotaForIntervals::toString() const
 }
 
 
-void Quota::loadFromConfig(const String & config_elem, const String & name_, const Poco::Util::AbstractConfiguration & config, pcg64 & rng)
+void QuotaEntry::loadFromConfig(const String & config_elem, const String & name_, const Poco::Util::AbstractConfiguration & config, pcg64 & rng)
 {
     name = name_;
 
@@ -279,7 +279,7 @@ void Quota::loadFromConfig(const String & config_elem, const String & name_, con
     }
 }
 
-QuotaForIntervalsPtr Quota::get(const String & quota_key, const String & user_name, const Poco::Net::IPAddress & ip)
+QuotaForIntervalsPtr QuotaEntry::get(const String & quota_key, const String & user_name, const Poco::Net::IPAddress & ip)
 {
     if (!quota_key.empty() && !ignore_key_if_not_keyed && (!is_keyed || keyed_by_ip))
         throw Exception("Quota " + name + " (for user " + user_name + ") doesn't allow client supplied keys.",

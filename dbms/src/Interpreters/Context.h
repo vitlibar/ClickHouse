@@ -239,7 +239,7 @@ public:
     const ClientInfo & getClientInfo() const { return client_info; }
 
     void setQuota(const String & name, const String & quota_key, const String & user_name, const Poco::Net::IPAddress & address);
-    QuotaForIntervals & getQuota();
+    std::shared_ptr<Quotas::Consumption> getQuota();
 
     void addDependency(const DatabaseAndTableName & from, const DatabaseAndTableName & where);
     void removeDependency(const DatabaseAndTableName & from, const DatabaseAndTableName & where);
