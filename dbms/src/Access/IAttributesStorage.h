@@ -6,8 +6,6 @@
 #include <functional>
 #include <optional>
 #include <vector>
-#include <boost/function_types/parameter_types.hpp>
-#include <boost/mpl/at.hpp>
 #include <atomic>
 
 
@@ -29,27 +27,41 @@ public:
     const String & getStorageName() const { return storage_name; }
 
     /// Returns the identifiers of all the attributes of a specified type contained in the storage.
+    std::vector<UUID> findAll(const Type & type) const;
+
     template <typename AttributesT>
     std::vector<UUID> findAll() const { return findAll(AttributesT::TYPE); }
-    std::vector<UUID> findAll(const Type & type) const { return findPrefixed(String{}, type); }
 
     /// Returns the identifiers of the attributes which names have a specified prefix.
-    template <typename AttributesT>
-    std::vector<UUID> findPrefixed(const String & prefix) const { return findPrefixed(prefix, AttributesT::TYPE); }
-    std::vector<UUID> findPrefixed(const String & prefix, const Type & type) const { return findPrefixedImpl(prefix, type); }
+    std::vector<UUID> findPrefixed(const Type & type, const String & prefix) const;
 
-    /// Searchs for attributes with specified name and type. Returns std::nullopt if not found.
     template <typename AttributesT>
-    std::optional<UUID> find(const String & name) const { return findImpl(name, AttributesT::TYPE); }
-    std::optional<UUID> find(const String & name, const Type & type) const { return findImpl(name, type); }
+    std::vector<UUID> findPrefixed(const String & prefix) const { return findPrefixed(AttributesT::TYPE, prefix); }
 
-    /// Returns whether there are attributes with such identifier in the storage.
-    bool exists(const UUID & id) const { return existsImpl(id); }
+    /// Searchs for attributes with specified type and name. Returns std::nullopt if not found.
+    std::optional<UUID> find(const Type & type, const String & name) const;
+
+    template <typename AttributesT>
+    std::optional<UUID> find(const String & name) const { return find(AttributesT::TYPE, name); }
+
+    std::vector<UUID> find(const Type & type, const Strings & names) const;
+
+    template <typename AttributesT>
+    std::vector<UUID> find(const Strings & names) const { return find(AttributesT::TYPE, names); }
 
     /// Searchs for attributes with specified name and type. Throws an exception if not found.
+    UUID getID(const Type & type, const String & name) const;
+
     template <typename AttributesT>
-    UUID getID(const String & name) const { return getID(name, AttributesT::TYPE); }
-    UUID getID(const String & name, const Type & type) const;
+    UUID getID(const String & name) const { return getID(AttributesT::TYPE, name); }
+
+    std::vector<UUID> getIDs(const Type & type, const String & name) const;
+
+    template <typename AttributesT>
+    std::vector<UUID> getIDs(const Strings & name) const { return getIDs(AttributesT::TYPE, name); }
+
+    /// Returns whether there are attributes with such identifier in the storage.
+    bool exists(const UUID & id) const;
 
     /// Reads the attributes. Throws an exception if not found.
     template <typename AttributesT = IAttributes>
@@ -69,78 +81,54 @@ public:
     String readName(const UUID & id) const;
     std::optional<String> tryReadName(const UUID & id) const;
 
-    /// Inserts attributes to the storage. If the specified name is already in use and `replace_if_exists == false` throws an exception.
-    UUID insert(const IAttributes & attrs, bool replace_if_exists = false);
-    UUID insert(const AttributesPtr & attrs, bool replace_if_exists = false);
-    std::vector<UUID> insert(const std::vector<AttributesPtr> & multiple_attrs, bool replace_if_exists = false);
+    using OnChangedHandler = std::function<void(const UUID & id, const AttributesPtr & old_attrs, const AttributesPtr & new_attrs);
+    using Notification = std::tuple<OnChangedHandler, UUID, AttributesPtr, AttributesPtr>;
+    using Notifications = std::vector<Notification>;
 
-    /// Inserts attributes to the storage.
-    /// Returns ID if successfully inserted or `nullopt` if the specified name is already in use.
-    std::optional<UUID> tryInsert(const IAttributes & attrs);
-    std::optional<UUID> tryInsert(const AttributesPtr & attrs);
-    std::vector<std::optional<UUID>> tryInsert(const std::vector<AttributesPtr> & multiple_attrs);
+    /// Inserts attributes to the storage. Returns IDs of inserted entries.
+    /// Throws an exception if the specified name already exists.
+    /// If `notifications` is specified, the function will append `notifications` with new notifications instead of sending them.
+    UUID insert(const AttributesPtr & attrs, Notifications * notifications = nullptr);
+    std::vector<UUID> insert(const std::vector<AttributesPtr> & multiple_attrs, Notifications * notifications = nullptr);
 
-    /// Removes the attributes from the storage. Throws an exception if not found.
-    void remove(const UUID & id) { removeImpl(id); }
-    void remove(const std::vector<UUID> & ids);
+    /// Inserts attributes to the storage. Returns IDs of inserted entries.
+    /// Replaces an existing entry in the storage if the specified name already exists.
+    /// If `notifications` is not null, the function will append `notifications` with new notifications instead of sending them.
+    UUID insertOrReplace(const AttributesPtr & attrs, Notifications * notifications = nullptr);
+    std::vector<UUID> insertOrReplace(const std::vector<AttributesPtr> & multiple_attrs, Notifications * notifications = nullptr);
 
-    template <typename AttributesT>
-    void remove(const String & name) { remove(name, AttributesT::TYPE); }
-    void remove(const String & name, const Type & type) { removeImpl(getID(name, type)); }
+    /// Inserts attributes to the storage. Returns IDs of inserted entries.
+    /// If `notifications` is not null, the function will append `notifications` with new notifications instead of sending them.
+    std::optional<UUID> tryInsert(const AttributesPtr & attrs, Notifications * notifications = nullptr);
+    std::vector<UUID> tryInsert(const std::vector<AttributesPtr> & multiple_attrs, Notifications * notifications = nullptr);
 
-    template <typename AttributesT>
-    void remove(const Strings & names) { remove(names, AttributesT::TYPE); }
-    void remove(const Strings & names, const Type & type);
+    /// Removes an entry from the storage. Throws an exception if couldn't remove.
+    /// If `notifications` is not null, the function will append `notifications` with new notifications instead of sending them.
+    void remove(const UUID & id, Notifications * notifications = nullptr);
+    void remove(const std::vector<UUID> & ids, Notifications * notifications = nullptr);
 
-    /// Removes the attributes from the storage. Returns true if successfully dropped, or false if not found.
-    bool tryRemove(const UUID & id);
-    void tryRemove(const std::vector<UUID> & ids, std::vector<UUID> * failed_to_remove = nullptr);
+    /// Removes an entry from the storage. Returns false if couldn't remove.
+    /// If `notifications` is not null, the function will append `notifications` with new notifications instead of sending them.
+    bool tryRemove(const UUID & id, Notifications * notifications = nullptr);
 
-    template <typename AttributesT>
-    bool tryRemove(const String & name) { return tryRemove(name, AttributesT::TYPE); }
-    bool tryRemove(const String & name, const Type & type);
+    /// Removes multiple entries from the storage. Returns the list of successfully dropped.
+    /// If `notifications` is not null, the function will append `notifications` with new notifications instead of sending them.
+    std::vector<UUID> tryRemove(const std::vector<UUID> & ids, Notifications * notifications = nullptr);
 
-    template <typename AttributesT>
-    void tryRemove(const Strings & names, Strings * failed_to_remove = nullptr) { tryRemove(names, AttributesT::TYPE, failed_to_remove); }
-    void tryRemove(const Strings & names, const Type & type, Strings * failed_to_remove = nullptr);
+    using UpdateFunc = std::function<void(const UUID &, IAttributes &)>;
 
-    /// Updates the attributes in the storage.
-    /// `update_func` should have signature `void(AttributesT & attrs)` where `AttributesT` is a class derived from IAttributes.
-    template <typename UpdateFuncT>
-    void update(const UUID & id, const UpdateFuncT & update_func) { updateImpl(id, castUpdateFunc(update_func)); }
+    /// Updates the attributes in the storage. Throws an exception if couldn't remove.
+    /// If `notifications` is not null, the function will append `notifications` with new notifications instead of sending them.
+    void update(const UUID & id, const UpdateFunc & update_func, Notifications * notifications = nullptr);
+    void update(const std::vector<UUID> & ids, const UpdateFunc & update_func, Notifications * notifications = nullptr);
 
-    template <typename UpdateFuncT>
-    void update(const std::vector<UUID> & ids, const UpdateFuncT & update_func) { updateHelper(ids, castUpdateFunc(update_func)); }
+    /// Updates an entry in the storage. Returns false if couldn't update.
+    /// If `notifications` is not null, the function will append `notifications` with new notifications instead of sending them.
+    bool tryUpdate(const UUID & id, const UpdateFunc & update_func, Notifications * notifications = nullptr);
 
-    template <typename AttributesT, typename UpdateFuncT>
-    void update(const String & name, const UpdateFuncT & update_func) { update(name, AttributesT::TYPE, update_func); }
-
-    template <typename UpdateFuncT>
-    void update(const String & name, const Type & type, const UpdateFuncT & update_func) { updateImpl(getID(name, type), castUpdateFunc(update_func)); }
-
-    template <typename AttributesT, typename UpdateFuncT>
-    void update(const Strings & names, const UpdateFuncT & update_func) { update(names, AttributesT::TYPE, update_func); }
-
-    template <typename UpdateFuncT>
-    void update(const Strings & names, const Type & type, const UpdateFuncT & update_func) { updateHelper(names, type, castUpdateFunc(update_func)); }
-
-    template <typename UpdateFuncT>
-    bool tryUpdate(const UUID & id, const UpdateFuncT & update_func) { return tryUpdateHelper(id, castUpdateFunc(update_func)); }
-
-    template <typename UpdateFuncT>
-    void tryUpdate(const std::vector<UUID> & ids, const UpdateFuncT & update_func, std::vector<UUID> * failed_to_update = nullptr) { tryUpdateHelper(ids, castUpdateFunc(update_func), failed_to_update); }
-
-    template <typename AttributesT, typename UpdateFuncT>
-    bool tryUpdate(const String & name, const UpdateFuncT & update_func) { return tryUpdate(name, AttributesT::TYPE, update_func); }
-
-    template <typename UpdateFuncT>
-    bool tryUpdate(const String & name, const Type & type, const UpdateFuncT & update_func) { return tryUpdateHelper(name, type, castUpdateFunc(update_func)); }
-
-    template <typename AttributesT, typename UpdateFuncT>
-    void tryUpdate(const Strings & names, const UpdateFuncT & update_func, Strings * failed_to_update = nullptr) { tryUpdate(names, AttributesT::TYPE, update_func, failed_to_update); }
-
-    template <typename UpdateFuncT>
-    void tryUpdate(const Strings & names, const Type & type, const UpdateFuncT & update_func, Strings * failed_to_update = nullptr) { tryUpdateHelper(names, type, castUpdateFunc(update_func), failed_to_update); }
+    /// Updates multiple entries in the storage. Returns the list of successfully updated.
+    /// If `notifications` is not null, the function will append `notifications` with new notifications instead of sending them.
+    std::vector<UUID> tryUpdate(const std::vector<UUID> & ids, const UpdateFunc & update_func, Notifications * notifications = nullptr);
 
     class Subscription
     {
@@ -150,76 +138,49 @@ public:
 
     using SubscriptionPtr = std::unique_ptr<Subscription>;
 
-    /// Subscribes for new attributes.
-    /// Can return nullptr if cannot subscribe or if it doesn't make sense (the storage is read-only).
-    using OnNewHandler = std::function<void(const UUID &)>;
-    template <typename AttributesT>
-    SubscriptionPtr subscribeForNew(const OnNewHandler & on_new) const { return subscribeForNew(String{}, AttributesT::TYPE, on_new); }
-    SubscriptionPtr subscribeForNew(const Type & type, const OnNewHandler & on_new) const { return subscribeForNew(String{}, type, on_new); }
-
-    template <typename AttributesT>
-    SubscriptionPtr subscribeForNew(const String & prefix, const OnNewHandler & on_new) const { return subscribeForNew(prefix, AttributesT::TYPE, on_new); }
-    SubscriptionPtr subscribeForNew(const String & prefix, const Type & type, const OnNewHandler & on_new) const { return subscribeForNewImpl(prefix, type, on_new); }
-
-    /// Subscribes for changes.
+    /// Subscribes for all changes.
     /// Can return nullptr if cannot subscribe (identifier not found) or if it doesn't make sense (the storage is read-only).
-    /// `on_changed` should have signature `void(const std::shared_ptr<const AttributesT> & attrs)` where `AttributesT` is any class derived from IAttributes.
-    template <typename OnChangedHandlerT>
-    SubscriptionPtr subscribeForChanges(const UUID & id, const OnChangedHandlerT & on_changed) const { return subscribeForChangesImpl(id, castOnChangedHandler(on_changed)); }
+    SubscriptionPtr subscribeForChangesOfAll(const Type & type, const OnChangedHandler & handler);
 
-    template <typename AttributesT, typename OnChangedHandlerT>
-    SubscriptionPtr subscribeForChanges(const String & name, const OnChangedHandlerT & on_changed) const { return subscribeForChanges(name, AttributesT::TYPE, on_changed); }
+    template <typename AttributesT>
+    SubscriptionPtr subscribeForChangesOfAll(OnChangedHandler handler) { return subscribeForChangesOfAll(AttributesT::TYPE, handler); }
 
-    template <typename OnChangedHandlerT>
-    SubscriptionPtr subscribeForChanges(const String & name, const Type & type, const OnChangedHandlerT & on_changed) const;
+    SubscriptionPtr subscribeForChangesOfPrefixed(const Type & type, const String & prefix, const OnChangedHandler & handler);
+
+    template <typename AttributesT>
+    SubscriptionPtr subscribeForChangesOfPrefixed(const String & prefix, const OnChangedHandler & handler) { return subscribeForChangesOfPrefixed(AttributesT::TYPE, prefix, handler); }
+
+    /// Subscribes for changes of a specific entry.
+    /// Can return nullptr if cannot subscribe (identifier not found) or if it doesn't make sense (the storage is read-only).
+    SubscriptionPtr subscribeForChanges(const UUID & id, const OnChangedHandler & handler);
+    SubscriptionPtr subscribeForChanges(const std::vector<UUID> & ids, const OnChangedHandler & handler);
+
+    static void notify(const Notifications & notifications);
 
 protected:
-    using UpdateFunc = std::function<void(IAttributes &)>;
-    using OnChangedHandler = std::function<void(const AttributesPtr &)>;
-
-    virtual std::vector<UUID> findPrefixedImpl(const String & prefix, const Type & type) const = 0;
-    virtual std::optional<UUID> findImpl(const String & name, const Type & type) const = 0;
+    virtual std::vector<UUID> findPrefixedImpl(const Type & type, const String & prefix) const = 0;
+    virtual std::optional<UUID> findImpl(const Type & type, const String & name) const = 0;
     virtual bool existsImpl(const UUID & id) const = 0;
     virtual AttributesPtr readImpl(const UUID & id) const = 0;
     virtual String readNameImpl(const UUID & id) const = 0;
-    virtual UUID insertImpl(const IAttributes & attrs, bool replace_if_exists) = 0;
-    virtual void removeImpl(const UUID & id) = 0;
-    virtual void updateImpl(const UUID & id, const UpdateFunc & update_func) = 0;
-    virtual SubscriptionPtr subscribeForNewImpl(const String & prefix, const Type & type, const OnNewHandler & on_new) const = 0;
-    virtual SubscriptionPtr subscribeForChangesImpl(const UUID & id, const OnChangedHandler & on_changed) const = 0;
-
-    Poco::Logger * getLogger() const;
+    virtual UUID insertImpl(const AttributesPtr & attrs, bool replace_if_exists, Notifications & notifications) = 0;
+    virtual void removeImpl(const UUID & id, Notifications & notifications) = 0;
+    virtual void updateImpl(const UUID & id, const UpdateFunc & update_func, Notifications & notifications) = 0;
+    virtual SubscriptionPtr subscribeForChangesOfPrefixedImpl(const Type & type, const String & prefix, const OnChangedHandler & handler) const = 0;
+    virtual SubscriptionPtr subscribeForChangesImpl(const UUID & id, const OnChangedHandler & handler) const = 0;
 
     static UUID generateRandomID();
     UUID generateIDFromNameAndType(const String & name, const Type & type) const;
 
+    Poco::Logger * getLogger() const;
     [[noreturn]] void throwNotFound(const UUID & id) const;
     [[noreturn]] void throwNotFound(const String & name, const Type & type) const;
     [[noreturn]] void throwNameCollisionCannotInsert(const String & name, const Type & type, const Type & type_of_existing) const;
     [[noreturn]] void throwNameCollisionCannotRename(const String & old_name, const String & new_name, const Type & type, const Type & type_of_existing) const;
     [[noreturn]] void throwStorageIsReadOnly() const;
 
-    using OnChangeNotification = std::pair<OnChangedHandler, AttributesPtr>;
-    using OnChangeNotifications = std::vector<OnChangeNotification>;
-    using OnNewNotification = std::pair<OnNewHandler, UUID>;
-    using OnNewNotifications = std::vector<OnNewNotification>;
-    static void notify(const OnChangeNotifications & notifications);
-    static void notify(const OnNewNotifications & notifications);
-
 private:
-    AttributesPtr tryReadHelper(const UUID & id) const;
-    void updateHelper(const std::vector<UUID> & ids, const UpdateFunc & update_func);
-    void updateHelper(const Strings & names, const Type & type, const UpdateFunc & update_func);
-    bool tryUpdateHelper(const UUID & id, const UpdateFunc & update_func);
-    void tryUpdateHelper(const std::vector<UUID> & ids, const UpdateFunc & update_func, std::vector<UUID> * failed_to_update = nullptr);
-    bool tryUpdateHelper(const String & name, const Type & type, const UpdateFunc & update_func);
-    void tryUpdateHelper(const Strings & names, const Type & type, const UpdateFunc & update_func, Strings * failed_to_update = nullptr);
-
-    template <typename UpdateFuncT>
-    static UpdateFunc castUpdateFunc(const UpdateFuncT & update_func);
-
-    template <typename OnChangedHandlerT>
-    static OnChangedHandler castOnChangedHandler(const OnChangedHandlerT & on_changed);
+    AttributesPtr tryReadImpl(const UUID & id) const;
 
     const String storage_name;
     mutable std::atomic<Poco::Logger *> log = nullptr;
@@ -249,7 +210,7 @@ std::shared_ptr<const AttributesT> IAttributesStorage::read(const String & name)
 template <typename AttributesT>
 std::shared_ptr<const AttributesT> IAttributesStorage::tryRead(const UUID & id) const
 {
-    auto attrs = tryReadHelper(id);
+    auto attrs = tryReadImpl(id);
     if (!attrs)
         return nullptr;
     if constexpr (std::is_same_v<AttributesT, IAttributes>)
@@ -264,47 +225,5 @@ std::shared_ptr<const AttributesT> IAttributesStorage::tryRead(const String & na
 {
     auto id = find(name, AttributesT::TYPE);
     return id ? tryRead<AttributesT>(*id) : nullptr;
-}
-
-
-template <typename UpdateFuncT>
-IAttributesStorage::UpdateFunc IAttributesStorage::castUpdateFunc(const UpdateFuncT & update_func)
-{
-    using ParamTypes = typename boost::function_types::parameter_types<decltype(&UpdateFuncT::operator())>::type;
-    using ArgType = typename boost::mpl::at<ParamTypes, boost::mpl::int_<1> >::type;
-    using AttributesT = std::remove_reference_t<ArgType>;
-
-    return [update_func](IAttributes & attrs)
-    {
-        if constexpr (std::is_same_v<AttributesT, IAttributes>)
-            update_func(attrs);
-        else
-            update_func(*attrs.cast<AttributesT>());
-    };
-}
-
-
-template <typename OnChangedHandlerT>
-IAttributesStorage::OnChangedHandler IAttributesStorage::castOnChangedHandler(const OnChangedHandlerT & on_changed)
-{
-    using ParamTypes = typename boost::function_types::parameter_types<decltype(&OnChangedHandlerT::operator())>::type;
-    using ArgType = typename boost::mpl::at<ParamTypes, boost::mpl::int_<1> >::type;
-    using AttributesT = typename std::remove_const_t<typename std::remove_const_t<std::remove_reference_t<ArgType>>::element_type>;
-
-    return [on_changed](const AttributesPtr & attrs)
-    {
-        if constexpr (std::is_same_v<AttributesT, IAttributes>)
-            on_changed(attrs);
-        else
-            on_changed(attrs ? attrs->cast<AttributesT>() : nullptr);
-    };
-}
-
-
-template <typename OnChangedHandlerT>
-IAttributesStorage::SubscriptionPtr IAttributesStorage::subscribeForChanges(const String & name, const Type & type, const OnChangedHandlerT & on_changed) const
-{
-    auto id = find(name, type);
-    return id ? subscribeForChanges(*id, on_changed) : nullptr;
 }
 }

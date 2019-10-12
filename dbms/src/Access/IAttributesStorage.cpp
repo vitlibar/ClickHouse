@@ -19,7 +19,35 @@ namespace ErrorCodes
 }
 
 
-UUID IAttributesStorage::getID(const String & name, const Type & type) const
+std::vector<UUID> IAttributesStorage::findAll(const Type & type) const
+{
+    return findPrefixedImpl(type, "");
+}
+
+
+std::vector<UUID> IAttributesStorage::findPrefixed(const Type & type, const String & prefix) const
+{
+    return findPrefixedImpl(type, prefix);
+}
+
+
+std::optional<UUID> IAttributesStorage::find(const Type & type, const String & name) const
+{
+    return findImpl(type, name);
+}
+
+
+std::vector<UUID> IAttributesStorage::find(const Type & type, const Strings & names) const
+{
+    std::vector<UUID> ids;
+    ids.reserve(names.size());
+    for (const String & name : names)
+        ids.push_back(findImpl(type, name));
+    return ids;
+}
+
+
+UUID IAttributesStorage::getID(const Type & type, const String & name) const
 {
     auto id = find(name, type);
     if (id)
@@ -28,7 +56,24 @@ UUID IAttributesStorage::getID(const String & name, const Type & type) const
 }
 
 
-AttributesPtr IAttributesStorage::tryReadHelper(const UUID & id) const
+std::vector<UUID> IAttributesStorage::getIDs(const Type & type, const Strings & names) const
+{
+    std::vector<UUID> ids;
+    ids.reserve(names.size());
+    for (const String & name : names)
+        ids.push_back(getID(type, name));
+    return ids;
+}
+
+
+bool IAttributesStorage::exists(const UUID & id) const
+{
+    return existsImpl(id);
+}
+
+
+
+AttributesPtr IAttributesStorage::tryReadImpl(const UUID & id) const
 {
     try
     {
@@ -60,348 +105,349 @@ std::optional<String> IAttributesStorage::tryReadName(const UUID & id) const
 }
 
 
-UUID insert(const IAttributes & attrs, bool replace_if_exists = false);
-UUID insert(const AttributesPtr & attrs, bool replace_if_exists = false);
-std::vector<UUID> insert(const std::vector<AttributesPtr> & attrs, bool replace_if_exists = false);
-
-/// Inserts attributes to the storage.
-/// Returns `{id, true}` if successfully inserted or `{id, false}` if the specified name is already in use.
-std::pair<UUID, bool> tryInsert(const IAttributes & attrs);
-std::pair<UUID, bool> tryInsert(const AttributesPtr & attrs);
-std::vector<std::pair<UUID, bool>> tryInsert(const std::vector<AttributesPtr> & attrs);
-
-
-UUID IAttributesStorage::insert(const IAttributes & attrs, bool replace_if_exists)
+UUID IAttributesStorage::insert(const AttributesPtr & attrs, Notification * notifications)
 {
-    return insertImpl(attrs, replace_if_exists);
+    Notifications immediate_notifications;
+    if (!notifications)
+        notifications = &immediate_notifications;
+    UUID id = insertImpl(attrs, false, *notifications);
+    notify(immediate_notifications);
+    return id;
 }
 
 
-UUID IAttributesStorage::insert(const AttributesPtr & attrs, bool replace_if_exists)
+std::vector<UUID> IAttributesStorage::insert(const std::vector<AttributesPtr> & multiple_attrs, Notification * notifications)
 {
-    return insert(*attrs, replace_if_exists);
-}
-
-
-std::vector<UUID> IAttributesStorage::insert(const std::vector<AttributesPtr> & multiple_attrs, bool replace_if_exists)
-{
+    Notifications immediate_notifications;
+    if (!notifications)
+        notifications = &immediate_notifications;
     std::vector<UUID> ids;
-    Strings failed_to_insert;
-    std::exception_ptr exception;
+    ids.reserve(multiple_attrs.size());
+    std::exception_ptr e;
     for (const auto & attrs : multiple_attrs)
     {
+        UUID id;
         try
         {
-            ids.emplace_back(insertImpl(*attrs, replace_if_exists));
+            id = insertImpl(attrs, false, *notifications);
         }
         catch (...)
         {
-            failed_to_insert.emplace_back(attrs->name);
-            exception = std::current_exception();
+            if (!e)
+                e = std::current_exception();
+            continue;
         }
+        ids.push_back(id);
     }
 
-    if (!failed_to_insert.empty())
+    if (e)
     {
-        String msg = "Couldn't insert ";
-        for (size_t i = 0; i != failed_to_insert.size(); ++i)
-            msg += String(i ? ", " : "") + backQuote(failed_to_insert[i]);
-        msg += " to AttributesStorage(" + getStorageName() + "): " + getExceptionMessage(exception, false);
-        throw Exception(msg, ErrorCodes::ATTRIBUTES_NOT_INSERTED);
+        std::rethrow_exception(e);
     }
+
+    notify(immediate_notifications);
     return ids;
 }
 
 
-std::optional<UUID> IAttributesStorage::tryInsert(const IAttributes & attrs)
+UUID IAttributesStorage::insertOrReplace(const AttributesPtr & attrs, Notification * notifications)
 {
+    Notifications immediate_notifications;
+    if (!notifications)
+        notifications = &immediate_notifications;
+    UUID id = insertImpl(attrs, true, *notifications);
+    notify(immediate_notifications);
+    return id;
+}
+
+
+std::vector<UUID> IAttributesStorage::insertOrReplace(const std::vector<AttributesPtr> & multiple_attrs, Notification * notifications)
+{
+    Notifications immediate_notifications;
+    if (!notifications)
+        notifications = &immediate_notifications;
+    std::vector<UUID> ids;
+    ids.reserve(multiple_attrs.size());
+    std::exception_ptr e;
+    for (const auto & attrs : multiple_attrs)
+    {
+        UUID id;
+        try
+        {
+            id = insertImpl(attrs, true, *notifications);
+        }
+        catch (...)
+        {
+            if (!e)
+                e = std::current_exception();
+            continue;
+        }
+        ids.push_back(id);
+    }
+
+    if (e)
+        std::rethrow_exception(e);
+
+    notify(immediate_notifications);
+    return ids;
+}
+
+
+std::optional<UUID> IAttributesStorage::tryInsert(const AttributesPtr & attrs, Notification * notifications)
+{
+    Notifications immediate_notifications;
+    if (!notifications)
+        notifications = &immediate_notifications;
+    UUID id;
     try
     {
-        return insertImpl(attrs, false);
+        id = insertImpl(attrs, false, *notifications);
     }
     catch (...)
     {
         return std::nullopt;
     }
+    notify(immediate_notifications);
+    return id;
 }
 
 
-std::optional<UUID> IAttributesStorage::tryInsert(const AttributesPtr & attrs)
+std::vector<UUID> IAttributesStorage::tryInsert(const std::vector<AttributesPtr> & multiple_attrs, Notification * notifications)
 {
-    return tryInsert(*attrs);
-}
-
-
-std::vector<std::optional<UUID>> IAttributesStorage::tryInsert(const std::vector<AttributesPtr> & multiple_attrs)
-{
-    std::vector<std::optional<UUID>> ids;
+    Notifications immediate_notifications;
+    if (!notifications)
+        notifications = &immediate_notifications;
+    std::vector<UUID> ids;
+    ids.reserve(multiple_attrs.size());
     for (const auto & attrs : multiple_attrs)
     {
-        std::optional<UUID> id;
+        UUID id;
         try
         {
-            id = insertImpl(*attrs, false);
+            id = insertImpl(attrs, false, *notifications);
         }
         catch (...)
         {
+            continue;
         }
-        ids.emplace_back(id);
+        ids.push_back(id);
     }
+    notify(immediate_notifications);
     return ids;
 }
 
 
-void IAttributesStorage::remove(const std::vector<UUID> & ids)
+void IAttributesStorage::remove(const UUID & id, Notifications * notifications)
 {
-    std::vector<UUID> failed_to_remove;
-    std::exception_ptr exception;
-    for (const UUID & id : ids)
-    {
-        try
-        {
-            removeImpl(id);
-        }
-        catch (...)
-        {
-            failed_to_remove.emplace_back(id);
-            exception = std::current_exception();
-        }
-    }
-
-    if (!failed_to_remove.empty())
-    {
-        String msg = "Couldn't remove ";
-        for (size_t i = 0; i != failed_to_remove.size(); ++i)
-            msg += String(i ? ", " : "") + "{" + toString(failed_to_remove[i]) + "}";
-        msg += " from AttributesStorage(" + getStorageName() + "): " + getExceptionMessage(exception, false);
-        throw Exception(msg, ErrorCodes::ATTRIBUTES_NOT_REMOVED);
-    }
+    Notifications immediate_notifications;
+    if (!notifications)
+        notifications = &immediate_notifications;
+    removeImpl(id, *notifications);
+    notify(immediate_notifications);
 }
 
 
-void IAttributesStorage::remove(const Strings & names, const Type & type)
+void IAttributesStorage::remove(const std::vector<UUID> & ids, Notifications * notifications)
 {
-    Strings failed_to_remove;
-    std::exception_ptr exception;
-    for (const String & name : names)
+    Notifications immediate_notifications;
+    if (!notifications)
+        notifications = &immediate_notifications;
+    std::exception_ptr e;
+    for (const auto & id : ids)
     {
         try
         {
-            removeImpl(getID(name, type));
+            removeImpl(id, *notifications);
         }
         catch (...)
         {
-            failed_to_remove.emplace_back(name);
-            exception = std::current_exception();
+            if (!e)
+                e = std::current_exception();
+            continue;
         }
     }
 
-    if (!failed_to_remove.empty())
-    {
-        String msg = "Couldn't remove ";
-        for (size_t i = 0; i != failed_to_remove.size(); ++i)
-            msg += String(i ? ", " : "") + backQuote(failed_to_remove[i]);
-        msg += " from AttributesStorage(" + getStorageName() + "): " + getExceptionMessage(exception, false);
-        throw Exception(msg, ErrorCodes::ATTRIBUTES_NOT_REMOVED);
-    }
+    if (e)
+        std::rethrow_exception(e);
+
+    notify(immediate_notifications);
 }
 
 
-bool IAttributesStorage::tryRemove(const UUID & id)
+bool IAttributesStorage::tryRemove(const UUID & id, Notifications * notifications)
 {
+    Notifications immediate_notifications;
+    if (!notifications)
+        notifications = &immediate_notifications;
     try
     {
-        removeImpl(id);
-        return true;
+        removeImpl(id, *notifications);
     }
     catch (...)
     {
         return false;
     }
+
+    notify(immediate_notifications);
+    return true;
 }
 
 
-bool IAttributesStorage::tryRemove(const String & name, const Type & type)
+std::vector<UUID> IAttributesStorage::tryRemove(const std::vector<UUID> & ids, Notifications * notifications)
 {
+    Notifications immediate_notifications;
+    if (!notifications)
+        notifications = &immediate_notifications;
+    std::vector<UUID> removed;
+    removed.reserve(ids.size());
+    for (const auto & id : ids)
+    {
+        try
+        {
+            removeImpl(id, *notifications);
+        }
+        catch (...)
+        {
+            continue;
+        }
+        removed.push_back(id);
+    }
+
+    notify(immediate_notifications);
+    return removed;
+}
+
+
+void IAttributesStorage::update(const UUID & id, const UpdateFunc & update_func, Notifications * notifications)
+{
+    Notifications immediate_notifications;
+    if (!notifications)
+        notifications = &immediate_notifications;
+    updateImpl(id, update_func, *notifications);
+    notify(immediate_notifications);
+}
+
+
+void IAttributesStorage::update(const std::vector<UUID> & ids, const UpdateFunc & update_func, Notifications * notifications)
+{
+    Notifications immediate_notifications;
+    if (!notifications)
+        notifications = &immediate_notifications;
+    std::exception_ptr e;
+    for (const auto & id : ids)
+    {
+        try
+        {
+            updateImpl(id, update_func, *notifications);
+        }
+        catch (...)
+        {
+            if (!e)
+                e = std::current_exception();
+            continue;
+        }
+    }
+
+    if (e)
+        std::rethrow_exception(e);
+
+    notify(immediate_notifications);
+}
+
+
+bool IAttributesStorage::tryUpdate(const UUID & id, const UpdateFunc & update_func, Notifications * notifications)
+{
+    Notifications immediate_notifications;
+    if (!notifications)
+        notifications = &immediate_notifications;
     try
     {
-        removeImpl(getID(name, type));
-        return true;
+        updateImpl(id, update_func, *notifications);
     }
     catch (...)
     {
         return false;
     }
+
+    notify(immediate_notifications);
+    return true;
 }
 
 
-void IAttributesStorage::tryRemove(const std::vector<UUID> & ids, std::vector<UUID> * failed_to_remove)
+std::vector<UUID> IAttributesStorage::tryUpdate(const std::vector<UUID> & ids, const UpdateFunc & update_func, Notifications * notifications)
 {
-    if (failed_to_remove)
-        failed_to_remove->clear();
-    for (const UUID & id : ids)
+    Notifications immediate_notifications;
+    if (!notifications)
+        notifications = &immediate_notifications;
+    std::vector<UUID> updated;
+    updated.reserve(ids.size());
+    for (const auto & id : ids)
     {
         try
         {
-            removeImpl(id);
+            updateImpl(id, update_func, *notifications);
         }
         catch (...)
         {
-            if (failed_to_remove)
-                failed_to_remove->emplace_back(id);
+            continue;
         }
+        updated.push_back(id);
     }
+
+    notify(immediate_notifications);
+    return updated;
 }
 
 
-void IAttributesStorage::tryRemove(const Strings & names, const Type & type, Strings * failed_to_remove)
+IAttributesStorage::SubscriptionPtr IAttributesStorage::subscribeForChangesOfAll(const Type & type, const OnChangedHandler & handler)
 {
-    if (failed_to_remove)
-        failed_to_remove->clear();
-    for (const String & name : names)
-    {
-        try
-        {
-            removeImpl(getID(name, type));
-        }
-        catch (...)
-        {
-            if (failed_to_remove)
-                failed_to_remove->emplace_back(name);
-        }
-    }
+    return subscribeForChangesOfPrefixedImpl(type, "", handler);
 }
 
 
-void IAttributesStorage::updateHelper(const std::vector<UUID> & ids, const UpdateFunc & update_func)
+IAttributesStorage::SubscriptionPtr IAttributesStorage::subscribeForChangesOfPrefixed(const Type & type, const String & prefix, const OnChangedHandler & handler)
 {
-    std::vector<UUID> failed_to_update;
-    std::exception_ptr exception;
-    for (const UUID & id : ids)
-    {
-        try
-        {
-            updateImpl(id, update_func);
-        }
-        catch (...)
-        {
-            failed_to_update.emplace_back(id);
-            exception = std::current_exception();
-        }
-    }
-
-    if (!failed_to_update.empty())
-    {
-        String msg = "Couldn't update ";
-        for (size_t i = 0; i != failed_to_update.size(); ++i)
-            msg += String(i ? ", " : "") + "{" + toString(failed_to_update[i]) + "}";
-        msg += " in AttributesStorage(" + getStorageName() + "): " + getExceptionMessage(exception, false);
-        throw Exception(msg, ErrorCodes::ATTRIBUTES_NOT_UPDATED);
-    }
+    return subscribeForChangesOfPrefixedImpl(type, prefix, handler);
 }
 
 
-void IAttributesStorage::updateHelper(const Strings & names, const Type & type, const UpdateFunc & update_func)
+IAttributesStorage::SubscriptionPtr IAttributesStorage::subscribeForChanges(const UUID & id, const OnChangedHandler & handler)
 {
-    Strings failed_to_update;
-    std::exception_ptr exception;
-    for (const String & name : names)
-    {
-        try
-        {
-            updateImpl(getID(name, type), update_func);
-        }
-        catch (...)
-        {
-            failed_to_update.emplace_back(name);
-            exception = std::current_exception();
-        }
-    }
-
-    if (!failed_to_update.empty())
-    {
-        String msg = "Couldn't update ";
-        for (size_t i = 0; i != failed_to_update.size(); ++i)
-            msg += String(i ? ", " : "") + "{" + failed_to_update[i] + "}";
-        msg += " in AttributesStorage(" + getStorageName() + "): " + getExceptionMessage(exception, false);
-        throw Exception(msg, ErrorCodes::ATTRIBUTES_NOT_UPDATED);
-    }
+    return subscribeForChangesImpl(if, handler);
 }
 
 
-bool IAttributesStorage::tryUpdateHelper(const UUID & id, const UpdateFunc & update_func)
+IAttributesStorage::SubscriptionPtr IAttributesStorage::subscribeForChanges(const std::vector<UUID> & ids, const OnChangedHandler & handler)
 {
-    try
+    if (ids.empty())
+        return nullptr;
+    if (ids.size() == 1)
+        return subscribeForChangesImpl(ids[0], handler);
+
+    std::vector<SubscriptionPtr> subscriptions;
+    subscriptions.reserve(ids.size());
+    for (const auto & id : ids)
     {
-        updateImpl(id, update_func);
-        return true;
+        auto subscription = subscribeForChangesImpl(id, handler);
+        if (subscription)
+            subscriptions.push_back(std::move(subscription));
     }
-    catch (...)
+
+    struct MultiSubscription : public Subscription
     {
-        return false;
-    }
+        std::vector<SubscriptionPtr> subscriptions;
+    };
+
+    return std::make_unique<MultiSubscription>{std::move(subscriptions)};
 }
 
 
-bool IAttributesStorage::tryUpdateHelper(const String & name, const Type & type, const UpdateFunc & update_func)
+void IAttributesStorage::notify(const Notifications & notifications)
 {
-    try
-    {
-        updateImpl(getID(name, type), update_func);
-        return true;
-    }
-    catch (...)
-    {
-        return false;
-    }
+    for (const auto & [fn, id, old_attrs, new_attrs] : notifications)
+        fn(id, old_attrs, new_attrs);
 }
 
-
-void IAttributesStorage::tryUpdateHelper(const std::vector<UUID> & ids, const UpdateFunc & update_func, std::vector<UUID> * failed_to_update)
-{
-    if (failed_to_update)
-        failed_to_update->clear();
-    for (const UUID & id : ids)
-    {
-        try
-        {
-            updateImpl(id, update_func);
-        }
-        catch (...)
-        {
-            if (failed_to_update)
-                failed_to_update->emplace_back(id);
-        }
-    }
-}
-
-
-void IAttributesStorage::tryUpdateHelper(const Strings & names, const Type & type, const UpdateFunc & update_func, Strings * failed_to_update)
-{
-    if (failed_to_update)
-        failed_to_update->clear();
-    for (const String & name : names)
-    {
-        try
-        {
-            updateImpl(getID(name, type), update_func);
-        }
-        catch (...)
-        {
-            if (failed_to_update)
-                failed_to_update->emplace_back(name);
-        }
-    }
-}
-
-
-Poco::Logger * IAttributesStorage::getLogger() const
-{
-    Poco::Logger * ptr = log.load();
-    if (!ptr)
-        log.store(ptr = &Poco::Logger::get("AttributesStorage(" + storage_name + ")"), std::memory_order_relaxed);
-    return ptr;
-}
 
 UUID IAttributesStorage::generateRandomID()
 {
@@ -421,6 +467,15 @@ UUID IAttributesStorage::generateIDFromNameAndType(const String & name, const Ty
     UUID result;
     memcpy(&result, md5.digest().data(), md5.digestLength());
     return result;
+}
+
+
+Poco::Logger * IAttributesStorage::getLogger() const
+{
+    Poco::Logger * ptr = log.load();
+    if (!ptr)
+        log.store(ptr = &Poco::Logger::get("AttributesStorage(" + storage_name + ")"), std::memory_order_relaxed);
+    return ptr;
 }
 
 
@@ -457,19 +512,5 @@ void IAttributesStorage::throwNameCollisionCannotRename(const String & old_name,
 void IAttributesStorage::throwStorageIsReadOnly() const
 {
     throw Exception("AttributesStorage(" + getStorageName() + ") is readonly", ErrorCodes::ATTRIBUTES_READ_ONLY);
-}
-
-
-void IAttributesStorage::notify(const OnChangeNotifications & notifications)
-{
-    for (const auto & [fn, attrs] : notifications)
-        fn(attrs);
-}
-
-
-void IAttributesStorage::notify(const OnNewNotifications & notifications)
-{
-    for (const auto & [fn, id] : notifications)
-        fn(id);
 }
 }
