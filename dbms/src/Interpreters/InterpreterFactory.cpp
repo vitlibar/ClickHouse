@@ -2,6 +2,7 @@
 #include <Parsers/ASTCheckQuery.h>
 #include <Parsers/ASTCreateQuery.h>
 #include <Parsers/ASTCreateQuotaQuery.h>
+#include <Parsers/ASTCreateRowPolicyQuery.h>
 #include <Parsers/ASTDropAccessEntityQuery.h>
 #include <Parsers/ASTDropQuery.h>
 #include <Parsers/ASTInsertQuery.h>
@@ -24,6 +25,7 @@
 #include <Interpreters/InterpreterCheckQuery.h>
 #include <Interpreters/InterpreterCreateQuery.h>
 #include <Interpreters/InterpreterCreateQuotaQuery.h>
+#include <Interpreters/InterpreterCreateRowPolicyQuery.h>
 #include <Interpreters/InterpreterDescribeQuery.h>
 #include <Interpreters/InterpreterExplainQuery.h>
 #include <Interpreters/InterpreterDropAccessEntityQuery.h>
@@ -198,6 +200,10 @@ std::unique_ptr<IInterpreter> InterpreterFactory::get(ASTPtr & query, Context & 
     else if (query->as<ASTCreateQuotaQuery>())
     {
         return std::make_unique<InterpreterCreateQuotaQuery>(query, context);
+    }
+    else if (query->as<ASTCreateRowPolicyQuery>())
+    {
+        return std::make_unique<InterpreterCreateRowPolicyQuery>(query, context);
     }
     else if (query->as<ASTDropAccessEntityQuery>())
     {

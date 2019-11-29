@@ -2,6 +2,7 @@
 #include <Parsers/ASTShowCreateAccessEntityQuery.h>
 #include <Parsers/CommonParsers.h>
 #include <Parsers/parseIdentifierOrStringLiteral.h>
+#include <Parsers/parseDatabaseAndTableName.h>
 
 
 namespace DB
@@ -15,13 +16,25 @@ bool ParserShowCreateAccessEntityQuery::parseImpl(Pos & pos, ASTPtr & node, Expe
     Kind kind;
     if (ParserKeyword{"QUOTA"}.ignore(pos, expected))
         kind = Kind::QUOTA;
+    else if (ParserKeyword{"POLICY"}.ignore(pos, expected) || ParserKeyword{"ROW POLICY"}.ignore(pos, expected))
+        kind = Kind::ROW_POLICY;
     else
         return false;
 
     String name;
     bool current_quota = false;
+    RowPolicy::FullNameParts row_policy_name;
 
-    if ((kind == Kind::QUOTA) && ParserKeyword{"CURRENT"}.ignore(pos, expected))
+    if (kind == Kind::ROW_POLICY)
+    {
+        String & database = row_policy_name.database;
+        String & table_name = row_policy_name.table_name;
+        String & policy_name = row_policy_name.policy_name;
+        if (!parseIdentifierOrStringLiteral(pos, expected, policy_name) || !ParserKeyword{"ON"}.ignore(pos, expected)
+            || !parseDatabaseAndTableName(pos, expected, database, table_name))
+            return false;
+    }
+    else if ((kind == Kind::QUOTA) && ParserKeyword{"CURRENT"}.ignore(pos, expected))
     {
         /// SHOW CREATE QUOTA CURRENT
         current_quota = true;
@@ -30,17 +43,20 @@ bool ParserShowCreateAccessEntityQuery::parseImpl(Pos & pos, ASTPtr & node, Expe
     {
         /// SHOW CREATE QUOTA name
     }
-    else
+    else if (kind == Kind::QUOTA)
     {
         /// SHOW CREATE QUOTA
         current_quota = true;
     }
+    else
+        return false;
 
     auto query = std::make_shared<ASTShowCreateAccessEntityQuery>(kind);
     node = query;
 
     query->name = std::move(name);
     query->current_quota = current_quota;
+    query->row_policy_name = std::move(row_policy_name);
 
     return true;
 }

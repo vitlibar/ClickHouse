@@ -608,6 +608,13 @@ void Context::checkQuotaManagementIsAllowed()
             "User " + client_info.current_user + " doesn't have enough privileges to manage quotas", ErrorCodes::NOT_ENOUGH_PRIVILEGES);
 }
 
+void Context::checkRowPolicyManagementIsAllowed()
+{
+    if (!is_row_policy_management_allowed)
+        throw Exception(
+            "User " + client_info.current_user + " doesn't have enough privileges to manage row policies", ErrorCodes::NOT_ENOUGH_PRIVILEGES);
+}
+
 void Context::setUsersConfig(const ConfigurationPtr & config)
 {
     auto lock = getLock();
@@ -647,6 +654,7 @@ void Context::calculateUserSettings()
         client_info.current_user, client_info.current_address.host(), client_info.quota_key);
     is_quota_management_allowed = user->is_quota_management_allowed;
     row_policy = getAccessControlManager().getRowPolicyUsageContext(client_info.current_user);
+    is_row_policy_management_allowed = user->is_row_policy_management_allowed;
 }
 
 
