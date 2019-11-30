@@ -424,7 +424,7 @@ InterpreterSelectQuery::InterpreterSelectQuery(
     if (storage && (storage->getDatabaseName() == "system"))
     {
         String table_name = storage->getTableName();
-        if ((table_name == "quota") || (table_name == "quotas"))
+        if ((table_name == "quotas") || (table_name == "quota_usage") || (table_name == "one"))
         {
             options.ignore_quota = true;
             options.ignore_limits = true;
