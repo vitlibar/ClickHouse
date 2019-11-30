@@ -659,9 +659,8 @@ void Context::calculateUserSettings()
     /// 3) Apply settings from current user
     setProfile(profile);
 
-    auto quota_id = getAccessControlManager().getID<Quota>(user->quota);
     quota = getAccessControlManager().getQuotaUsageContext(
-        client_info.current_user, client_info.current_address.host(), client_info.quota_key, {quota_id});
+        client_info.current_user, client_info.current_address.host(), client_info.quota_key);
 }
 
 

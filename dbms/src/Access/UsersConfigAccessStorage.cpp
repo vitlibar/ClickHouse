@@ -4,6 +4,7 @@
 #include <Common/quoteString.h>
 #include <Poco/Util/AbstractConfiguration.h>
 #include <Poco/MD5Engine.h>
+#include <boost/range/algorithm/copy.hpp>
 #include <cstring>
 
 
@@ -34,7 +35,7 @@ namespace
 
     UUID generateID(const IAccessEntity & entity) { return generateID(entity.getType(), entity.getFullName()); }
 
-    QuotaPtr parseQuota(const Poco::Util::AbstractConfiguration & config, const String & quota_name)
+    QuotaPtr parseQuota(const Poco::Util::AbstractConfiguration & config, const String & quota_name, const Strings & user_names)
     {
         auto quota = std::make_shared<Quota>();
         quota->setName(quota_name);
@@ -76,12 +77,23 @@ namespace
             limits.max[ResourceType::EXECUTION_TIME] = Quota::secondsToExecutionTime(config.getUInt64(interval_config + ".execution_time", Quota::UNLIMITED));
         }
 
+        boost::range::copy(user_names, std::inserter(quota->roles, quota->roles.end()));
+
         return quota;
     }
 
 
     std::vector<AccessEntityPtr> parseQuotas(const Poco::Util::AbstractConfiguration & config, Poco::Logger * log)
     {
+        Poco::Util::AbstractConfiguration::Keys user_names;
+        config.keys("users", user_names);
+        std::unordered_map<String, Strings> quota_to_user_names;
+        for (const auto & user_name : user_names)
+        {
+            if (config.has("users." + user_name + ".quota"))
+                quota_to_user_names[config.getString("users." + user_name + ".quota")].push_back(user_name);
+        }
+
         Poco::Util::AbstractConfiguration::Keys quota_names;
         config.keys("quotas", quota_names);
         std::vector<AccessEntityPtr> quotas;
@@ -90,7 +102,9 @@ namespace
         {
             try
             {
-                quotas.push_back(parseQuota(config, quota_name));
+                auto it = quota_to_user_names.find(quota_name);
+                const Strings quota_users = (it != quota_to_user_names.end()) ? std::move(it->second) : Strings{};
+                quotas.push_back(parseQuota(config, quota_name, quota_users));
             }
             catch (...)
             {

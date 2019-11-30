@@ -10,6 +10,7 @@
 #include <boost/range/algorithm/fill.hpp>
 #include <boost/range/algorithm/lower_bound.hpp>
 #include <boost/range/algorithm/stable_sort.hpp>
+#include <boost/range/algorithm_ext/erase.hpp>
 
 
 namespace DB
@@ -276,9 +277,8 @@ QuotaUsageContext::QuotaUsageContext()
 QuotaUsageContext::QuotaUsageContext(
     const String & user_name_,
     const Poco::Net::IPAddress & address_,
-    const String & client_key_,
-    const std::vector<UUID> & quota_ids_)
-    : user_name(user_name_), address(address_), client_key(client_key_), quota_ids(quota_ids_)
+    const String & client_key_)
+    : user_name(user_name_), address(address_), client_key(client_key_)
 {
 }
 
@@ -342,6 +342,18 @@ void QuotaUsageContext::checkExceeded(ResourceType resource_type)
 }
 
 
+bool QuotaUsageContext::canUseQuota(const Quota & quota) const
+{
+    if (quota.except_roles.count(user_name))
+        return false;
+
+    if (quota.all_roles)
+        return true;
+
+    return quota.roles.count(user_name);
+}
+
+
 String QuotaUsageContext::calculateKey(const Quota & quota) const
 {
     using KeyType = Quota::KeyType;
@@ -395,115 +407,110 @@ QuotaUsageManager::~QuotaUsageManager()
 }
 
 
-std::shared_ptr<QuotaUsageContext> QuotaUsageManager::getContext(const String & user_name, const Poco::Net::IPAddress & address, const String & client_key, const std::vector<UUID> & quota_ids)
+std::shared_ptr<QuotaUsageContext> QuotaUsageManager::getContext(const String & user_name, const Poco::Net::IPAddress & address, const String & client_key)
 {
     std::lock_guard lock{mutex};
-    auto context = ext::shared_ptr_helper<QuotaUsageContext>::create(user_name, address, client_key, quota_ids);
-    findOrBuildIntervalsForContext(context);
+    ensureAllQuotasRead();
+    auto context = ext::shared_ptr_helper<QuotaUsageContext>::create(user_name, address, client_key);
+    contexts.push_back(context);
+    chooseQuotaForContext(context);
     return context;
 }
 
 
-std::shared_ptr<const QuotaUsageContext::Intervals> QuotaUsageManager::findOrBuildIntervalsForContext(const std::shared_ptr<QuotaUsageContext> & context)
+void QuotaUsageManager::ensureAllQuotasRead()
 {
     /// `mutex` is already locked.
-    std::shared_ptr<const Intervals> intervals;
-    MultipleKeysIntervals *mki = nullptr;
-    for (const UUID & quota_id : context->quota_ids)
-    {
-        auto quota = tryReadQuota(quota_id);
-        if (!quota)
-            continue;
+    if (all_quotas_read)
+        return;
+    all_quotas_read = true;
+    subscription = access_control_manager.subscribeForChanges<Quota>(
+        [&](const UUID & id, const AccessEntityPtr & entity)
+        {
+            if (entity)
+                quotaAddedOrChanged(id, typeid_cast<QuotaPtr>(entity));
+            else
+                quotaRemoved(id);
+        });
 
-        mki = &id_to_mki[quota_id];
-        auto & key_to_intervals = mki->key_to_intervals;
-        String key = context->calculateKey(*quota);
-        auto it = key_to_intervals.find(key);
-        if (it == key_to_intervals.end())
-            it = key_to_intervals.try_emplace(key, Intervals::build(quota_id, *quota, key, rnd_engine)).first;
-        intervals = it->second;
-        break;
+    for (const UUID & id : access_control_manager.findAll<Quota>())
+    {
+        auto quota = access_control_manager.tryRead<Quota>(id);
+        if (quota)
+            all_quotas.emplace(id, QuotaWithIntervals{quota, {}}).first;
     }
-
-    if (!intervals)
-        intervals = Intervals::unlimited_quota(); /// No quota == no limits.
-
-    std::atomic_store(&context->atomic_intervals, intervals);
-    if (mki)
-        mki->contexts.push_back(context);
-    return intervals;
 }
 
 
-std::shared_ptr<const Quota> QuotaUsageManager::tryReadQuota(const UUID & quota_id)
-{
-    /// `mutex` is already locked.
-    auto it = id_to_mki.find(quota_id);
-    if (it != id_to_mki.end())
-        return it->second.quota;
-
-    auto on_changed_quota = [this, quota_id](const UUID &, const AccessEntityPtr & new_quota)
-    {
-        if (new_quota)
-            quotaChanged(quota_id, typeid_cast<QuotaPtr>(new_quota));
-        else
-            quotaRemoved(quota_id);
-    };
-    auto subscription = access_control_manager.subscribeForChanges(quota_id, on_changed_quota);
-    auto quota = access_control_manager.tryRead<Quota>(quota_id);
-    if (!quota)
-        return nullptr;
-
-    it = id_to_mki.emplace(quota_id, MultipleKeysIntervals{}).first;
-    it->second.quota = quota;
-    it->second.subscription = std::move(subscription);
-    return quota;
-}
-
-
-void QuotaUsageManager::quotaChanged(const UUID & quota_id, const std::shared_ptr<const Quota> & new_quota)
+void QuotaUsageManager::quotaAddedOrChanged(const UUID & quota_id, const std::shared_ptr<const Quota> & new_quota)
 {
     std::lock_guard lock{mutex};
-    auto it = id_to_mki.find(quota_id);
-    if (it == id_to_mki.end())
+    auto it = all_quotas.find(quota_id);
+    if (it == all_quotas.end())
+    {
+        all_quotas.emplace(quota_id, QuotaWithIntervals{new_quota, {}});
         return;
-    auto & mki = it->second;
-    if (mki.quota == new_quota)
+    }
+    auto & quota_with_intervals = it->second;
+    if (quota_with_intervals.quota == new_quota)
         return;
 
-    mki.quota = new_quota;
+    quota_with_intervals.quota = new_quota;
 
-    auto & key_to_intervals = mki.key_to_intervals;
+    auto & key_to_intervals = quota_with_intervals.key_to_intervals;
     for (auto & intervals : key_to_intervals | boost::adaptors::map_values)
         intervals = intervals->rebuild(*new_quota, rnd_engine);
 
-    auto contexts = std::move(mki.contexts);
-    for (const auto & weak : contexts)
-    {
-        auto context = weak.lock();
-        if (context)
-            findOrBuildIntervalsForContext(context);
-    }
+    chooseQuotaForAllContexts();
 }
 
 
 void QuotaUsageManager::quotaRemoved(const UUID & quota_id)
 {
     std::lock_guard lock{mutex};
-    auto it = id_to_mki.find(quota_id);
-    if (it == id_to_mki.end())
-        return;
-    auto & mki = it->second;
-    auto contexts = std::move(mki.contexts);
-    id_to_mki.erase(it);
+    all_quotas.erase(quota_id);
+    chooseQuotaForAllContexts();
+}
 
-    /// Rechoose quota for existing contexts.
-    for (const auto & weak : contexts)
+
+void QuotaUsageManager::chooseQuotaForAllContexts()
+{
+    /// `mutex` is already locked.
+    boost::range::remove_erase_if(
+        contexts,
+        [&](const std::weak_ptr<QuotaUsageContext> & weak)
+        {
+            auto context = weak.lock();
+            if (!context)
+                return true; // remove from the `contexts` list.
+            chooseQuotaForContext(context);
+            return false; // keep in the `contexts` list.
+        });
+}
+
+void QuotaUsageManager::chooseQuotaForContext(const std::shared_ptr<QuotaUsageContext> & context)
+{
+    /// `mutex` is already locked.
+    std::shared_ptr<const Intervals> intervals;
+    for (auto [quota_id, quota_with_intervals] : all_quotas)
     {
-        auto context = weak.lock();
-        if (context)
-            findOrBuildIntervalsForContext(context);
+        const auto & quota = *quota_with_intervals.quota;
+        if (context->canUseQuota(quota))
+        {
+            auto & key_to_intervals = quota_with_intervals.key_to_intervals;
+            String key = context->calculateKey(quota);
+            auto it = key_to_intervals.find(key);
+            if (it == key_to_intervals.end())
+                it = key_to_intervals.try_emplace(key, Intervals::build(quota_id, quota, key, rnd_engine)).first;
+            intervals = it->second;
+            break;
+        }
     }
+
+    if (!intervals)
+        intervals = Intervals::unlimited_quota(); /// No quota == no limits.
+
+    std::atomic_store(&context->atomic_intervals, intervals);
 }
 
 
@@ -512,9 +519,9 @@ std::vector<QuotaUsageInfo> QuotaUsageManager::getInfo() const
     std::lock_guard lock{mutex};
     std::vector<QuotaUsageInfo> all_infos;
     auto current_time = std::chrono::system_clock::now();
-    for (const auto & mki : id_to_mki | boost::adaptors::map_values)
+    for (const auto & info : all_quotas | boost::adaptors::map_values)
     {
-        for (const auto & intervals : mki.key_to_intervals | boost::adaptors::map_values)
+        for (const auto & intervals : info.key_to_intervals | boost::adaptors::map_values)
             all_infos.push_back(intervals->getInfo(current_time));
     }
     return all_infos;

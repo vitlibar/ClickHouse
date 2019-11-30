@@ -2,7 +2,8 @@
 
 #include <Access/IAccessEntity.h>
 #include <chrono>
-#include <map>
+#include <unordered_set>
+
 
 
 namespace DB
@@ -62,6 +63,11 @@ struct Quota : public IAccessEntity
     static constexpr size_t MAX_KEY_TYPE = 6;
     KeyType key_type = KeyType::NONE;
 
+    /// Which roles or users should use this quota.
+    std::unordered_set<String> roles;
+    bool all_roles = false;
+    std::unordered_set<String> except_roles;
+
     bool equal(const IAccessEntity & other) const override;
     std::shared_ptr<IAccessEntity> clone() const override { return cloneImpl<Quota>(); }
 
@@ -101,22 +107,6 @@ inline const char * Quota::resourceTypeToKeyword(ResourceType resource_type)
         case Quota::READ_ROWS: return "READ ROWS";
         case Quota::READ_BYTES: return "READ BYTES";
         case Quota::EXECUTION_TIME: return "EXECUTION TIME";
-    }
-    __builtin_unreachable();
-}
-
-
-inline const char * Quota::resourceTypeToColumnName(ResourceType resource_type)
-{
-    switch (resource_type)
-    {
-        case Quota::QUERIES: return "queries";
-        case Quota::ERRORS: return "errors";
-        case Quota::RESULT_ROWS: return "result_rows";
-        case Quota::RESULT_BYTES: return "result_bytes";
-        case Quota::READ_ROWS: return "read_rows";
-        case Quota::READ_BYTES: return "read_bytes";
-        case Quota::EXECUTION_TIME: return "execution_time";
     }
     __builtin_unreachable();
 }

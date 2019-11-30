@@ -21,29 +21,31 @@ public:
     QuotaUsageManager(const AccessControlManager & access_control_manager_);
     ~QuotaUsageManager();
 
-    QuotaUsageContextPtr getContext(const String & user_name, const Poco::Net::IPAddress & address, const String & client_key, const std::vector<UUID> & quota_ids);
+    QuotaUsageContextPtr getContext(const String & user_name, const Poco::Net::IPAddress & address, const String & client_key);
     std::vector<QuotaUsageInfo> getInfo() const;
 
 private:
     using Interval = QuotaUsageContext::Interval;
     using Intervals = QuotaUsageContext::Intervals;
 
-    struct MultipleKeysIntervals
+    struct QuotaWithIntervals
     {
-        std::unordered_map<String /* quota key */, std::shared_ptr<const Intervals>> key_to_intervals;
         std::shared_ptr<const Quota> quota;
-        IAccessStorage::SubscriptionPtr subscription;
-        std::vector<std::weak_ptr<QuotaUsageContext>> contexts;
+        std::unordered_map<String /* quota key */, std::shared_ptr<const Intervals>> key_to_intervals;
     };
 
-    std::shared_ptr<const Intervals> findOrBuildIntervalsForContext(const std::shared_ptr<QuotaUsageContext> & context);
-    std::shared_ptr<const Quota> tryReadQuota(const UUID & quota_id);
-    void quotaChanged(const UUID & quota_id, const std::shared_ptr<const Quota> & new_quota);
+    void ensureAllQuotasRead();
+    void quotaAddedOrChanged(const UUID & quota_id, const std::shared_ptr<const Quota> & new_quota);
     void quotaRemoved(const UUID & quota_id);
+    void chooseQuotaForAllContexts();
+    void chooseQuotaForContext(const std::shared_ptr<QuotaUsageContext> & context);
 
     const AccessControlManager & access_control_manager;
     mutable std::mutex mutex;
-    std::unordered_map<UUID /* quota id */, MultipleKeysIntervals> id_to_mki;
+    std::unordered_map<UUID /* quota id */, QuotaWithIntervals> all_quotas;
+    bool all_quotas_read = false;
+    IAccessStorage::SubscriptionPtr subscription;
+    std::vector<std::weak_ptr<QuotaUsageContext>> contexts;
     mutable pcg64 rnd_engine;
 };
 }

@@ -33,11 +33,8 @@ public:
 
     void loadFromConfig(const Poco::Util::AbstractConfiguration & users_config);
 
-    std::shared_ptr<QuotaUsageContext> getQuotaUsageContext(
-        const String & user_name,
-        const Poco::Net::IPAddress & address,
-        const String & custom_quota_key,
-        const std::vector<UUID> & quota_ids);
+    std::shared_ptr<QuotaUsageContext>
+    getQuotaUsageContext(const String & user_name, const Poco::Net::IPAddress & address, const String & custom_quota_key);
 
     std::vector<QuotaUsageInfo> getQuotasUsageInfo() const;
 

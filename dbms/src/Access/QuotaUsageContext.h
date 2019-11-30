@@ -47,14 +47,14 @@ private:
     struct Intervals;
 
     /// Instances of this class are created by QuotaUsageManager.
-    QuotaUsageContext(const String & user_name_, const Poco::Net::IPAddress & address_, const String & client_key_, const std::vector<UUID> & quota_ids_);
+    QuotaUsageContext(const String & user_name_, const Poco::Net::IPAddress & address_, const String & client_key_);
 
+    bool canUseQuota(const Quota & quota) const;
     String calculateKey(const Quota & quota) const;
 
     const String user_name;
     const Poco::Net::IPAddress address;
     const String client_key;
-    const std::vector<UUID> quota_ids;
     std::shared_ptr<const Intervals> atomic_intervals; /// atomically changed by QuotaUsageManager
 };
 

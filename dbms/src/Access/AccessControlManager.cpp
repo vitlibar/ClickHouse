@@ -39,9 +39,9 @@ void AccessControlManager::loadFromConfig(const Poco::Util::AbstractConfiguratio
 
 
 std::shared_ptr<QuotaUsageContext> AccessControlManager::getQuotaUsageContext(
-    const String & user_name, const Poco::Net::IPAddress & address, const String & custom_quota_key, const std::vector<UUID> & quota_ids)
+    const String & user_name, const Poco::Net::IPAddress & address, const String & custom_quota_key)
 {
-    return quota_usage_manager->getContext(user_name, address, custom_quota_key, quota_ids);
+    return quota_usage_manager->getContext(user_name, address, custom_quota_key);
 }
 
 
