@@ -492,7 +492,7 @@ void QuotaUsageManager::chooseQuotaForContext(const std::shared_ptr<QuotaUsageCo
 {
     /// `mutex` is already locked.
     std::shared_ptr<const Intervals> intervals;
-    for (auto [quota_id, quota_with_intervals] : all_quotas)
+    for (auto & [quota_id, quota_with_intervals] : all_quotas)
     {
         const auto & quota = *quota_with_intervals.quota;
         if (context->canUseQuota(quota))

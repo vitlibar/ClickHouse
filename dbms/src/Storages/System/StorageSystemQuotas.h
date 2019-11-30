@@ -10,8 +10,7 @@ namespace DB
 class Context;
 
 
-/** Implements the `quotas` system tables, which allows you to get information about quotas
-  * and how they are used by all users.
+/** Implements the `quotas` system tables, which allows you to get information about quotas.
   */
 class StorageSystemQuotas : public ext::shared_ptr_helper<StorageSystemQuotas>, public IStorageSystemOneBlock<StorageSystemQuotas>
 {
