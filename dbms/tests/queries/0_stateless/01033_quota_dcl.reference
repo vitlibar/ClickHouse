@@ -1,0 +1,2 @@
+default
+CREATE QUOTA default KEYED BY \'user name\' SET TRACKING FOR INTERVAL 1 HOUR TO default, readonly
