@@ -1,4 +1,5 @@
 #include <Parsers/ASTCreateQuotaQuery.h>
+#include <Parsers/ASTRoleList.h>
 #include <Common/quoteString.h>
 #include <Common/IntervalKind.h>
 #include <ext/range.h>
@@ -93,6 +94,12 @@ namespace
             formatLimits(limits, settings);
         }
     }
+
+    void formatRoles(const ASTRoleList & roles, const IAST::FormatSettings & settings)
+    {
+        settings.ostr << (settings.hilite ? IAST::hilite_keyword : "") << " TO " << (settings.hilite ? IAST::hilite_none : "");
+        roles.format(settings);
+    }
 }
 
 
@@ -129,5 +136,8 @@ void ASTCreateQuotaQuery::formatImpl(const FormatSettings & settings, FormatStat
         formatKeyType(*key_type, settings);
 
     formatAllLimits(all_limits, settings);
+
+    if (roles)
+        formatRoles(*roles, settings);
 }
 }

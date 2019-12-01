@@ -1,10 +1,12 @@
 #include <Interpreters/InterpreterCreateQuotaQuery.h>
 #include <Parsers/ASTCreateQuotaQuery.h>
+#include <Parsers/ASTRoleList.h>
 #include <Interpreters/Context.h>
 #include <Access/AccessControlManager.h>
 #include <ext/range.h>
 #include <boost/range/algorithm/find_if.hpp>
 #include <boost/range/algorithm/upper_bound.hpp>
+#include <boost/range/algorithm/copy.hpp>
 
 
 namespace DB
@@ -92,6 +94,23 @@ void InterpreterCreateQuotaQuery::updateQuotaFromQuery(Quota & quota, const ASTC
             if (query_limits.max[resource_type])
                 quota_limits.max[resource_type] = *query_limits.max[resource_type];
         }
+    }
+
+    if (query.roles)
+    {
+        const auto & query_roles = *query.roles;
+
+        quota.roles.clear();
+        boost::range::copy(query_roles.roles, std::inserter(quota.roles, quota.roles.end()));
+        if (query_roles.current_user)
+            quota.roles.insert(context.getClientInfo().current_user);
+
+        quota.all_roles = query_roles.all_roles;
+
+        quota.except_roles.clear();
+        boost::range::copy(query_roles.except_roles, std::inserter(quota.except_roles, quota.except_roles.end()));
+        if (query_roles.except_current_user)
+            quota.except_roles.insert(context.getClientInfo().current_user);
     }
 }
 }

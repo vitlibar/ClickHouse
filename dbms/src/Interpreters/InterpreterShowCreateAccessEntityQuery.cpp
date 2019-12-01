@@ -2,6 +2,7 @@
 #include <Interpreters/Context.h>
 #include <Parsers/ASTCreateQuotaQuery.h>
 #include <Parsers/ASTShowCreateAccessEntityQuery.h>
+#include <Parsers/ASTRoleList.h>
 #include <Parsers/formatAST.h>
 #include <Access/AccessControlManager.h>
 #include <Access/QuotaUsageContext.h>
@@ -9,6 +10,7 @@
 #include <DataStreams/OneBlockInputStream.h>
 #include <DataTypes/DataTypeString.h>
 #include <ext/range.h>
+#include <boost/range/algorithm/copy.hpp>
 #include <sstream>
 
 
@@ -73,6 +75,12 @@ ASTPtr InterpreterShowCreateAccessEntityQuery::getCreateQuotaQuery(const ASTShow
                 create_query_limits.max[resource_type] = limits.max[resource_type];
         create_query->all_limits.push_back(create_query_limits);
     }
+
+    auto create_query_roles = std::make_shared<ASTRoleList>();
+    boost::range::copy(quota->roles, std::back_inserter(create_query_roles->roles));
+    create_query_roles->all_roles = quota->all_roles;
+    boost::range::copy(quota->except_roles, std::back_inserter(create_query_roles->except_roles));
+    create_query->roles = std::move(create_query_roles);
 
     return create_query;
 }

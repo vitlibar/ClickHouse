@@ -6,11 +6,15 @@
 
 namespace DB
 {
+class ASTRoleList;
+
+
 /** CREATE QUOTA [IF NOT EXISTS | OR REPLACE] name
   *      [KEYED BY {'none' | 'user name' | 'ip address' | 'client key' | 'client key or user name' | 'client key or ip address'}]
   *      [{SET {{MAX QUERIES | MAX ERRORS | MAX RESULT ROWS | MAX RESULT BYTES | MAX READ ROWS | MAX READ BYTES | MAX EXECUTION TIME} = {number | ANY} } [,...] |
   *        SET TRACKING
   *       } FOR [RANDOMIZED] INTERVAL number {SECOND | MINUTE | HOUR | DAY} [,...]]
+  *      [TO {role [,...] | ALL | ALL EXCEPT role [,...]}]
   *
   * ALTER QUOTA [IF EXISTS] name
   *      [RENAME TO new_name]
@@ -19,6 +23,7 @@ namespace DB
   *        SET TRACKING |
   *        UNSET TRACKING
   *       } FOR [RANDOMIZED] INTERVAL number {SECOND | MINUTE | HOUR | DAY} [,...]]
+  *      [TO {role [,...] | ALL | ALL EXCEPT role [,...]}]
   */
 class ASTCreateQuotaQuery : public IAST
 {
@@ -47,6 +52,8 @@ public:
         bool randomize_interval = false;
     };
     std::vector<Limits> all_limits;
+
+    std::shared_ptr<ASTRoleList> roles;
 
     String getID(char) const override;
     ASTPtr clone() const override;
