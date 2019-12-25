@@ -321,8 +321,7 @@ void DatabaseOnDisk::createDictionary(
     external_loader.addConfigRepository(
         temp_repository_name,
         std::make_unique<ExternalLoaderPresetConfigRepository>(
-            std::vector{std::pair{dictionary_metadata_tmp_path,
-                                  getDictionaryConfigurationFromAST(query->as<const ASTCreateQuery &>(), database.getDatabaseName())}}));
+            std::vector{std::pair{dictionary_metadata_tmp_path, getDictionaryConfigurationFromAST(query->as<const ASTCreateQuery &>())}}));
     SCOPE_EXIT({ external_loader.removeConfigRepository(temp_repository_name); });
 
     bool lazy_load = context.getConfigRef().getBool("dictionaries_lazy_load", true);
