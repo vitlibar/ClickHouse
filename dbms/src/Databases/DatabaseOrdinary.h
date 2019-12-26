@@ -6,6 +6,7 @@
 
 namespace DB
 {
+class ExternalLoaderDatabaseConfigRepository;
 
 /** Default engine of databases.
   * It stores tables list in filesystem using list of .sql files,
@@ -15,6 +16,7 @@ class DatabaseOrdinary : public DatabaseWithOwnTablesBase
 {
 public:
     DatabaseOrdinary(String name_, const String & metadata_path_, const Context & context);
+    ~DatabaseOrdinary() override;
 
     String getEngineName() const override { return "Ordinary"; }
 
@@ -89,6 +91,7 @@ private:
     const String metadata_path;
     const String data_path;
     Poco::Logger * log;
+    std::unique_ptr<ExternalLoaderDatabaseConfigRepository> dictionaries_config_repository;
 
     void startupTables(ThreadPool & thread_pool);
 };

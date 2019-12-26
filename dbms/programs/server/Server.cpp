@@ -947,6 +947,8 @@ int Server::main(const std::vector<std::string> & /*args*/)
         });
 
         /// try to load dictionaries immediately, throw on error and die
+        ExternalLoaderXMLConfigRepository dictionaries_repository(config(), "dictionaries_config");
+        ExternalLoaderXMLConfigRepository models_repository(config(), "models_config");
         try
         {
             if (!config().getBool("dictionaries_lazy_load", true))
@@ -954,12 +956,8 @@ int Server::main(const std::vector<std::string> & /*args*/)
                 global_context->tryCreateEmbeddedDictionaries();
                 global_context->getExternalDictionariesLoader().enableAlwaysLoadEverything(true);
             }
-
-            auto dictionaries_repository = std::make_unique<ExternalLoaderXMLConfigRepository>(config(), "dictionaries_config");
-            global_context->getExternalDictionariesLoader().addConfigRepository("", std::move(dictionaries_repository));
-
-            auto models_repository = std::make_unique<ExternalLoaderXMLConfigRepository>(config(), "models_config");
-            global_context->getExternalModelsLoader().addConfigRepository("", std::move(models_repository));
+            global_context->getExternalDictionariesLoader().addConfigRepository(&dictionaries_repository);
+            global_context->getExternalModelsLoader().addConfigRepository(&models_repository);
         }
         catch (...)
         {

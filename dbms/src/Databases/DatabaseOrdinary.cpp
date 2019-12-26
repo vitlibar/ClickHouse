@@ -120,9 +120,13 @@ DatabaseOrdinary::DatabaseOrdinary(String name_, const String & metadata_path_, 
     , metadata_path(metadata_path_)
     , data_path(context.getPath() + "data/" + escapeForFileName(name) + "/")
     , log(&Logger::get("DatabaseOrdinary (" + name + ")"))
+    , dictionaries_config_repository(std::make_unique<ExternalLoaderDatabaseConfigRepository>(*this, context))
 {
     Poco::File(getDataPath()).createDirectories();
 }
+
+
+DatabaseOrdinary::~DatabaseOrdinary() = default;
 
 
 void DatabaseOrdinary::loadStoredObjects(
@@ -188,10 +192,8 @@ void DatabaseOrdinary::loadStoredObjects(
     /// After all tables was basically initialized, startup them.
     startupTables(pool);
 
-    /// Add database as repository
-    auto dictionaries_repository = std::make_unique<ExternalLoaderDatabaseConfigRepository>(shared_from_this(), context);
-    auto & external_loader = context.getExternalDictionariesLoader();
-    external_loader.addConfigRepository(getDatabaseName(), std::move(dictionaries_repository));
+    /// Add a config repository for this database.
+    context.getExternalDictionariesLoader().addConfigRepository(dictionaries_config_repository.get());
 
     /// Attach dictionaries.
     for (const auto & name_with_query : file_names)

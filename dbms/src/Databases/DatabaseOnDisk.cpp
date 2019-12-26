@@ -7,7 +7,7 @@
 #include <Interpreters/Context.h>
 #include <Interpreters/InterpreterCreateQuery.h>
 #include <Interpreters/ExternalDictionariesLoader.h>
-#include <Interpreters/ExternalLoaderPresetConfigRepository.h>
+#include <Interpreters/ExternalLoaderTempConfigRepository.h>
 #include <Dictionaries/getDictionaryConfigurationFromAST.h>
 #include <Parsers/ASTCreateQuery.h>
 #include <Parsers/ParserCreateQuery.h>
@@ -284,7 +284,7 @@ void DatabaseOnDisk::createDictionary(
 
     /// A dictionary with the same full name could be defined in *.xml config files.
     String full_name = database.getDatabaseName() + "." + dictionary_name;
-    auto & external_loader = const_cast<ExternalDictionariesLoader &>(context.getExternalDictionariesLoader());
+    const auto & external_loader = context.getExternalDictionariesLoader();
     if (external_loader.getCurrentStatus(full_name) != ExternalLoader::Status::NOT_EXIST)
         throw Exception(
             "Dictionary " + backQuote(database.getDatabaseName()) + "." + backQuote(dictionary_name) + " already exists.",
@@ -315,14 +315,11 @@ void DatabaseOnDisk::createDictionary(
 
     /// Add a temporary repository containing the dictionary.
     /// We need this temp repository to try loading the dictionary before actually attaching it to the database.
-    static std::atomic<size_t> counter = 0;
-    String temp_repository_name = String(IExternalLoaderConfigRepository::INTERNAL_REPOSITORY_NAME_PREFIX) + " creating " + full_name + " "
-        + std::to_string(++counter);
-    external_loader.addConfigRepository(
-        temp_repository_name,
-        std::make_unique<ExternalLoaderPresetConfigRepository>(
-            std::vector{std::pair{dictionary_metadata_tmp_path, getDictionaryConfigurationFromAST(query->as<const ASTCreateQuery &>())}}));
-    SCOPE_EXIT({ external_loader.removeConfigRepository(temp_repository_name); });
+    ExternalLoaderTempConfigRepository temp_repository(
+        database.getDatabaseName(),
+        dictionary_metadata_tmp_path,
+        getDictionaryConfigurationFromAST(query->as<const ASTCreateQuery &>()));
+    const_cast<ExternalDictionariesLoader &>(external_loader).addConfigRepository(&temp_repository);
 
     bool lazy_load = context.getConfigRef().getBool("dictionaries_lazy_load", true);
     if (!lazy_load)

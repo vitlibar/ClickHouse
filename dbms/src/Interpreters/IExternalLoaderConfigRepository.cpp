@@ -1,7 +1,12 @@
 #include <Interpreters/IExternalLoaderConfigRepository.h>
+#include <Interpreters/ExternalLoader.h>
 
 
 namespace DB
 {
-const char * IExternalLoaderConfigRepository::INTERNAL_REPOSITORY_NAME_PREFIX = "\xFF internal repo ";
+IExternalLoaderConfigRepository::~IExternalLoaderConfigRepository()
+{
+    if (auto * p = external_loader.load())
+        p->removeConfigRepository(this);
+}
 }
