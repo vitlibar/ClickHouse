@@ -95,7 +95,6 @@ class CompiledExpressionCache;
 using DatabaseAndTableName = std::pair<String, String>;
 
 /// Table -> set of table-views that make SELECT from it.
-using ViewDependencies = std::map<DatabaseAndTableName, std::set<DatabaseAndTableName>>;
 using Dependencies = std::vector<DatabaseAndTableName>;
 
 using TableAndCreateAST = std::pair<StoragePtr, ASTPtr>;

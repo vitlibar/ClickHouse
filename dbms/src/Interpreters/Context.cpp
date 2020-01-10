@@ -98,6 +98,9 @@ namespace ErrorCodes
 }
 
 
+using ViewDependencies = std::map<DatabaseAndTableName, std::set<DatabaseAndTableName>>;
+
+
 /** Set of known objects (environment), that could be used in query.
   * Shared (global) part. Order of members (especially, order of destruction) is very important.
   */
