@@ -4,6 +4,7 @@
 #include <Access/UsersConfigAccessStorage.h>
 #include <Access/QuotaContextFactory.h>
 #include <Access/RowPolicyContextFactory.h>
+#include <Access/AccessRightsContext.h>
 
 
 namespace DB
@@ -56,6 +57,12 @@ std::vector<QuotaUsageInfo> AccessControlManager::getQuotaUsageInfo() const
 std::shared_ptr<RowPolicyContext> AccessControlManager::getRowPolicyContext(const String & user_name) const
 {
     return row_policy_context_factory->createContext(user_name);
+}
+
+
+std::shared_ptr<const AccessRightsContext> AccessControlManager::getAccessRightsContext(const String & user_name, const AccessRights & granted_to_user, const Settings & settings)
+{
+    return std::make_shared<AccessRightsContext>(user_name, granted_to_user, settings);
 }
 
 }
