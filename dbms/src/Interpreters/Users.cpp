@@ -73,6 +73,7 @@ User::User(const String & name_, const String & config_elem, const Poco::Util::A
 
     /// Fill list of allowed databases.
     const auto config_sub_elem = config_elem + ".allow_databases";
+    bool some_database_allowed = false;
     if (config.has(config_sub_elem))
     {
         databases = DatabaseSet();
@@ -84,8 +85,13 @@ User::User(const String & name_, const String & config_elem, const Poco::Util::A
         {
             const auto database_name = config.getString(config_sub_elem + "." + key);
             databases->insert(database_name);
+            access.grant(AccessType::ALL, database_name);
         }
     }
+    if (some_database_allowed)
+        access.grant(AccessType::ALL, "system"); /// Anyone has access to the "system" database.
+    else
+        access.grant(AccessType::ALL); /// By default all databases are accessible.
 
     /// Fill list of allowed dictionaries.
     const auto config_dictionary_sub_elem = config_elem + ".allow_dictionaries";

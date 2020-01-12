@@ -29,6 +29,7 @@
 #include <Access/SettingsConstraints.h>
 #include <Access/QuotaContext.h>
 #include <Access/RowPolicyContext.h>
+#include <Access/AccessRightsContext.h>
 #include <Interpreters/ExpressionJIT.h>
 #include <Interpreters/UsersManager.h>
 #include <Dictionaries/Embedded/GeoDictionariesLoader.h>
@@ -333,6 +334,7 @@ Context Context::createGlobal()
     Context res;
     res.quota = std::make_shared<QuotaContext>();
     res.row_policy = std::make_shared<RowPolicyContext>();
+    res.access_rights = std::make_shared<AccessRightsContext>();
     res.shared = std::make_shared<ContextShared>();
     return res;
 }
@@ -632,6 +634,22 @@ void Context::checkRowPolicyManagementIsAllowed()
             "User " + client_info.current_user + " doesn't have enough privileges to manage row policies", ErrorCodes::NOT_ENOUGH_PRIVILEGES);
 }
 
+
+template <typename... Args>
+void Context::checkAccessImpl(const AccessType & access, const Args &... args) const
+{
+    getAccessRights()->check(access, args...);
+}
+
+void Context::checkAccess(const AccessType & access) const { return checkAccessImpl(access); }
+void Context::checkAccess(const AccessType & access, const std::string_view & database) const { return checkAccessImpl(access, database); }
+void Context::checkAccess(const AccessType & access, const Strings & databases) const { return checkAccessImpl(access, databases); }
+void Context::checkAccess(const AccessType & access, const std::string_view & database, const std::string_view & table_or_dictionary) const { return checkAccessImpl(access, database, table_or_dictionary); }
+void Context::checkAccess(const AccessType & access, const std::string_view & database, const Strings & tables_or_dictionaries) const { return checkAccessImpl(access, database, tables_or_dictionaries); }
+void Context::checkAccess(const AccessType & access, const std::string_view & database, const std::string_view & table_or_dictionary, const std::string_view & column_or_attribute) const { return checkAccessImpl(access, database, table_or_dictionary, column_or_attribute); }
+void Context::checkAccess(const AccessType & access, const std::string_view & database, const std::string_view & table_or_dictionary, const Strings & columns_or_attributes) const { return checkAccessImpl(access, database, table_or_dictionary, columns_or_attributes); }
+
+
 void Context::setUsersConfig(const ConfigurationPtr & config)
 {
     auto lock = getLock();
@@ -649,8 +667,6 @@ ConfigurationPtr Context::getUsersConfig()
 void Context::calculateUserSettings()
 {
     auto lock = getLock();
-
-    auto user = getUser(client_info.current_user);
     String profile = user->profile;
 
     /// 1) Set default settings (hardcoded values)
@@ -672,8 +688,13 @@ void Context::calculateUserSettings()
     is_quota_management_allowed = user->is_quota_management_allowed;
     row_policy = getAccessControlManager().getRowPolicyContext(client_info.current_user);
     is_row_policy_management_allowed = user->is_row_policy_management_allowed;
+    calculateAccessRights();
 }
 
+void Context::calculateAccessRights()
+{
+    access_rights = std::make_shared<AccessRightsContext>(client_info.current_user, user->access, settings.readonly, settings.allow_ddl);
+}
 
 void Context::setProfile(const String & profile)
 {
@@ -685,7 +706,7 @@ void Context::setProfile(const String & profile)
     settings_constraints = std::move(new_constraints);
 }
 
-std::shared_ptr<const User> Context::getUser(const String & user_name)
+std::shared_ptr<const User> Context::getUser(const String & user_name) const
 {
     return shared->users_manager->getUser(user_name);
 }
@@ -694,7 +715,7 @@ void Context::setUser(const String & name, const String & password, const Poco::
 {
     auto lock = getLock();
 
-    auto user_props = shared->users_manager->authorizeAndGetUser(name, password, address.host());
+    user = shared->users_manager->authorizeAndGetUser(name, password, address.host());
 
     client_info.current_user = name;
     client_info.current_address = address;
@@ -1123,7 +1144,13 @@ Settings Context::getSettings() const
 
 void Context::setSettings(const Settings & settings_)
 {
+    bool old_readonly = settings.readonly;
+    bool old_allow_ddl = settings.allow_ddl;
+
     settings = settings_;
+
+    if ((settings.readonly != old_readonly) || (settings.allow_ddl != old_allow_ddl))
+        calculateAccessRights();
 }
 
 
@@ -1136,6 +1163,9 @@ void Context::setSetting(const String & name, const String & value)
         return;
     }
     settings.set(name, value);
+
+    if (name == "readonly" || name == "allow_ddl")
+        calculateAccessRights();
 }
 
 
@@ -1148,6 +1178,9 @@ void Context::setSetting(const String & name, const Field & value)
         return;
     }
     settings.set(name, value);
+
+    if (name == "readonly" || name == "allow_ddl")
+        calculateAccessRights();
 }
 
 
@@ -1569,9 +1602,9 @@ std::pair<String, UInt16> Context::getInterserverIOAddress() const
     return { shared->interserver_io_host, shared->interserver_io_port };
 }
 
-void Context::setInterserverCredentials(const String & user, const String & password)
+void Context::setInterserverCredentials(const String & user_, const String & password)
 {
-    shared->interserver_io_user = user;
+    shared->interserver_io_user = user_;
     shared->interserver_io_password = password;
 }
 

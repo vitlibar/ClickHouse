@@ -478,6 +478,8 @@ namespace ErrorCodes
     extern const int CANNOT_CREATE_DATABASE = 501;
     extern const int CANNOT_SIGQUEUE = 502;
     extern const int AGGREGATE_FUNCTION_THROW = 503;
+    extern const int UNKNOWN_ACCESS_TYPE = 504;
+    extern const int INVALID_GRANT = 505;
 
     extern const int KEEPER_EXCEPTION = 999;
     extern const int POCO_EXCEPTION = 1000;
