@@ -43,6 +43,7 @@ namespace DB
 
 struct ContextShared;
 class Context;
+class AccessRightsContext;
 class QuotaContext;
 class RowPolicyContext;
 class EmbeddedDictionaries;
@@ -142,6 +143,8 @@ private:
     InputInitializer input_initializer_callback;
     InputBlocksReader input_blocks_reader;
 
+    std::shared_ptr<const User> user;
+    std::shared_ptr<const AccessRightsContext> access_rights;
     std::shared_ptr<QuotaContext> quota;           /// Current quota. By default - empty quota, that have no limits.
     bool is_quota_management_allowed = false;      /// Whether the current user is allowed to manage quotas via SQL commands.
     std::shared_ptr<RowPolicyContext> row_policy;
@@ -216,6 +219,20 @@ public:
 
     AccessControlManager & getAccessControlManager();
     const AccessControlManager & getAccessControlManager() const;
+    std::shared_ptr<const AccessRightsContext> getAccessRights() const { return access_rights; }
+
+    /// Checks access rights.
+    /// Note: Don't pass an empty database in the meaning of the current database to this function.
+    /// This function can accept an empty database only for temporary tables or dictionaries without database.
+    void checkAccess(const AccessFlags & access) const;
+    void checkAccess(const AccessFlags & access, const std::string_view & database) const;
+    void checkAccess(const AccessFlags & access, const std::string_view & database, const std::string_view & table) const;
+    void checkAccess(const AccessFlags & access, const std::string_view & database, const std::string_view & table, const std::string_view & column) const;
+    void checkAccess(const AccessFlags & access, const std::string_view & database, const std::string_view & table, const std::vector<std::string_view> & columns) const;
+    void checkAccess(const AccessFlags & access, const std::string_view & database, const std::string_view & table, const Strings & columns) const;
+    void checkAccess(const AccessRightsElement & access) const;
+    void checkAccess(const AccessRightsElements & access) const;
+
     std::shared_ptr<QuotaContext> getQuota() const { return quota; }
     void checkQuotaManagementIsAllowed();
     std::shared_ptr<RowPolicyContext> getRowPolicy() const { return row_policy; }
@@ -230,12 +247,10 @@ public:
 
     /// Must be called before getClientInfo.
     void setUser(const String & name, const String & password, const Poco::Net::SocketAddress & address, const String & quota_key);
+    std::shared_ptr<const User> getUser() const { return user; }
 
     /// Used by MySQL Secure Password Authentication plugin.
-    std::shared_ptr<const User> getUser(const String & user_name);
-
-    /// Compute and set actual user settings, client_info.current_user should be set
-    void calculateUserSettings();
+    std::shared_ptr<const User> getUser(const String & user_name) const;
 
     /// We have to copy external tables inside executeQuery() to track limits. Therefore, set callback for it. Must set once.
     void setExternalTablesInitializer(ExternalTablesInitializer && initializer);
@@ -581,11 +596,18 @@ public:
 
     MySQLWireContext mysql;
 private:
+    /// Compute and set actual user settings, client_info.current_user should be set
+    void calculateUserSettings();
+    void calculateAccessRights();
+
     /** Check if the current client has access to the specified database.
       * If access is denied, throw an exception.
       * NOTE: This method should always be called when the `shared->mutex` mutex is acquired.
       */
     void checkDatabaseAccessRightsImpl(const std::string & database_name) const;
+
+    template <typename... Args>
+    void checkAccessImpl(const Args &... args) const;
 
     void setProfile(const String & profile);
 
