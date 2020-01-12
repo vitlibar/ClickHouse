@@ -24,6 +24,10 @@ class QuotaContextFactory;
 struct QuotaUsageInfo;
 class RowPolicyContext;
 class RowPolicyContextFactory;
+class AccessRights;
+class AccessRightsContext;
+class ClientInfo;
+struct Settings;
 
 
 /// Manages access control entities.
@@ -41,6 +45,8 @@ public:
     std::vector<QuotaUsageInfo> getQuotaUsageInfo() const;
 
     std::shared_ptr<RowPolicyContext> getRowPolicyContext(const String & user_name) const;
+
+    std::shared_ptr<const AccessRightsContext> getAccessRightsContext(const ClientInfo & client_info, const AccessRights & granted_to_user, const Settings & settings, const String & current_database);
 
 private:
     std::unique_ptr<QuotaContextFactory> quota_context_factory;
