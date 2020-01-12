@@ -258,9 +258,9 @@ public:
     const ViewDependencies & getViewDependencies() const;
 
     /// Checking the existence of the table/database. Database can be empty - in this case the current database is used.
-    bool isTableExist(const String & database_name, const String & table_name, AccessRightCheckingMode access_right_checking_mode) const;
-    bool isDatabaseExist(const String & database_name, AccessRightCheckingMode access_right_checking_mode) const;
-    bool isDictionaryExists(const String & database_name, const String & dictionary_name, AccessRightCheckingMode access_right_checking_mode) const;
+    bool isTableExist(const String & database_name, const String & table_name, AccessRightCheckingMode access_right_checking_mode = IGNORE_ACCESS_RIGHTS) const;
+    bool isDatabaseExist(const String & database_name, AccessRightCheckingMode access_right_checking_mode = IGNORE_ACCESS_RIGHTS) const;
+    bool isDictionaryExists(const String & database_name, const String & dictionary_name, AccessRightCheckingMode access_right_checking_mode = IGNORE_ACCESS_RIGHTS) const;
     bool isExternalTableExist(const String & table_name) const;
     bool hasDatabaseAccessRights(const String & database_name) const;
 
@@ -270,18 +270,18 @@ public:
       * when assertTableDoesntExist or assertDatabaseExists is called inside another function that already
       * made this check.
       */
-    void assertTableDoesntExist(const String & database_name, const String & table_name, AccessRightCheckingMode access_right_checking_mode) const;
-    void assertDatabaseExists(const String & database_name, AccessRightCheckingMode access_right_checking_mode) const;
+    void assertTableDoesntExist(const String & database_name, const String & table_name, AccessRightCheckingMode access_right_checking_mode = IGNORE_ACCESS_RIGHTS) const;
+    void assertDatabaseExists(const String & database_name, AccessRightCheckingMode access_right_checking_mode = IGNORE_ACCESS_RIGHTS) const;
 
-    void assertDatabaseDoesntExist(const String & database_name, AccessRightCheckingMode access_right_checking_mode) const;
+    void assertDatabaseDoesntExist(const String & database_name, AccessRightCheckingMode access_right_checking_mode = IGNORE_ACCESS_RIGHTS) const;
     void checkDatabaseAccessRights(const std::string & database_name) const;
 
     const Scalars & getScalars() const;
     const Block & getScalar(const String & name) const;
     Tables getExternalTables() const;
     StoragePtr tryGetExternalTable(const String & table_name) const;
-    StoragePtr getTable(const String & database_name, const String & table_name, AccessRightCheckingMode access_right_checking_mode) const;
-    StoragePtr tryGetTable(const String & database_name, const String & table_name, AccessRightCheckingMode access_right_checking_mode) const;
+    StoragePtr getTable(const String & database_name, const String & table_name, AccessRightCheckingMode access_right_checking_mode = IGNORE_ACCESS_RIGHTS) const;
+    StoragePtr tryGetTable(const String & database_name, const String & table_name, AccessRightCheckingMode access_right_checking_mode = IGNORE_ACCESS_RIGHTS) const;
     void addExternalTable(const String & table_name, const StoragePtr & storage, const ASTPtr & ast = {});
     void addScalar(const String & name, const Block & block);
     bool hasScalar(const String & name) const;
@@ -292,8 +292,8 @@ public:
     void addViewSource(const StoragePtr & storage);
     StoragePtr getViewSource();
 
-    void addDatabase(const String & database_name, const DatabasePtr & database, AccessRightCheckingMode access_right_checking_mode);
-    DatabasePtr detachDatabase(const String & database_name, AccessRightCheckingMode access_right_checking_mode);
+    void addDatabase(const String & database_name, const DatabasePtr & database, AccessRightCheckingMode access_right_checking_mode = IGNORE_ACCESS_RIGHTS);
+    DatabasePtr detachDatabase(const String & database_name, AccessRightCheckingMode access_right_checking_mode = IGNORE_ACCESS_RIGHTS);
 
     /// Get an object that protects the table from concurrently executing multiple DDL operations.
     std::unique_ptr<DDLGuard> getDDLGuard(const String & database, const String & table) const;
@@ -304,7 +304,7 @@ public:
     /// Id of initiating query for distributed queries; or current query id if it's not a distributed query.
     String getInitialQueryId() const;
 
-    void setCurrentDatabase(const String & name, AccessRightCheckingMode access_right_checking_mode);
+    void setCurrentDatabase(const String & name, AccessRightCheckingMode access_right_checking_mode = IGNORE_ACCESS_RIGHTS);
     void setCurrentQueryId(const String & query_id);
 
     void killCurrentQuery();
@@ -374,8 +374,8 @@ public:
     /// Get query for the CREATE table.
     ASTPtr getCreateExternalTableQuery(const String & table_name) const;
 
-    const DatabasePtr getDatabase(const String & database_name, AccessRightCheckingMode access_right_checking_mode) const;
-    DatabasePtr getDatabase(const String & database_name, AccessRightCheckingMode access_right_checking_mode);
+    const DatabasePtr getDatabase(const String & database_name, AccessRightCheckingMode access_right_checking_mode = IGNORE_ACCESS_RIGHTS) const;
+    DatabasePtr getDatabase(const String & database_name, AccessRightCheckingMode access_right_checking_mode = IGNORE_ACCESS_RIGHTS);
     const DatabasePtr tryGetDatabase(const String & database_name) const;
     DatabasePtr tryGetDatabase(const String & database_name);
 
