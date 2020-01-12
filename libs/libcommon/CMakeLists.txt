@@ -59,6 +59,7 @@ add_library (common
     include/ext/function_traits.h
     include/ext/identity.h
     include/ext/map.h
+    include/ext/movables.h
     include/ext/range.h
     include/ext/scope_guard.h
     include/ext/size.h
