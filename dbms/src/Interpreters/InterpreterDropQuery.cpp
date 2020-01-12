@@ -236,7 +236,7 @@ BlockIO InterpreterDropQuery::executeToDatabase(String & database_name, ASTDropQ
         }
         else if (kind == ASTDropQuery::Kind::Detach)
         {
-            context.detachDatabase(database_name);
+            context.detachDatabase(database_name, CHECK_ACCESS_RIGHTS);
             database->shutdown();
         }
         else if (kind == ASTDropQuery::Kind::Drop)
@@ -256,14 +256,14 @@ BlockIO InterpreterDropQuery::executeToDatabase(String & database_name, ASTDropQ
             auto context_lock = context.getLock();
 
             /// Someone could have time to delete the database before us.
-            context.assertDatabaseExists(database_name);
+            context.assertDatabaseExists(database_name, CHECK_ACCESS_RIGHTS);
 
             /// Someone could have time to create a table in the database to be deleted while we deleted the tables without the context lock.
-            if (!context.getDatabase(database_name)->empty(context))
+            if (!context.getDatabase(database_name, CHECK_ACCESS_RIGHTS)->empty(context))
                 throw Exception("New table appeared in database being dropped. Try dropping it again.", ErrorCodes::DATABASE_NOT_EMPTY);
 
             /// Delete database information from the RAM
-            context.detachDatabase(database_name);
+            context.detachDatabase(database_name, CHECK_ACCESS_RIGHTS);
 
             database->shutdown();
 
@@ -282,7 +282,7 @@ BlockIO InterpreterDropQuery::executeToDatabase(String & database_name, ASTDropQ
 
 DatabasePtr InterpreterDropQuery::tryGetDatabase(String & database_name, bool if_exists)
 {
-    return if_exists ? context.tryGetDatabase(database_name) : context.getDatabase(database_name);
+    return if_exists ? context.tryGetDatabase(database_name) : context.getDatabase(database_name, CHECK_ACCESS_RIGHTS);
 }
 
 DatabaseAndTable InterpreterDropQuery::tryGetDatabaseAndTable(String & database_name, String & table_name, bool if_exists)

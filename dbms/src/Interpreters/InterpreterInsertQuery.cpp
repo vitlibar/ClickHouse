@@ -57,7 +57,7 @@ StoragePtr InterpreterInsertQuery::getTable(const ASTInsertQuery & query)
     }
 
     /// Into what table to write.
-    return context.getTable(query.database, query.table);
+    return context.getTable(query.database, query.table, CHECK_ACCESS_RIGHTS);
 }
 
 Block InterpreterInsertQuery::getSampleBlock(const ASTInsertQuery & query, const StoragePtr & table)

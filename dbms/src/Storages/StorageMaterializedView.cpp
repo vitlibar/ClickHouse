@@ -127,7 +127,8 @@ StorageMaterializedView::StorageMaterializedView(
     if (!select_table_name.empty())
         global_context.addDependency(
             DatabaseAndTableName(select_database_name, select_table_name),
-            DatabaseAndTableName(database_name, table_name));
+            DatabaseAndTableName(database_name, table_name),
+            CHECK_ACCESS_RIGHTS);
 
     // If the destination table is not set, use inner table
     if (!query.to_table.empty())
@@ -169,7 +170,8 @@ StorageMaterializedView::StorageMaterializedView(
             if (!select_table_name.empty())
                 global_context.removeDependency(
                     DatabaseAndTableName(select_database_name, select_table_name),
-                    DatabaseAndTableName(database_name, table_name));
+                    DatabaseAndTableName(database_name, table_name),
+                    CHECK_ACCESS_RIGHTS);
 
             throw;
         }
@@ -222,7 +224,7 @@ BlockOutputStreamPtr StorageMaterializedView::write(const ASTPtr & query, const 
 
 static void executeDropQuery(ASTDropQuery::Kind kind, Context & global_context, const String & target_database_name, const String & target_table_name)
 {
-    if (global_context.tryGetTable(target_database_name, target_table_name))
+    if (global_context.tryGetTable(target_database_name, target_table_name, CHECK_ACCESS_RIGHTS))
     {
         /// We create and execute `drop` query for internal table.
         auto drop_query = std::make_shared<ASTDropQuery>();
@@ -240,7 +242,8 @@ void StorageMaterializedView::drop(TableStructureWriteLockHolder &)
 {
     global_context.removeDependency(
         DatabaseAndTableName(select_database_name, select_table_name),
-        DatabaseAndTableName(database_name, table_name));
+        DatabaseAndTableName(database_name, table_name),
+        CHECK_ACCESS_RIGHTS);
 
     if (has_inner_table && tryGetTargetTable())
         executeDropQuery(ASTDropQuery::Kind::Drop, global_context, target_database_name, target_table_name);
@@ -280,7 +283,7 @@ void StorageMaterializedView::mutate(const MutationCommands & commands, const Co
 
 static void executeRenameQuery(Context & global_context, const String & database_name, const String & table_original_name, const String & new_table_name)
 {
-    if (global_context.tryGetTable(database_name, table_original_name))
+    if (global_context.tryGetTable(database_name, table_original_name, CHECK_ACCESS_RIGHTS))
     {
             auto rename = std::make_shared<ASTRenameQuery>();
 
@@ -317,14 +320,16 @@ void StorageMaterializedView::rename(
 
     global_context.removeDependencyUnsafe(
             DatabaseAndTableName(select_database_name, select_table_name),
-            DatabaseAndTableName(database_name, table_name));
+            DatabaseAndTableName(database_name, table_name),
+            CHECK_ACCESS_RIGHTS);
 
     table_name = new_table_name;
     database_name = new_database_name;
 
     global_context.addDependencyUnsafe(
             DatabaseAndTableName(select_database_name, select_table_name),
-            DatabaseAndTableName(database_name, table_name));
+            DatabaseAndTableName(database_name, table_name),
+            CHECK_ACCESS_RIGHTS);
 }
 
 void StorageMaterializedView::shutdown()
@@ -332,17 +337,18 @@ void StorageMaterializedView::shutdown()
     /// Make sure the dependency is removed after DETACH TABLE
     global_context.removeDependency(
         DatabaseAndTableName(select_database_name, select_table_name),
-        DatabaseAndTableName(database_name, table_name));
+        DatabaseAndTableName(database_name, table_name),
+        CHECK_ACCESS_RIGHTS);
 }
 
 StoragePtr StorageMaterializedView::getTargetTable() const
 {
-    return global_context.getTable(target_database_name, target_table_name);
+    return global_context.getTable(target_database_name, target_table_name, CHECK_ACCESS_RIGHTS);
 }
 
 StoragePtr StorageMaterializedView::tryGetTargetTable() const
 {
-    return global_context.tryGetTable(target_database_name, target_table_name);
+    return global_context.tryGetTable(target_database_name, target_table_name, CHECK_ACCESS_RIGHTS);
 }
 
 Strings StorageMaterializedView::getDataPaths() const

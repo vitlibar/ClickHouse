@@ -145,7 +145,7 @@ void StorageLiveView::writeIntoLiveView(
 
     if (!is_block_processed)
     {
-        auto parent_storage = context.getTable(live_view.getSelectDatabaseName(), live_view.getSelectTableName());
+        auto parent_storage = context.getTable(live_view.getSelectDatabaseName(), live_view.getSelectTableName(), CHECK_ACCESS_RIGHTS);
         BlockInputStreams streams = {std::make_shared<OneBlockInputStream>(block)};
         auto proxy_storage = std::make_shared<ProxyStorage>(parent_storage, std::move(streams), QueryProcessingStage::FetchColumns);
         InterpreterSelectQuery select_block(live_view.getInnerQuery(),
@@ -177,7 +177,7 @@ void StorageLiveView::writeIntoLiveView(
         }
     }
 
-    auto parent_storage = context.getTable(live_view.getSelectDatabaseName(), live_view.getSelectTableName());
+    auto parent_storage = context.getTable(live_view.getSelectDatabaseName(), live_view.getSelectTableName(), CHECK_ACCESS_RIGHTS);
     auto proxy_storage = std::make_shared<ProxyStorage>(parent_storage, std::move(from), QueryProcessingStage::WithMergeableState);
     InterpreterSelectQuery select(live_view.getInnerQuery(), context, proxy_storage, QueryProcessingStage::Complete);
     BlockInputStreamPtr data = std::make_shared<MaterializingBlockInputStream>(select.execute().in);
@@ -225,7 +225,8 @@ StorageLiveView::StorageLiveView(
 
     global_context.addDependency(
         DatabaseAndTableName(select_database_name, select_table_name),
-        DatabaseAndTableName(database_name, table_name));
+        DatabaseAndTableName(database_name, table_name),
+        CHECK_ACCESS_RIGHTS);
 
     is_temporary = query.temporary;
     temporary_live_view_timeout = local_context.getSettingsRef().temporary_live_view_timeout.totalSeconds();
@@ -257,7 +258,7 @@ Block StorageLiveView::getHeader() const
 
     if (!sample_block)
     {
-        auto storage = global_context.getTable(select_database_name, select_table_name);
+        auto storage = global_context.getTable(select_database_name, select_table_name, CHECK_ACCESS_RIGHTS);
         sample_block = InterpreterSelectQuery(inner_query, global_context, storage,
             SelectQueryOptions(QueryProcessingStage::Complete)).getSampleBlock();
         sample_block.insert({DataTypeUInt64().createColumnConst(
@@ -292,7 +293,7 @@ bool StorageLiveView::getNewBlocks()
     mergeable_blocks = std::make_shared<std::vector<BlocksPtr>>();
     mergeable_blocks->push_back(new_mergeable_blocks);
     BlockInputStreamPtr from = std::make_shared<BlocksBlockInputStream>(std::make_shared<BlocksPtr>(new_mergeable_blocks), mergeable_stream->getHeader());
-    auto proxy_storage = ProxyStorage::createProxyStorage(global_context.getTable(select_database_name, select_table_name), {from}, QueryProcessingStage::WithMergeableState);
+    auto proxy_storage = ProxyStorage::createProxyStorage(global_context.getTable(select_database_name, select_table_name, CHECK_ACCESS_RIGHTS), {from}, QueryProcessingStage::WithMergeableState);
     InterpreterSelectQuery select(inner_query->clone(), global_context, proxy_storage, SelectQueryOptions(QueryProcessingStage::Complete));
     BlockInputStreamPtr data = std::make_shared<MaterializingBlockInputStream>(select.execute().in);
 
@@ -339,7 +340,7 @@ bool StorageLiveView::getNewBlocks()
 
 void StorageLiveView::checkTableCanBeDropped() const
 {
-    Dependencies dependencies = global_context.getDependencies(database_name, table_name);
+    Dependencies dependencies = global_context.getDependencies(database_name, table_name, CHECK_ACCESS_RIGHTS);
     if (!dependencies.empty())
     {
         DatabaseAndTableName database_and_table_name = dependencies.front();
@@ -365,7 +366,7 @@ void StorageLiveView::noUsersThread(std::shared_ptr<StorageLiveView> storage, co
                     return;
                 if (storage->hasUsers())
                     return;
-                if (!storage->global_context.getDependencies(storage->database_name, storage->table_name).empty())
+                if (!storage->global_context.getDependencies(storage->database_name, storage->table_name, CHECK_ACCESS_RIGHTS).empty())
                     continue;
                 drop_table = true;
             }
@@ -375,7 +376,7 @@ void StorageLiveView::noUsersThread(std::shared_ptr<StorageLiveView> storage, co
 
     if (drop_table)
     {
-        if (storage->global_context.tryGetTable(storage->database_name, storage->table_name))
+        if (storage->global_context.tryGetTable(storage->database_name, storage->table_name, CHECK_ACCESS_RIGHTS))
         {
             try
             {
@@ -468,7 +469,8 @@ void StorageLiveView::drop(TableStructureWriteLockHolder &)
 {
     global_context.removeDependency(
         DatabaseAndTableName(select_database_name, select_table_name),
-        DatabaseAndTableName(database_name, table_name));
+        DatabaseAndTableName(database_name, table_name),
+        CHECK_ACCESS_RIGHTS);
 
     std::lock_guard lock(mutex);
     is_dropped = true;

@@ -138,7 +138,7 @@ void SelectStreamFactory::createForShard(
             main_table_storage = table_function_ptr->execute(table_func_ptr, context, table_function_ptr->getName());
         }
         else
-            main_table_storage = context.tryGetTable(main_table.database, main_table.table);
+            main_table_storage = context.tryGetTable(main_table.database, main_table.table, CHECK_ACCESS_RIGHTS);
 
 
         if (!main_table_storage) /// Table is absent on a local server.

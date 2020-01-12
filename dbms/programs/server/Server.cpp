@@ -538,7 +538,7 @@ int Server::main(const std::vector<std::string> & /*args*/)
         /// After attaching system databases we can initialize system log.
         global_context->initializeSystemLogs();
         /// After the system database is created, attach virtual system tables (in addition to query_log and part_log)
-        attachSystemTablesServer(*global_context->getDatabase("system"), has_zookeeper);
+        attachSystemTablesServer(*global_context->getDatabase("system", CHECK_ACCESS_RIGHTS), has_zookeeper);
         /// Then, load remaining databases
         loadMetadata(*global_context);
     }
@@ -568,7 +568,7 @@ int Server::main(const std::vector<std::string> & /*args*/)
         global_context->initializeTraceCollector();
 #endif
 
-    global_context->setCurrentDatabase(default_database);
+    global_context->setCurrentDatabase(default_database, CHECK_ACCESS_RIGHTS);
 
     if (has_zookeeper && config().has("distributed_ddl"))
     {
@@ -681,7 +681,7 @@ int Server::main(const std::vector<std::string> & /*args*/)
 
         /// This object will periodically calculate some metrics.
         AsynchronousMetrics async_metrics(*global_context);
-        attachSystemTablesAsync(*global_context->getDatabase("system"), async_metrics);
+        attachSystemTablesAsync(*global_context->getDatabase("system", CHECK_ACCESS_RIGHTS), async_metrics);
 
         for (const auto & listen_host : listen_hosts)
         {

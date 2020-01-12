@@ -265,7 +265,7 @@ protected:
                     Array dependencies_database_name_array;
                     if (columns_mask[src_index] || columns_mask[src_index + 1])
                     {
-                        const auto dependencies = context.getDependencies(database_name, table_name);
+                        const auto dependencies = context.getDependencies(database_name, table_name, CHECK_ACCESS_RIGHTS);
 
                         dependencies_table_name_array.reserve(dependencies.size());
                         dependencies_database_name_array.reserve(dependencies.size());

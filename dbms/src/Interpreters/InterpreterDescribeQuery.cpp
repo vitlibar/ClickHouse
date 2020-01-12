@@ -89,7 +89,7 @@ BlockInputStreamPtr InterpreterDescribeQuery::executeImpl()
             String table_name;
             std::tie(database_name, table_name) = IdentifierSemantic::extractDatabaseAndTable(identifier);
 
-            table = context.getTable(database_name, table_name);
+            table = context.getTable(database_name, table_name, CHECK_ACCESS_RIGHTS);
         }
 
         auto table_lock = table->lockStructureForShare(false, context.getInitialQueryId());

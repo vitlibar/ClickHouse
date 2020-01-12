@@ -272,7 +272,7 @@ void StorageMergeTree::alter(
     {
         lockStructureExclusively(table_lock_holder, context.getCurrentQueryId());
 
-        context.getDatabase(current_database_name)->alterTable(context, current_table_name, metadata);
+        context.getDatabase(current_database_name, CHECK_ACCESS_RIGHTS)->alterTable(context, current_table_name, metadata);
 
         update_metadata();
     }
@@ -289,7 +289,7 @@ void StorageMergeTree::alter(
 
         lockStructureExclusively(table_lock_holder, context.getCurrentQueryId());
 
-        context.getDatabase(current_database_name)->alterTable(context, current_table_name, metadata);
+        context.getDatabase(current_database_name, CHECK_ACCESS_RIGHTS)->alterTable(context, current_table_name, metadata);
 
         update_metadata();
 
@@ -1031,7 +1031,7 @@ void StorageMergeTree::alterPartition(const ASTPtr & query, const PartitionComma
             {
                 checkPartitionCanBeDropped(command.partition);
                 String from_database = command.from_database.empty() ? context.getCurrentDatabase() : command.from_database;
-                auto from_storage = context.getTable(from_database, command.from_table);
+                auto from_storage = context.getTable(from_database, command.from_table, CHECK_ACCESS_RIGHTS);
                 replacePartitionFrom(from_storage, command.partition, command.replace, context);
             }
             break;

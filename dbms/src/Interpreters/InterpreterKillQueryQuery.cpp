@@ -239,7 +239,7 @@ BlockIO InterpreterKillQueryQuery::execute()
             CancellationCode code = CancellationCode::Unknown;
             if (!query.test)
             {
-                auto storage = context.tryGetTable(database_name, table_name);
+                auto storage = context.tryGetTable(database_name, table_name, CHECK_ACCESS_RIGHTS);
                 if (!storage)
                     code = CancellationCode::NotFound;
                 else

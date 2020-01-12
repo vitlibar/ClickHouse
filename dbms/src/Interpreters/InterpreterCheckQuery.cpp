@@ -40,7 +40,7 @@ BlockIO InterpreterCheckQuery::execute()
     const String & table_name = check.table;
     String database_name = check.database.empty() ? context.getCurrentDatabase() : check.database;
 
-    StoragePtr table = context.getTable(database_name, table_name);
+    StoragePtr table = context.getTable(database_name, table_name, CHECK_ACCESS_RIGHTS);
     auto check_results = table->checkData(query_ptr, context);
 
     Block block;

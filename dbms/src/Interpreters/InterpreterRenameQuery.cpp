@@ -95,14 +95,14 @@ BlockIO InterpreterRenameQuery::execute()
 
     for (auto & elem : descriptions)
     {
-        context.assertTableDoesntExist(elem.to_database_name, elem.to_table_name);
-        auto from_table = context.getTable(elem.from_database_name, elem.from_table_name);
+        context.assertTableDoesntExist(elem.to_database_name, elem.to_table_name, CHECK_ACCESS_RIGHTS);
+        auto from_table = context.getTable(elem.from_database_name, elem.from_table_name, CHECK_ACCESS_RIGHTS);
         auto from_table_lock = from_table->lockExclusively(context.getCurrentQueryId());
 
-        context.getDatabase(elem.from_database_name)->renameTable(
+        context.getDatabase(elem.from_database_name, CHECK_ACCESS_RIGHTS)->renameTable(
             context,
             elem.from_table_name,
-            *context.getDatabase(elem.to_database_name),
+            *context.getDatabase(elem.to_database_name, CHECK_ACCESS_RIGHTS),
             elem.to_table_name,
             from_table_lock);
     }

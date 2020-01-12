@@ -41,7 +41,7 @@ String InterpreterShowTablesQuery::getRewrittenQuery()
       * So that all clients can see a list of all databases and tables in them regardless of their access rights
       * to these databases.
       */
-    context.assertDatabaseExists(database, false);
+    context.assertDatabaseExists(database, IGNORE_ACCESS_RIGHTS);
 
     std::stringstream rewritten_query;
     rewritten_query << "SELECT name FROM system.";

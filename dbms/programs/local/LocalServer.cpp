@@ -187,8 +187,8 @@ try
       *  if such tables will not be dropped, clickhouse-server will not be able to load them due to security reasons.
       */
     std::string default_database = config().getString("default_database", "_local");
-    context->addDatabase(default_database, std::make_shared<DatabaseMemory>(default_database));
-    context->setCurrentDatabase(default_database);
+    context->addDatabase(default_database, std::make_shared<DatabaseMemory>(default_database), CHECK_ACCESS_RIGHTS);
+    context->setCurrentDatabase(default_database, CHECK_ACCESS_RIGHTS);
     applyCmdOptions();
 
     if (!context->getPath().empty())
@@ -253,7 +253,7 @@ void LocalServer::attachSystemTables()
     {
         /// TODO: add attachTableDelayed into DatabaseMemory to speedup loading
         system_database = std::make_shared<DatabaseMemory>("system");
-        context->addDatabase("system", system_database);
+        context->addDatabase("system", system_database, CHECK_ACCESS_RIGHTS);
     }
 
     attachSystemTablesLocal(*system_database);

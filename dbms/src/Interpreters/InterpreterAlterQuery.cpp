@@ -40,7 +40,7 @@ BlockIO InterpreterAlterQuery::execute()
 
     const String & table_name = alter.table;
     String database_name = alter.database.empty() ? context.getCurrentDatabase() : alter.database;
-    StoragePtr table = context.getTable(database_name, table_name);
+    StoragePtr table = context.getTable(database_name, table_name, CHECK_ACCESS_RIGHTS);
 
     /// Add default database to table identifiers that we can encounter in e.g. default expressions,
     /// mutation expression, etc.

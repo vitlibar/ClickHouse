@@ -112,6 +112,12 @@ using InputBlocksReader = std::function<Block(Context &)>;
 /// Scalar results of sub queries
 using Scalars = std::map<String, Block>;
 
+enum AccessRightCheckingMode
+{
+    CHECK_ACCESS_RIGHTS,
+    IGNORE_ACCESS_RIGHTS,
+};
+
 /// An empty interface for an arbitrary object that may be attached by a shared pointer
 /// to query context, when using ClickHouse as a library.
 struct IHostContext
@@ -251,18 +257,18 @@ public:
     ClientInfo & getClientInfo() { return client_info; }
     const ClientInfo & getClientInfo() const { return client_info; }
 
-    void addDependency(const DatabaseAndTableName & from, const DatabaseAndTableName & where);
-    void removeDependency(const DatabaseAndTableName & from, const DatabaseAndTableName & where);
-    Dependencies getDependencies(const String & database_name, const String & table_name) const;
+    void addDependency(const DatabaseAndTableName & from, const DatabaseAndTableName & where, AccessRightCheckingMode access_right_checking_mode);
+    void removeDependency(const DatabaseAndTableName & from, const DatabaseAndTableName & where, AccessRightCheckingMode access_right_checking_mode);
+    Dependencies getDependencies(const String & database_name, const String & table_name, AccessRightCheckingMode access_right_checking_mode) const;
 
     /// Functions where we can lock the context manually
-    void addDependencyUnsafe(const DatabaseAndTableName & from, const DatabaseAndTableName & where);
-    void removeDependencyUnsafe(const DatabaseAndTableName & from, const DatabaseAndTableName & where);
+    void addDependencyUnsafe(const DatabaseAndTableName & from, const DatabaseAndTableName & where, AccessRightCheckingMode access_right_checking_mode);
+    void removeDependencyUnsafe(const DatabaseAndTableName & from, const DatabaseAndTableName & where, AccessRightCheckingMode access_right_checking_mode);
 
     /// Checking the existence of the table/database. Database can be empty - in this case the current database is used.
-    bool isTableExist(const String & database_name, const String & table_name) const;
-    bool isDatabaseExist(const String & database_name) const;
-    bool isDictionaryExists(const String & database_name, const String & dictionary_name) const;
+    bool isTableExist(const String & database_name, const String & table_name, AccessRightCheckingMode access_right_checking_mode) const;
+    bool isDatabaseExist(const String & database_name, AccessRightCheckingMode access_right_checking_mode) const;
+    bool isDictionaryExists(const String & database_name, const String & dictionary_name, AccessRightCheckingMode access_right_checking_mode) const;
     bool isExternalTableExist(const String & table_name) const;
     bool hasDatabaseAccessRights(const String & database_name) const;
 
@@ -272,18 +278,18 @@ public:
       * when assertTableDoesntExist or assertDatabaseExists is called inside another function that already
       * made this check.
       */
-    void assertTableDoesntExist(const String & database_name, const String & table_name, bool check_database_acccess_rights = true) const;
-    void assertDatabaseExists(const String & database_name, bool check_database_acccess_rights = true) const;
+    void assertTableDoesntExist(const String & database_name, const String & table_name, AccessRightCheckingMode access_right_checking_mode) const;
+    void assertDatabaseExists(const String & database_name, AccessRightCheckingMode access_right_checking_mode) const;
 
-    void assertDatabaseDoesntExist(const String & database_name) const;
+    void assertDatabaseDoesntExist(const String & database_name, AccessRightCheckingMode access_right_checking_mode) const;
     void checkDatabaseAccessRights(const std::string & database_name) const;
 
     const Scalars & getScalars() const;
     const Block & getScalar(const String & name) const;
     Tables getExternalTables() const;
     StoragePtr tryGetExternalTable(const String & table_name) const;
-    StoragePtr getTable(const String & database_name, const String & table_name) const;
-    StoragePtr tryGetTable(const String & database_name, const String & table_name) const;
+    StoragePtr getTable(const String & database_name, const String & table_name, AccessRightCheckingMode access_right_checking_mode) const;
+    StoragePtr tryGetTable(const String & database_name, const String & table_name, AccessRightCheckingMode access_right_checking_mode) const;
     void addExternalTable(const String & table_name, const StoragePtr & storage, const ASTPtr & ast = {});
     void addScalar(const String & name, const Block & block);
     bool hasScalar(const String & name) const;
@@ -294,8 +300,8 @@ public:
     void addViewSource(const StoragePtr & storage);
     StoragePtr getViewSource();
 
-    void addDatabase(const String & database_name, const DatabasePtr & database);
-    DatabasePtr detachDatabase(const String & database_name);
+    void addDatabase(const String & database_name, const DatabasePtr & database, AccessRightCheckingMode access_right_checking_mode);
+    DatabasePtr detachDatabase(const String & database_name, AccessRightCheckingMode access_right_checking_mode);
 
     /// Get an object that protects the table from concurrently executing multiple DDL operations.
     std::unique_ptr<DDLGuard> getDDLGuard(const String & database, const String & table) const;
@@ -306,7 +312,7 @@ public:
     /// Id of initiating query for distributed queries; or current query id if it's not a distributed query.
     String getInitialQueryId() const;
 
-    void setCurrentDatabase(const String & name);
+    void setCurrentDatabase(const String & name, AccessRightCheckingMode access_right_checking_mode);
     void setCurrentQueryId(const String & query_id);
 
     void killCurrentQuery();
@@ -376,8 +382,8 @@ public:
     /// Get query for the CREATE table.
     ASTPtr getCreateExternalTableQuery(const String & table_name) const;
 
-    const DatabasePtr getDatabase(const String & database_name) const;
-    DatabasePtr getDatabase(const String & database_name);
+    const DatabasePtr getDatabase(const String & database_name, AccessRightCheckingMode access_right_checking_mode) const;
+    DatabasePtr getDatabase(const String & database_name, AccessRightCheckingMode access_right_checking_mode);
     const DatabasePtr tryGetDatabase(const String & database_name) const;
     DatabasePtr tryGetDatabase(const String & database_name);
 
@@ -589,7 +595,7 @@ private:
 
     EmbeddedDictionaries & getEmbeddedDictionariesImpl(bool throw_on_error) const;
 
-    StoragePtr getTableImpl(const String & database_name, const String & table_name, Exception * exception) const;
+    StoragePtr getTableImpl(const String & database_name, const String & table_name, AccessRightCheckingMode access_right_checking_mode, Exception * exception) const;
 
     SessionKey getSessionKey(const String & session_id) const;
 

@@ -44,13 +44,13 @@ BlockInputStreamPtr InterpreterExistsQuery::executeImpl()
         if (exists_query->temporary)
             result = context.isExternalTableExist(exists_query->table);
         else
-            result = context.isTableExist(exists_query->database, exists_query->table);
+            result = context.isTableExist(exists_query->database, exists_query->table, CHECK_ACCESS_RIGHTS);
     }
     else if ((exists_query = query_ptr->as<ASTExistsDictionaryQuery>()))
     {
         if (exists_query->temporary)
             throw Exception("Temporary dictionaries are not possible.", ErrorCodes::SYNTAX_ERROR);
-        result = context.isDictionaryExists(exists_query->database, exists_query->table);
+        result = context.isDictionaryExists(exists_query->database, exists_query->table, CHECK_ACCESS_RIGHTS);
     }
 
     return std::make_shared<OneBlockInputStream>(Block{{

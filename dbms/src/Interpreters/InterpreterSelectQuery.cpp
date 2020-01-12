@@ -302,7 +302,7 @@ InterpreterSelectQuery::InterpreterSelectQuery(
             if (!storage)
             {
                 /// Read from table. Even without table expression (implicit SELECT ... FROM system.one).
-                storage = context->getTable(database_name, table_name);
+                storage = context->getTable(database_name, table_name, CHECK_ACCESS_RIGHTS);
             }
         }
     }
@@ -444,7 +444,7 @@ void InterpreterSelectQuery::getDatabaseAndTableNames(const ASTSelectQuery & que
         database_name = db_and_table->database;
 
         /// If the database is not specified - use the current database.
-        if (database_name.empty() && !context.tryGetTable("", table_name))
+        if (database_name.empty() && !context.tryGetTable("", table_name, CHECK_ACCESS_RIGHTS))
             database_name = context.getCurrentDatabase();
     }
     else /// If the table is not specified - use the table `system.one`.

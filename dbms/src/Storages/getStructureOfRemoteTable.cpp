@@ -51,7 +51,7 @@ ColumnsDescription getStructureOfRemoteTable(
     else
     {
         if (shard_info.isLocal())
-            return context.getTable(database, table)->getColumns();
+            return context.getTable(database, table, CHECK_ACCESS_RIGHTS)->getColumns();
 
         /// Request for a table description
         query = "DESC TABLE " + backQuoteIfNeed(database) + "." + backQuoteIfNeed(table);

@@ -22,7 +22,7 @@ BlockIO InterpreterOptimizeQuery::execute()
     if (!ast.cluster.empty())
         return executeDDLQueryOnCluster(query_ptr, context, {ast.database});
 
-    StoragePtr table = context.getTable(ast.database, ast.table);
+    StoragePtr table = context.getTable(ast.database, ast.table, CHECK_ACCESS_RIGHTS);
     table->optimize(query_ptr, ast.partition, ast.final, ast.deduplicate, context);
     return {};
 }

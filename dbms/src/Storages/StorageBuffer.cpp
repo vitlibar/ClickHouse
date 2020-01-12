@@ -127,7 +127,7 @@ QueryProcessingStage::Enum StorageBuffer::getQueryProcessingStage(const Context 
 {
     if (!no_destination)
     {
-        auto destination = context.getTable(destination_database, destination_table);
+        auto destination = context.getTable(destination_database, destination_table, CHECK_ACCESS_RIGHTS);
 
         if (destination.get() == this)
             throw Exception("Destination table is myself. Read will cause infinite loop.", ErrorCodes::INFINITE_LOOP);
@@ -150,7 +150,7 @@ BlockInputStreams StorageBuffer::read(
 
     if (!no_destination)
     {
-        auto destination = context.getTable(destination_database, destination_table);
+        auto destination = context.getTable(destination_database, destination_table, CHECK_ACCESS_RIGHTS);
 
         if (destination.get() == this)
             throw Exception("Destination table is myself. Read will cause infinite loop.", ErrorCodes::INFINITE_LOOP);
@@ -327,7 +327,7 @@ public:
         StoragePtr destination;
         if (!storage.no_destination)
         {
-            destination = storage.global_context.tryGetTable(storage.destination_database, storage.destination_table);
+            destination = storage.global_context.tryGetTable(storage.destination_database, storage.destination_table, CHECK_ACCESS_RIGHTS);
             if (destination.get() == &storage)
                 throw Exception("Destination table is myself. Write will cause infinite loop.", ErrorCodes::INFINITE_LOOP);
         }
@@ -424,7 +424,7 @@ bool StorageBuffer::mayBenefitFromIndexForIn(const ASTPtr & left_in_operand, con
     if (no_destination)
         return false;
 
-    auto destination = global_context.getTable(destination_database, destination_table);
+    auto destination = global_context.getTable(destination_database, destination_table, CHECK_ACCESS_RIGHTS);
 
     if (destination.get() == this)
         throw Exception("Destination table is myself. Read will cause infinite loop.", ErrorCodes::INFINITE_LOOP);
@@ -591,7 +591,7 @@ void StorageBuffer::flushBuffer(Buffer & buffer, bool check_thresholds, bool loc
         */
     try
     {
-        writeBlockToDestination(block_to_write, global_context.tryGetTable(destination_database, destination_table));
+        writeBlockToDestination(block_to_write, global_context.tryGetTable(destination_database, destination_table, CHECK_ACCESS_RIGHTS));
     }
     catch (...)
     {
@@ -724,7 +724,7 @@ void StorageBuffer::alter(const AlterCommands & params, const Context & context,
 
     StorageInMemoryMetadata metadata = getInMemoryMetadata();
     params.apply(metadata);
-    context.getDatabase(database_name_)->alterTable(context, table_name_, metadata);
+    context.getDatabase(database_name_, CHECK_ACCESS_RIGHTS)->alterTable(context, table_name_, metadata);
     setColumns(std::move(metadata.columns));
 }
 

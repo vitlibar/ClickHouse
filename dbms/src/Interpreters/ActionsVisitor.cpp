@@ -593,7 +593,7 @@ SetPtr ActionsMatcher::makeSet(const ASTFunction & node, Data & data, bool no_su
         if (identifier)
         {
             DatabaseAndTableWithAlias database_table(*identifier);
-            StoragePtr table = data.context.tryGetTable(database_table.database, database_table.table);
+            StoragePtr table = data.context.tryGetTable(database_table.database, database_table.table, CHECK_ACCESS_RIGHTS);
 
             if (table)
             {

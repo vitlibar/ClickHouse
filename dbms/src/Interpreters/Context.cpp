@@ -485,19 +485,19 @@ static String resolveDatabase(const String & database_name, const String & curre
 }
 
 
-const DatabasePtr Context::getDatabase(const String & database_name) const
+const DatabasePtr Context::getDatabase(const String & database_name, AccessRightCheckingMode access_right_checking_mode) const
 {
     auto lock = getLock();
     String db = resolveDatabase(database_name, current_database);
-    assertDatabaseExists(db);
+    assertDatabaseExists(db, access_right_checking_mode);
     return shared->databases[db];
 }
 
-DatabasePtr Context::getDatabase(const String & database_name)
+DatabasePtr Context::getDatabase(const String & database_name, AccessRightCheckingMode access_right_checking_mode)
 {
     auto lock = getLock();
     String db = resolveDatabase(database_name, current_database);
-    assertDatabaseExists(db);
+    assertDatabaseExists(db, access_right_checking_mode);
     return shared->databases[db];
 }
 
@@ -739,55 +739,64 @@ void Context::checkDatabaseAccessRightsImpl(const std::string & database_name) c
         throw Exception("Access denied to database " + database_name + " for user " + client_info.current_user , ErrorCodes::DATABASE_ACCESS_DENIED);
 }
 
-void Context::addDependencyUnsafe(const DatabaseAndTableName & from, const DatabaseAndTableName & where)
+void Context::addDependencyUnsafe(const DatabaseAndTableName & from, const DatabaseAndTableName & where, AccessRightCheckingMode access_right_checking_mode)
 {
-    checkDatabaseAccessRightsImpl(from.first);
-    checkDatabaseAccessRightsImpl(where.first);
+    if (access_right_checking_mode == CHECK_ACCESS_RIGHTS)
+    {
+        checkDatabaseAccessRightsImpl(from.first);
+        checkDatabaseAccessRightsImpl(where.first);
+    }
     shared->view_dependencies[from].insert(where);
 
     // Notify table of dependencies change
-    auto table = tryGetTable(from.first, from.second);
+    auto table = tryGetTable(from.first, from.second, access_right_checking_mode);
     if (table != nullptr)
         table->updateDependencies();
 }
 
-void Context::addDependency(const DatabaseAndTableName & from, const DatabaseAndTableName & where)
+void Context::addDependency(const DatabaseAndTableName & from, const DatabaseAndTableName & where, AccessRightCheckingMode access_right_checking_mode)
 {
     auto lock = getLock();
-    addDependencyUnsafe(from, where);
+    addDependencyUnsafe(from, where, access_right_checking_mode);
 }
 
-void Context::removeDependencyUnsafe(const DatabaseAndTableName & from, const DatabaseAndTableName & where)
+void Context::removeDependencyUnsafe(const DatabaseAndTableName & from, const DatabaseAndTableName & where, AccessRightCheckingMode access_right_checking_mode)
 {
-    checkDatabaseAccessRightsImpl(from.first);
-    checkDatabaseAccessRightsImpl(where.first);
+    if (access_right_checking_mode == CHECK_ACCESS_RIGHTS)
+    {
+        checkDatabaseAccessRightsImpl(from.first);
+        checkDatabaseAccessRightsImpl(where.first);
+    }
     shared->view_dependencies[from].erase(where);
 
     // Notify table of dependencies change
-    auto table = tryGetTable(from.first, from.second);
+    auto table = tryGetTable(from.first, from.second, access_right_checking_mode);
     if (table != nullptr)
         table->updateDependencies();
 }
 
-void Context::removeDependency(const DatabaseAndTableName & from, const DatabaseAndTableName & where)
+void Context::removeDependency(const DatabaseAndTableName & from, const DatabaseAndTableName & where, AccessRightCheckingMode access_right_checking_mode)
 {
     auto lock = getLock();
-    removeDependencyUnsafe(from, where);
+    removeDependencyUnsafe(from, where, access_right_checking_mode);
 }
 
-Dependencies Context::getDependencies(const String & database_name, const String & table_name) const
+Dependencies Context::getDependencies(const String & database_name, const String & table_name, AccessRightCheckingMode access_right_checking_mode) const
 {
     auto lock = getLock();
 
     String db = resolveDatabase(database_name, current_database);
 
-    if (database_name.empty() && tryGetExternalTable(table_name))
+    if (access_right_checking_mode == CHECK_ACCESS_RIGHTS)
     {
-        /// Table is temporary. Access granted.
-    }
-    else
-    {
-        checkDatabaseAccessRightsImpl(db);
+        if (database_name.empty() && tryGetExternalTable(table_name))
+        {
+            /// Table is temporary. Access granted.
+        }
+        else
+        {
+            checkDatabaseAccessRightsImpl(db);
+        }
     }
 
     ViewDependencies::const_iterator iter = shared->view_dependencies.find(DatabaseAndTableName(db, table_name));
@@ -797,34 +806,37 @@ Dependencies Context::getDependencies(const String & database_name, const String
     return Dependencies(iter->second.begin(), iter->second.end());
 }
 
-bool Context::isTableExist(const String & database_name, const String & table_name) const
+bool Context::isTableExist(const String & database_name, const String & table_name, AccessRightCheckingMode access_right_checking_mode) const
 {
     auto lock = getLock();
 
     String db = resolveDatabase(database_name, current_database);
-    checkDatabaseAccessRightsImpl(db);
+    if (access_right_checking_mode == CHECK_ACCESS_RIGHTS)
+        checkDatabaseAccessRightsImpl(db);
 
     Databases::const_iterator it = shared->databases.find(db);
     return shared->databases.end() != it
         && it->second->isTableExist(*this, table_name);
 }
 
-bool Context::isDictionaryExists(const String & database_name, const String & dictionary_name) const
+bool Context::isDictionaryExists(const String & database_name, const String & dictionary_name, AccessRightCheckingMode access_right_checking_mode) const
 {
     auto lock = getLock();
 
     String db = resolveDatabase(database_name, current_database);
-    checkDatabaseAccessRightsImpl(db);
+    if (access_right_checking_mode == CHECK_ACCESS_RIGHTS)
+        checkDatabaseAccessRightsImpl(db);
 
     Databases::const_iterator it = shared->databases.find(db);
     return shared->databases.end() != it && it->second->isDictionaryExist(*this, dictionary_name);
 }
 
-bool Context::isDatabaseExist(const String & database_name) const
+bool Context::isDatabaseExist(const String & database_name, AccessRightCheckingMode access_right_checking_mode) const
 {
     auto lock = getLock();
     String db = resolveDatabase(database_name, current_database);
-    checkDatabaseAccessRightsImpl(db);
+    if (access_right_checking_mode == CHECK_ACCESS_RIGHTS)
+        checkDatabaseAccessRightsImpl(db);
     return shared->databases.end() != shared->databases.find(db);
 }
 
@@ -834,12 +846,12 @@ bool Context::isExternalTableExist(const String & table_name) const
 }
 
 
-void Context::assertTableDoesntExist(const String & database_name, const String & table_name, bool check_database_access_rights) const
+void Context::assertTableDoesntExist(const String & database_name, const String & table_name, AccessRightCheckingMode access_right_checking_mode) const
 {
     auto lock = getLock();
 
     String db = resolveDatabase(database_name, current_database);
-    if (check_database_access_rights)
+    if (access_right_checking_mode == CHECK_ACCESS_RIGHTS)
         checkDatabaseAccessRightsImpl(db);
 
     Databases::const_iterator it = shared->databases.find(db);
@@ -848,12 +860,12 @@ void Context::assertTableDoesntExist(const String & database_name, const String 
 }
 
 
-void Context::assertDatabaseExists(const String & database_name, bool check_database_access_rights) const
+void Context::assertDatabaseExists(const String & database_name, AccessRightCheckingMode access_right_checking_mode) const
 {
     auto lock = getLock();
 
     String db = resolveDatabase(database_name, current_database);
-    if (check_database_access_rights)
+    if (access_right_checking_mode == CHECK_ACCESS_RIGHTS)
         checkDatabaseAccessRightsImpl(db);
 
     if (shared->databases.end() == shared->databases.find(db))
@@ -861,12 +873,13 @@ void Context::assertDatabaseExists(const String & database_name, bool check_data
 }
 
 
-void Context::assertDatabaseDoesntExist(const String & database_name) const
+void Context::assertDatabaseDoesntExist(const String & database_name, AccessRightCheckingMode access_right_checking_mode) const
 {
     auto lock = getLock();
 
     String db = resolveDatabase(database_name, current_database);
-    checkDatabaseAccessRightsImpl(db);
+    if (access_right_checking_mode == CHECK_ACCESS_RIGHTS)
+        checkDatabaseAccessRightsImpl(db);
 
     if (shared->databases.end() != shared->databases.find(db))
         throw Exception("Database " + backQuoteIfNeed(db) + " already exists.", ErrorCodes::DATABASE_ALREADY_EXISTS);
@@ -920,23 +933,23 @@ StoragePtr Context::tryGetExternalTable(const String & table_name) const
 }
 
 
-StoragePtr Context::getTable(const String & database_name, const String & table_name) const
+StoragePtr Context::getTable(const String & database_name, const String & table_name, AccessRightCheckingMode access_right_checking_mode) const
 {
     Exception exc;
-    auto res = getTableImpl(database_name, table_name, &exc);
+    auto res = getTableImpl(database_name, table_name, access_right_checking_mode, &exc);
     if (!res)
         throw exc;
     return res;
 }
 
 
-StoragePtr Context::tryGetTable(const String & database_name, const String & table_name) const
+StoragePtr Context::tryGetTable(const String & database_name, const String & table_name, AccessRightCheckingMode access_right_checking_mode) const
 {
-    return getTableImpl(database_name, table_name, nullptr);
+    return getTableImpl(database_name, table_name, access_right_checking_mode, nullptr);
 }
 
 
-StoragePtr Context::getTableImpl(const String & database_name, const String & table_name, Exception * exception) const
+StoragePtr Context::getTableImpl(const String & database_name, const String & table_name, AccessRightCheckingMode access_right_checking_mode, Exception * exception) const
 {
     String db;
     DatabasePtr database;
@@ -952,7 +965,8 @@ StoragePtr Context::getTableImpl(const String & database_name, const String & ta
         }
 
         db = resolveDatabase(database_name, current_database);
-        checkDatabaseAccessRightsImpl(db);
+        if (access_right_checking_mode == CHECK_ACCESS_RIGHTS)
+            checkDatabaseAccessRightsImpl(db);
 
         Databases::const_iterator it = shared->databases.find(db);
         if (shared->databases.end() == it)
@@ -1073,19 +1087,19 @@ std::unique_ptr<DDLGuard> Context::getDDLGuard(const String & database, const St
 }
 
 
-void Context::addDatabase(const String & database_name, const DatabasePtr & database)
+void Context::addDatabase(const String & database_name, const DatabasePtr & database, AccessRightCheckingMode access_right_checking_mode)
 {
     auto lock = getLock();
 
-    assertDatabaseDoesntExist(database_name);
+    assertDatabaseDoesntExist(database_name, access_right_checking_mode);
     shared->databases[database_name] = database;
 }
 
 
-DatabasePtr Context::detachDatabase(const String & database_name)
+DatabasePtr Context::detachDatabase(const String & database_name, AccessRightCheckingMode access_right_checking_mode)
 {
     auto lock = getLock();
-    auto res = getDatabase(database_name);
+    auto res = getDatabase(database_name, access_right_checking_mode);
     shared->databases.erase(database_name);
 
     return res;
@@ -1183,10 +1197,10 @@ String Context::getInitialQueryId() const
 }
 
 
-void Context::setCurrentDatabase(const String & name)
+void Context::setCurrentDatabase(const String & name, AccessRightCheckingMode access_right_checking_mode)
 {
     auto lock = getLock();
-    assertDatabaseExists(name);
+    assertDatabaseExists(name, access_right_checking_mode);
     current_database = name;
 }
 

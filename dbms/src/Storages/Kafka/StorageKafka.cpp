@@ -306,14 +306,14 @@ void StorageKafka::updateConfiguration(cppkafka::Configuration & conf)
 bool StorageKafka::checkDependencies(const String & current_database_name, const String & current_table_name)
 {
     // Check if all dependencies are attached
-    auto dependencies = global_context.getDependencies(current_database_name, current_table_name);
+    auto dependencies = global_context.getDependencies(current_database_name, current_table_name, CHECK_ACCESS_RIGHTS);
     if (dependencies.size() == 0)
         return true;
 
     // Check the dependencies are ready?
     for (const auto & db_tab : dependencies)
     {
-        auto table = global_context.tryGetTable(db_tab.first, db_tab.second);
+        auto table = global_context.tryGetTable(db_tab.first, db_tab.second, CHECK_ACCESS_RIGHTS);
         if (!table)
             return false;
 
@@ -335,7 +335,7 @@ void StorageKafka::threadFunc()
     try
     {
         // Check if at least one direct dependency is attached
-        auto dependencies = global_context.getDependencies(database_name, table_name);
+        auto dependencies = global_context.getDependencies(database_name, table_name, CHECK_ACCESS_RIGHTS);
 
         // Keep streaming as long as there are attached views and streaming is not cancelled
         while (!stream_cancelled && num_created_consumers > 0 && dependencies.size() > 0)
@@ -363,7 +363,7 @@ void StorageKafka::threadFunc()
 
 bool StorageKafka::streamToViews()
 {
-    auto table = global_context.getTable(database_name, table_name);
+    auto table = global_context.getTable(database_name, table_name, CHECK_ACCESS_RIGHTS);
     if (!table)
         throw Exception("Engine table " + backQuote(database_name) + "." + backQuote(table_name) + " doesn't exist.", ErrorCodes::LOGICAL_ERROR);
 

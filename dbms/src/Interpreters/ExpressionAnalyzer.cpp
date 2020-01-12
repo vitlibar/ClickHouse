@@ -279,7 +279,7 @@ SetPtr SelectQueryExpressionAnalyzer::isPlainStorageSetInSubquery(const ASTPtr &
     if (!table)
         return nullptr;
     const DatabaseAndTableWithAlias database_table(*table);
-    const auto storage = context.getTable(database_table.database, database_table.table);
+    const auto storage = context.getTable(database_table.database, database_table.table, CHECK_ACCESS_RIGHTS);
     if (storage->getName() != "Set")
         return nullptr;
     const auto storage_set = std::dynamic_pointer_cast<StorageSet>(storage);
@@ -465,7 +465,7 @@ static JoinPtr tryGetStorageJoin(const ASTTablesInSelectQueryElement & join_elem
     if (table_to_join.database_and_table_name)
     {
         DatabaseAndTableWithAlias database_table(table_to_join.database_and_table_name);
-        StoragePtr table = context.tryGetTable(database_table.database, database_table.table);
+        StoragePtr table = context.tryGetTable(database_table.database, database_table.table, CHECK_ACCESS_RIGHTS);
 
         if (table)
         {

@@ -34,7 +34,7 @@ PushingToViewsBlockOutputStream::PushingToViewsBlockOutputStream(
 
     if (!table.empty())
     {
-        Dependencies dependencies = context.getDependencies(database, table);
+        Dependencies dependencies = context.getDependencies(database, table, CHECK_ACCESS_RIGHTS);
 
         /// We need special context for materialized views insertions
         if (!dependencies.empty())
@@ -47,7 +47,7 @@ PushingToViewsBlockOutputStream::PushingToViewsBlockOutputStream(
 
         for (const auto & database_table : dependencies)
         {
-            auto dependent_table = context.getTable(database_table.first, database_table.second);
+            auto dependent_table = context.getTable(database_table.first, database_table.second, CHECK_ACCESS_RIGHTS);
 
             ASTPtr query;
             BlockOutputStreamPtr out;

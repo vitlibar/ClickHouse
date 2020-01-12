@@ -53,7 +53,7 @@ void StorageNull::alter(
 
     StorageInMemoryMetadata metadata = getInMemoryMetadata();
     params.apply(metadata);
-    context.getDatabase(current_database_name)->alterTable(context, current_table_name, metadata);
+    context.getDatabase(current_database_name, CHECK_ACCESS_RIGHTS)->alterTable(context, current_table_name, metadata);
     setColumns(std::move(metadata.columns));
 }
 
