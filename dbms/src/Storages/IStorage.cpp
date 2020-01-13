@@ -314,6 +314,20 @@ bool IStorage::isVirtualColumn(const String & column_name) const
     return getColumns().get(column_name).is_virtual;
 }
 
+void IStorage::collectRequiredColumnsForDependantViews(const Context & context) const
+{
+    for (const auto & [view_database, view_name] : context.getDependencies(getDatabaseName(), getTableName()))
+    {
+        auto view = context.tryGetTable(view_database, view_name);
+        if (view)
+        {
+            if (auto * materialized_view = dynamic_cast<const StorageMaterializedView *>(view.get()))
+                materialized_view->collectRequiredColumns();
+            else if (auto * live_view = dynamic_cast<const StorageLiveView *>(view.get()))
+                live_view->collectRequiredColumns();
+        }
+}
+
 TableStructureReadLockHolder IStorage::lockStructureForShare(bool will_add_new_data, const String & query_id)
 {
     TableStructureReadLockHolder result;

@@ -18,6 +18,7 @@
 #include <Storages/ReadInOrderOptimizer.h>
 
 #include <Common/typeid_cast.h>
+#include <boost/algorithm/string/join.hpp>
 
 
 namespace DB
@@ -123,6 +124,7 @@ StorageMaterializedView::StorageMaterializedView(
     auto & select_query = inner_query->as<ASTSelectQuery &>();
     extractDependentTable(select_query, select_database_name, select_table_name);
     checkAllowedQueries(select_query);
+    collectSelectRequiredColumns();
 
     if (!select_table_name.empty())
         global_context.addDependency(
@@ -176,6 +178,26 @@ StorageMaterializedView::StorageMaterializedView(
             throw;
         }
     }
+}
+
+void StorageMaterializedView::collectRequiredColumns()
+{
+    Strings new_select_required_columns;
+    if (global_context.tryGetTable(select_database_name, select_table_name))
+    {
+        auto result = SyntaxAnalyzer{global_context}.analyze(inner_query, {});
+        if (result->requiredSourceColumns() == select_required_columns)
+            return;
+        new_select_required_columns = result->requiredSourceColumns();
+    }
+
+    if (select_required_columns == new_select_required_columns)
+        return;
+
+    select_required_columns = std::move(new_select_required_columns);
+    std::cout << "StorageMaterializedView: required_select_columns: "
+              << boost::join(select_required_columns, ", ") << std::endl;
+    global_context.recalculateAccessRights();
 }
 
 NameAndTypePair StorageMaterializedView::getColumn(const String & column_name) const
@@ -330,6 +352,11 @@ void StorageMaterializedView::rename(
             DatabaseAndTableName(select_database_name, select_table_name),
             DatabaseAndTableName(database_name, table_name),
             CHECK_ACCESS_RIGHTS);
+}
+
+void StorageMaterializedView::startup()
+{
+    collectRequiredColumns();
 }
 
 void StorageMaterializedView::shutdown()

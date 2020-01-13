@@ -18,6 +18,10 @@ public:
     std::string getDatabaseName() const override { return database_name; }
 
     ASTPtr getInnerQuery() const { return inner_query->clone(); }
+    const String & getSelectDatabaseName() const { return select_database_name; }
+    const String & getSelectTableName() const { return select_table_name; }
+    Strings getRequiredColumns() const { return select_required_columns; }
+    void collectRequiredColumns();
 
     NameAndTypePair getColumn(const String & column_name) const override;
     bool hasColumn(const String & column_name) const override;
@@ -70,6 +74,7 @@ public:
 private:
     String select_database_name;
     String select_table_name;
+    Strings select_required_columns;
     String target_database_name;
     String target_table_name;
     String table_name;

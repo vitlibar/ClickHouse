@@ -96,6 +96,8 @@
 #include <DataStreams/materializeBlock.h>
 #include <Processors/Pipe.h>
 
+#include <boost/algorithm/string/join.hpp>
+
 
 namespace DB
 {
@@ -302,7 +304,7 @@ InterpreterSelectQuery::InterpreterSelectQuery(
             if (!storage)
             {
                 /// Read from table. Even without table expression (implicit SELECT ... FROM system.one).
-                storage = context->getTable(database_name, table_name, CHECK_ACCESS_RIGHTS);
+                storage = context->getTable(database_name, table_name);
             }
         }
     }
@@ -418,6 +420,11 @@ InterpreterSelectQuery::InterpreterSelectQuery(
     if (query.prewhere() && !query.where())
         analysis_result.prewhere_info->need_filter = true;
 
+    std::cout << "InterpreterSelectQuery: required_columns: "
+              << boost::join(required_columns, ", ") << std::endl;
+    if (storage)
+        context->checkAccess(AccessType::SELECT, storage->getDatabaseName(), storage->getTableName(), required_columns);
+
     /// Blocks used in expression analysis contains size 1 const columns for constant folding and
     ///  null non-const columns to avoid useless memory allocations. However, a valid block sample
     ///  requires all columns to be of size 0, thus we need to sanitize the block here.
@@ -444,7 +451,7 @@ void InterpreterSelectQuery::getDatabaseAndTableNames(const ASTSelectQuery & que
         database_name = db_and_table->database;
 
         /// If the database is not specified - use the current database.
-        if (database_name.empty() && !context.tryGetTable("", table_name, CHECK_ACCESS_RIGHTS))
+        if (database_name.empty() && !context.tryGetExternalTable(table_name))
             database_name = context.getCurrentDatabase();
     }
     else /// If the table is not specified - use the table `system.one`.

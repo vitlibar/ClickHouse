@@ -164,6 +164,9 @@ protected: /// still thread-unsafe part.
     /// Initially reserved virtual column name may be shadowed by real column.
     virtual bool isVirtualColumn(const String & column_name) const;
 
+    /// Dependant views store list of columns they want to read from the table they view.
+    /// This list should be updated when alter() updates the columns of the table.
+    void collectRequiredColumnsForDependantViews(const Context & context) const;
 
 private:
     ColumnsDescription columns; /// combined real and virtual columns
