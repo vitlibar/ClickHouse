@@ -35,6 +35,7 @@ limitations under the License. */
 #include <Storages/LiveView/ProxyStorage.h>
 
 #include <Storages/StorageFactory.h>
+#include <Storages/ViewDependencies.h>
 #include <Parsers/ASTTablesInSelectQuery.h>
 #include <Parsers/ASTSubquery.h>
 #include <Interpreters/getTableExpressions.h>
@@ -58,7 +59,12 @@ static void extractDependentTable(ASTSelectQuery & query, String & select_databa
     ASTPtr subquery = extractTableExpression(query, 0);
 
     if (!db_and_table && !subquery)
+    {
+        /// If the table is not specified - use the table `system.one`.
+        select_database_name = "system";
+        select_table_name = "one";
         return;
+    }
 
     if (db_and_table)
     {
@@ -215,18 +221,8 @@ StorageLiveView::StorageLiveView(
 
     ASTSelectQuery & select_query = typeid_cast<ASTSelectQuery &>(*inner_query);
     extractDependentTable(select_query, select_database_name, select_table_name);
-
-    /// If the table is not specified - use the table `system.one`
-    if (select_table_name.empty())
-    {
-        select_database_name = "system";
-        select_table_name = "one";
-    }
-
-    global_context.addDependency(
-        DatabaseAndTableName(select_database_name, select_table_name),
-        DatabaseAndTableName(database_name, table_name),
-        CHECK_ACCESS_RIGHTS);
+    local_context.checkDatabaseAccessRights(database_name);
+    local_context.checkDatabaseAccessRights(select_database_name);
 
     is_temporary = query.temporary;
     temporary_live_view_timeout = local_context.getSettingsRef().temporary_live_view_timeout.totalSeconds();
@@ -340,11 +336,11 @@ bool StorageLiveView::getNewBlocks()
 
 void StorageLiveView::checkTableCanBeDropped() const
 {
-    Dependencies dependencies = global_context.getDependencies(database_name, table_name, CHECK_ACCESS_RIGHTS);
-    if (!dependencies.empty())
+    auto views = global_context.getViewDependencies().getViews({database_name, table_name});
+    if (!views.empty())
     {
-        DatabaseAndTableName database_and_table_name = dependencies.front();
-        throw Exception("Table has dependency " + database_and_table_name.first + "." + database_and_table_name.second, ErrorCodes::TABLE_WAS_NOT_DROPPED);
+        const auto & [view_db, view_name] = views.front();
+        throw Exception("Table has dependency " + view_db + "." + view_name, ErrorCodes::TABLE_WAS_NOT_DROPPED);
     }
 }
 
@@ -366,7 +362,7 @@ void StorageLiveView::noUsersThread(std::shared_ptr<StorageLiveView> storage, co
                     return;
                 if (storage->hasUsers())
                     return;
-                if (!storage->global_context.getDependencies(storage->database_name, storage->table_name, CHECK_ACCESS_RIGHTS).empty())
+                if (storage->global_context.getViewDependencies().hasViews({storage->database_name, storage->table_name}))
                     continue;
                 drop_table = true;
             }
@@ -432,6 +428,12 @@ void StorageLiveView::startNoUsersThread(const UInt64 & timeout)
 
 void StorageLiveView::startup()
 {
+    auto analyzer_result = SyntaxAnalyzer{global_context}.analyze(inner_query, {});
+
+    global_context.getViewDependencies().add(
+        {select_database_name, select_table_name},
+        {database_name, table_name}, analyzer_result->requiredSourceColumns());
+
     startNoUsersThread(temporary_live_view_timeout);
 }
 
@@ -452,6 +454,11 @@ void StorageLiveView::shutdown()
             }
         }
     }
+
+    /// Make sure the dependency is removed after DETACH TABLE
+    global_context.getViewDependencies().remove(
+        {select_database_name, select_table_name},
+        {database_name, table_name});
 }
 
 StorageLiveView::~StorageLiveView()
@@ -467,11 +474,6 @@ StorageLiveView::~StorageLiveView()
 
 void StorageLiveView::drop(TableStructureWriteLockHolder &)
 {
-    global_context.removeDependency(
-        DatabaseAndTableName(select_database_name, select_table_name),
-        DatabaseAndTableName(database_name, table_name),
-        CHECK_ACCESS_RIGHTS);
-
     std::lock_guard lock(mutex);
     is_dropped = true;
     condition.notify_all();

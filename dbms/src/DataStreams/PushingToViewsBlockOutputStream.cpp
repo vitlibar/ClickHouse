@@ -13,6 +13,7 @@
 #include <Storages/MergeTree/ReplicatedMergeTreeBlockOutputStream.h>
 #include <Storages/StorageValues.h>
 #include <Storages/LiveView/StorageLiveView.h>
+#include <Storages/ViewDependencies.h>
 
 namespace DB
 {
@@ -34,10 +35,10 @@ PushingToViewsBlockOutputStream::PushingToViewsBlockOutputStream(
 
     if (!table.empty())
     {
-        Dependencies dependencies = context.getDependencies(database, table, CHECK_ACCESS_RIGHTS);
+        auto view_names = context.getViewDependencies().getViews({database, table});
 
         /// We need special context for materialized views insertions
-        if (!dependencies.empty())
+        if (!view_names.empty())
         {
             views_context = std::make_unique<Context>(context);
             // Do not deduplicate insertions into MV if the main insertion is Ok
@@ -45,14 +46,14 @@ PushingToViewsBlockOutputStream::PushingToViewsBlockOutputStream(
                 views_context->getSettingsRef().insert_deduplicate = false;
         }
 
-        for (const auto & database_table : dependencies)
+        for (const auto & [view_db, view_name] : view_names)
         {
-            auto dependent_table = context.getTable(database_table.first, database_table.second, CHECK_ACCESS_RIGHTS);
+            auto view = context.getTable(view_db, view_name, CHECK_ACCESS_RIGHTS);
 
             ASTPtr query;
             BlockOutputStreamPtr out;
 
-            if (auto * materialized_view = dynamic_cast<const StorageMaterializedView *>(dependent_table.get()))
+            if (auto * materialized_view = dynamic_cast<const StorageMaterializedView *>(view.get()))
             {
                 StoragePtr inner_table = materialized_view->getTargetTable();
                 query = materialized_view->getInnerQuery();
@@ -64,14 +65,14 @@ PushingToViewsBlockOutputStream::PushingToViewsBlockOutputStream(
                 BlockIO io = interpreter.execute();
                 out = io.out;
             }
-            else if (dynamic_cast<const StorageLiveView *>(dependent_table.get()))
+            else if (dynamic_cast<const StorageLiveView *>(view.get()))
                 out = std::make_shared<PushingToViewsBlockOutputStream>(
-                        database_table.first, database_table.second, dependent_table, *views_context, ASTPtr(), true);
+                        view_db, view_name, view, *views_context, ASTPtr(), true);
             else
                 out = std::make_shared<PushingToViewsBlockOutputStream>(
-                        database_table.first, database_table.second, dependent_table, *views_context, ASTPtr());
+                        view_db, view_name, view, *views_context, ASTPtr());
 
-            views.emplace_back(ViewInfo{std::move(query), database_table.first, database_table.second, std::move(out)});
+            views.emplace_back(ViewInfo{std::move(query), view_db, view_name, std::move(out)});
         }
     }
 

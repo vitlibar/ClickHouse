@@ -16,6 +16,7 @@
 
 #include <Storages/StorageFactory.h>
 #include <Storages/ReadInOrderOptimizer.h>
+#include <Storages/ViewDependencies.h>
 
 #include <Common/typeid_cast.h>
 
@@ -41,7 +42,12 @@ static void extractDependentTable(ASTSelectQuery & query, String & select_databa
     ASTPtr subquery = extractTableExpression(query, 0);
 
     if (!db_and_table && !subquery)
+    {
+        /// If the table is not specified - use the table `system.one`.
+        select_database_name = "system";
+        select_table_name = "one";
         return;
+    }
 
     if (db_and_table)
     {
@@ -123,12 +129,8 @@ StorageMaterializedView::StorageMaterializedView(
     auto & select_query = inner_query->as<ASTSelectQuery &>();
     extractDependentTable(select_query, select_database_name, select_table_name);
     checkAllowedQueries(select_query);
-
-    if (!select_table_name.empty())
-        global_context.addDependency(
-            DatabaseAndTableName(select_database_name, select_table_name),
-            DatabaseAndTableName(database_name, table_name),
-            CHECK_ACCESS_RIGHTS);
+    local_context.checkDatabaseAccessRights(database_name);
+    local_context.checkDatabaseAccessRights(select_database_name);
 
     // If the destination table is not set, use inner table
     if (!query.to_table.empty())
@@ -158,23 +160,9 @@ StorageMaterializedView::StorageMaterializedView(
         manual_create_query->set(manual_create_query->storage, query.storage->ptr());
 
         /// Execute the query.
-        try
-        {
-            InterpreterCreateQuery create_interpreter(manual_create_query, local_context);
-            create_interpreter.setInternal(true);
-            create_interpreter.execute();
-        }
-        catch (...)
-        {
-            /// In case of any error we should remove dependency to the view.
-            if (!select_table_name.empty())
-                global_context.removeDependency(
-                    DatabaseAndTableName(select_database_name, select_table_name),
-                    DatabaseAndTableName(database_name, table_name),
-                    CHECK_ACCESS_RIGHTS);
-
-            throw;
-        }
+        InterpreterCreateQuery create_interpreter(manual_create_query, local_context);
+        create_interpreter.setInternal(true);
+        create_interpreter.execute();
     }
 }
 
@@ -240,11 +228,6 @@ static void executeDropQuery(ASTDropQuery::Kind kind, Context & global_context, 
 
 void StorageMaterializedView::drop(TableStructureWriteLockHolder &)
 {
-    global_context.removeDependency(
-        DatabaseAndTableName(select_database_name, select_table_name),
-        DatabaseAndTableName(database_name, table_name),
-        CHECK_ACCESS_RIGHTS);
-
     if (has_inner_table && tryGetTargetTable())
         executeDropQuery(ASTDropQuery::Kind::Drop, global_context, target_database_name, target_table_name);
 }
@@ -316,29 +299,33 @@ void StorageMaterializedView::rename(
         target_table_name = new_target_table_name;
     }
 
-    auto lock = global_context.getLock();
+    auto & view_dependencies = global_context.getViewDependencies();
+    auto lock = view_dependencies.getLock();
 
-    global_context.removeDependencyUnsafe(
-            DatabaseAndTableName(select_database_name, select_table_name),
-            DatabaseAndTableName(database_name, table_name),
-            CHECK_ACCESS_RIGHTS);
+    auto select_required_columns = view_dependencies.getTableColumns({select_database_name, select_table_name}, {database_name, table_name});
+    view_dependencies.remove({select_database_name, select_table_name}, {database_name, table_name});
 
     table_name = new_table_name;
     database_name = new_database_name;
 
-    global_context.addDependencyUnsafe(
-            DatabaseAndTableName(select_database_name, select_table_name),
-            DatabaseAndTableName(database_name, table_name),
-            CHECK_ACCESS_RIGHTS);
+    view_dependencies.add({select_database_name, select_table_name}, {database_name, table_name}, select_required_columns);
+}
+
+void StorageMaterializedView::startup()
+{
+    auto analyzer_result = SyntaxAnalyzer{global_context}.analyze(inner_query, {});
+
+    global_context.getViewDependencies().add(
+        {select_database_name, select_table_name},
+        {database_name, table_name}, analyzer_result->requiredSourceColumns());
 }
 
 void StorageMaterializedView::shutdown()
 {
     /// Make sure the dependency is removed after DETACH TABLE
-    global_context.removeDependency(
-        DatabaseAndTableName(select_database_name, select_table_name),
-        DatabaseAndTableName(database_name, table_name),
-        CHECK_ACCESS_RIGHTS);
+    global_context.getViewDependencies().remove(
+        {select_database_name, select_table_name},
+        {database_name, table_name});
 }
 
 StoragePtr StorageMaterializedView::getTargetTable() const

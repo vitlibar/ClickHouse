@@ -22,6 +22,7 @@
 #include <Storages/MergeTree/MergeList.h>
 #include <Storages/MergeTree/MergeTreeSettings.h>
 #include <Storages/CompressionCodecSelector.h>
+#include <Storages/ViewDependencies.h>
 #include <TableFunctions/TableFunctionFactory.h>
 #include <Interpreters/ActionLocksManager.h>
 #include <Core/Settings.h>
@@ -739,71 +740,14 @@ void Context::checkDatabaseAccessRightsImpl(const std::string & database_name) c
         throw Exception("Access denied to database " + database_name + " for user " + client_info.current_user , ErrorCodes::DATABASE_ACCESS_DENIED);
 }
 
-void Context::addDependencyUnsafe(const DatabaseAndTableName & from, const DatabaseAndTableName & where, AccessRightCheckingMode access_right_checking_mode)
+ViewDependencies & Context::getViewDependencies()
 {
-    if (access_right_checking_mode == CHECK_ACCESS_RIGHTS)
-    {
-        checkDatabaseAccessRightsImpl(from.first);
-        checkDatabaseAccessRightsImpl(where.first);
-    }
-    shared->view_dependencies[from].insert(where);
-
-    // Notify table of dependencies change
-    auto table = tryGetTable(from.first, from.second, access_right_checking_mode);
-    if (table != nullptr)
-        table->updateDependencies();
+    return shared->view_dependencies;
 }
 
-void Context::addDependency(const DatabaseAndTableName & from, const DatabaseAndTableName & where, AccessRightCheckingMode access_right_checking_mode)
+const ViewDependencies & Context::getViewDependencies() const
 {
-    auto lock = getLock();
-    addDependencyUnsafe(from, where, access_right_checking_mode);
-}
-
-void Context::removeDependencyUnsafe(const DatabaseAndTableName & from, const DatabaseAndTableName & where, AccessRightCheckingMode access_right_checking_mode)
-{
-    if (access_right_checking_mode == CHECK_ACCESS_RIGHTS)
-    {
-        checkDatabaseAccessRightsImpl(from.first);
-        checkDatabaseAccessRightsImpl(where.first);
-    }
-    shared->view_dependencies[from].erase(where);
-
-    // Notify table of dependencies change
-    auto table = tryGetTable(from.first, from.second, access_right_checking_mode);
-    if (table != nullptr)
-        table->updateDependencies();
-}
-
-void Context::removeDependency(const DatabaseAndTableName & from, const DatabaseAndTableName & where, AccessRightCheckingMode access_right_checking_mode)
-{
-    auto lock = getLock();
-    removeDependencyUnsafe(from, where, access_right_checking_mode);
-}
-
-Dependencies Context::getDependencies(const String & database_name, const String & table_name, AccessRightCheckingMode access_right_checking_mode) const
-{
-    auto lock = getLock();
-
-    String db = resolveDatabase(database_name, current_database);
-
-    if (access_right_checking_mode == CHECK_ACCESS_RIGHTS)
-    {
-        if (database_name.empty() && tryGetExternalTable(table_name))
-        {
-            /// Table is temporary. Access granted.
-        }
-        else
-        {
-            checkDatabaseAccessRightsImpl(db);
-        }
-    }
-
-    ViewDependencies::const_iterator iter = shared->view_dependencies.find(DatabaseAndTableName(db, table_name));
-    if (iter == shared->view_dependencies.end())
-        return {};
-
-    return Dependencies(iter->second.begin(), iter->second.end());
+    return shared->view_dependencies;
 }
 
 bool Context::isTableExist(const String & database_name, const String & table_name, AccessRightCheckingMode access_right_checking_mode) const
