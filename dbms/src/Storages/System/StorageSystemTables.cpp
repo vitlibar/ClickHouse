@@ -5,6 +5,7 @@
 #include <DataStreams/OneBlockInputStream.h>
 #include <Storages/System/StorageSystemTables.h>
 #include <Storages/VirtualColumnUtils.h>
+#include <Storages/ViewDependencies.h>
 #include <Databases/IDatabase.h>
 #include <Interpreters/Context.h>
 #include <Parsers/ASTCreateQuery.h>
@@ -265,7 +266,7 @@ protected:
                     Array dependencies_database_name_array;
                     if (columns_mask[src_index] || columns_mask[src_index + 1])
                     {
-                        const auto dependencies = context.getDependencies(database_name, table_name, CHECK_ACCESS_RIGHTS);
+                        const auto dependencies = context.getViewDependencies().getViews({database_name, table_name});
 
                         dependencies_table_name_array.reserve(dependencies.size());
                         dependencies_database_name_array.reserve(dependencies.size());

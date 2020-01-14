@@ -20,6 +20,7 @@
 #include <Storages/Kafka/WriteBufferToKafkaProducer.h>
 #include <Storages/StorageFactory.h>
 #include <Storages/StorageMaterializedView.h>
+#include <Storages/ViewDependencies.h>
 #include <boost/algorithm/string/replace.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/trim.hpp>
@@ -117,6 +118,13 @@ StorageKafka::StorageKafka(
     setColumns(columns_);
     task = global_context.getSchedulePool().createTask(log->name(), [this]{ threadFunc(); });
     task->deactivate();
+
+    activate_on_add_view
+        = global_context.getViewDependencies().subscribeForChanges([this](const DatabaseAndTableNameRef & from, const DatabaseAndTableNameRef &, bool added)
+    {
+        if (added && (from.first == database_name) && (from.second == table_name))
+            task->activateAndSchedule();
+    });
 }
 
 
@@ -200,12 +208,6 @@ void StorageKafka::rename(const String & /* new_path_to_db */, const String & ne
 {
     table_name = new_table_name;
     database_name = new_database_name;
-}
-
-
-void StorageKafka::updateDependencies()
-{
-    task->activateAndSchedule();
 }
 
 
@@ -306,24 +308,22 @@ void StorageKafka::updateConfiguration(cppkafka::Configuration & conf)
 bool StorageKafka::checkDependencies(const String & current_database_name, const String & current_table_name)
 {
     // Check if all dependencies are attached
-    auto dependencies = global_context.getDependencies(current_database_name, current_table_name, CHECK_ACCESS_RIGHTS);
-    if (dependencies.size() == 0)
-        return true;
+    auto view_names = global_context.getViewDependencies().getViews({current_database_name, current_table_name});
 
     // Check the dependencies are ready?
-    for (const auto & db_tab : dependencies)
+    for (const auto & [view_db, view_name] : view_names)
     {
-        auto table = global_context.tryGetTable(db_tab.first, db_tab.second, CHECK_ACCESS_RIGHTS);
-        if (!table)
+        auto view = global_context.tryGetTable(view_db, view_name, CHECK_ACCESS_RIGHTS);
+        if (!view)
             return false;
 
         // If it materialized view, check it's target table
-        auto * materialized_view = dynamic_cast<StorageMaterializedView *>(table.get());
+        auto * materialized_view = dynamic_cast<StorageMaterializedView *>(view.get());
         if (materialized_view && !materialized_view->tryGetTargetTable())
             return false;
 
         // Check all its dependencies
-        if (!checkDependencies(db_tab.first, db_tab.second))
+        if (!checkDependencies(view_db, view_name))
             return false;
     }
 
@@ -335,15 +335,15 @@ void StorageKafka::threadFunc()
     try
     {
         // Check if at least one direct dependency is attached
-        auto dependencies = global_context.getDependencies(database_name, table_name, CHECK_ACCESS_RIGHTS);
+        auto views = global_context.getViewDependencies().getViews({database_name, table_name});
 
         // Keep streaming as long as there are attached views and streaming is not cancelled
-        while (!stream_cancelled && num_created_consumers > 0 && dependencies.size() > 0)
+        while (!stream_cancelled && num_created_consumers > 0 && views.size() > 0)
         {
             if (!checkDependencies(database_name, table_name))
                 break;
 
-            LOG_DEBUG(log, "Started streaming to " << dependencies.size() << " attached views");
+            LOG_DEBUG(log, "Started streaming to " << views.size() << " attached views");
 
             // Reschedule if not limited
             if (!streamToViews())

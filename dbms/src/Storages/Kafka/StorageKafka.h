@@ -6,6 +6,7 @@
 
 #include <Poco/Semaphore.h>
 #include <ext/shared_ptr_helper.h>
+#include <ext/scope_guard.h>
 
 #include <mutex>
 #include <atomic>
@@ -51,8 +52,6 @@ public:
 
     void rename(const String & /* new_path_to_db */, const String & new_database_name, const String & new_table_name, TableStructureWriteLockHolder &) override;
 
-    void updateDependencies() override;
-
     void pushReadBuffer(ConsumerBufferPtr buf);
     ConsumerBufferPtr popReadBuffer();
     ConsumerBufferPtr popReadBuffer(std::chrono::milliseconds timeout);
@@ -93,6 +92,8 @@ private:
     /// Can differ from num_consumers in case of exception in startup() (or if startup() hasn't been called).
     /// In this case we still need to be able to shutdown() properly.
     size_t num_created_consumers = 0; /// number of actually created consumers.
+
+    ext::scope_guard activate_on_add_view;
 
     Poco::Logger * log;
 

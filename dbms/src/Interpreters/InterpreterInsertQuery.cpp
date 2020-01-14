@@ -46,7 +46,7 @@ InterpreterInsertQuery::InterpreterInsertQuery(
 }
 
 
-StoragePtr InterpreterInsertQuery::getTable(const ASTInsertQuery & query)
+StoragePtr InterpreterInsertQuery::getTable(ASTInsertQuery & query)
 {
     if (query.table_function)
     {
@@ -57,6 +57,8 @@ StoragePtr InterpreterInsertQuery::getTable(const ASTInsertQuery & query)
     }
 
     /// Into what table to write.
+    if (query.database.empty() && !context.isExternalTableExist(query.table))
+        query.database = context.getCurrentDatabase();
     return context.getTable(query.database, query.table, CHECK_ACCESS_RIGHTS);
 }
 
@@ -96,7 +98,7 @@ Block InterpreterInsertQuery::getSampleBlock(const ASTInsertQuery & query, const
 
 BlockIO InterpreterInsertQuery::execute()
 {
-    const auto & query = query_ptr->as<ASTInsertQuery &>();
+    auto & query = query_ptr->as<ASTInsertQuery &>();
     checkAccess(query);
 
     StoragePtr table = getTable(query);

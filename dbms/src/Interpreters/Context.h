@@ -81,6 +81,7 @@ class ICompressionCodec;
 class AccessControlManager;
 class SettingsConstraints;
 class RemoteHostFilter;
+class ViewDependencies;
 
 class IOutputFormat;
 using OutputFormatPtr = std::shared_ptr<IOutputFormat>;
@@ -93,10 +94,6 @@ class CompiledExpressionCache;
 
 /// (database name, table name)
 using DatabaseAndTableName = std::pair<String, String>;
-
-/// Table -> set of table-views that make SELECT from it.
-using ViewDependencies = std::map<DatabaseAndTableName, std::set<DatabaseAndTableName>>;
-using Dependencies = std::vector<DatabaseAndTableName>;
 
 using TableAndCreateAST = std::pair<StoragePtr, ASTPtr>;
 using TableAndCreateASTs = std::map<String, TableAndCreateAST>;
@@ -257,13 +254,8 @@ public:
     ClientInfo & getClientInfo() { return client_info; }
     const ClientInfo & getClientInfo() const { return client_info; }
 
-    void addDependency(const DatabaseAndTableName & from, const DatabaseAndTableName & where, AccessRightCheckingMode access_right_checking_mode);
-    void removeDependency(const DatabaseAndTableName & from, const DatabaseAndTableName & where, AccessRightCheckingMode access_right_checking_mode);
-    Dependencies getDependencies(const String & database_name, const String & table_name, AccessRightCheckingMode access_right_checking_mode) const;
-
-    /// Functions where we can lock the context manually
-    void addDependencyUnsafe(const DatabaseAndTableName & from, const DatabaseAndTableName & where, AccessRightCheckingMode access_right_checking_mode);
-    void removeDependencyUnsafe(const DatabaseAndTableName & from, const DatabaseAndTableName & where, AccessRightCheckingMode access_right_checking_mode);
+    ViewDependencies & getViewDependencies();
+    const ViewDependencies & getViewDependencies() const;
 
     /// Checking the existence of the table/database. Database can be empty - in this case the current database is used.
     bool isTableExist(const String & database_name, const String & table_name, AccessRightCheckingMode access_right_checking_mode) const;
