@@ -283,6 +283,11 @@ void StorageMaterializedView::rename(
 void StorageMaterializedView::startup()
 {
     global_context.getViewDependencies().add(select_table_id, getStorageID());
+
+    /// TODO: We should check access for the definer's context, not for the global context.
+    /// And it's more correct to check it in the read() function instead of startup().
+    select_column_names = SyntaxAnalyzer{global_context}.analyze(inner_query, {})->requiredSourceColumns();
+    global_context.checkAccess(AccessType::SELECT, select_table_id.database_name, select_table_id.table_name, select_column_names);
 }
 
 void StorageMaterializedView::shutdown()

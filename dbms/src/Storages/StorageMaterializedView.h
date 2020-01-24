@@ -14,6 +14,7 @@ class StorageMaterializedView : public ext::shared_ptr_helper<StorageMaterialize
     friend struct ext::shared_ptr_helper<StorageMaterializedView>;
 public:
     std::string getName() const override { return "MaterializedView"; }
+    bool isView() const override { return true; }
 
     ASTPtr getInnerQuery() const { return inner_query->clone(); }
 
@@ -71,7 +72,7 @@ private:
     StorageID select_table_id = StorageID::createEmpty();
     /// Will be initialized in constructor
     StorageID target_table_id = StorageID::createEmpty();
-
+    Strings select_column_names;
     ASTPtr inner_query;
     Context & global_context;
     bool has_inner_table = false;

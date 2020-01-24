@@ -48,6 +48,7 @@ friend class LiveViewBlockOutputStream;
 public:
     ~StorageLiveView() override;
     String getName() const override { return "LiveView"; }
+    bool isView() const override { return true; }
     StorageID getSelectTableID() const { return select_table_id; }
     StorageID getBlocksStorageID() const
     {
@@ -167,6 +168,7 @@ public:
 
 private:
     StorageID select_table_id = StorageID::createEmpty();     /// Will be initialized in constructor
+    Strings select_column_names;
     ASTPtr inner_query; /// stored query : SELECT * FROM ( SELECT a FROM A)
     ASTPtr inner_subquery; /// stored query's innermost subquery if any
     ASTPtr inner_blocks_query; /// query over the mergeable blocks to produce final result
