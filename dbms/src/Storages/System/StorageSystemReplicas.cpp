@@ -6,6 +6,7 @@
 #include <Storages/System/StorageSystemReplicas.h>
 #include <Storages/StorageReplicatedMergeTree.h>
 #include <Storages/VirtualColumnUtils.h>
+#include <Access/AccessRightsContext.h>
 #include <Common/typeid_cast.h>
 #include <Databases/IDatabase.h>
 
@@ -61,6 +62,7 @@ BlockInputStreams StorageSystemReplicas::read(
     const unsigned /*num_streams*/)
 {
     check(column_names);
+    auto access_rights = context.getAccessRights();
 
     /// We collect a set of replicated tables.
     std::map<String, std::map<String, StoragePtr>> replicated_tables;
@@ -69,12 +71,10 @@ BlockInputStreams StorageSystemReplicas::read(
         /// Lazy database can not contain replicated tables
         if (db.second->getEngineName() == "Lazy")
             continue;
-        if (context.hasDatabaseAccessRights(db.first))
-        {
-            for (auto iterator = db.second->getTablesIterator(context); iterator->isValid(); iterator->next())
-                if (dynamic_cast<const StorageReplicatedMergeTree *>(iterator->table().get()))
-                    replicated_tables[db.first][iterator->name()] = iterator->table();
-        }
+        for (auto iterator = db.second->getTablesIterator(context); iterator->isValid(); iterator->next())
+            if (dynamic_cast<const StorageReplicatedMergeTree *>(iterator->table().get())
+                && access_rights->isGranted(AccessType::SHOW, db.first, iterator->name()))
+                replicated_tables[db.first][iterator->name()] = iterator->table();
     }
 
 

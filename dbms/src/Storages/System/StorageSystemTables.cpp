@@ -7,6 +7,7 @@
 #include <Storages/VirtualColumnUtils.h>
 #include <Storages/ViewDependencies.h>
 #include <Databases/IDatabase.h>
+#include <Access/AccessRightsContext.h>
 #include <Interpreters/Context.h>
 #include <Parsers/ASTCreateQuery.h>
 #include <Parsers/queryToString.h>
@@ -106,6 +107,8 @@ protected:
         Block res = header;
         MutableColumns res_columns = header.cloneEmptyColumns();
 
+        auto access_rights = context.getAccessRights();
+
         size_t rows_count = 0;
         while (rows_count < max_block_size)
         {
@@ -117,7 +120,7 @@ protected:
                 database_name = databases->getDataAt(database_idx).toString();
                 database = context.tryGetDatabase(database_name);
 
-                if (!database || !context.hasDatabaseAccessRights(database_name))
+                if (!database)
                 {
                     /// Database was deleted just now or the user has no access.
                     ++database_idx;
@@ -136,6 +139,9 @@ protected:
 
                     for (auto table : external_tables)
                     {
+                        if (!access_rights->isGranted(AccessType::SHOW, "", table.first))
+                            continue;
+
                         size_t src_index = 0;
                         size_t res_index = 0;
 
@@ -202,8 +208,10 @@ protected:
             for (; rows_count < max_block_size && tables_it->isValid(); tables_it->next())
             {
                 auto table_name = tables_it->name();
-                StoragePtr table = nullptr;
+                if (!access_rights->isGranted(AccessType::SHOW, database_name, table_name))
+                    continue;
 
+                StoragePtr table = nullptr;
                 TableStructureReadLockHolder lock;
 
                 try
