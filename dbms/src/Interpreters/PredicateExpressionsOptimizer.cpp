@@ -488,7 +488,7 @@ ASTs PredicateExpressionsOptimizer::evaluateAsterisk(ASTSelectQuery * select_que
             {
                 const auto * database_and_table_ast = table_expression->database_and_table_name->as<ASTIdentifier>();
                 DatabaseAndTableWithAlias database_and_table_name(*database_and_table_ast);
-                storage = context.getTable(database_and_table_name.database, database_and_table_name.table, CHECK_ACCESS_RIGHTS);
+                storage = context.getTable(database_and_table_name.database, database_and_table_name.table);
             }
             else
                 throw Exception("Logical error: unexpected table expression", ErrorCodes::LOGICAL_ERROR);

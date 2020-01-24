@@ -313,7 +313,7 @@ bool StorageKafka::checkDependencies(const String & current_database_name, const
     // Check the dependencies are ready?
     for (const auto & [view_db, view_name] : view_names)
     {
-        auto view = global_context.tryGetTable(view_db, view_name, CHECK_ACCESS_RIGHTS);
+        auto view = global_context.tryGetTable(view_db, view_name);
         if (!view)
             return false;
 
@@ -363,7 +363,7 @@ void StorageKafka::threadFunc()
 
 bool StorageKafka::streamToViews()
 {
-    auto table = global_context.getTable(database_name, table_name, CHECK_ACCESS_RIGHTS);
+    auto table = global_context.getTable(database_name, table_name);
     if (!table)
         throw Exception("Engine table " + backQuote(database_name) + "." + backQuote(table_name) + " doesn't exist.", ErrorCodes::LOGICAL_ERROR);
 

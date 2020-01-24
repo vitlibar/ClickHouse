@@ -48,7 +48,7 @@ PushingToViewsBlockOutputStream::PushingToViewsBlockOutputStream(
 
         for (const auto & [view_db, view_name] : view_names)
         {
-            auto view = context.getTable(view_db, view_name, CHECK_ACCESS_RIGHTS);
+            auto view = context.getTable(view_db, view_name);
 
             ASTPtr query;
             BlockOutputStreamPtr out;

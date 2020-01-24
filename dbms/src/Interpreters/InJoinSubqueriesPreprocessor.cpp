@@ -27,7 +27,7 @@ namespace
 StoragePtr tryGetTable(const ASTPtr & database_and_table, const Context & context)
 {
     DatabaseAndTableWithAlias db_and_table(database_and_table);
-    return context.tryGetTable(db_and_table.database, db_and_table.table, CHECK_ACCESS_RIGHTS);
+    return context.tryGetTable(db_and_table.database, db_and_table.table);
 }
 
 using CheckShardsAndTables = InJoinSubqueriesPreprocessor::CheckShardsAndTables;

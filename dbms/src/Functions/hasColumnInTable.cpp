@@ -113,7 +113,7 @@ void FunctionHasColumnInTable::executeImpl(Block & block, const ColumnNumbers & 
     bool has_column;
     if (host_name.empty())
     {
-        const StoragePtr & table = global_context.getTable(database_name, table_name, CHECK_ACCESS_RIGHTS);
+        const StoragePtr & table = global_context.getTable(database_name, table_name);
         has_column = table->hasColumn(column_name);
     }
     else

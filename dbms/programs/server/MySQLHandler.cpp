@@ -104,7 +104,7 @@ void MySQLHandler::run()
         try
         {
             if (!handshake_response.database.empty())
-                connection_context.setCurrentDatabase(handshake_response.database, CHECK_ACCESS_RIGHTS);
+                connection_context.setCurrentDatabase(handshake_response.database);
             connection_context.setCurrentQueryId("");
         }
         catch (const Exception & exc)
@@ -244,7 +244,7 @@ void MySQLHandler::comInitDB(ReadBuffer & payload)
     String database;
     readStringUntilEOF(database, payload);
     LOG_DEBUG(log, "Setting current database to " << database);
-    connection_context.setCurrentDatabase(database, CHECK_ACCESS_RIGHTS);
+    connection_context.setCurrentDatabase(database);
     packet_sender->sendPacket(OK_Packet(0, client_capability_flags, 0, 0, 1), true);
 }
 
@@ -253,7 +253,7 @@ void MySQLHandler::comFieldList(ReadBuffer & payload)
     ComFieldList packet;
     packet.readPayload(payload);
     String database = connection_context.getCurrentDatabase();
-    StoragePtr tablePtr = connection_context.getTable(database, packet.table, CHECK_ACCESS_RIGHTS);
+    StoragePtr tablePtr = connection_context.getTable(database, packet.table);
     for (const NameAndTypePair & column: tablePtr->getColumns().getAll())
     {
         ColumnDefinition column_definition(

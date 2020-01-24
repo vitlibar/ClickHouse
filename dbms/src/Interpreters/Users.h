@@ -5,8 +5,6 @@
 #include <Access/Authentication.h>
 #include <Access/AllowedClientHosts.h>
 #include <Access/AccessRights.h>
-#include <optional>
-#include <unordered_set>
 
 
 namespace Poco
@@ -32,17 +30,6 @@ struct User
     String profile;
 
     AllowedClientHosts allowed_client_hosts;
-
-    /// List of allowed databases.
-    using DatabaseSet = std::unordered_set<std::string>;
-    std::optional<DatabaseSet> databases;
-
-    /// List of allowed dictionaries.
-    using DictionarySet = std::unordered_set<std::string>;
-    std::optional<DictionarySet> dictionaries;
-
-    bool is_quota_management_allowed = false;
-    bool is_row_policy_management_allowed = false;
 
     AccessRights access;
 

@@ -529,7 +529,7 @@ void StorageReplicatedMergeTree::setTableStructure(ColumnsDescription new_column
         }
     }
 
-    global_context.getDatabase(database_name, CHECK_ACCESS_RIGHTS)->alterTable(global_context, table_name, metadata);
+    global_context.getDatabase(database_name)->alterTable(global_context, table_name, metadata);
 
     /// Even if the primary/sorting keys didn't change we must reinitialize it
     /// because primary key column types might have changed.
@@ -1657,7 +1657,7 @@ bool StorageReplicatedMergeTree::executeReplaceRange(const LogEntry & entry)
 
     auto clone_data_parts_from_source_table = [&] () -> size_t
     {
-        source_table = global_context.tryGetTable(entry_replace.from_database, entry_replace.from_table, CHECK_ACCESS_RIGHTS);
+        source_table = global_context.tryGetTable(entry_replace.from_database, entry_replace.from_table);
         if (!source_table)
         {
             LOG_DEBUG(log, "Can't use " << source_table_name << " as source table for REPLACE PARTITION command. It does not exist.");
@@ -3212,7 +3212,7 @@ void StorageReplicatedMergeTree::alter(
 
         changeSettings(metadata.settings_ast, table_lock_holder);
 
-        global_context.getDatabase(current_database_name, CHECK_ACCESS_RIGHTS)->alterTable(query_context, current_table_name, metadata);
+        global_context.getDatabase(current_database_name)->alterTable(query_context, current_table_name, metadata);
         return;
     }
 
@@ -3290,7 +3290,7 @@ void StorageReplicatedMergeTree::alter(
         auto old_metadata = getInMemoryMetadata();
         old_metadata.settings_ast = metadata.settings_ast;
         changeSettings(metadata.settings_ast, table_lock_holder);
-        global_context.getDatabase(current_database_name, CHECK_ACCESS_RIGHTS)->alterTable(query_context, current_table_name, old_metadata);
+        global_context.getDatabase(current_database_name)->alterTable(query_context, current_table_name, old_metadata);
 
         /// Modify shared metadata nodes in ZooKeeper.
         Coordination::Requests ops;
@@ -3541,7 +3541,7 @@ void StorageReplicatedMergeTree::alterPartition(const ASTPtr & query, const Part
             {
                 checkPartitionCanBeDropped(command.partition);
                 String from_database = command.from_database.empty() ? query_context.getCurrentDatabase() : command.from_database;
-                auto from_storage = query_context.getTable(from_database, command.from_table, CHECK_ACCESS_RIGHTS);
+                auto from_storage = query_context.getTable(from_database, command.from_table);
                 replacePartitionFrom(from_storage, command.partition, command.replace, query_context);
             }
             break;

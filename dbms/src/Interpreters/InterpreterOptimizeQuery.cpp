@@ -24,7 +24,7 @@ BlockIO InterpreterOptimizeQuery::execute()
 
     context.checkAccess(getRequiredAccess());
 
-    StoragePtr table = context.getTable(ast.database, ast.table, CHECK_ACCESS_RIGHTS);
+    StoragePtr table = context.getTable(ast.database, ast.table);
     table->optimize(query_ptr, ast.partition, ast.final, ast.deduplicate, context);
     return {};
 }

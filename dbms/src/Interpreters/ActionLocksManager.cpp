@@ -35,7 +35,7 @@ void ActionLocksManager::add(StorageActionBlockType action_type)
 
 void ActionLocksManager::add(const String & database_name, const String & table_name, StorageActionBlockType action_type)
 {
-    if (auto table = global_context.tryGetTable(database_name, table_name, CHECK_ACCESS_RIGHTS))
+    if (auto table = global_context.tryGetTable(database_name, table_name))
         add(table, action_type);
 }
 
@@ -60,7 +60,7 @@ void ActionLocksManager::remove(StorageActionBlockType action_type)
 
 void ActionLocksManager::remove(const String & database_name, const String & table_name, StorageActionBlockType action_type)
 {
-    if (auto table = global_context.tryGetTable(database_name, table_name, CHECK_ACCESS_RIGHTS))
+    if (auto table = global_context.tryGetTable(database_name, table_name))
         remove(table, action_type);
 }
 

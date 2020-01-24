@@ -108,7 +108,7 @@ void TCPHandler::runImpl()
     /// When connecting, the default database can be specified.
     if (!default_database.empty())
     {
-        if (!connection_context.isDatabaseExist(default_database, CHECK_ACCESS_RIGHTS))
+        if (!connection_context.isDatabaseExist(default_database))
         {
             Exception e("Database " + backQuote(default_database) + " doesn't exist", ErrorCodes::UNKNOWN_DATABASE);
             LOG_ERROR(log, "Code: " << e.code() << ", e.displayText() = " << e.displayText()
@@ -117,7 +117,7 @@ void TCPHandler::runImpl()
             return;
         }
 
-        connection_context.setCurrentDatabase(default_database, CHECK_ACCESS_RIGHTS);
+        connection_context.setCurrentDatabase(default_database);
     }
 
     Settings connection_settings = connection_context.getSettings();
@@ -466,7 +466,7 @@ void TCPHandler::processInsertQuery(const Settings & connection_settings)
         if (query_context->getSettingsRef().input_format_defaults_for_omitted_fields)
         {
             if (!db_and_table.second.empty())
-                sendTableColumns(query_context->getTable(db_and_table.first, db_and_table.second, CHECK_ACCESS_RIGHTS)->getColumns());
+                sendTableColumns(query_context->getTable(db_and_table.first, db_and_table.second)->getColumns());
         }
     }
 
@@ -684,7 +684,7 @@ void TCPHandler::processTablesStatusRequest()
     TablesStatusResponse response;
     for (const QualifiedTableName & table_name: request.tables)
     {
-        StoragePtr table = connection_context.tryGetTable(table_name.database, table_name.table, CHECK_ACCESS_RIGHTS);
+        StoragePtr table = connection_context.tryGetTable(table_name.database, table_name.table);
         if (!table)
             continue;
 

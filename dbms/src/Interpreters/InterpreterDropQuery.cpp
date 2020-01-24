@@ -251,7 +251,7 @@ BlockIO InterpreterDropQuery::executeToDatabase(const String & database_name, AS
         else if (kind == ASTDropQuery::Kind::Detach)
         {
             context.checkAccess(AccessType::DETACH_DATABASE, database_name);
-            context.detachDatabase(database_name, CHECK_ACCESS_RIGHTS);
+            context.detachDatabase(database_name);
             database->shutdown();
         }
         else if (kind == ASTDropQuery::Kind::Drop)
@@ -273,14 +273,14 @@ BlockIO InterpreterDropQuery::executeToDatabase(const String & database_name, AS
             auto context_lock = context.getLock();
 
             /// Someone could have time to delete the database before us.
-            context.assertDatabaseExists(database_name, CHECK_ACCESS_RIGHTS);
+            context.assertDatabaseExists(database_name);
 
             /// Someone could have time to create a table in the database to be deleted while we deleted the tables without the context lock.
-            if (!context.getDatabase(database_name, CHECK_ACCESS_RIGHTS)->empty(context))
+            if (!context.getDatabase(database_name)->empty(context))
                 throw Exception("New table appeared in database being dropped. Try dropping it again.", ErrorCodes::DATABASE_NOT_EMPTY);
 
             /// Delete database information from the RAM
-            context.detachDatabase(database_name, CHECK_ACCESS_RIGHTS);
+            context.detachDatabase(database_name);
 
             database->shutdown();
 
@@ -299,7 +299,7 @@ BlockIO InterpreterDropQuery::executeToDatabase(const String & database_name, AS
 
 DatabasePtr InterpreterDropQuery::tryGetDatabase(const String & database_name, bool if_exists)
 {
-    return if_exists ? context.tryGetDatabase(database_name) : context.getDatabase(database_name, CHECK_ACCESS_RIGHTS);
+    return if_exists ? context.tryGetDatabase(database_name) : context.getDatabase(database_name);
 }
 
 DatabaseAndTable InterpreterDropQuery::tryGetDatabaseAndTable(const String & database_name, const String & table_name, bool if_exists)
