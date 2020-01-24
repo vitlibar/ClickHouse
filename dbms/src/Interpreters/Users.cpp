@@ -112,6 +112,15 @@ User::User(const String & name_, const String & config_elem, const Poco::Util::A
     else
         access.grant(AccessType::ALL); /// By default all databases are accessible.
 
+    if (dictionaries)
+    {
+        access.fullRevoke(AccessType::dictGet, "");
+        for (const String & dictionary : *dictionaries)
+            access.grant(AccessType::dictGet, "", dictionary);
+    }
+    else if (!access.isGranted(AccessType::ALL))
+        access.grant(AccessType::dictGet, "");
+
     if (config.has(config_elem + ".allow_quota_management"))
         is_quota_management_allowed = config.getBool(config_elem + ".allow_quota_management");
     if (config.has(config_elem + ".allow_row_policy_management"))

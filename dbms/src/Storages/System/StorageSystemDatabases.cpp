@@ -1,6 +1,7 @@
 #include <Databases/IDatabase.h>
 #include <DataTypes/DataTypeString.h>
 #include <Interpreters/Context.h>
+#include <Access/AccessRightsContext.h>
 #include <Storages/System/StorageSystemDatabases.h>
 
 
@@ -20,9 +21,10 @@ NamesAndTypesList StorageSystemDatabases::getNamesAndTypes()
 void StorageSystemDatabases::fillData(MutableColumns & res_columns, const Context & context, const SelectQueryInfo &) const
 {
     auto databases = context.getDatabases();
+    auto access_rights = context.getAccessRights();
     for (const auto & database : databases)
     {
-        if (context.hasDatabaseAccessRights(database.first))
+        if (access_rights->isGranted(AccessType::SHOW, database.first))
         {
             res_columns[0]->insert(database.first);
             res_columns[1]->insert(database.second->getEngineName());

@@ -9,6 +9,7 @@
 #include <Storages/VirtualColumnUtils.h>
 #include <Parsers/queryToString.h>
 #include <Parsers/ASTSelectQuery.h>
+#include <Access/AccessRightsContext.h>
 #include <Databases/IDatabase.h>
 
 
@@ -61,10 +62,11 @@ public:
         ColumnPtr databases_,
         ColumnPtr tables_,
         Storages storages_,
+        const std::shared_ptr<const AccessRightsContext> & access_rights_,
         String query_id_)
         : columns_mask(columns_mask_), header(header_), max_block_size(max_block_size_)
         , databases(databases_), tables(tables_), storages(std::move(storages_))
-        , query_id(std::move(query_id_)), total_tables(tables->size())
+        , query_id(std::move(query_id_)), total_tables(tables->size()), access_rights(access_rights_)
     {
     }
 
@@ -127,7 +129,7 @@ protected:
 
             for (const auto & column : columns)
             {
-                if (column.is_virtual)
+                if (column.is_virtual || !access_rights->isGranted(AccessType::SHOW, database_name, table_name, column.name))
                     continue;
 
                 size_t src_index = 0;
@@ -224,6 +226,7 @@ private:
     String query_id;
     size_t db_table_num = 0;
     size_t total_tables;
+    std::shared_ptr<const AccessRightsContext> access_rights;
 };
 
 
@@ -267,8 +270,7 @@ BlockInputStreams StorageSystemColumns::read(
             /// We are skipping "Lazy" database because we cannot afford initialization of all its tables.
             /// This should be documented.
 
-            if (context.hasDatabaseAccessRights(database.first)
-                && database.second->getEngineName() != "Lazy")
+            if (database.second->getEngineName() != "Lazy")
                 database_column_mut->insert(database.first);
         }
 
@@ -319,7 +321,7 @@ BlockInputStreams StorageSystemColumns::read(
     return {std::make_shared<ColumnsBlockInputStream>(
         std::move(columns_mask), std::move(res_block), max_block_size,
         std::move(filtered_database_column), std::move(filtered_table_column), std::move(storages),
-        context.getCurrentQueryId())};
+        context.getAccessRights(), context.getCurrentQueryId())};
 }
 
 }

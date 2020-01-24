@@ -17,6 +17,7 @@ public:
     std::string getName() const override { return "View"; }
     std::string getTableName() const override { return table_name; }
     std::string getDatabaseName() const override { return database_name; }
+    bool isView() const override { return true; }
 
     /// It is passed inside the query and solved at its level.
     bool supportsSampling() const override { return true; }

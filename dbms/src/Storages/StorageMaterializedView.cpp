@@ -129,8 +129,6 @@ StorageMaterializedView::StorageMaterializedView(
     auto & select_query = inner_query->as<ASTSelectQuery &>();
     extractDependentTable(select_query, select_database_name, select_table_name);
     checkAllowedQueries(select_query);
-    local_context.checkDatabaseAccessRights(database_name);
-    local_context.checkDatabaseAccessRights(select_database_name);
 
     // If the destination table is not set, use inner table
     if (!query.to_table.empty())
@@ -313,6 +311,11 @@ void StorageMaterializedView::rename(
 void StorageMaterializedView::startup()
 {
     global_context.getViewDependencies().add({select_database_name, select_table_name}, {database_name, table_name});
+
+    /// TODO: We should check access for the definer's context, not for the global context.
+    /// And it's more correct to check it in the read() function instead of startup().
+    select_column_names = SyntaxAnalyzer{global_context}.analyze(inner_query, {})->requiredSourceColumns();
+    global_context.checkAccess(AccessType::SELECT, select_database_name, select_table_name, select_column_names);
 }
 
 void StorageMaterializedView::shutdown()

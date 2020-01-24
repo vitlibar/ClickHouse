@@ -221,8 +221,6 @@ StorageLiveView::StorageLiveView(
 
     ASTSelectQuery & select_query = typeid_cast<ASTSelectQuery &>(*inner_query);
     extractDependentTable(select_query, select_database_name, select_table_name);
-    local_context.checkDatabaseAccessRights(database_name);
-    local_context.checkDatabaseAccessRights(select_database_name);
 
     is_temporary = query.temporary;
     temporary_live_view_timeout = local_context.getSettingsRef().temporary_live_view_timeout.totalSeconds();
@@ -429,6 +427,12 @@ void StorageLiveView::startNoUsersThread(const UInt64 & timeout)
 void StorageLiveView::startup()
 {
     global_context.getViewDependencies().add({select_database_name, select_table_name}, {database_name, table_name});
+
+    /// TODO: We should check access for the definer's context, not for the global context.
+    /// And it's more correct to check it in the read() function instead of startup().
+    select_column_names = SyntaxAnalyzer{global_context}.analyze(inner_query, {})->requiredSourceColumns();
+    global_context.checkAccess(AccessType::SELECT, select_database_name, select_table_name, select_column_names);
+
     startNoUsersThread(temporary_live_view_timeout);
 }
 

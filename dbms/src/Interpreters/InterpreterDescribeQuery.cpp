@@ -89,6 +89,10 @@ BlockInputStreamPtr InterpreterDescribeQuery::executeImpl()
             String table_name;
             std::tie(database_name, table_name) = IdentifierSemantic::extractDatabaseAndTable(identifier);
 
+            if (database_name.empty() && context.isExternalTableExist(table_name))
+                database_name = context.getCurrentDatabase();
+
+            context.checkAccess(AccessType::SHOW, database_name, table_name);
             table = context.getTable(database_name, table_name, CHECK_ACCESS_RIGHTS);
         }
 

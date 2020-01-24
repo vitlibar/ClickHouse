@@ -42,14 +42,27 @@ BlockInputStreamPtr InterpreterExistsQuery::executeImpl()
     if ((exists_query = query_ptr->as<ASTExistsTableQuery>()))
     {
         if (exists_query->temporary)
+        {
+            context.checkAccess(AccessType::SHOW, "", exists_query->table);
             result = context.isExternalTableExist(exists_query->table);
+        }
         else
-            result = context.isTableExist(exists_query->database, exists_query->table, CHECK_ACCESS_RIGHTS);
+        {
+            String database = exists_query->database;
+            if (database.empty())
+                database = context.getCurrentDatabase();
+            context.checkAccess(AccessType::SHOW, database, exists_query->table);
+            result = context.isTableExist(database, exists_query->table, CHECK_ACCESS_RIGHTS);
+        }
     }
     else if ((exists_query = query_ptr->as<ASTExistsDictionaryQuery>()))
     {
         if (exists_query->temporary)
             throw Exception("Temporary dictionaries are not possible.", ErrorCodes::SYNTAX_ERROR);
+        String database = exists_query->database;
+        if (database.empty())
+            database = context.getCurrentDatabase();
+        context.checkAccess(AccessType::SHOW, database, exists_query->table);
         result = context.isDictionaryExists(exists_query->database, exists_query->table, CHECK_ACCESS_RIGHTS);
     }
 
