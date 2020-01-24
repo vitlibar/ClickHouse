@@ -59,7 +59,7 @@ StoragePtr InterpreterInsertQuery::getTable(ASTInsertQuery & query)
     /// Into what table to write.
     if (query.database.empty() && !context.isExternalTableExist(query.table))
         query.database = context.getCurrentDatabase();
-    return context.getTable(query.database, query.table, CHECK_ACCESS_RIGHTS);
+    return context.getTable(query.database, query.table);
 }
 
 Block InterpreterInsertQuery::getSampleBlock(const ASTInsertQuery & query, const StoragePtr & table)
@@ -99,11 +99,13 @@ Block InterpreterInsertQuery::getSampleBlock(const ASTInsertQuery & query, const
 BlockIO InterpreterInsertQuery::execute()
 {
     auto & query = query_ptr->as<ASTInsertQuery &>();
-    checkAccess(query);
-
     StoragePtr table = getTable(query);
 
     auto table_lock = table->lockStructureForShare(true, context.getInitialQueryId());
+
+    auto query_sample_block = getSampleBlock(query, table);
+    if (!query.table.empty())
+        context.checkAccess(AccessType::INSERT, query.database, query.table, query_sample_block.getNames());
 
     /// We create a pipeline of several streams, into which we will write data.
     BlockOutputStreamPtr out;
@@ -122,7 +124,6 @@ BlockIO InterpreterInsertQuery::execute()
         out = std::make_shared<SquashingBlockOutputStream>(
             out, out->getHeader(), context.getSettingsRef().min_insert_block_size_rows, context.getSettingsRef().min_insert_block_size_bytes);
     }
-    auto query_sample_block = getSampleBlock(query, table);
 
     /// Actually we don't know structure of input blocks from query/table,
     /// because some clients break insertion protocol (columns != header)
@@ -173,19 +174,6 @@ BlockIO InterpreterInsertQuery::execute()
     return res;
 }
 
-
-void InterpreterInsertQuery::checkAccess(const ASTInsertQuery & query)
-{
-    const Settings & settings = context.getSettingsRef();
-    auto readonly = settings.readonly;
-
-    if (!readonly || (query.database.empty() && context.tryGetExternalTable(query.table) && readonly >= 2))
-    {
-        return;
-    }
-
-    throw Exception("Cannot insert into table in readonly mode", ErrorCodes::READONLY);
-}
 
 std::pair<String, String> InterpreterInsertQuery::getDatabaseTable() const
 {

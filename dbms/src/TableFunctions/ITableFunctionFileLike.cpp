@@ -51,6 +51,8 @@ StoragePtr ITableFunctionFileLike::executeImpl(const ASTPtr & ast_function, cons
 
     ColumnsDescription columns = parseColumnsListFromString(structure, context);
 
+    context.checkAccess(getRequiredAccessType());
+
     /// Create table
     StoragePtr storage = getStorage(filename, format, columns, const_cast<Context &>(context), table_name, compression_method);
 

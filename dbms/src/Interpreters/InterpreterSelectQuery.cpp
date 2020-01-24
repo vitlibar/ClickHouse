@@ -252,6 +252,7 @@ InterpreterSelectQuery::InterpreterSelectQuery(
     auto & query = getSelectQuery();
 
     ASTPtr table_expression = extractTableExpression(query, 0);
+    String database_name, table_name;
 
     bool is_table_func = false;
     bool is_subquery = false;
@@ -284,9 +285,6 @@ InterpreterSelectQuery::InterpreterSelectQuery(
         }
         else
         {
-            String database_name;
-            String table_name;
-
             getDatabaseAndTableNames(query, database_name, table_name, *context);
 
             if (auto view_source = context->getViewSource())
@@ -302,7 +300,7 @@ InterpreterSelectQuery::InterpreterSelectQuery(
             if (!storage)
             {
                 /// Read from table. Even without table expression (implicit SELECT ... FROM system.one).
-                storage = context->getTable(database_name, table_name, CHECK_ACCESS_RIGHTS);
+                storage = context->getTable(database_name, table_name);
             }
         }
     }
@@ -418,21 +416,20 @@ InterpreterSelectQuery::InterpreterSelectQuery(
     if (query.prewhere() && !query.where())
         analysis_result.prewhere_info->need_filter = true;
 
+    if (!table_name.empty())
+        context->checkAccess(AccessType::SELECT, database_name, table_name, required_columns);
+
+    /// Remove limits for some tables in the `system` database.
+    if (database_name == "system" && ((table_name == "quotas") || (table_name == "quota_usage") || (table_name == "one")))
+    {
+        options.ignore_quota = true;
+        options.ignore_limits = true;
+    }
+
     /// Blocks used in expression analysis contains size 1 const columns for constant folding and
     ///  null non-const columns to avoid useless memory allocations. However, a valid block sample
     ///  requires all columns to be of size 0, thus we need to sanitize the block here.
     sanitizeBlock(result_header);
-
-    /// Remove limits for some tables in the `system` database.
-    if (storage && (storage->getDatabaseName() == "system"))
-    {
-        String table_name = storage->getTableName();
-        if ((table_name == "quotas") || (table_name == "quota_usage") || (table_name == "one"))
-        {
-            options.ignore_quota = true;
-            options.ignore_limits = true;
-        }
-    }
 }
 
 
@@ -444,7 +441,7 @@ void InterpreterSelectQuery::getDatabaseAndTableNames(const ASTSelectQuery & que
         database_name = db_and_table->database;
 
         /// If the database is not specified - use the current database.
-        if (database_name.empty() && !context.tryGetTable("", table_name, CHECK_ACCESS_RIGHTS))
+        if (database_name.empty() && !context.isExternalTableExist(table_name))
             database_name = context.getCurrentDatabase();
     }
     else /// If the table is not specified - use the table `system.one`.

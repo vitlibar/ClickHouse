@@ -45,6 +45,7 @@ public:
     String getDatabaseName() const override { return database_name; }
     String getSelectDatabaseName() const { return select_database_name; }
     String getSelectTableName() const { return select_table_name; }
+    bool isView() const override { return true; }
 
     NameAndTypePair getColumn(const String & column_name) const override;
     bool hasColumn(const String & column_name) const override;
@@ -144,6 +145,7 @@ public:
 private:
     String select_database_name;
     String select_table_name;
+    Strings select_column_names;
     String table_name;
     String database_name;
     ASTPtr inner_query;

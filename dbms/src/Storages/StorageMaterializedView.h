@@ -16,6 +16,7 @@ public:
     std::string getName() const override { return "MaterializedView"; }
     std::string getTableName() const override { return table_name; }
     std::string getDatabaseName() const override { return database_name; }
+    bool isView() const override { return true; }
 
     ASTPtr getInnerQuery() const { return inner_query->clone(); }
 
@@ -71,6 +72,7 @@ public:
 private:
     String select_database_name;
     String select_table_name;
+    Strings select_column_names;
     String target_database_name;
     String target_table_name;
     String table_name;

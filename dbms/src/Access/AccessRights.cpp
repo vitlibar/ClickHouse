@@ -47,7 +47,7 @@ public:
     AccessFlags inherited_access;
     AccessFlags partial_revokes;
     AccessFlags access; /// access == (inherited_access - partial_revokes) | explicit_grants
-    AccessFlags access_with_implicit; /// access_with_implicit == access | implicit_access (e.g. SHOW, EXISTS)
+    AccessFlags access_with_implicit; /// access_with_implicit == access | implicit_access (e.g. SHOW, EXISTS, access to temporary tables)
     AccessFlags access_with_children; /// access_with_children == access_with_implicit & child[0].access_with_children & ... & child[N].access_with_children
     Level level = GLOBAL_LEVEL;
     std::unique_ptr<std::unordered_map<std::string_view, Node>> children;
@@ -240,6 +240,14 @@ private:
         /// Implicit grants.
         if (access & AccessFlags::allGrantableOnDatabaseLevel())
             access_with_implicit |= AccessType::SHOW | AccessType::EXISTS; /// The SHOW and EXISTS access types are granted implicitly.
+
+        if (access & AccessType::CREATE_TEMPORARY_TABLE)
+        {
+            if ((level == GLOBAL_LEVEL) && recursive)
+                getChild("");  /// temporary tables use empty database
+            else if ((level == DATABASE_LEVEL) && node_name->empty())
+                access_with_implicit |= AccessType::CREATE_TABLE | AccessType::CREATE_VIEW | AccessType::ALTER_TABLE | AccessType::ALTER_VIEW | AccessType::DROP_TABLE | AccessType::DROP_VIEW | AccessType::TRUNCATE | AccessType::SELECT | AccessType::INSERT | AccessType::OPTIMIZE;
+        }
 
         access_with_children = access_with_implicit;
 

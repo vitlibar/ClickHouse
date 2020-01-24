@@ -9,6 +9,7 @@
 #include <DataStreams/OneBlockInputStream.h>
 #include <Storages/MergeTree/MergeTreeData.h>
 #include <Storages/VirtualColumnUtils.h>
+#include <Access/AccessRightsContext.h>
 #include <Databases/IDatabase.h>
 #include <Parsers/queryToString.h>
 #include <Parsers/ASTIdentifier.h>
@@ -79,7 +80,7 @@ StoragesInfoStream::StoragesInfoStream(const SelectQueryInfo & query_info, const
         {
             /// Lazy database can not contain MergeTree tables
             /// and it's unnecessary to load all tables of Lazy database just to filter all of them.
-            if (context.hasDatabaseAccessRights(database.first) && database.second->getEngineName() != "Lazy")
+            if (database.second->getEngineName() != "Lazy")
                 database_column_mut->insert(database.first);
         }
         block_to_filter.insert(ColumnWithTypeAndName(
@@ -97,6 +98,7 @@ StoragesInfoStream::StoragesInfoStream(const SelectQueryInfo & query_info, const
             /// Add columns 'table', 'engine', 'active'
 
             IColumn::Offsets offsets(rows);
+            auto access_rights = context.getAccessRights();
 
             for (size_t i = 0; i < rows; ++i)
             {
@@ -110,7 +112,8 @@ StoragesInfoStream::StoragesInfoStream(const SelectQueryInfo & query_info, const
                     StoragePtr storage = iterator->table();
                     String engine_name = storage->getName();
 
-                    if (!dynamic_cast<MergeTreeData *>(storage.get()))
+                    if (!dynamic_cast<MergeTreeData *>(storage.get())
+                        || !access_rights->isGranted(AccessType::SHOW, database_name, table_name))
                         continue;
 
                     storages[std::make_pair(database_name, iterator->name())] = storage;
