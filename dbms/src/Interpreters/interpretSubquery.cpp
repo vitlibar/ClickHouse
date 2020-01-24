@@ -84,7 +84,7 @@ std::shared_ptr<InterpreterSelectWithUnionQuery> interpretSubquery(
         else
         {
             DatabaseAndTableWithAlias database_table(*table);
-            const auto & storage = context.getTable(database_table.database, database_table.table, CHECK_ACCESS_RIGHTS);
+            const auto & storage = context.getTable(database_table.database, database_table.table);
             columns = storage->getColumns().getOrdinary();
             select_query->replaceDatabaseAndTable(database_table.database, database_table.table);
         }

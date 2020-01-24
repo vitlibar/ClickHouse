@@ -210,7 +210,7 @@ BlockOutputStreamPtr StorageMaterializedView::write(const ASTPtr & query, const 
 
 static void executeDropQuery(ASTDropQuery::Kind kind, Context & global_context, const String & target_database_name, const String & target_table_name)
 {
-    if (global_context.tryGetTable(target_database_name, target_table_name, CHECK_ACCESS_RIGHTS))
+    if (global_context.tryGetTable(target_database_name, target_table_name))
     {
         /// We create and execute `drop` query for internal table.
         auto drop_query = std::make_shared<ASTDropQuery>();
@@ -264,7 +264,7 @@ void StorageMaterializedView::mutate(const MutationCommands & commands, const Co
 
 static void executeRenameQuery(Context & global_context, const String & database_name, const String & table_original_name, const String & new_table_name)
 {
-    if (global_context.tryGetTable(database_name, table_original_name, CHECK_ACCESS_RIGHTS))
+    if (global_context.tryGetTable(database_name, table_original_name))
     {
             auto rename = std::make_shared<ASTRenameQuery>();
 
@@ -326,12 +326,12 @@ void StorageMaterializedView::shutdown()
 
 StoragePtr StorageMaterializedView::getTargetTable() const
 {
-    return global_context.getTable(target_database_name, target_table_name, CHECK_ACCESS_RIGHTS);
+    return global_context.getTable(target_database_name, target_table_name);
 }
 
 StoragePtr StorageMaterializedView::tryGetTargetTable() const
 {
-    return global_context.tryGetTable(target_database_name, target_table_name, CHECK_ACCESS_RIGHTS);
+    return global_context.tryGetTable(target_database_name, target_table_name);
 }
 
 Strings StorageMaterializedView::getDataPaths() const

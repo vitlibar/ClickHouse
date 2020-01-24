@@ -57,7 +57,7 @@ BlockInputStreamPtr InterpreterShowCreateQuery::executeImpl()
             if (database.empty())
                 database = context.getCurrentDatabase();
             context.checkAccess(AccessType::SHOW, database, show_query->table);
-            create_query = context.getDatabase(database, CHECK_ACCESS_RIGHTS)->getCreateTableQuery(context, show_query->table);
+            create_query = context.getDatabase(database)->getCreateTableQuery(context, show_query->table);
         }
     }
     else if ((show_query = query_ptr->as<ASTShowCreateDatabaseQuery>()))
@@ -65,7 +65,7 @@ BlockInputStreamPtr InterpreterShowCreateQuery::executeImpl()
         if (show_query->temporary)
             throw Exception("Temporary databases are not possible.", ErrorCodes::SYNTAX_ERROR);
         context.checkAccess(AccessType::SHOW, show_query->database);
-        create_query = context.getDatabase(show_query->database, CHECK_ACCESS_RIGHTS)->getCreateDatabaseQuery();
+        create_query = context.getDatabase(show_query->database)->getCreateDatabaseQuery();
     }
     else if ((show_query = query_ptr->as<ASTShowCreateDictionaryQuery>()))
     {
@@ -75,7 +75,7 @@ BlockInputStreamPtr InterpreterShowCreateQuery::executeImpl()
         if (database.empty())
             database = context.getCurrentDatabase();
         context.checkAccess(AccessType::SHOW, database, show_query->table);
-        create_query = context.getDatabase(database, CHECK_ACCESS_RIGHTS)->getCreateDictionaryQuery(context, show_query->table);
+        create_query = context.getDatabase(database)->getCreateDictionaryQuery(context, show_query->table);
     }
 
     if (!create_query && show_query && show_query->temporary)

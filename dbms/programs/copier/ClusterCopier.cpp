@@ -2467,8 +2467,8 @@ void ClusterCopierApp::mainImpl()
     registerDisks();
 
     static const std::string default_database = "_local";
-    context->addDatabase(default_database, std::make_shared<DatabaseMemory>(default_database), CHECK_ACCESS_RIGHTS);
-    context->setCurrentDatabase(default_database, CHECK_ACCESS_RIGHTS);
+    context->addDatabase(default_database, std::make_shared<DatabaseMemory>(default_database));
+    context->setCurrentDatabase(default_database);
 
     /// Initialize query scope just in case.
     CurrentThread::QueryScope query_scope(*context);

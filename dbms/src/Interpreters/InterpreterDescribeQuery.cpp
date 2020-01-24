@@ -93,7 +93,7 @@ BlockInputStreamPtr InterpreterDescribeQuery::executeImpl()
                 database_name = context.getCurrentDatabase();
 
             context.checkAccess(AccessType::SHOW, database_name, table_name);
-            table = context.getTable(database_name, table_name, CHECK_ACCESS_RIGHTS);
+            table = context.getTable(database_name, table_name);
         }
 
         auto table_lock = table->lockStructureForShare(false, context.getInitialQueryId());

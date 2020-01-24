@@ -808,7 +808,7 @@ SyntaxAnalyzerResultPtr SyntaxAnalyzer::analyze(
     if (!storage && select_query)
     {
         if (auto db_and_table = getDatabaseAndTable(*select_query, 0))
-            storage = context.tryGetTable(db_and_table->database, db_and_table->table, CHECK_ACCESS_RIGHTS);
+            storage = context.tryGetTable(db_and_table->database, db_and_table->table);
     }
 
     const auto & settings = context.getSettingsRef();

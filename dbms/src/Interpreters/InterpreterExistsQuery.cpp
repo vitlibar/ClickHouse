@@ -52,7 +52,7 @@ BlockInputStreamPtr InterpreterExistsQuery::executeImpl()
             if (database.empty())
                 database = context.getCurrentDatabase();
             context.checkAccess(AccessType::SHOW, database, exists_query->table);
-            result = context.isTableExist(database, exists_query->table, CHECK_ACCESS_RIGHTS);
+            result = context.isTableExist(database, exists_query->table);
         }
     }
     else if ((exists_query = query_ptr->as<ASTExistsDictionaryQuery>()))
@@ -63,7 +63,7 @@ BlockInputStreamPtr InterpreterExistsQuery::executeImpl()
         if (database.empty())
             database = context.getCurrentDatabase();
         context.checkAccess(AccessType::SHOW, database, exists_query->table);
-        result = context.isDictionaryExists(exists_query->database, exists_query->table, CHECK_ACCESS_RIGHTS);
+        result = context.isDictionaryExists(exists_query->database, exists_query->table);
     }
 
     return std::make_shared<OneBlockInputStream>(Block{{

@@ -41,7 +41,7 @@ BlockIO InterpreterCheckQuery::execute()
     String database_name = check.database.empty() ? context.getCurrentDatabase() : check.database;
 
     context.checkAccess(AccessType::SHOW, database_name, table_name);
-    StoragePtr table = context.getTable(database_name, table_name, CHECK_ACCESS_RIGHTS);
+    StoragePtr table = context.getTable(database_name, table_name);
     auto check_results = table->checkData(query_ptr, context);
 
     Block block;

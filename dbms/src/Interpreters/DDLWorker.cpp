@@ -623,7 +623,7 @@ void DDLWorker::processTask(DDLTask & task, const ZooKeeperPtr & zookeeper)
             if (auto query_with_table = dynamic_cast<ASTQueryWithTableAndOutput *>(rewritten_ast.get()); query_with_table)
             {
                 String database = query_with_table->database.empty() ? context.getCurrentDatabase() : query_with_table->database;
-                StoragePtr storage = context.tryGetTable(database, query_with_table->table, CHECK_ACCESS_RIGHTS);
+                StoragePtr storage = context.tryGetTable(database, query_with_table->table);
 
                 /// For some reason we check consistency of cluster definition only
                 /// in case of ALTER query, but not in case of CREATE/DROP etc.

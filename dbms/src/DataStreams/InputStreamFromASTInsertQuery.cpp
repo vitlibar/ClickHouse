@@ -58,7 +58,7 @@ InputStreamFromASTInsertQuery::InputStreamFromASTInsertQuery(
 
     if (context.getSettingsRef().input_format_defaults_for_omitted_fields && !ast_insert_query->table.empty() && !input_function)
     {
-        StoragePtr storage = context.getTable(ast_insert_query->database, ast_insert_query->table, CHECK_ACCESS_RIGHTS);
+        StoragePtr storage = context.getTable(ast_insert_query->database, ast_insert_query->table);
         auto column_defaults = storage->getColumns().getDefaults();
         if (!column_defaults.empty())
             res_stream = std::make_shared<AddingDefaultsBlockInputStream>(res_stream, column_defaults, context);

@@ -497,7 +497,7 @@ void HTTPHandler::processQuery(
     {
         if (key == "database")
         {
-            context.setCurrentDatabase(value, CHECK_ACCESS_RIGHTS);
+            context.setCurrentDatabase(value);
         }
         else if (key == "default_format")
         {

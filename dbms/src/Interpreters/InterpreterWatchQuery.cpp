@@ -52,7 +52,7 @@ BlockIO InterpreterWatchQuery::execute()
     table = query.table;
 
     /// Get storage
-    storage = context.tryGetTable(database, table, CHECK_ACCESS_RIGHTS);
+    storage = context.tryGetTable(database, table);
 
     if (!storage)
         throw Exception("Table " + backQuoteIfNeed(database) + "." +

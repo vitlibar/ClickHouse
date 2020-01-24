@@ -84,7 +84,7 @@ BlockIO InterpreterCreateQuery::createDatabase(ASTCreateQuery & create)
     auto guard = context.getDDLGuard(database_name, "");
 
     /// Database can be created before or it can be created concurrently in another thread, while we were waiting in DDLGuard
-    if (context.isDatabaseExist(database_name, CHECK_ACCESS_RIGHTS))
+    if (context.isDatabaseExist(database_name))
     {
         if (create.if_not_exists)
             return {};
@@ -145,7 +145,7 @@ BlockIO InterpreterCreateQuery::createDatabase(ASTCreateQuery & create)
     bool renamed = false;
     try
     {
-        context.addDatabase(database_name, database, CHECK_ACCESS_RIGHTS);
+        context.addDatabase(database_name, database);
         added = true;
 
         if (need_write_metadata)
@@ -161,7 +161,7 @@ BlockIO InterpreterCreateQuery::createDatabase(ASTCreateQuery & create)
         if (renamed)
             Poco::File(metadata_file_tmp_path).remove();
         if (added)
-            context.detachDatabase(database_name, CHECK_ACCESS_RIGHTS);
+            context.detachDatabase(database_name);
 
         throw;
     }
@@ -410,7 +410,7 @@ InterpreterCreateQuery::TableProperties InterpreterCreateQuery::setProperties(AS
     else if (!create.as_table.empty())
     {
         String as_database_name = create.as_database.empty() ? context.getCurrentDatabase() : create.as_database;
-        StoragePtr as_storage = context.getTable(as_database_name, create.as_table, CHECK_ACCESS_RIGHTS);
+        StoragePtr as_storage = context.getTable(as_database_name, create.as_table);
 
         /// as_storage->getColumns() and setEngine(...) must be called under structure lock of other_table for CREATE ... AS other_table.
         as_storage_lock = as_storage->lockStructureForShare(false, context.getCurrentQueryId());
@@ -508,7 +508,7 @@ void InterpreterCreateQuery::setEngine(ASTCreateQuery & create) const
         String as_database_name = create.as_database.empty() ? context.getCurrentDatabase() : create.as_database;
         String as_table_name = create.as_table;
 
-        ASTPtr as_create_ptr = context.getDatabase(as_database_name, CHECK_ACCESS_RIGHTS)->getCreateTableQuery(context, as_table_name);
+        ASTPtr as_create_ptr = context.getDatabase(as_database_name)->getCreateTableQuery(context, as_table_name);
         const auto & as_create = as_create_ptr->as<ASTCreateQuery &>();
 
         if (as_create.is_view)
@@ -537,7 +537,7 @@ BlockIO InterpreterCreateQuery::createTable(ASTCreateQuery & create)
     if (create.attach && !create.storage && !create.columns_list)
     {
         // Table SQL definition is available even if the table is detached
-        auto query = context.getDatabase(create.database, CHECK_ACCESS_RIGHTS)->getCreateTableQuery(context, create.table);
+        auto query = context.getDatabase(create.database)->getCreateTableQuery(context, create.table);
         create = query->as<ASTCreateQuery &>(); // Copy the saved create query, but use ATTACH instead of CREATE
         create.attach = true;
     }
@@ -577,7 +577,7 @@ bool InterpreterCreateQuery::doCreateTable(const ASTCreateQuery & create,
     bool need_add_to_database = !create.temporary || create.is_live_view;
     if (need_add_to_database)
     {
-        database = context.getDatabase(create.database, CHECK_ACCESS_RIGHTS);
+        database = context.getDatabase(create.database);
 
         /** If the request specifies IF NOT EXISTS, we allow concurrent CREATE queries (which do nothing).
           * If table doesnt exist, one thread is creating table, while others wait in DDLGuard.
@@ -681,7 +681,7 @@ BlockIO InterpreterCreateQuery::createDictionary(ASTCreateQuery & create)
     const String & database_name = create.database;
 
     auto guard = context.getDDLGuard(database_name, dictionary_name);
-    DatabasePtr database = context.getDatabase(database_name, CHECK_ACCESS_RIGHTS);
+    DatabasePtr database = context.getDatabase(database_name);
 
     if (database->isDictionaryExist(context, dictionary_name))
     {
@@ -695,7 +695,7 @@ BlockIO InterpreterCreateQuery::createDictionary(ASTCreateQuery & create)
 
     if (create.attach)
     {
-        auto query = context.getDatabase(database_name, CHECK_ACCESS_RIGHTS)->getCreateDictionaryQuery(context, dictionary_name);
+        auto query = context.getDatabase(database_name)->getCreateDictionaryQuery(context, dictionary_name);
         create = query->as<ASTCreateQuery &>();
         create.attach = true;
     }

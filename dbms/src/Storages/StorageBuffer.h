@@ -84,7 +84,7 @@ public:
     {
         if (no_destination)
             return false;
-        auto dest = global_context.tryGetTable(destination_database, destination_table, CHECK_ACCESS_RIGHTS);
+        auto dest = global_context.tryGetTable(destination_database, destination_table);
         if (dest && dest.get() != this)
             return dest->supportsPrewhere();
         return false;

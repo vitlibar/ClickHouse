@@ -311,7 +311,7 @@ BlockIO InterpreterSystemQuery::execute()
 
 StoragePtr InterpreterSystemQuery::tryRestartReplica(const String & database_name, const String & table_name, Context & system_context)
 {
-    auto database = system_context.getDatabase(database_name, CHECK_ACCESS_RIGHTS);
+    auto database = system_context.getDatabase(database_name);
     context.checkAccess(AccessType::RESTART_REPLICA, database_name, table_name);
 
     auto table_ddl_guard = system_context.getDDLGuard(database_name, table_name);
@@ -319,7 +319,7 @@ StoragePtr InterpreterSystemQuery::tryRestartReplica(const String & database_nam
 
     /// Detach actions
     {
-        auto table = system_context.tryGetTable(database_name, table_name, CHECK_ACCESS_RIGHTS);
+        auto table = system_context.tryGetTable(database_name, table_name);
 
         if (!table || !dynamic_cast<const StorageReplicatedMergeTree *>(table.get()))
             return nullptr;
@@ -391,7 +391,7 @@ void InterpreterSystemQuery::syncReplica(ASTSystemQuery & query)
     const String & table_name = query.table;
 
     context.checkAccess(AccessType::SYNC_REPLICA, database_name, table_name);
-    StoragePtr table = context.getTable(database_name, table_name, CHECK_ACCESS_RIGHTS);
+    StoragePtr table = context.getTable(database_name, table_name);
 
     if (auto storage_replicated = dynamic_cast<StorageReplicatedMergeTree *>(table.get()))
     {
@@ -415,7 +415,7 @@ void InterpreterSystemQuery::flushDistributed(ASTSystemQuery & query)
     String & table_name = query.table;
     context.checkAccess(AccessType::FLUSH_DISTRIBUTED, database_name, table_name);
 
-    if (auto storage_distributed = dynamic_cast<StorageDistributed *>(context.getTable(database_name, table_name, CHECK_ACCESS_RIGHTS).get()))
+    if (auto storage_distributed = dynamic_cast<StorageDistributed *>(context.getTable(database_name, table_name).get()))
         storage_distributed->flushClusterNodesAllData();
     else
         throw Exception("Table " + database_name + "." + table_name + " is not distributed", ErrorCodes::BAD_ARGUMENTS);

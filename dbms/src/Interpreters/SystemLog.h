@@ -369,7 +369,7 @@ void SystemLog<LogElement>::prepareTable()
 {
     String description = backQuoteIfNeed(database_name) + "." + backQuoteIfNeed(table_name);
 
-    table = context.tryGetTable(database_name, table_name, CHECK_ACCESS_RIGHTS);
+    table = context.tryGetTable(database_name, table_name);
 
     if (table)
     {
@@ -380,7 +380,7 @@ void SystemLog<LogElement>::prepareTable()
         {
             /// Rename the existing table.
             int suffix = 0;
-            while (context.isTableExist(database_name, table_name + "_" + toString(suffix), CHECK_ACCESS_RIGHTS))
+            while (context.isTableExist(database_name, table_name + "_" + toString(suffix)))
                 ++suffix;
 
             auto rename = std::make_shared<ASTRenameQuery>();
@@ -437,7 +437,7 @@ void SystemLog<LogElement>::prepareTable()
         interpreter.setInternal(true);
         interpreter.execute();
 
-        table = context.getTable(database_name, table_name, CHECK_ACCESS_RIGHTS);
+        table = context.getTable(database_name, table_name);
     }
 
     is_prepared = true;
