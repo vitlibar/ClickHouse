@@ -87,6 +87,7 @@ class DiskSelector;
 class StoragePolicy;
 using StoragePolicyPtr = std::shared_ptr<const StoragePolicy>;
 class StoragePolicySelector;
+class ViewDependencies;
 
 class IOutputFormat;
 using OutputFormatPtr = std::shared_ptr<IOutputFormat>;
@@ -99,10 +100,6 @@ using VolumePtr = std::shared_ptr<Volume>;
 class CompiledExpressionCache;
 
 #endif
-
-/// Table -> set of table-views that make SELECT from it.
-using ViewDependencies = std::map<StorageID, std::set<StorageID>>;
-using Dependencies = std::vector<StorageID>;
 
 using TableAndCreateAST = std::pair<StoragePtr, ASTPtr>;
 using TableAndCreateASTs = std::map<String, TableAndCreateAST>;
@@ -259,13 +256,8 @@ public:
     ClientInfo & getClientInfo() { return client_info; }
     const ClientInfo & getClientInfo() const { return client_info; }
 
-    void addDependency(const StorageID & from, const StorageID & where);
-    void removeDependency(const StorageID & from, const StorageID & where);
-    Dependencies getDependencies(const StorageID & from) const;
-
-    /// Functions where we can lock the context manually
-    void addDependencyUnsafe(const StorageID & from, const StorageID & where);
-    void removeDependencyUnsafe(const StorageID & from, const StorageID & where);
+    ViewDependencies & getViewDependencies();
+    const ViewDependencies & getViewDependencies() const;
 
     /// Checking the existence of the table/database. Database can be empty - in this case the current database is used.
     bool isTableExist(const String & database_name, const String & table_name) const;

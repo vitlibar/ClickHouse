@@ -43,6 +43,7 @@ public:
 
     void rename(const String & new_path_to_db, const String & new_database_name, const String & new_table_name, TableStructureWriteLockHolder &) override;
 
+    void startup() override;
     void shutdown() override;
 
     void checkTableCanBeDropped() const override;

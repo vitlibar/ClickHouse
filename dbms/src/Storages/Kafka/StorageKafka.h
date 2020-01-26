@@ -6,6 +6,7 @@
 
 #include <Poco/Semaphore.h>
 #include <ext/shared_ptr_helper.h>
+#include <ext/scope_guard.h>
 
 #include <mutex>
 #include <atomic>
@@ -46,8 +47,6 @@ public:
     BlockOutputStreamPtr write(
         const ASTPtr & query,
         const Context & context) override;
-
-    void updateDependencies() override;
 
     void pushReadBuffer(ConsumerBufferPtr buf);
     ConsumerBufferPtr popReadBuffer();
@@ -92,6 +91,8 @@ private:
     /// Can differ from num_consumers in case of exception in startup() (or if startup() hasn't been called).
     /// In this case we still need to be able to shutdown() properly.
     size_t num_created_consumers = 0; /// number of actually created consumers.
+
+    ext::scope_guard activate_on_add_view;
 
     Poco::Logger * log;
 
