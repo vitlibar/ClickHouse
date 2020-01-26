@@ -20,6 +20,7 @@
 #include <Storages/Kafka/WriteBufferToKafkaProducer.h>
 #include <Storages/StorageFactory.h>
 #include <Storages/StorageMaterializedView.h>
+#include <Storages/ViewDependencies.h>
 #include <boost/algorithm/string/replace.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/trim.hpp>
@@ -114,6 +115,13 @@ StorageKafka::StorageKafka(
     setColumns(columns_);
     task = global_context.getSchedulePool().createTask(log->name(), [this]{ threadFunc(); });
     task->deactivate();
+
+    activate_on_add_view
+        = global_context.getViewDependencies().subscribeForChanges([this](const StorageID & from, const StorageID &, bool added)
+    {
+        if (added && (from == getStorageID()))
+            task->activateAndSchedule();
+    });
 }
 
 
@@ -190,11 +198,6 @@ void StorageKafka::shutdown()
     rd_kafka_wait_destroyed(CLEANUP_TIMEOUT_MS);
 
     task->deactivate();
-}
-
-void StorageKafka::updateDependencies()
-{
-    task->activateAndSchedule();
 }
 
 
@@ -295,24 +298,24 @@ void StorageKafka::updateConfiguration(cppkafka::Configuration & conf)
 bool StorageKafka::checkDependencies(const StorageID & table_id)
 {
     // Check if all dependencies are attached
-    auto dependencies = global_context.getDependencies(table_id);
-    if (dependencies.size() == 0)
+    auto view_ids = global_context.getViewDependencies().getViews(table_id);
+    if (view_ids.size() == 0)
         return true;
 
     // Check the dependencies are ready?
-    for (const auto & db_tab : dependencies)
+    for (const auto & view_id : view_ids)
     {
-        auto table = global_context.tryGetTable(db_tab);
-        if (!table)
+        auto view = global_context.tryGetTable(view_id);
+        if (!view)
             return false;
 
         // If it materialized view, check it's target table
-        auto * materialized_view = dynamic_cast<StorageMaterializedView *>(table.get());
+        auto * materialized_view = dynamic_cast<StorageMaterializedView *>(view.get());
         if (materialized_view && !materialized_view->tryGetTargetTable())
             return false;
 
         // Check all its dependencies
-        if (!checkDependencies(db_tab))
+        if (!checkDependencies(view_id))
             return false;
     }
 
@@ -325,15 +328,15 @@ void StorageKafka::threadFunc()
     {
         auto table_id = getStorageID();
         // Check if at least one direct dependency is attached
-        auto dependencies = global_context.getDependencies(table_id);
+        auto view_ids = global_context.getViewDependencies().getViews(table_id);
 
         // Keep streaming as long as there are attached views and streaming is not cancelled
-        while (!stream_cancelled && num_created_consumers > 0 && dependencies.size() > 0)
+        while (!stream_cancelled && num_created_consumers > 0 && !view_ids.empty())
         {
             if (!checkDependencies(table_id))
                 break;
 
-            LOG_DEBUG(log, "Started streaming to " << dependencies.size() << " attached views");
+            LOG_DEBUG(log, "Started streaming to " << view_ids.size() << " attached views");
 
             // Reschedule if not limited
             if (!streamToViews())

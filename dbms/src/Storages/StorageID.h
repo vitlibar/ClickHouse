@@ -63,6 +63,22 @@ struct StorageID
         return uuid != UUID{UInt128(0, 0)};
     }
 
+    bool operator==(const StorageID & rhs) const
+    {
+        assertNotEmpty();
+        if (!hasUUID() && !rhs.hasUUID())
+            /// If both IDs don't have UUID, compare them like pair of strings
+            return std::tie(database_name, table_name) == std::tie(rhs.database_name, rhs.table_name);
+        else if (hasUUID() && rhs.hasUUID())
+            /// If both IDs have UUID, compare UUIDs and ignore database and table name
+            return uuid == rhs.uuid;
+        else
+            /// All IDs without UUID are less, then all IDs with UUID
+            return false;
+    }
+
+    bool operator!=(const StorageID & rhs) const { return !(*this == rhs); }
+
     bool operator<(const StorageID & rhs) const
     {
         assertNotEmpty();
@@ -78,6 +94,10 @@ struct StorageID
             return !hasUUID();
     }
 
+    bool operator<=(const StorageID & rhs) const { return !(rhs < *this); }
+    bool operator>(const StorageID & rhs) const { return (rhs < *this); }
+    bool operator>=(const StorageID & rhs) const { return !(*this < rhs); }
+
     void assertNotEmpty() const
     {
         if (empty())
@@ -88,6 +108,15 @@ struct StorageID
             throw Exception("Table name is empty, but database name is not", ErrorCodes::LOGICAL_ERROR);
     }
 
+    size_t hash() const
+    {
+        if (empty())
+            return 0;
+        if (hasUUID())
+            return std::hash<UUID>{}(uuid);
+        return std::hash<String>{}(database_name) - std::hash<String>{}(table_name);
+    }
+
     /// Avoid implicit construction of empty StorageID. However, it's needed for deferred initialization.
     static StorageID createEmpty() { return {}; }
 
@@ -95,4 +124,17 @@ private:
     StorageID() = default;
 };
 
+}
+
+
+namespace std
+{
+    template <>
+    struct hash<DB::StorageID>
+    {
+        size_t operator()(const DB::StorageID & table_id) const
+        {
+            return table_id.hash();
+        }
+    };
 }

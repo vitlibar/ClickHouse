@@ -15,6 +15,7 @@
 #include <DataStreams/IBlockOutputStream.h>
 
 #include <Storages/StorageFactory.h>
+#include <Storages/ViewDependencies.h>
 #include <Storages/ReadInOrderOptimizer.h>
 
 #include <Common/typeid_cast.h>
@@ -64,7 +65,10 @@ static StorageID extractDependentTableFromSelectQuery(ASTSelectQuery & query, Co
         return extractDependentTableFromSelectQuery(inner_query->as<ASTSelectQuery &>(), context, false);
     }
     else
-        return StorageID::createEmpty();
+    {
+        /// If the table is not specified - use the table `system.one`
+        return StorageID("system", "one");
+    }
 }
 
 
@@ -144,9 +148,6 @@ StorageMaterializedView::StorageMaterializedView(
 
         target_table_id = global_context.getTable(manual_create_query->database, manual_create_query->table)->getStorageID();
     }
-
-    if (!select_table_id.empty())
-        global_context.addDependency(select_table_id, table_id_);
 }
 
 NameAndTypePair StorageMaterializedView::getColumn(const String & column_name) const
@@ -211,10 +212,6 @@ static void executeDropQuery(ASTDropQuery::Kind kind, Context & global_context, 
 
 void StorageMaterializedView::drop(TableStructureWriteLockHolder &)
 {
-    auto table_id = getStorageID();
-    if (!select_table_id.empty())
-        global_context.removeDependency(select_table_id, table_id);
-
     if (has_inner_table && tryGetTargetTable())
         executeDropQuery(ASTDropQuery::Kind::Drop, global_context, target_table_id);
 }
@@ -276,19 +273,22 @@ void StorageMaterializedView::rename(
         target_table_id.table_name = new_target_table_name;
     }
 
-    auto lock = global_context.getLock();
-    if (!select_table_id.empty())
-        global_context.removeDependencyUnsafe(select_table_id, getStorageID());
+    auto & view_dependencies = global_context.getViewDependencies();
+    auto lock = view_dependencies.getLock();
+    view_dependencies.remove(select_table_id, getStorageID());
     IStorage::renameInMemory(new_database_name, new_table_name);
-    if (!select_table_id.empty())
-        global_context.addDependencyUnsafe(select_table_id, getStorageID());
+    view_dependencies.add(select_table_id, getStorageID());
+}
+
+void StorageMaterializedView::startup()
+{
+    global_context.getViewDependencies().add(select_table_id, getStorageID());
 }
 
 void StorageMaterializedView::shutdown()
 {
     /// Make sure the dependency is removed after DETACH TABLE
-    if (!select_table_id.empty())
-        global_context.removeDependency(select_table_id, getStorageID());
+    global_context.getViewDependencies().remove(select_table_id, getStorageID());
 }
 
 StoragePtr StorageMaterializedView::getTargetTable() const
