@@ -72,10 +72,11 @@ User::User(const String & name_, const String & config_elem, const Poco::Util::A
     }
 
     /// Fill list of allowed databases.
+    std::optional<Strings> databases;
     const auto config_sub_elem = config_elem + ".allow_databases";
     if (config.has(config_sub_elem))
     {
-        databases = DatabaseSet();
+        databases.emplace();
         Poco::Util::AbstractConfiguration::Keys config_keys;
         config.keys(config_sub_elem, config_keys);
 
@@ -83,15 +84,16 @@ User::User(const String & name_, const String & config_elem, const Poco::Util::A
         for (const auto & key : config_keys)
         {
             const auto database_name = config.getString(config_sub_elem + "." + key);
-            databases->insert(database_name);
+            databases->push_back(database_name);
         }
     }
 
     /// Fill list of allowed dictionaries.
+    std::optional<Strings> dictionaries;
     const auto config_dictionary_sub_elem = config_elem + ".allow_dictionaries";
     if (config.has(config_dictionary_sub_elem))
     {
-        dictionaries = DictionarySet();
+        dictionaries.emplace();
         Poco::Util::AbstractConfiguration::Keys config_keys;
         config.keys(config_dictionary_sub_elem, config_keys);
 
@@ -99,7 +101,7 @@ User::User(const String & name_, const String & config_elem, const Poco::Util::A
         for (const auto & key : config_keys)
         {
             const auto dictionary_name = config.getString(config_dictionary_sub_elem + "." + key);
-            dictionaries->insert(dictionary_name);
+            dictionaries->push_back(dictionary_name);
         }
     }
 
@@ -120,11 +122,6 @@ User::User(const String & name_, const String & config_elem, const Poco::Util::A
     }
     else if (!access.isGranted(AccessType::ALL))
         access.grant(AccessType::dictGet, "");
-
-    if (config.has(config_elem + ".allow_quota_management"))
-        is_quota_management_allowed = config.getBool(config_elem + ".allow_quota_management");
-    if (config.has(config_elem + ".allow_row_policy_management"))
-        is_row_policy_management_allowed = config.getBool(config_elem + ".allow_row_policy_management");
 }
 
 }
