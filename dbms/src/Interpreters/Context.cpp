@@ -22,6 +22,7 @@
 #include <Storages/MergeTree/MergeList.h>
 #include <Storages/MergeTree/MergeTreeSettings.h>
 #include <Storages/CompressionCodecSelector.h>
+#include <Storages/ViewDependencies.h>
 #include <Disks/DiskLocal.h>
 #include <TableFunctions/TableFunctionFactory.h>
 #include <Interpreters/ActionLocksManager.h>
@@ -764,63 +765,14 @@ void Context::checkDatabaseAccessRightsImpl(const std::string & database_name) c
         throw Exception("Access denied to database " + database_name + " for user " + client_info.current_user , ErrorCodes::DATABASE_ACCESS_DENIED);
 }
 
-
-void Context::addDependencyUnsafe(const StorageID & from, const StorageID & where)
+ViewDependencies & Context::getViewDependencies()
 {
-    checkDatabaseAccessRightsImpl(from.database_name);
-    checkDatabaseAccessRightsImpl(where.database_name);
-    shared->view_dependencies[from].insert(where);
-
-    // Notify table of dependencies change
-    auto table = tryGetTable(from);
-    if (table != nullptr)
-        table->updateDependencies();
+    return shared->view_dependencies;
 }
 
-void Context::addDependency(const StorageID & from, const StorageID & where)
+const ViewDependencies & Context::getViewDependencies() const
 {
-    auto lock = getLock();
-    addDependencyUnsafe(from, where);
-}
-
-void Context::removeDependencyUnsafe(const StorageID & from, const StorageID & where)
-{
-    checkDatabaseAccessRightsImpl(from.database_name);
-    checkDatabaseAccessRightsImpl(where.database_name);
-    shared->view_dependencies[from].erase(where);
-
-    // Notify table of dependencies change
-    auto table = tryGetTable(from);
-    if (table != nullptr)
-        table->updateDependencies();
-}
-
-void Context::removeDependency(const StorageID & from, const StorageID & where)
-{
-    auto lock = getLock();
-    removeDependencyUnsafe(from, where);
-}
-
-Dependencies Context::getDependencies(const StorageID & from) const
-{
-    auto lock = getLock();
-
-    String db = resolveDatabase(from.database_name, current_database);
-
-    if (from.database_name.empty() && tryGetExternalTable(from.table_name))
-    {
-        /// Table is temporary. Access granted.
-    }
-    else
-    {
-        checkDatabaseAccessRightsImpl(db);
-    }
-
-    ViewDependencies::const_iterator iter = shared->view_dependencies.find(StorageID(db, from.table_name, from.uuid));
-    if (iter == shared->view_dependencies.end())
-        return {};
-
-    return Dependencies(iter->second.begin(), iter->second.end());
+    return shared->view_dependencies;
 }
 
 bool Context::isTableExist(const String & database_name, const String & table_name) const

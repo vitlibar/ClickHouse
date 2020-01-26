@@ -33,6 +33,7 @@ limitations under the License. */
 #include <Storages/LiveView/StorageBlocks.h>
 
 #include <Storages/StorageFactory.h>
+#include <Storages/ViewDependencies.h>
 #include <Parsers/ASTTablesInSelectQuery.h>
 #include <Parsers/ASTSubquery.h>
 #include <Parsers/queryToString.h>
@@ -259,8 +260,6 @@ StorageLiveView::StorageLiveView(
     auto inner_query_tmp = inner_query->clone();
     select_table_id = extractDependentTable(inner_query_tmp, global_context, table_id_.table_name, inner_subquery);
 
-    global_context.addDependency(select_table_id, table_id_);
-
     is_temporary = query.temporary;
     temporary_live_view_timeout = local_context.getSettingsRef().temporary_live_view_timeout.totalSeconds();
 
@@ -371,11 +370,11 @@ bool StorageLiveView::getNewBlocks()
 void StorageLiveView::checkTableCanBeDropped() const
 {
     auto table_id = getStorageID();
-    Dependencies dependencies = global_context.getDependencies(table_id);
-    if (!dependencies.empty())
+    auto views = global_context.getViewDependencies().getViews(table_id);
+    if (!views.empty())
     {
-        StorageID dependent_table_id = dependencies.front();
-        throw Exception("Table has dependency " + dependent_table_id.getNameForLogs(), ErrorCodes::TABLE_WAS_NOT_DROPPED);
+        StorageID view_id = views.front();
+        throw Exception("Table has dependency " + view_id.getNameForLogs(), ErrorCodes::TABLE_WAS_NOT_DROPPED);
     }
 }
 
@@ -398,7 +397,7 @@ void StorageLiveView::noUsersThread(std::shared_ptr<StorageLiveView> storage, co
                     return;
                 if (storage->hasUsers())
                     return;
-                if (!storage->global_context.getDependencies(table_id).empty())
+                if (storage->global_context.getViewDependencies().hasViews(table_id))
                     continue;
                 drop_table = true;
             }
@@ -465,12 +464,12 @@ void StorageLiveView::startNoUsersThread(const UInt64 & timeout)
 
 void StorageLiveView::startup()
 {
+    global_context.getViewDependencies().add(select_table_id, getStorageID());
     startNoUsersThread(temporary_live_view_timeout);
 }
 
 void StorageLiveView::shutdown()
 {
-    global_context.removeDependency(select_table_id, getStorageID());
     bool expected = false;
     if (!shutdown_called.compare_exchange_strong(expected, true))
         return;
@@ -486,6 +485,8 @@ void StorageLiveView::shutdown()
             }
         }
     }
+
+    global_context.getViewDependencies().remove(select_table_id, getStorageID());
 }
 
 StorageLiveView::~StorageLiveView()
@@ -501,9 +502,6 @@ StorageLiveView::~StorageLiveView()
 
 void StorageLiveView::drop(TableStructureWriteLockHolder &)
 {
-    auto table_id = getStorageID();
-    global_context.removeDependency(select_table_id, table_id);
-
     std::lock_guard lock(mutex);
     is_dropped = true;
     condition.notify_all();
