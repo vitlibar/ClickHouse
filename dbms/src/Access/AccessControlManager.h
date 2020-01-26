@@ -19,6 +19,7 @@ namespace Poco
 
 namespace DB
 {
+struct User;
 class QuotaContext;
 class QuotaContextFactory;
 struct QuotaUsageInfo;
@@ -38,6 +39,9 @@ public:
     ~AccessControlManager();
 
     void loadFromConfig(const Poco::Util::AbstractConfiguration & users_config);
+
+    std::shared_ptr<const User> getUser(const String & user_name) const;
+    std::shared_ptr<const User> authorizeAndGetUser(const String & user_name, const String & password, const Poco::Net::IPAddress & address) const;
 
     std::shared_ptr<QuotaContext>
     createQuotaContext(const String & user_name, const Poco::Net::IPAddress & address, const String & custom_quota_key);
