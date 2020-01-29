@@ -194,8 +194,6 @@ template <typename EntityType>
 std::shared_ptr<const EntityType> IAccessStorage::tryRead(const UUID & id) const
 {
     auto entity = tryReadBase(id);
-    if (!entity)
-        return nullptr;
     return typeid_cast<std::shared_ptr<const EntityType>>(entity);
 }
 
