@@ -2,6 +2,7 @@
 
 #include <Access/AccessRights.h>
 #include <Interpreters/ClientInfo.h>
+#include <Core/UUID.h>
 #include <boost/smart_ptr/atomic_shared_ptr.hpp>
 #include <mutex>
 
@@ -12,7 +13,10 @@ namespace DB
 {
 struct Settings;
 struct User;
+struct Role;
 using UserPtr = std::shared_ptr<const User>;
+using RolePtr = std::shared_ptr<const Role>;
+using EnabledRolesPtr = std::shared_ptr<const std::vector<std::pair<UUID, RolePtr>>>;
 
 
 class AccessRightsContext
@@ -21,7 +25,7 @@ public:
     /// Default constructor creates access rights' context which allows everything.
     AccessRightsContext();
 
-    AccessRightsContext(const UserPtr & user_, const ClientInfo & client_info_, const Settings & settings, const String & current_database_);
+    AccessRightsContext(const UserPtr & user_, const EnabledRolesPtr & enabled_roles_, const ClientInfo & client_info_, const Settings & settings, const String & current_database_);
 
     /// Checks if a specified access granted, and throws an exception if not.
     /// Empty database means the current database.
@@ -78,6 +82,7 @@ private:
     boost::shared_ptr<const AccessRights> calculateResultAccess(bool grant_option, UInt64 readonly_, bool allow_ddl_, bool allow_introspection_) const;
 
     const UserPtr user;
+    const EnabledRolesPtr enabled_roles;
     const UInt64 readonly = 0;
     const bool allow_ddl = true;
     const bool allow_introspection = true;

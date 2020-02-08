@@ -688,7 +688,7 @@ void Context::calculateAccessRights()
 {
     auto lock = getLock();
     if (user)
-        std::atomic_store(&access_rights, getAccessControlManager().getAccessRightsContext(user, client_info, settings, current_database));
+        std::atomic_store(&access_rights, getAccessControlManager().getAccessRightsContext(user, enabled_roles, client_info, settings, current_database));
 }
 
 void Context::setProfile(const String & profile)
@@ -715,6 +715,7 @@ UUID Context::getUserID() const
     return user_id;
 }
 
+
 void Context::setUser(const String & name, const String & password, const Poco::Net::SocketAddress & address, const String & quota_key)
 {
     auto lock = getLock();
@@ -733,17 +734,59 @@ void Context::setUser(const String & name, const String & password, const Poco::
         address.host(),
         [this](const UserPtr & changed_user)
         {
+            auto lock2 = getLock();
             user = changed_user;
-            calculateAccessRights();
+            setCurrentRoles(*current_roles);
         },
         &subscription_for_user_change.subscription);
 
     quota = getAccessControlManager().createQuotaContext(
         client_info.current_user, client_info.current_address.host(), client_info.quota_key);
+
     row_policy = getAccessControlManager().getRowPolicyContext(client_info.current_user);
 
     calculateUserSettings();
+    setCurrentRoles(user->default_roles);
+}
+
+
+void Context::setCurrentRoles(const std::vector<UUID> & current_roles_)
+{
+    auto lock = getLock();
+
+    std::vector<UUID> granted_current_roles;
+    granted_current_roles.reserve(current_roles_.size());
+    if (user)
+    {
+        for (const auto & id : current_roles_)
+            if (std::find(user->granted_roles.begin(), user->granted_roles.end(), id) != user->granted_roles.end())
+                granted_current_roles.push_back(id);
+    }
+
+    std::shared_ptr<const std::vector<UUID>> new_roles;
+    if (!granted_current_roles.empty())
+        new_roles = std::make_shared<std::vector<UUID>>(std::move(granted_current_roles));
+
+    current_roles = new_roles;
+
+    enabled_roles = getAccessControlManager().getEnabledRoles(new_roles, [this](const EnabledRolesPtr & changed_enabled_roles)
+    {
+        enabled_roles = changed_enabled_roles;
+        calculateAccessRights();
+    });
+
     calculateAccessRights();
+}
+
+
+std::shared_ptr<const std::vector<UUID>> Context::getCurrentRoles() const
+{
+    return current_roles;
+}
+
+EnabledRolesPtr Context::getEnabledRoles() const
+{
+    return enabled_roles;
 }
 
 void Context::addDependencyUnsafe(const StorageID & from, const StorageID & where)

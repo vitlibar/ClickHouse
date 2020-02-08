@@ -3,6 +3,7 @@
 #include <Access/MemoryAccessStorage.h>
 #include <Access/UsersConfigAccessStorage.h>
 #include <Access/User.h>
+#include <Access/EnabledRolesWatcher.h>
 #include <Access/QuotaContextFactory.h>
 #include <Access/RowPolicyContextFactory.h>
 #include <Access/AccessRightsContext.h>
@@ -82,6 +83,25 @@ UserPtr AccessControlManager::authorizeAndGetUser(
 }
 
 
+EnabledRolesPtr AccessControlManager::getEnabledRoles(const std::vector<UUID> & current_roles, std::function<void(const EnabledRolesPtr &)> on_change, ext::scope_guard * subscription) const
+{
+    if (current_roles.empty())
+        return nullptr;
+    return getEnabledRoles(std::make_shared<std::vector<UUID>>(current_roles), on_change, subscription);
+}
+
+
+EnabledRolesPtr AccessControlManager::getEnabledRoles(const std::shared_ptr<const std::vector<UUID>> & current_roles, std::function<void(const EnabledRolesPtr &)> on_change, ext::scope_guard * subscription) const
+{
+    if (!current_roles)
+        return nullptr;
+    auto watcher = std::make_shared<EnabledRolesWatcher>(*this, current_roles, on_change);
+    if (on_change && subscription)
+        *subscription = [watcher]{};
+    return watcher->getEnabledRoles();
+}
+
+
 void AccessControlManager::loadFromConfig(const Poco::Util::AbstractConfiguration & users_config)
 {
     auto & users_config_access_storage = dynamic_cast<UsersConfigAccessStorage &>(getStorageByIndex(1));
@@ -89,9 +109,9 @@ void AccessControlManager::loadFromConfig(const Poco::Util::AbstractConfiguratio
 }
 
 
-std::shared_ptr<const AccessRightsContext> AccessControlManager::getAccessRightsContext(const UserPtr & user, const ClientInfo & client_info, const Settings & settings, const String & current_database)
+std::shared_ptr<const AccessRightsContext> AccessControlManager::getAccessRightsContext(const UserPtr & user, const EnabledRolesPtr & enabled_roles, const ClientInfo & client_info, const Settings & settings, const String & current_database)
 {
-    return std::make_shared<AccessRightsContext>(user, client_info, settings, current_database);
+    return std::make_shared<AccessRightsContext>(user, enabled_roles, client_info, settings, current_database);
 }
 
 

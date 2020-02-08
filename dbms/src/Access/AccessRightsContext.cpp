@@ -1,5 +1,6 @@
 #include <Access/AccessRightsContext.h>
 #include <Access/User.h>
+#include <Access/Role.h>
 #include <Common/Exception.h>
 #include <Common/quoteString.h>
 #include <Core/Settings.h>
@@ -89,8 +90,9 @@ AccessRightsContext::AccessRightsContext()
 }
 
 
-AccessRightsContext::AccessRightsContext(const UserPtr & user_, const ClientInfo & client_info_, const Settings & settings, const String & current_database_)
+AccessRightsContext::AccessRightsContext(const UserPtr & user_, const EnabledRolesPtr & enabled_roles_, const ClientInfo & client_info_, const Settings & settings, const String & current_database_)
     : user(user_)
+    , enabled_roles(enabled_roles_)
     , readonly(settings.readonly)
     , allow_ddl(settings.allow_ddl)
     , allow_introspection(settings.allow_introspection_functions)
@@ -273,7 +275,20 @@ boost::shared_ptr<const AccessRights> AccessRightsContext::calculateResultAccess
     auto result_ptr = boost::make_shared<AccessRights>();
     auto & result = *result_ptr;
 
-    result = grant_option ? user->access_with_grant_option : user->access;
+    if (grant_option)
+    {
+        result = user->access_with_grant_option;
+        if (enabled_roles)
+            for (const auto & enabled_role : *enabled_roles)
+                result.merge(enabled_role.second->access_with_grant_option);
+    }
+    else
+    {
+        result = user->access;
+        if (enabled_roles)
+            for (const auto & enabled_role : *enabled_roles)
+                result.merge(enabled_role.second->access);
+    }
 
     static const AccessFlags table_ddl = AccessType::CREATE_DATABASE | AccessType::CREATE_TABLE | AccessType::CREATE_VIEW
         | AccessType::ALTER_TABLE | AccessType::ALTER_VIEW | AccessType::DROP_DATABASE | AccessType::DROP_TABLE | AccessType::DROP_VIEW

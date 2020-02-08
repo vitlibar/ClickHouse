@@ -45,6 +45,10 @@ namespace DB
 struct ContextShared;
 class Context;
 struct User;
+struct Role;
+using UserPtr = std::shared_ptr<const User>;
+using RolePtr = std::shared_ptr<const Role>;
+using EnabledRolesPtr = std::shared_ptr<const std::vector<std::pair<UUID, RolePtr>>>;
 class AccessRightsContext;
 class QuotaContext;
 class RowPolicyContext;
@@ -135,12 +139,12 @@ using IHostContextPtr = std::shared_ptr<IHostContext>;
 
 /// Subscription for user's change. This subscription cannot be copied with the context,
 /// that's why we had to move it into a separate structure.
-struct SubscriptionForUserChange
+struct SubscriptionForAccessChange
 {
     ext::scope_guard subscription;
-    SubscriptionForUserChange() {}
-    SubscriptionForUserChange(const SubscriptionForUserChange &) {}
-    SubscriptionForUserChange & operator =(const SubscriptionForUserChange &) { subscription = {}; return *this; }
+    SubscriptionForAccessChange() {}
+    SubscriptionForAccessChange(const SubscriptionForAccessChange &) {}
+    SubscriptionForAccessChange & operator =(const SubscriptionForAccessChange &) { subscription = {}; return *this; }
 };
 
 /** A set of known objects that can be used in the query.
@@ -163,7 +167,10 @@ private:
 
     std::shared_ptr<const User> user;
     UUID user_id;
-    SubscriptionForUserChange subscription_for_user_change;
+    std::shared_ptr<const std::vector<UUID>> current_roles;
+    EnabledRolesPtr enabled_roles;
+    SubscriptionForAccessChange subscription_for_user_change;
+    SubscriptionForAccessChange subscription_for_enabled_roles_change;
     std::shared_ptr<const AccessRightsContext> access_rights;
     std::shared_ptr<QuotaContext> quota;           /// Current quota. By default - empty quota, that have no limits.
     std::shared_ptr<RowPolicyContext> row_policy;
@@ -237,7 +244,12 @@ public:
 
     AccessControlManager & getAccessControlManager();
     const AccessControlManager & getAccessControlManager() const;
-    std::shared_ptr<const AccessRightsContext> getAccessRights() const { return std::atomic_load(&access_rights); }
+
+    void setCurrentRoles(const std::vector<UUID> & current_roles_);
+    std::shared_ptr<const std::vector<UUID>> getCurrentRoles() const;
+    EnabledRolesPtr getEnabledRoles() const;
+
+    std::shared_ptr<const AccessRightsContext> getAccessRights() const;
 
     /// Checks access rights.
     /// Empty database means the current database.

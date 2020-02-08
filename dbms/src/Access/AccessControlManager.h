@@ -22,6 +22,9 @@ namespace DB
 {
 struct User;
 using UserPtr = std::shared_ptr<const User>;
+struct Role;
+using RolePtr = std::shared_ptr<const Role>;
+using EnabledRolesPtr = std::shared_ptr<const std::vector<std::pair<UUID, RolePtr>>>;
 class QuotaContext;
 class QuotaContextFactory;
 struct QuotaUsageInfo;
@@ -47,7 +50,10 @@ public:
     UserPtr authorizeAndGetUser(const String & user_name, const String & password, const Poco::Net::IPAddress & address, std::function<void(const UserPtr &)> on_change = {}, ext::scope_guard * subscription = nullptr) const;
     UserPtr authorizeAndGetUser(const UUID & user_id, const String & password, const Poco::Net::IPAddress & address, std::function<void(const UserPtr &)> on_change = {}, ext::scope_guard * subscription = nullptr) const;
 
-    std::shared_ptr<const AccessRightsContext> getAccessRightsContext(const UserPtr & user, const ClientInfo & client_info, const Settings & settings, const String & current_database);
+    EnabledRolesPtr getEnabledRoles(const std::vector<UUID> & current_roles, std::function<void(const EnabledRolesPtr &)> on_change = {}, ext::scope_guard * subscription = nullptr) const;
+    EnabledRolesPtr getEnabledRoles(const std::shared_ptr<const std::vector<UUID>> & current_roles, std::function<void(const EnabledRolesPtr &)> on_change = {}, ext::scope_guard * subscription = nullptr) const;
+
+    std::shared_ptr<const AccessRightsContext> getAccessRightsContext(const UserPtr & user, const EnabledRolesPtr & enabled_roles, const ClientInfo & client_info, const Settings & settings, const String & current_database);
 
     std::shared_ptr<QuotaContext>
     createQuotaContext(const String & user_name, const Poco::Net::IPAddress & address, const String & custom_quota_key);
