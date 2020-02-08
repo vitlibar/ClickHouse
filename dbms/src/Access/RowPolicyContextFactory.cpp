@@ -167,7 +167,12 @@ void RowPolicyContextFactory::PolicyInfo::setPolicy(const RowPolicyPtr & policy_
 
 bool RowPolicyContextFactory::PolicyInfo::canUseWithContext(const RowPolicyContext & context) const
 {
-    return roles->match(context.user_id);
+    if (roles->match(context.user_id))
+        return true;
+    for (const auto & role_id : context.enabled_roles)
+        if (roles->match(role_id))
+            return true;
+    return false;
 }
 
 

@@ -3,6 +3,7 @@
 #include <Access/RowPolicyContext.h>
 #include <Access/QuotaContext.h>
 #include <Access/User.h>
+#include <Access/Role.h>
 #include <Common/Exception.h>
 #include <Common/quoteString.h>
 #include <Core/Settings.h>
@@ -95,9 +96,22 @@ AccessRightsContext::AccessRightsContext()
 }
 
 
+<<<<<<< HEAD
 AccessRightsContext::AccessRightsContext(const AccessControlManager & manager_, const Params & params_)
     : manager(&manager_)
     , params(params_)
+=======
+AccessRightsContext::AccessRightsContext(const UserPtr & user_, const EnabledRolesPtr & enabled_roles_, const ClientInfo & client_info_, const Settings & settings, const String & current_database_)
+    : user(user_)
+    , enabled_roles(enabled_roles_)
+    , readonly(settings.readonly)
+    , allow_ddl(settings.allow_ddl)
+    , allow_introspection(settings.allow_introspection_functions)
+    , current_database(current_database_)
+    , interface(client_info_.interface)
+    , http_method(client_info_.http_method)
+    , trace_log(&Poco::Logger::get("AccessRightsContext (" + user_->getName() + ")"))
+>>>>>>> c55f214907... Introduce roles.
 {
     subscription_for_user_change
         = manager->subscribeForChanges(getUserID(), [this](const UUID &, const AccessEntityPtr & entity)
@@ -334,7 +348,20 @@ boost::shared_ptr<const AccessRights> AccessRightsContext::calculateResultAccess
     auto result_ptr = boost::make_shared<AccessRights>();
     auto & result = *result_ptr;
 
-    result = grant_option ? user->access_with_grant_option : user->access;
+    if (grant_option)
+    {
+        result = user->access_with_grant_option;
+        if (enabled_roles)
+            for (const auto & enabled_role : *enabled_roles)
+                result.merge(enabled_role.second->access_with_grant_option);
+    }
+    else
+    {
+        result = user->access;
+        if (enabled_roles)
+            for (const auto & enabled_role : *enabled_roles)
+                result.merge(enabled_role.second->access);
+    }
 
     static const AccessFlags table_ddl = AccessType::CREATE_DATABASE | AccessType::CREATE_TABLE | AccessType::CREATE_VIEW
         | AccessType::ALTER_TABLE | AccessType::ALTER_VIEW | AccessType::DROP_DATABASE | AccessType::DROP_TABLE | AccessType::DROP_VIEW
@@ -407,6 +434,7 @@ bool operator <(const AccessRightsContext::Params & lhs, const AccessRightsConte
     if (lhs.field > rhs.field) \
         return false
     ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(user_id);
+    ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(current_role_ids);
     ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(address);
     ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(quota_key);
     ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(current_database);
@@ -426,6 +454,7 @@ bool operator ==(const AccessRightsContext::Params & lhs, const AccessRightsCont
     if (lhs.field != rhs.field) \
         return false
     ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(user_id);
+    ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(current_role_ids);
     ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(address);
     ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(quota_key);
     ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(current_database);

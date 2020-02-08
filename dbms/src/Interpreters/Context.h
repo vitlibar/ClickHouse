@@ -44,6 +44,10 @@ namespace DB
 struct ContextShared;
 class Context;
 struct User;
+struct Role;
+using UserPtr = std::shared_ptr<const User>;
+using RolePtr = std::shared_ptr<const Role>;
+using EnabledRolesPtr = std::shared_ptr<const std::vector<std::pair<UUID, RolePtr>>>;
 class AccessRightsContext;
 using AccessRightsContextPtr = std::shared_ptr<const AccessRightsContext>;
 class RowPolicyContext;
@@ -135,7 +139,6 @@ struct IHostContext
 
 using IHostContextPtr = std::shared_ptr<IHostContext>;
 
-
 /** A set of known objects that can be used in the query.
   * Consists of a shared part (always common to all sessions and queries)
   *  and copied part (which can be its own for each session or query).
@@ -155,6 +158,7 @@ private:
     InputBlocksReader input_blocks_reader;
 
     UUID user_id;
+    std::vector<UUID> current_roles;
     AccessRightsContextPtr access_rights;
     String current_database;
     Settings settings;                                  /// Setting for query execution.
@@ -241,6 +245,10 @@ public:
     std::shared_ptr<const User> getUser() const;
     String getUserName() const;
     UUID getUserID() const;
+
+    void setCurrentRoles(const std::vector<UUID> & current_roles_);
+    Strings getCurrentRoles() const;
+    Strings getEnabledRoles() const;
 
     /// Checks access rights.
     /// Empty database means the current database.

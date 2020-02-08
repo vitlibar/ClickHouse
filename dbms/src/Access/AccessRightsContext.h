@@ -16,10 +16,12 @@ namespace DB
 class AccessControlManager;
 struct Settings;
 struct User;
-struct RowPolicyContext;
-struct QuotaContext;
 using UserPtr = std::shared_ptr<const User>;
+struct Role;
+using RolePtr = std::shared_ptr<const Role>;
+struct RowPolicyContext;
 using RowPolicyContextPtr = std::shared_ptr<const RowPolicyContext>;
+struct QuotaContext;
 using QuotaContextPtr = std::shared_ptr<const QuotaContext>;
 
 
@@ -29,6 +31,7 @@ public:
     struct Params
     {
         UUID user_id;
+        std::vector<UUID> current_role_ids;
         bool readonly = false;
         bool allow_ddl = false;
         bool allow_introspection = false;
@@ -50,9 +53,21 @@ public:
     AccessRightsContext();
 
     const Params & getParams() const { return params; }
+
     const UUID & getUserID() const { return params.user_id; }
     UserPtr getUser() const;
     String getUserName() const;
+
+    EnabledRolesInfoPtr getEnabledRolesInfo() const;
+    std::vector<UUID> get
+    Strings getCurrentRolesNames() const;
+    Strings getEnabledRolesNames() const;
+
+    std::vector<UUID> getCurrentRoleIDs() const;
+    Strings getCurrentRoleNames() const;
+    std::vector<UUID> getEnabledRoleIDs() const;
+    Strings getEnabledRoleNames() const;
+
     RowPolicyContextPtr getRowPolicy() const;
     QuotaContextPtr getQuota() const;
 
@@ -120,10 +135,11 @@ private:
     const Params params;
     mutable Poco::Logger * trace_log = nullptr;
     mutable UserPtr user;
+    mutable ext::scope_guard subscription_for_user_change;
+    mutable EnabledRolesInfoPtr roles_info;
     mutable boost::atomic_shared_ptr<const AccessRights> result_access_cache[7];
     mutable RowPolicyContextPtr row_policy;
     mutable QuotaContextPtr quota;
-    mutable ext::scope_guard subscription_for_user_change;
     mutable std::mutex mutex;
 };
 
