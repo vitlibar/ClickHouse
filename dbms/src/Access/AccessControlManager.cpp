@@ -87,10 +87,10 @@ UserPtr AccessControlManager::authorizeAndGetUser(
 std::vector<UUID> AccessControlManager::getUsersFromList(const ASTRoleList & list, std::optional<UUID> current_user) const
 {
     std::vector<UUID> user_ids;
-    if (list.all_roles)
+    if (list.all)
     {
         user_ids = findAll<User>();
-        for (const auto & except_name : list.except_roles)
+        for (const auto & except_name : list.except_names)
         {
             auto except_id = find<User>(except_name);
             if (except_id)
@@ -109,7 +109,7 @@ std::vector<UUID> AccessControlManager::getUsersFromList(const ASTRoleList & lis
     }
     else
     {
-        for (const auto & name : list.roles)
+        for (const auto & name : list.names)
             user_ids.push_back(getID<User>(name));
         if (list.current_user && current_user)
             user_ids.push_back(*current_user);
@@ -122,11 +122,11 @@ std::pair<std::vector<UUID>, std::vector<UUID>> AccessControlManager::getUsersAn
 {
     std::vector<UUID> user_ids;
     std::vector<UUID> role_ids;
-    if (list.all_roles)
+    if (list.all)
     {
         user_ids = findAll<User>();
         role_ids = findAll<Role>();
-        for (const auto & except_name : list.except_roles)
+        for (const auto & except_name : list.except_names)
         {
             auto except_id = find<User>(except_name);
             if (except_id)
@@ -152,7 +152,7 @@ std::pair<std::vector<UUID>, std::vector<UUID>> AccessControlManager::getUsersAn
     }
     else
     {
-        for (const auto & name : list.roles)
+        for (const auto & name : list.names)
         {
             auto id = find<User>(name);
             if (id)
@@ -170,10 +170,10 @@ std::pair<std::vector<UUID>, std::vector<UUID>> AccessControlManager::getUsersAn
 std::vector<UUID> AccessControlManager::getGrantedRolesFromList(const UserPtr & user, const ASTRoleList & list) const
 {
     std::vector<UUID> role_ids;
-    if (list.all_roles)
+    if (list.all)
     {
         role_ids = user->granted_roles;
-        for (const auto & except_name : list.except_roles)
+        for (const auto & except_name : list.except_names)
         {
             auto except_id = find<Role>(except_name);
             if (except_id)
@@ -186,7 +186,7 @@ std::vector<UUID> AccessControlManager::getGrantedRolesFromList(const UserPtr & 
     }
     else
     {
-        for (const auto & name : list.roles)
+        for (const auto & name : list.names)
         {
             auto id = getID<Role>(name);
             if (boost::range::find(user->granted_roles, id) == user->granted_roles.end())

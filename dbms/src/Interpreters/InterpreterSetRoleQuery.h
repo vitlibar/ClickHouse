@@ -16,6 +16,8 @@ public:
 
     BlockIO execute() override;
 
+    static void setDefaultRoles(const std::vector<UUID> & to_users, const ASTRoleList & roles, bool grant_if_need);
+
 private:
     void setRole(const ASTSetRoleQuery & query);
     void setDefaultRole(const ASTSetRoleQuery & query);
