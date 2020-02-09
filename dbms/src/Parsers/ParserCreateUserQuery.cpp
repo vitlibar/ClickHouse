@@ -6,6 +6,7 @@
 #include <Parsers/ExpressionElementParsers.h>
 #include <Parsers/ASTLiteral.h>
 #include <Parsers/ASTRoleList.h>
+#include <Parsers/ParserRoleList.h>
 #include <ext/range.h>
 #include <boost/algorithm/string/predicate.hpp>
 
@@ -24,9 +25,6 @@ namespace
     {
         return IParserBase::wrapParseImpl(pos, [&]
         {
-            if (!new_name.empty())
-                return false;
-
             if (!ParserKeyword{"RENAME TO"}.ignore(pos, expected))
                 return false;
 
@@ -37,12 +35,15 @@ namespace
 
     bool parsePassword(IParserBase::Pos & pos, Expected & expected, String & password)
     {
-        ASTPtr ast;
-        if (!ParserStringLiteral{}.parse(pos, ast, expected))
-            return false;
+        return IParserBase::wrapParseImpl(pos, [&]
+        {
+            ASTPtr ast;
+            if (!ParserStringLiteral{}.parse(pos, ast, expected))
+                return false;
 
-        password = ast->as<const ASTLiteral &>().value.safeGet<String>();
-        return true;
+            password = ast->as<const ASTLiteral &>().value.safeGet<String>();
+            return true;
+        });
     }
 
 
@@ -50,9 +51,6 @@ namespace
     {
         return IParserBase::wrapParseImpl(pos, [&]
         {
-            if (authentication)
-                return false;
-
             if (!ParserKeyword{"IDENTIFIED"}.ignore(pos, expected))
                 return false;
 
@@ -201,13 +199,28 @@ namespace
     }
 
 
+    bool parseDefaultRoles(IParserBase::Pos & pos, Expected & expected, bool alter, std::shared_ptr<ASTRoleList> & default_roles)
+    {
+        return IParserBase::wrapParseImpl(pos, [&]
+        {
+            if (!ParserKeyword{"DEFAULT ROLE"}.ignore(pos, expected))
+                return false;
+
+            ASTPtr ast;
+            bool allow_all = alter;
+            if (!ParserRoleList{/* allow_current_user = */ false, allow_all}.parse(pos, ast, expected))
+                return false;
+
+            default_roles = typeid_cast<std::shared_ptr<ASTRoleList>>(ast);
+            return true;
+        });
+    }
+
+
     bool parseProfileName(IParserBase::Pos & pos, Expected & expected, std::optional<String> & profile)
     {
         return IParserBase::wrapParseImpl(pos, [&]
         {
-            if (profile)
-                return false;
-
             if (!ParserKeyword{"PROFILE"}.ignore(pos, expected))
                 return false;
 
@@ -259,15 +272,28 @@ bool ParserCreateUserQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expec
     std::optional<AllowedClientHosts> hosts;
     std::optional<AllowedClientHosts> add_hosts;
     std::optional<AllowedClientHosts> remove_hosts;
+    std::shared_ptr<ASTRoleList> default_roles;
     std::optional<String> profile;
 
-    while (parseAuthentication(pos, expected, authentication)
-           || parseHosts(pos, expected, nullptr, hosts)
-           || parseProfileName(pos, expected, profile)
-           || (alter && parseRenameTo(pos, expected, new_name, new_host_pattern))
-           || (alter && parseHosts(pos, expected, "ADD", add_hosts))
-           || (alter && parseHosts(pos, expected, "REMOVE", remove_hosts)))
-        ;
+    while (true)
+    {
+        if (!authentication && parseAuthentication(pos, expected, authentication))
+            continue;
+        if (parseHosts(pos, expected, nullptr, hosts))
+            continue;
+        if (!default_roles && parseDefaultRoles(pos, expected, alter, default_roles))
+            continue;
+        if (!profile && parseProfileName(pos, expected, profile))
+            continue;
+        if (alter)
+        {
+           if (new_name.empty() && parseRenameTo(pos, expected, new_name, new_host_pattern))
+               continue;
+           if (parseHosts(pos, expected, "ADD", add_hosts) || parseHosts(pos, expected, "REMOVE", remove_hosts))
+               continue;
+        }
+        break;
+    }
 
     if (!hosts)
     {
@@ -290,6 +316,7 @@ bool ParserCreateUserQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expec
     query->hosts = std::move(hosts);
     query->add_hosts = std::move(add_hosts);
     query->remove_hosts = std::move(remove_hosts);
+    query->default_roles = std::move(default_roles);
     query->profile = std::move(profile);
 
     return true;

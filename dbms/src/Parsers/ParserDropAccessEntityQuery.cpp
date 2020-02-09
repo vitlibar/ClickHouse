@@ -13,47 +13,65 @@ namespace
 {
     bool parseNames(IParserBase::Pos & pos, Expected & expected, Strings & names)
     {
-        do
+        return IParserBase::wrapParseImpl(pos, [&]
         {
-            String name;
-            if (!parseIdentifierOrStringLiteral(pos, expected, name))
-                return false;
+            Strings got_names;
+            do
+            {
+                String name;
+                if (!parseIdentifierOrStringLiteral(pos, expected, name))
+                    return false;
 
-            names.push_back(std::move(name));
-        }
-        while (ParserToken{TokenType::Comma}.ignore(pos, expected));
-        return true;
+                got_names.emplace_back(std::move(name));
+            }
+            while (ParserToken{TokenType::Comma}.ignore(pos, expected));
+
+            names = std::move(got_names);
+            return true;
+        });
     }
 
-    bool parseRowPolicyNames(IParserBase::Pos & pos, Expected & expected, std::vector<RowPolicy::FullNameParts> & row_policies_names)
+    bool parseRowPolicyNames(IParserBase::Pos & pos, Expected & expected, std::vector<RowPolicy::FullNameParts> & names)
     {
-        do
+        return IParserBase::wrapParseImpl(pos, [&]
         {
-            Strings policy_names;
-            if (!parseNames(pos, expected, policy_names))
-                return false;
-            String database, table_name;
-            if (!ParserKeyword{"ON"}.ignore(pos, expected) || !parseDatabaseAndTableName(pos, expected, database, table_name))
-                return false;
-            for (const String & policy_name : policy_names)
-                row_policies_names.push_back({database, table_name, policy_name});
-        }
-        while (ParserToken{TokenType::Comma}.ignore(pos, expected));
-        return true;
+            std::vector<RowPolicy::FullNameParts> got_names;
+            do
+            {
+                Strings policy_names;
+                if (!parseNames(pos, expected, policy_names))
+                    return false;
+                String database, table_name;
+                if (!ParserKeyword{"ON"}.ignore(pos, expected) || !parseDatabaseAndTableName(pos, expected, database, table_name))
+                    return false;
+                for (const String & policy_name : policy_names)
+                    got_names.emplace_back(database, table_name, policy_name);
+            }
+            while (ParserToken{TokenType::Comma}.ignore(pos, expected));
+
+            names = std::move(got_names);
+            return true;
+        });
     }
 
     bool parseUserNames(IParserBase::Pos & pos, Expected & expected, Strings & names)
     {
-        do
+        return IParserBase::wrapParseImpl(pos, [&]
         {
-            String name;
-            if (!parseUserName(pos, expected, name))
-                return false;
+            Strings got_names;
+            do
+            {
+                String name;
+                if (!parseUserName(pos, expected, name))
+                    return false;
 
-            names.push_back(std::move(name));
-        }
-        while (ParserToken{TokenType::Comma}.ignore(pos, expected));
-        return true;
+                got_names.emplace_back(std::move(name));
+            }
+            while (ParserToken{TokenType::Comma}.ignore(pos, expected));
+
+            names = std::move(got_names);
+            return true;
+        });
     }
 }
 
@@ -71,6 +89,8 @@ bool ParserDropAccessEntityQuery::parseImpl(Pos & pos, ASTPtr & node, Expected &
         kind = Kind::ROW_POLICY;
     else if (ParserKeyword{"USER"}.ignore(pos, expected))
         kind = Kind::USER;
+    else if (ParserKeyword{"ROLE"}.ignore(pos, expected))
+        kind = Kind::ROLE;
     else
         return false;
 
@@ -81,7 +101,7 @@ bool ParserDropAccessEntityQuery::parseImpl(Pos & pos, ASTPtr & node, Expected &
     Strings names;
     std::vector<RowPolicy::FullNameParts> row_policies_names;
 
-    if (kind == Kind::USER)
+    if ((kind == Kind::USER) || (kind == Kind::ROLE))
     {
         if (!parseUserNames(pos, expected, names))
             return false;

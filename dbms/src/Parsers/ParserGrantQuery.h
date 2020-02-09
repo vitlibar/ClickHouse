@@ -6,8 +6,11 @@
 namespace DB
 {
 /** Parses queries like
-  * GRANT access_type[(column_name [,...])] [,...] ON {db.table|db.*|*.*|table|*} TO user_name
-  * REVOKE access_type[(column_name [,...])] [,...] ON {db.table|db.*|*.*|table|*} TO user_name
+  * GRANT access_type[(column_name [,...])] [,...] ON {db.table|db.*|*.*|table|*} TO {user | role | CURRENT_USER} [,...] [WITH GRANT OPTION]
+  * REVOKE [GRANT OPTION FOR] access_type[(column_name [,...])] [,...] ON {db.table|db.*|*.*|table|*} FROM {user | role | CURRENT_USER} [,...] | ALL | ALL EXCEPT {user | role | CURRENT_USER} [,...]
+  *
+  * GRANT role [,...] TO {user | role | CURRENT_USER} [,...] [WITH ADMIN OPTION]
+  * REVOKE [ADMIN OPTION FOR] role [,...] FROM {user | role | CURRENT_USER} [,...] | ALL | ALL EXCEPT {user | role | CURRENT_USER} [,...]
   */
 class ParserGrantQuery : public IParserBase
 {

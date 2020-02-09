@@ -91,28 +91,45 @@ void ASTGrantQuery::formatImpl(const FormatSettings & settings, FormatState &, F
     settings.ostr << (settings.hilite ? hilite_keyword : "") << ((kind == Kind::GRANT) ? "GRANT" : "REVOKE")
                   << (settings.hilite ? hilite_none : "") << " ";
 
-    if (grant_option && (kind == Kind::REVOKE))
-        settings.ostr << (settings.hilite ? hilite_keyword : "") << "GRANT OPTION FOR " << (settings.hilite ? hilite_none : "");
-
-    bool need_comma = false;
-    for (const auto & [database_and_table, keyword_to_columns] : prepareTableToAccessMap(access_rights_elements))
+    if (kind == Kind::REVOKE)
     {
-        for (const auto & [keyword, columns] : keyword_to_columns)
+        if (grant_option)
+            settings.ostr << (settings.hilite ? hilite_keyword : "") << "GRANT OPTION FOR " << (settings.hilite ? hilite_none : "");
+        else if (admin_option)
+            settings.ostr << (settings.hilite ? hilite_keyword : "") << "ADMIN OPTION FOR " << (settings.hilite ? hilite_none : "");
+    }
+
+    if (!access_rights_elements.empty())
+    {
+        bool need_comma = false;
+        for (const auto & [database_and_table, keyword_to_columns] : prepareTableToAccessMap(access_rights_elements))
         {
-            if (std::exchange(need_comma, true))
-                settings.ostr << ", ";
+            for (const auto & [keyword, columns] : keyword_to_columns)
+            {
+                if (std::exchange(need_comma, true))
+                    settings.ostr << ", ";
 
-            settings.ostr << (settings.hilite ? hilite_keyword : "") << keyword << (settings.hilite ? hilite_none : "");
-            formatColumnNames(columns, settings);
+                settings.ostr << (settings.hilite ? hilite_keyword : "") << keyword << (settings.hilite ? hilite_none : "");
+                formatColumnNames(columns, settings);
+            }
+
+            settings.ostr << (settings.hilite ? hilite_keyword : "") << " ON " << (settings.hilite ? hilite_none : "") << database_and_table;
         }
-
-        settings.ostr << (settings.hilite ? hilite_keyword : "") << " ON " << (settings.hilite ? hilite_none : "") << database_and_table;
+    }
+    else if (roles)
+    {
+        roles->format(settings);
     }
 
     settings.ostr << (settings.hilite ? hilite_keyword : "") << ((kind == Kind::GRANT) ? " TO " : " FROM ") << (settings.hilite ? hilite_none : "");
     to_roles->format(settings);
 
-    if (grant_option && (kind == Kind::GRANT))
-        settings.ostr << (settings.hilite ? hilite_keyword : "") << " WITH GRANT OPTION" << (settings.hilite ? hilite_none : "");
+    if (kind == Kind::GRANT)
+    {
+        if (grant_option)
+            settings.ostr << (settings.hilite ? hilite_keyword : "") << " WITH GRANT OPTION" << (settings.hilite ? hilite_none : "");
+        else if (admin_option)
+            settings.ostr << (settings.hilite ? hilite_keyword : "") << " WITH ADMIN OPTION" << (settings.hilite ? hilite_none : "");
+    }
 }
 }

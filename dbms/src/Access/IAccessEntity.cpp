@@ -2,6 +2,7 @@
 #include <Access/Quota.h>
 #include <Access/RowPolicy.h>
 #include <Access/User.h>
+#include <Access/Role.h>
 #include <common/demangle.h>
 
 
@@ -11,6 +12,8 @@ String IAccessEntity::getTypeName(std::type_index type)
 {
     if (type == typeid(User))
         return "User";
+    if (type == typeid(Role))
+        return "Role";
     if (type == typeid(Quota))
         return "Quota";
     if (type == typeid(RowPolicy))

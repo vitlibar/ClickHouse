@@ -13,10 +13,9 @@ namespace DB
 {
 struct Settings;
 struct User;
-struct Role;
+struct EnabledRole;
 using UserPtr = std::shared_ptr<const User>;
-using RolePtr = std::shared_ptr<const Role>;
-using EnabledRolesPtr = std::shared_ptr<const std::vector<std::pair<UUID, RolePtr>>>;
+using EnabledRolesPtr = std::shared_ptr<const std::vector<EnabledRole>>;
 
 
 class AccessRightsContext

@@ -1,5 +1,6 @@
 #include <Access/EnabledRolesWatcher.h>
 #include <Access/Role.h>
+#include <Access/User.h>
 #include <Access/AccessControlManager.h>
 #include <boost/range/adaptor/map.hpp>
 
@@ -8,29 +9,22 @@ namespace DB
 {
 namespace
 {
-    using EnabledRoles = std::vector<std::pair<UUID, RolePtr>>;
-
-    bool exists(const EnabledRoles & vec, const UUID & id)
-    {
-        return std::find_if(vec.begin(), vec.end(), [&id](const std::pair<UUID, RolePtr> & elem)
-        {
-            return elem.first == id;
-        }) != vec.end();
-    }
+    bool exists(const std::vector<UUID> & vec, const UUID & id) { return std::find(vec.begin(), vec.end(), id) != vec.end(); }
 }
 
 
 EnabledRolesWatcher::EnabledRolesWatcher(
     const AccessControlManager & manager_,
+    const UserPtr & user_,
     const std::vector<UUID> & current_roles_,
     std::function<void(const EnabledRolesPtr &)> on_change_)
-    : EnabledRolesWatcher(manager_, current_roles_.empty() ? nullptr : std::make_shared<std::vector<UUID>>(current_roles_), on_change_)
+    : EnabledRolesWatcher(manager_, user_, current_roles_.empty() ? nullptr : std::make_shared<std::vector<UUID>>(current_roles_), on_change_)
 {
 }
 
 
-EnabledRolesWatcher::EnabledRolesWatcher(const AccessControlManager & manager_, const std::shared_ptr<const std::vector<UUID>> & current_roles_, std::function<void(const EnabledRolesPtr &)> on_change_)
-    : manager(manager_), current_roles(current_roles_), on_change(on_change_)
+EnabledRolesWatcher::EnabledRolesWatcher(const AccessControlManager & manager_, const UserPtr & user_, const std::shared_ptr<const std::vector<UUID>> & current_roles_, std::function<void(const EnabledRolesPtr &)> on_change_)
+    : manager(manager_), user(user_), current_roles(current_roles_), on_change(on_change_)
 {
     updateNoNotify();
 }
@@ -63,52 +57,73 @@ void EnabledRolesWatcher::updateNoNotify()
         return;
 
     for (auto & entry : enabled_roles_map | boost::adaptors::map_values)
-        entry.in_use = false;
+        entry.index = npos;
 
     auto new_enabled_roles = std::make_shared<EnabledRoles>();
+    auto & new_enabled_roles_ref = *new_enabled_roles;
 
     for (const auto & id : *current_roles)
     {
-        RolePtr role;
-        if (!exists(*new_enabled_roles, id) && (role = getRole(id)))
-            new_enabled_roles->emplace_back(id, std::move(role));
+        Entry * entry = getEntry(id);
+        if (!entry)
+            continue;
+
+        if (entry->index == npos)
+        {
+            entry->index = new_enabled_roles_ref.size();
+            new_enabled_roles_ref.emplace_back(entry->role, id, false);
+        }
+
+        if (!new_enabled_roles_ref[entry->index].admin_option && exists(user->granted_roles_with_admin_option, id))
+            new_enabled_roles_ref[entry->index].admin_option = true;
     }
 
     size_t num_processed_enabled_roles = 0;
     while (num_processed_enabled_roles != new_enabled_roles->size())
     {
-        for (size_t i = num_processed_enabled_roles; i != new_enabled_roles->size(); ++i)
+        for (size_t i = num_processed_enabled_roles; i != new_enabled_roles_ref.size(); ++i)
         {
-            const auto & role = (*new_enabled_roles)[i].second;
+            const auto & role = new_enabled_roles_ref[i].role;
             for (const auto & granted_role_id : role->granted_roles)
             {
-                RolePtr granted_role;
-                if (!exists(*new_enabled_roles, granted_role_id) && (granted_role = getRole(granted_role_id)))
-                    new_enabled_roles->emplace_back(granted_role_id, std::move(granted_role));
+                Entry * entry = getEntry(granted_role_id);
+                if (!entry)
+                    continue;
+
+                if (entry->index == npos)
+                {
+                    entry->index = new_enabled_roles_ref.size();
+                    new_enabled_roles_ref.emplace_back(entry->role, granted_role_id, false);
+                }
+            }
+            for (const auto & granted_role_id : role->granted_roles_with_admin_option)
+            {
+                Entry * entry = getEntry(granted_role_id);
+                if (!entry || (entry->index == npos))
+                    continue;
+
+                new_enabled_roles_ref[entry->index].admin_option = true;
             }
         }
     }
 
     for (auto it = enabled_roles_map.begin(); it != enabled_roles_map.end();)
     {
-        if (it->second.in_use)
-            ++it;
-        else
+        if (it->second.index == npos)
             it = enabled_roles_map.erase(it);
+        else
+            ++it;
     }
 
     enabled_roles = std::move(new_enabled_roles);
 }
 
 
-RolePtr EnabledRolesWatcher::getRole(const UUID & id)
+EnabledRolesWatcher::Entry * EnabledRolesWatcher::getEntry(const UUID & id)
 {
     auto it = enabled_roles_map.find(id);
     if (it != enabled_roles_map.end())
-    {
-        it->second.in_use = true;
-        return it->second.role;
-    }
+        return &it->second;
 
     auto subscription = manager.subscribeForChanges(id, [this, id](const UUID &, const AccessEntityPtr & entity)
     {
@@ -126,12 +141,11 @@ RolePtr EnabledRolesWatcher::getRole(const UUID & id)
     if (!role)
         return nullptr;
 
-    MapEntry new_entry;
+    Entry new_entry;
     new_entry.role = role;
     new_entry.subscription = std::move(subscription);
-    new_entry.in_use = true;
-    enabled_roles_map.emplace(id, std::move(new_entry));
-    return role;
+    it = enabled_roles_map.emplace(id, std::move(new_entry)).first;
+    return &it->second;
 }
 
 

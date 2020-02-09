@@ -22,9 +22,8 @@ namespace DB
 {
 struct User;
 using UserPtr = std::shared_ptr<const User>;
-struct Role;
-using RolePtr = std::shared_ptr<const Role>;
-using EnabledRolesPtr = std::shared_ptr<const std::vector<std::pair<UUID, RolePtr>>>;
+struct EnabledRole;
+using EnabledRolesPtr = std::shared_ptr<const std::vector<EnabledRole>>;
 class QuotaContext;
 class QuotaContextFactory;
 struct QuotaUsageInfo;
@@ -32,6 +31,7 @@ class RowPolicyContext;
 class RowPolicyContextFactory;
 class AccessRights;
 class AccessRightsContext;
+class ASTRoleList;
 class ClientInfo;
 struct Settings;
 
@@ -50,8 +50,12 @@ public:
     UserPtr authorizeAndGetUser(const String & user_name, const String & password, const Poco::Net::IPAddress & address, std::function<void(const UserPtr &)> on_change = {}, ext::scope_guard * subscription = nullptr) const;
     UserPtr authorizeAndGetUser(const UUID & user_id, const String & password, const Poco::Net::IPAddress & address, std::function<void(const UserPtr &)> on_change = {}, ext::scope_guard * subscription = nullptr) const;
 
-    EnabledRolesPtr getEnabledRoles(const std::vector<UUID> & current_roles, std::function<void(const EnabledRolesPtr &)> on_change = {}, ext::scope_guard * subscription = nullptr) const;
-    EnabledRolesPtr getEnabledRoles(const std::shared_ptr<const std::vector<UUID>> & current_roles, std::function<void(const EnabledRolesPtr &)> on_change = {}, ext::scope_guard * subscription = nullptr) const;
+    std::vector<UUID> getUsersFromList(const ASTRoleList & list, std::optional<UUID> current_user = {}) const;
+    std::pair<std::vector<UUID> /* users */, std::vector<UUID> /* roles */> getUsersAndRolesFromList(const ASTRoleList & list, std::optional<UUID> current_user = {}) const;
+    std::vector<UUID> getGrantedRolesFromList(const UserPtr & user, const ASTRoleList & list) const;
+
+    EnabledRolesPtr getEnabledRoles(const UserPtr & user, const std::vector<UUID> & current_roles, std::function<void(const EnabledRolesPtr &)> on_change = {}, ext::scope_guard * subscription = nullptr) const;
+    EnabledRolesPtr getEnabledRoles(const UserPtr & user, const std::shared_ptr<const std::vector<UUID>> & current_roles, std::function<void(const EnabledRolesPtr &)> on_change = {}, ext::scope_guard * subscription = nullptr) const;
 
     std::shared_ptr<const AccessRightsContext> getAccessRightsContext(const UserPtr & user, const EnabledRolesPtr & enabled_roles, const ClientInfo & client_info, const Settings & settings, const String & current_database);
 

@@ -8,6 +8,12 @@
 namespace DB
 {
 
+ParserRoleList::ParserRoleList(bool allow_current_user_, bool allow_all_)
+    : allow_current_user(allow_current_user_), allow_all(allow_all_)
+{
+}
+
+
 bool ParserRoleList::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
 {
     Strings roles;
@@ -22,8 +28,9 @@ bool ParserRoleList::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
         if (ParserKeyword{"NONE"}.ignore(pos, expected))
         {
         }
-        else if (ParserKeyword{"CURRENT_USER"}.ignore(pos, expected) ||
-                 ParserKeyword{"currentUser"}.ignore(pos, expected))
+        else if (
+            allow_current_user
+            && (ParserKeyword{"CURRENT_USER"}.ignore(pos, expected) || ParserKeyword{"currentUser"}.ignore(pos, expected)))
         {
             if (ParserToken{TokenType::OpeningRoundBracket}.ignore(pos, expected))
             {
@@ -35,7 +42,7 @@ bool ParserRoleList::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
             else
                 current_user = true;
         }
-        else if (ParserKeyword{"ALL"}.ignore(pos, expected))
+        else if (allow_all && ParserKeyword{"ALL"}.ignore(pos, expected))
         {
             all_roles = true;
             if (ParserKeyword{"EXCEPT"}.ignore(pos, expected))

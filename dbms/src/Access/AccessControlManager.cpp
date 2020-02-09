@@ -7,6 +7,7 @@
 #include <Access/QuotaContextFactory.h>
 #include <Access/RowPolicyContextFactory.h>
 #include <Access/AccessRightsContext.h>
+#include <Parsers/ASTRoleList.h>
 
 
 namespace DB
@@ -83,19 +84,134 @@ UserPtr AccessControlManager::authorizeAndGetUser(
 }
 
 
-EnabledRolesPtr AccessControlManager::getEnabledRoles(const std::vector<UUID> & current_roles, std::function<void(const EnabledRolesPtr &)> on_change, ext::scope_guard * subscription) const
+std::vector<UUID> AccessControlManager::getUsersFromList(const ASTRoleList & list, std::optional<UUID> current_user) const
 {
-    if (current_roles.empty())
-        return nullptr;
-    return getEnabledRoles(std::make_shared<std::vector<UUID>>(current_roles), on_change, subscription);
+    std::vector<UUID> user_ids;
+    if (list.all_roles)
+    {
+        user_ids = findAll<User>();
+        for (const auto & except_name : list.except_roles)
+        {
+            auto except_id = find<User>(except_name);
+            if (except_id)
+            {
+                auto it = boost::range::find(user_ids, except_id);
+                if (it != user_ids.end())
+                    user_ids.erase(it);
+            }
+        }
+        if (list.except_current_user && current_user)
+        {
+            auto it = boost::range::find(user_ids, *current_user);
+            if (it != user_ids.end())
+                user_ids.erase(it);
+        }
+    }
+    else
+    {
+        for (const auto & name : list.roles)
+            user_ids.push_back(getID<User>(name));
+        if (list.current_user && current_user)
+            user_ids.push_back(*current_user);
+    }
+    return user_ids;
 }
 
 
-EnabledRolesPtr AccessControlManager::getEnabledRoles(const std::shared_ptr<const std::vector<UUID>> & current_roles, std::function<void(const EnabledRolesPtr &)> on_change, ext::scope_guard * subscription) const
+std::pair<std::vector<UUID>, std::vector<UUID>> AccessControlManager::getUsersAndRolesFromList(const ASTRoleList & list, std::optional<UUID> current_user) const
+{
+    std::vector<UUID> user_ids;
+    std::vector<UUID> role_ids;
+    if (list.all_roles)
+    {
+        user_ids = findAll<User>();
+        role_ids = findAll<Role>();
+        for (const auto & except_name : list.except_roles)
+        {
+            auto except_id = find<User>(except_name);
+            if (except_id)
+            {
+                auto it = boost::range::find(user_ids, except_id);
+                if (it != user_ids.end())
+                    user_ids.erase(it);
+            }
+            except_id = find<Role>(except_name);
+            if (except_id)
+            {
+                auto it = boost::range::find(role_ids, except_id);
+                if (it != role_ids.end())
+                    role_ids.erase(it);
+            }
+        }
+        if (list.except_current_user && current_user)
+        {
+            auto it = boost::range::find(user_ids, *current_user);
+            if (it != user_ids.end())
+                user_ids.erase(it);
+        }
+    }
+    else
+    {
+        for (const auto & name : list.roles)
+        {
+            auto id = find<User>(name);
+            if (id)
+                user_ids.push_back(*id);
+            else
+                role_ids.push_back(getID<Role>(name));
+        }
+        if (list.current_user && current_user)
+            user_ids.push_back(*current_user);
+    }
+    return {std::move(user_ids), std::move(role_ids)};
+}
+
+
+std::vector<UUID> AccessControlManager::getGrantedRolesFromList(const UserPtr & user, const ASTRoleList & list) const
+{
+    std::vector<UUID> role_ids;
+    if (list.all_roles)
+    {
+        role_ids = user->granted_roles;
+        for (const auto & except_name : list.except_roles)
+        {
+            auto except_id = find<Role>(except_name);
+            if (except_id)
+            {
+                auto it = boost::range::find(role_ids, except_id);
+                if (it != role_ids.end())
+                    role_ids.erase(it);
+            }
+        }
+    }
+    else
+    {
+        for (const auto & name : list.roles)
+        {
+            auto id = getID<Role>(name);
+            if (boost::range::find(user->granted_roles, id) == user->granted_roles.end())
+                throw Exception(user->getName() + ": " + "Cannot set role " + backQuoteIfNeed(name) + " because it's not granted",
+                                ErrorCodes::NOT_ENOUGH_PRIVILEGES);
+            role_ids.push_back(id);
+        }
+    }
+    return role_ids;
+}
+
+
+EnabledRolesPtr AccessControlManager::getEnabledRoles(const UserPtr & user, const std::vector<UUID> & current_roles, std::function<void(const EnabledRolesPtr &)> on_change, ext::scope_guard * subscription) const
+{
+    if (current_roles.empty())
+        return nullptr;
+    return getEnabledRoles(user, std::make_shared<std::vector<UUID>>(current_roles), on_change, subscription);
+}
+
+
+EnabledRolesPtr AccessControlManager::getEnabledRoles(const UserPtr & user, const std::shared_ptr<const std::vector<UUID>> & current_roles, std::function<void(const EnabledRolesPtr &)> on_change, ext::scope_guard * subscription) const
 {
     if (!current_roles)
         return nullptr;
-    auto watcher = std::make_shared<EnabledRolesWatcher>(*this, current_roles, on_change);
+    auto watcher = std::make_shared<EnabledRolesWatcher>(*this, user, current_roles, on_change);
     if (on_change && subscription)
         *subscription = [watcher]{};
     return watcher->getEnabledRoles();

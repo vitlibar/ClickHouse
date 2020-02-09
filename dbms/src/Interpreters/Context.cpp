@@ -635,6 +635,12 @@ const AccessControlManager & Context::getAccessControlManager() const
     return shared->access_control_manager;
 }
 
+std::shared_ptr<const AccessRightsContext> Context::getAccessRights() const
+{
+    auto lock = getLock();
+    return access_rights;
+}
+
 template <typename... Args>
 void Context::checkAccessImpl(const Args &... args) const
 {
@@ -688,7 +694,7 @@ void Context::calculateAccessRights()
 {
     auto lock = getLock();
     if (user)
-        std::atomic_store(&access_rights, getAccessControlManager().getAccessRightsContext(user, enabled_roles, client_info, settings, current_database));
+        access_rights = getAccessControlManager().getAccessRightsContext(user, enabled_roles, client_info, settings, current_database);
 }
 
 void Context::setProfile(const String & profile)
@@ -769,7 +775,7 @@ void Context::setCurrentRoles(const std::vector<UUID> & current_roles_)
 
     current_roles = new_roles;
 
-    enabled_roles = getAccessControlManager().getEnabledRoles(new_roles, [this](const EnabledRolesPtr & changed_enabled_roles)
+    enabled_roles = getAccessControlManager().getEnabledRoles(user, new_roles, [this](const EnabledRolesPtr & changed_enabled_roles)
     {
         enabled_roles = changed_enabled_roles;
         calculateAccessRights();
@@ -781,11 +787,13 @@ void Context::setCurrentRoles(const std::vector<UUID> & current_roles_)
 
 std::shared_ptr<const std::vector<UUID>> Context::getCurrentRoles() const
 {
+    auto lock = getLock();
     return current_roles;
 }
 
 EnabledRolesPtr Context::getEnabledRoles() const
 {
+    auto lock = getLock();
     return enabled_roles;
 }
 
