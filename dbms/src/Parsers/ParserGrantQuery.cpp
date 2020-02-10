@@ -223,7 +223,7 @@ namespace
             }
 
             ASTPtr ast;
-            if (!ParserRoleList{false, false}.parse(pos, ast, expected))
+            if (!ParserRoleList{/* allow_all = */ (kind == Kind::REVOKE)}.parse(pos, ast, expected))
                 return false;
 
             to_roles = typeid_cast<std::shared_ptr<ASTRoleList>>(ast);

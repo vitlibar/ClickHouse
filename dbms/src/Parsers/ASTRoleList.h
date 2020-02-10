@@ -6,7 +6,8 @@
 
 namespace DB
 {
-/// {role|CURRENT_USER} [,...] | NONE | ALL | ALL EXCEPT {role|CURRENT_USER} [,...]
+/// Represents a list of users/roles like
+/// {user_name | role_name | CURRENT_USER} [,...] | NONE | ALL | ALL EXCEPT {user_name | role_name | CURRENT_USER} [,...]
 class ASTRoleList : public IAST
 {
 public:

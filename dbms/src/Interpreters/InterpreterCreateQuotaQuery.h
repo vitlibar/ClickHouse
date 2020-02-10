@@ -2,12 +2,14 @@
 
 #include <Interpreters/IInterpreter.h>
 #include <Parsers/IAST_fwd.h>
+#include <optional>
 
 
 namespace DB
 {
 class ASTCreateQuotaQuery;
 struct Quota;
+class RoleList;
 
 
 class InterpreterCreateQuotaQuery : public IInterpreter
@@ -21,7 +23,7 @@ public:
     bool ignoreLimits() const override { return true; }
 
 private:
-    void updateQuotaFromQuery(Quota & quota, const ASTCreateQuotaQuery & query);
+    void updateQuotaFromQuery(Quota & quota, const ASTCreateQuotaQuery & query, const std::optional<RoleList> & roles_from_query);
 
     ASTPtr query_ptr;
     Context & context;

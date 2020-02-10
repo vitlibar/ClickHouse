@@ -92,7 +92,7 @@ ASTs InterpreterShowGrantsQuery::getGrantQueries(const ASTShowGrantsQuery & show
     if (show_query.current_user)
         user = context.getUser();
     else
-        user = context.getAccessControlManager().getUser(show_query.name);
+        user = context.getAccessControlManager().read<User>(show_query.name);
 
     ASTs res;
 
