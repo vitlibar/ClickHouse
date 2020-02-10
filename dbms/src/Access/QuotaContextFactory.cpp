@@ -9,6 +9,7 @@
 #include <boost/range/algorithm/lower_bound.hpp>
 #include <boost/range/algorithm/stable_sort.hpp>
 #include <boost/range/algorithm_ext/erase.hpp>
+#include <boost/smart_ptr/make_shared.hpp>
 
 
 namespace DB
@@ -81,7 +82,7 @@ String QuotaContextFactory::QuotaInfo::calculateKey(const QuotaContext & context
 }
 
 
-std::shared_ptr<const QuotaContext::Intervals> QuotaContextFactory::QuotaInfo::getOrBuildIntervals(const String & key)
+boost::shared_ptr<const QuotaContext::Intervals> QuotaContextFactory::QuotaInfo::getOrBuildIntervals(const String & key)
 {
     auto it = key_to_intervals.find(key);
     if (it != key_to_intervals.end())
@@ -97,9 +98,9 @@ void QuotaContextFactory::QuotaInfo::rebuildAllIntervals()
 }
 
 
-std::shared_ptr<const QuotaContext::Intervals> QuotaContextFactory::QuotaInfo::rebuildIntervals(const String & key)
+boost::shared_ptr<const QuotaContext::Intervals> QuotaContextFactory::QuotaInfo::rebuildIntervals(const String & key)
 {
-    auto new_intervals = std::make_shared<Intervals>();
+    auto new_intervals = boost::make_shared<Intervals>();
     new_intervals->quota_name = quota->getName();
     new_intervals->quota_id = quota_id;
     new_intervals->quota_key = key;
@@ -256,7 +257,7 @@ void QuotaContextFactory::chooseQuotaForAllContexts()
 void QuotaContextFactory::chooseQuotaForContext(const std::shared_ptr<QuotaContext> & context)
 {
     /// `mutex` is already locked.
-    std::shared_ptr<const Intervals> intervals;
+    boost::shared_ptr<const Intervals> intervals;
     for (auto & info : all_quotas | boost::adaptors::map_values)
     {
         if (info.canUseWithContext(*context))
@@ -268,9 +269,9 @@ void QuotaContextFactory::chooseQuotaForContext(const std::shared_ptr<QuotaConte
     }
 
     if (!intervals)
-        intervals = std::make_shared<Intervals>(); /// No quota == no limits.
+        intervals = boost::make_shared<Intervals>(); /// No quota == no limits.
 
-    std::atomic_store(&context->atomic_intervals, intervals);
+    context->intervals.store(intervals);
 }
 
 
