@@ -5,6 +5,7 @@
 #include <Poco/Net/IPAddress.h>
 #include <ext/shared_ptr_helper.h>
 #include <boost/noncopyable.hpp>
+#include <boost/smart_ptr/atomic_shared_ptr.hpp>
 #include <atomic>
 #include <chrono>
 #include <memory>
@@ -79,7 +80,7 @@ private:
     const String user_name;
     const Poco::Net::IPAddress address;
     const String client_key;
-    std::shared_ptr<const Intervals> atomic_intervals; /// atomically changed by QuotaUsageManager
+    boost::atomic_shared_ptr<const Intervals> intervals; /// atomically changed by QuotaUsageManager
 };
 
 using QuotaContextPtr = std::shared_ptr<QuotaContext>;
