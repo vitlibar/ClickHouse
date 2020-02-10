@@ -95,10 +95,10 @@ std::shared_ptr<const AccessRightsContext> AccessControlManager::getAccessRights
 }
 
 
-std::shared_ptr<QuotaContext> AccessControlManager::createQuotaContext(
-    const String & user_name, const Poco::Net::IPAddress & address, const String & custom_quota_key)
+std::shared_ptr<QuotaContext> AccessControlManager::getQuotaContext(
+    const UUID & user_id, const String & user_name, const Poco::Net::IPAddress & address, const String & custom_quota_key)
 {
-    return quota_context_factory->createContext(user_name, address, custom_quota_key);
+    return quota_context_factory->createContext(user_id, user_name, address, custom_quota_key);
 }
 
 
@@ -108,9 +108,9 @@ std::vector<QuotaUsageInfo> AccessControlManager::getQuotaUsageInfo() const
 }
 
 
-std::shared_ptr<RowPolicyContext> AccessControlManager::getRowPolicyContext(const String & user_name) const
+std::shared_ptr<RowPolicyContext> AccessControlManager::getRowPolicyContext(const UUID & user_id) const
 {
-    return row_policy_context_factory->createContext(user_name);
+    return row_policy_context_factory->createContext(user_id);
 }
 
 }

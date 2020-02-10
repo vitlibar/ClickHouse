@@ -738,8 +738,8 @@ void Context::setUser(const String & name, const String & password, const Poco::
         },
         &subscription_for_user_change.subscription);
 
-    quota = getAccessControlManager().createQuotaContext(name, address.host(), quota_key);
-    row_policy = getAccessControlManager().getRowPolicyContext(name);
+    quota = getAccessControlManager().getQuotaContext(user_id, name, address.host(), quota_key);
+    row_policy = getAccessControlManager().getRowPolicyContext(user_id);
 
     calculateUserSettings();
     calculateAccessRights();
@@ -764,8 +764,8 @@ bool Context::setUserNoCheck(const String & name, const Poco::Net::SocketAddress
         },
         &subscription_for_user_change.subscription);
 
-    quota = getAccessControlManager().createQuotaContext(name, address_for_quota.host(), quota_key);
-    row_policy = getAccessControlManager().getRowPolicyContext(name);
+    quota = getAccessControlManager().getQuotaContext(user_id, name, address_for_quota.host(), quota_key);
+    row_policy = getAccessControlManager().getRowPolicyContext(user_id);
 
     calculateUserSettings();
     calculateAccessRights();

@@ -209,7 +209,7 @@ bool ParserGrantQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
         if (!ParserKeyword{"FROM"}.ignore(pos, expected))
             return false;
     }
-    if (!ParserRoleList{}.parse(pos, to_roles, expected))
+    if (!ParserRoleList{/* allow_all = */ (kind == Kind::REVOKE)}.parse(pos, to_roles, expected))
         return false;
 
     if (kind == Kind::GRANT)

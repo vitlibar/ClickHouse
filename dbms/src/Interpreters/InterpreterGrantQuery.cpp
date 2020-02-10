@@ -1,9 +1,9 @@
 #include <Interpreters/InterpreterGrantQuery.h>
 #include <Parsers/ASTGrantQuery.h>
-#include <Parsers/ASTRoleList.h>
 #include <Interpreters/Context.h>
 #include <Access/AccessControlManager.h>
 #include <Access/AccessRightsContext.h>
+#include <Access/RoleList.h>
 #include <Access/User.h>
 
 
@@ -15,13 +15,9 @@ BlockIO InterpreterGrantQuery::execute()
     auto & access_control = context.getAccessControlManager();
     context.getAccessRights()->checkGrantOption(query.access_rights_elements);
 
-    using Kind = ASTGrantQuery::Kind;
-
-    if (query.to_roles->all_roles)
-        throw Exception(
-            "Cannot " + String((query.kind == Kind::GRANT) ? "GRANT to" : "REVOKE from") + " ALL", ErrorCodes::NOT_IMPLEMENTED);
-
+    std::vector<UUID> to_roles = RoleList{*query.to_roles, access_control, context.getUserID()}.getAllMatchingUsers(access_control);
     String current_database = context.getCurrentDatabase();
+    using Kind = ASTGrantQuery::Kind;
 
     auto update_func = [&](const AccessEntityPtr & entity) -> AccessEntityPtr
     {
@@ -47,10 +43,7 @@ BlockIO InterpreterGrantQuery::execute()
         return updated_user;
     };
 
-    std::vector<UUID> ids = access_control.getIDs<User>(query.to_roles->roles);
-    if (query.to_roles->current_user)
-        ids.push_back(context.getUserID());
-    access_control.update(ids, update_func);
+    access_control.update(to_roles, update_func);
     return {};
 }
 

@@ -50,11 +50,11 @@ public:
     std::shared_ptr<const AccessRightsContext> getAccessRightsContext(const UserPtr & user, const ClientInfo & client_info, const Settings & settings, const String & current_database);
 
     std::shared_ptr<QuotaContext>
-    createQuotaContext(const String & user_name, const Poco::Net::IPAddress & address, const String & custom_quota_key);
+    getQuotaContext(const UUID & user_id, const String & user_name, const Poco::Net::IPAddress & address, const String & custom_quota_key);
 
     std::vector<QuotaUsageInfo> getQuotaUsageInfo() const;
 
-    std::shared_ptr<RowPolicyContext> getRowPolicyContext(const String & user_name) const;
+    std::shared_ptr<RowPolicyContext> getRowPolicyContext(const UUID & user_id) const;
 
 private:
     std::unique_ptr<QuotaContextFactory> quota_context_factory;
