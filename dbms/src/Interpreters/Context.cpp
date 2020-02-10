@@ -742,9 +742,8 @@ void Context::setUser(const String & name, const String & password, const Poco::
         },
         &subscription_for_user_change.subscription);
 
-    quota = getAccessControlManager().createQuotaContext(
-        client_info.current_user, client_info.current_address.host(), client_info.quota_key);
-    row_policy = getAccessControlManager().getRowPolicyContext(client_info.current_user);
+    quota = getAccessControlManager().getQuotaContext(user_id, user->getName(), client_info.current_address.host(), client_info.quota_key);
+    row_policy = getAccessControlManager().getRowPolicyContext(user_id);
 
     calculateUserSettings();
     calculateAccessRights();
