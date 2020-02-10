@@ -237,21 +237,6 @@ public:
 
     AccessControlManager & getAccessControlManager();
     const AccessControlManager & getAccessControlManager() const;
-    std::shared_ptr<const AccessRightsContext> getAccessRights() const { return std::atomic_load(&access_rights); }
-
-    /// Checks access rights.
-    /// Empty database means the current database.
-    void checkAccess(const AccessFlags & access) const;
-    void checkAccess(const AccessFlags & access, const std::string_view & database) const;
-    void checkAccess(const AccessFlags & access, const std::string_view & database, const std::string_view & table) const;
-    void checkAccess(const AccessFlags & access, const std::string_view & database, const std::string_view & table, const std::string_view & column) const;
-    void checkAccess(const AccessFlags & access, const std::string_view & database, const std::string_view & table, const std::vector<std::string_view> & columns) const;
-    void checkAccess(const AccessFlags & access, const std::string_view & database, const std::string_view & table, const Strings & columns) const;
-    void checkAccess(const AccessRightsElement & access) const;
-    void checkAccess(const AccessRightsElements & access) const;
-
-    std::shared_ptr<QuotaContext> getQuota() const { return quota; }
-    std::shared_ptr<RowPolicyContext> getRowPolicy() const { return row_policy; }
 
     /// TODO: we need much better code for switching policies, quotas, access rights for initial user
     /// Switches row policy in case we have initial user in client info
@@ -268,6 +253,21 @@ public:
     void setUser(const String & name, const String & password, const Poco::Net::SocketAddress & address, const String & quota_key);
     std::shared_ptr<const User> getUser() const;
     UUID getUserID() const;
+
+    /// Checks access rights.
+    /// Empty database means the current database.
+    void checkAccess(const AccessFlags & access) const;
+    void checkAccess(const AccessFlags & access, const std::string_view & database) const;
+    void checkAccess(const AccessFlags & access, const std::string_view & database, const std::string_view & table) const;
+    void checkAccess(const AccessFlags & access, const std::string_view & database, const std::string_view & table, const std::string_view & column) const;
+    void checkAccess(const AccessFlags & access, const std::string_view & database, const std::string_view & table, const std::vector<std::string_view> & columns) const;
+    void checkAccess(const AccessFlags & access, const std::string_view & database, const std::string_view & table, const Strings & columns) const;
+    void checkAccess(const AccessRightsElement & access) const;
+    void checkAccess(const AccessRightsElements & access) const;
+    std::shared_ptr<const AccessRightsContext> getAccessRights() const;
+
+    std::shared_ptr<RowPolicyContext> getRowPolicy() const;
+    std::shared_ptr<QuotaContext> getQuota() const;
 
     /// We have to copy external tables inside executeQuery() to track limits. Therefore, set callback for it. Must set once.
     void setExternalTablesInitializer(ExternalTablesInitializer && initializer);

@@ -349,7 +349,8 @@ ProcessList & Context::getProcessList() { return shared->process_list; }
 const ProcessList & Context::getProcessList() const { return shared->process_list; }
 MergeList & Context::getMergeList() { return shared->merge_list; }
 const MergeList & Context::getMergeList() const { return shared->merge_list; }
-
+AccessControlManager & Context::getAccessControlManager() { return shared->access_control_manager; }
+const AccessControlManager & Context::getAccessControlManager() const { return shared->access_control_manager; }
 
 const Databases Context::getDatabases() const
 {
@@ -623,37 +624,6 @@ const Poco::Util::AbstractConfiguration & Context::getConfigRef() const
     return shared->config ? *shared->config : Poco::Util::Application::instance().config();
 }
 
-AccessControlManager & Context::getAccessControlManager()
-{
-    auto lock = getLock();
-    return shared->access_control_manager;
-}
-
-const AccessControlManager & Context::getAccessControlManager() const
-{
-    auto lock = getLock();
-    return shared->access_control_manager;
-}
-
-template <typename... Args>
-void Context::checkAccessImpl(const Args &... args) const
-{
-    getAccessRights()->check(args...);
-}
-
-void Context::checkAccess(const AccessFlags & access) const { return checkAccessImpl(access); }
-void Context::checkAccess(const AccessFlags & access, const std::string_view & database) const { return checkAccessImpl(access, database); }
-void Context::checkAccess(const AccessFlags & access, const std::string_view & database, const std::string_view & table) const { return checkAccessImpl(access, database, table); }
-void Context::checkAccess(const AccessFlags & access, const std::string_view & database, const std::string_view & table, const std::string_view & column) const { return checkAccessImpl(access, database, table, column); }
-void Context::checkAccess(const AccessFlags & access, const std::string_view & database, const std::string_view & table, const std::vector<std::string_view> & columns) const { return checkAccessImpl(access, database, table, columns); }
-void Context::checkAccess(const AccessFlags & access, const std::string_view & database, const std::string_view & table, const Strings & columns) const { return checkAccessImpl(access, database, table, columns); }
-void Context::checkAccess(const AccessRightsElement & access) const { return checkAccessImpl(access); }
-void Context::checkAccess(const AccessRightsElements & access) const { return checkAccessImpl(access); }
-
-void Context::switchRowPolicy()
-{
-    row_policy = getAccessControlManager().getRowPolicyContext(client_info.initial_user);
-}
 
 void Context::setUsersConfig(const ConfigurationPtr & config)
 {
@@ -667,6 +637,55 @@ ConfigurationPtr Context::getUsersConfig()
     auto lock = getLock();
     return shared->users_config;
 }
+
+
+void Context::setUser(const String & name, const String & password, const Poco::Net::SocketAddress & address, const String & quota_key)
+{
+    auto lock = getLock();
+
+    client_info.current_user = name;
+    client_info.current_address = address;
+    client_info.current_password = password;
+
+    if (!quota_key.empty())
+        client_info.quota_key = quota_key;
+
+    user_id = shared->access_control_manager.getID<User>(name);
+    user = shared->access_control_manager.authorizeAndGetUser(
+        user_id,
+        password,
+        address.host(),
+        [this](const UserPtr & changed_user)
+        {
+            auto lock2 = getLock();
+            user = changed_user;
+            calculateAccessRights();
+        },
+        &subscription_for_user_change.subscription);
+
+    quota = getAccessControlManager().getQuotaContext(user_id, user->getName(), client_info.current_address.host(), client_info.quota_key);
+    row_policy = getAccessControlManager().getRowPolicyContext(user_id);
+
+    calculateUserSettings();
+    calculateAccessRights();
+}
+
+std::shared_ptr<const User> Context::getUser() const
+{
+    auto lock = getLock();
+    if (!user)
+        throw Exception("No current user", ErrorCodes::LOGICAL_ERROR);
+    return user;
+}
+
+UUID Context::getUserID() const
+{
+    auto lock = getLock();
+    if (!user)
+        throw Exception("No current user", ErrorCodes::LOGICAL_ERROR);
+    return user_id;
+}
+
 
 void Context::calculateUserSettings()
 {
@@ -688,13 +707,6 @@ void Context::calculateUserSettings()
     setProfile(profile);
 }
 
-void Context::calculateAccessRights()
-{
-    auto lock = getLock();
-    if (user)
-        std::atomic_store(&access_rights, getAccessControlManager().getAccessRightsContext(user, client_info, settings, current_database));
-}
-
 void Context::setProfile(const String & profile)
 {
     settings.setProfile(profile, *shared->users_config);
@@ -705,49 +717,54 @@ void Context::setProfile(const String & profile)
     settings_constraints = std::move(new_constraints);
 }
 
-std::shared_ptr<const User> Context::getUser() const
-{
-    if (!user)
-        throw Exception("No current user", ErrorCodes::LOGICAL_ERROR);
-    return user;
-}
 
-UUID Context::getUserID() const
-{
-    if (!user)
-        throw Exception("No current user", ErrorCodes::LOGICAL_ERROR);
-    return user_id;
-}
-
-void Context::setUser(const String & name, const String & password, const Poco::Net::SocketAddress & address, const String & quota_key)
+void Context::calculateAccessRights()
 {
     auto lock = getLock();
-
-    client_info.current_user = name;
-    client_info.current_address = address;
-    client_info.current_password = password;
-
-    if (!quota_key.empty())
-        client_info.quota_key = quota_key;
-
-    user_id = shared->access_control_manager.getID<User>(name);
-    user = shared->access_control_manager.authorizeAndGetUser(
-        user_id,
-        password,
-        address.host(),
-        [this](const UserPtr & changed_user)
-        {
-            user = changed_user;
-            calculateAccessRights();
-        },
-        &subscription_for_user_change.subscription);
-
-    quota = getAccessControlManager().getQuotaContext(user_id, user->getName(), client_info.current_address.host(), client_info.quota_key);
-    row_policy = getAccessControlManager().getRowPolicyContext(user_id);
-
-    calculateUserSettings();
-    calculateAccessRights();
+    if (user)
+        access_rights = getAccessControlManager().getAccessRightsContext(user, client_info, settings, current_database);
 }
+
+std::shared_ptr<const AccessRightsContext> Context::getAccessRights() const
+{
+    auto lock = getLock();
+    return access_rights;
+}
+
+template <typename... Args>
+void Context::checkAccessImpl(const Args &... args) const
+{
+    getAccessRights()->check(args...);
+}
+
+void Context::checkAccess(const AccessFlags & access) const { return checkAccessImpl(access); }
+void Context::checkAccess(const AccessFlags & access, const std::string_view & database) const { return checkAccessImpl(access, database); }
+void Context::checkAccess(const AccessFlags & access, const std::string_view & database, const std::string_view & table) const { return checkAccessImpl(access, database, table); }
+void Context::checkAccess(const AccessFlags & access, const std::string_view & database, const std::string_view & table, const std::string_view & column) const { return checkAccessImpl(access, database, table, column); }
+void Context::checkAccess(const AccessFlags & access, const std::string_view & database, const std::string_view & table, const std::vector<std::string_view> & columns) const { return checkAccessImpl(access, database, table, columns); }
+void Context::checkAccess(const AccessFlags & access, const std::string_view & database, const std::string_view & table, const Strings & columns) const { return checkAccessImpl(access, database, table, columns); }
+void Context::checkAccess(const AccessRightsElement & access) const { return checkAccessImpl(access); }
+void Context::checkAccess(const AccessRightsElements & access) const { return checkAccessImpl(access); }
+
+
+std::shared_ptr<RowPolicyContext> Context::getRowPolicy() const
+{
+    auto lock = getLock();
+    return row_policy;
+}
+
+std::shared_ptr<QuotaContext> Context::getQuota() const
+{
+    auto lock = getLock();
+    return quota;
+}
+
+
+void Context::switchRowPolicy()
+{
+    row_policy = getAccessControlManager().getRowPolicyContext(client_info.initial_user);
+}
+
 
 void Context::addDependencyUnsafe(const StorageID & from, const StorageID & where)
 {
