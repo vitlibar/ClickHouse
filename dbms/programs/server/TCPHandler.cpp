@@ -902,7 +902,7 @@ void TCPHandler::receiveQuery()
         }
         else
         {
-            query_context->switchRowPolicy();
+            query_context->setUserNoCheck(client_info.initial_user, client_info.initial_address, client_info.quota_key);
         }
     }
 

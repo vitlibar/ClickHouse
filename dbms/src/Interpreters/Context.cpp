@@ -650,11 +650,6 @@ void Context::checkAccess(const AccessFlags & access, const std::string_view & d
 void Context::checkAccess(const AccessRightsElement & access) const { return checkAccessImpl(access); }
 void Context::checkAccess(const AccessRightsElements & access) const { return checkAccessImpl(access); }
 
-void Context::switchRowPolicy()
-{
-    row_policy = getAccessControlManager().getRowPolicyContext(client_info.initial_user);
-}
-
 void Context::setUsersConfig(const ConfigurationPtr & config)
 {
     auto lock = getLock();
@@ -719,6 +714,7 @@ UUID Context::getUserID() const
     return user_id;
 }
 
+
 void Context::setUser(const String & name, const String & password, const Poco::Net::SocketAddress & address, const String & quota_key)
 {
     auto lock = getLock();
@@ -742,13 +738,40 @@ void Context::setUser(const String & name, const String & password, const Poco::
         },
         &subscription_for_user_change.subscription);
 
-    quota = getAccessControlManager().createQuotaContext(
-        client_info.current_user, client_info.current_address.host(), client_info.quota_key);
-    row_policy = getAccessControlManager().getRowPolicyContext(client_info.current_user);
+    quota = getAccessControlManager().createQuotaContext(name, address.host(), quota_key);
+    row_policy = getAccessControlManager().getRowPolicyContext(name);
 
     calculateUserSettings();
     calculateAccessRights();
 }
+
+
+bool Context::setUserNoCheck(const String & name, const Poco::Net::SocketAddress & address_for_quota, const String & quota_key)
+{
+    auto lock = getLock();
+
+    auto id = shared->access_control_manager.find<User>(name);
+    if (!id)
+        return false;
+
+    user_id = *id;
+    user = shared->access_control_manager.getUser(
+        user_id,
+        [this](const UserPtr & changed_user)
+        {
+            user = changed_user;
+            calculateAccessRights();
+        },
+        &subscription_for_user_change.subscription);
+
+    quota = getAccessControlManager().createQuotaContext(name, address_for_quota.host(), quota_key);
+    row_policy = getAccessControlManager().getRowPolicyContext(name);
+
+    calculateUserSettings();
+    calculateAccessRights();
+    return true;
+}
+
 
 void Context::addDependencyUnsafe(const StorageID & from, const StorageID & where)
 {

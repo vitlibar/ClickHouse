@@ -253,10 +253,6 @@ public:
     std::shared_ptr<QuotaContext> getQuota() const { return quota; }
     std::shared_ptr<RowPolicyContext> getRowPolicy() const { return row_policy; }
 
-    /// TODO: we need much better code for switching policies, quotas, access rights for initial user
-    /// Switches row policy in case we have initial user in client info
-    void switchRowPolicy();
-
     /** Take the list of users, quotas and configuration profiles from this config.
       * The list of users is completely replaced.
       * The accumulated quota values are not reset if the quota is not deleted.
@@ -266,6 +262,7 @@ public:
 
     /// Must be called before getClientInfo.
     void setUser(const String & name, const String & password, const Poco::Net::SocketAddress & address, const String & quota_key);
+    bool setUserNoCheck(const String & name, const Poco::Net::SocketAddress & address_for_quota, const String & quota_key);
     std::shared_ptr<const User> getUser() const;
     UUID getUserID() const;
 
