@@ -900,10 +900,12 @@ void TCPHandler::receiveQuery()
             client_info.initial_query_id = client_info.current_query_id;
             client_info.initial_address = client_info.current_address;
         }
+#if 0
         else
         {
             query_context->switchRowPolicy();
         }
+#endif
     }
 
     /// Per query settings.
