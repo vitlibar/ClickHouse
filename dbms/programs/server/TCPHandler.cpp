@@ -900,9 +900,11 @@ void TCPHandler::receiveQuery()
             client_info.initial_query_id = client_info.current_query_id;
             client_info.initial_address = client_info.current_address;
         }
-        else
+
+        if (client_info.query_kind == ClientInfo::QueryKind::SECONDARY_QUERY)
         {
-            query_context->setUserNoCheck(client_info.initial_user, client_info.initial_address, client_info.quota_key);
+            /// Try set the access rights as if the query is executed by initial_user.
+            query_context->setAccessRightsForInitialUser();
         }
     }
 

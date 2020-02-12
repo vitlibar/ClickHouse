@@ -62,5 +62,5 @@ private:
 };
 
 
-using RowPolicyContextPtr = std::shared_ptr<RowPolicyContext>;
+using RowPolicyContextPtr = std::shared_ptr<const RowPolicyContext>;
 }

@@ -13,7 +13,6 @@
 #include <Common/ThreadPool.h>
 #include "config_core.h"
 #include <Storages/IStorage_fwd.h>
-#include <ext/scope_guard.h>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -133,15 +132,6 @@ struct IHostContext
 
 using IHostContextPtr = std::shared_ptr<IHostContext>;
 
-/// Subscription for user's change. This subscription cannot be copied with the context,
-/// that's why we had to move it into a separate structure.
-struct SubscriptionForUserChange
-{
-    ext::scope_guard subscription;
-    SubscriptionForUserChange() {}
-    SubscriptionForUserChange(const SubscriptionForUserChange &) {}
-    SubscriptionForUserChange & operator =(const SubscriptionForUserChange &) { subscription = {}; return *this; }
-};
 
 /** A set of known objects that can be used in the query.
   * Consists of a shared part (always common to all sessions and queries)
@@ -161,12 +151,9 @@ private:
     InputInitializer input_initializer_callback;
     InputBlocksReader input_blocks_reader;
 
-    std::shared_ptr<const User> user;
     UUID user_id;
-    SubscriptionForUserChange subscription_for_user_change;
     std::shared_ptr<const AccessRightsContext> access_rights;
-    std::shared_ptr<QuotaContext> quota;           /// Current quota. By default - empty quota, that have no limits.
-    std::shared_ptr<RowPolicyContext> row_policy;
+    bool use_access_rights_for_initial_user = false;
     String current_database;
     Settings settings;                                  /// Setting for query execution.
     std::shared_ptr<const SettingsConstraints> settings_constraints;
@@ -237,7 +224,25 @@ public:
 
     AccessControlManager & getAccessControlManager();
     const AccessControlManager & getAccessControlManager() const;
-    std::shared_ptr<const AccessRightsContext> getAccessRights() const { return std::atomic_load(&access_rights); }
+
+    /** Take the list of users, quotas and configuration profiles from this config.
+      * The list of users is completely replaced.
+      * The accumulated quota values are not reset if the quota is not deleted.
+      */
+    void setUsersConfig(const ConfigurationPtr & config);
+    ConfigurationPtr getUsersConfig();
+
+    /// Sets the current user, checks the password and that the specified host is allowed.
+    /// Must be called before getClientInfo.
+    void setUser(const String & name, const String & password, const Poco::Net::SocketAddress & address, const String & quota_key);
+
+    /// Use the access rights of the initial user instead of the access rights of the current user.
+    /// The function can fail (in that case it returns false) if the initial user doesn't exist.
+    bool setAccessRightsForInitialUser();
+
+    std::shared_ptr<const User> getUser() const;
+    String getUserName() const;
+    UUID getUserID() const;
 
     /// Checks access rights.
     /// Empty database means the current database.
@@ -250,21 +255,9 @@ public:
     void checkAccess(const AccessRightsElement & access) const;
     void checkAccess(const AccessRightsElements & access) const;
 
-    std::shared_ptr<QuotaContext> getQuota() const { return quota; }
-    std::shared_ptr<RowPolicyContext> getRowPolicy() const { return row_policy; }
-
-    /** Take the list of users, quotas and configuration profiles from this config.
-      * The list of users is completely replaced.
-      * The accumulated quota values are not reset if the quota is not deleted.
-      */
-    void setUsersConfig(const ConfigurationPtr & config);
-    ConfigurationPtr getUsersConfig();
-
-    /// Must be called before getClientInfo.
-    void setUser(const String & name, const String & password, const Poco::Net::SocketAddress & address, const String & quota_key);
-    bool setUserNoCheck(const String & name, const Poco::Net::SocketAddress & address_for_quota, const String & quota_key);
-    std::shared_ptr<const User> getUser() const;
-    UUID getUserID() const;
+    std::shared_ptr<const AccessRightsContext> getAccessRights() const;
+    std::shared_ptr<const RowPolicyContext> getRowPolicy() const;
+    std::shared_ptr<const QuotaContext> getQuota() const;
 
     /// We have to copy external tables inside executeQuery() to track limits. Therefore, set callback for it. Must set once.
     void setExternalTablesInitializer(ExternalTablesInitializer && initializer);
@@ -608,12 +601,6 @@ private:
     /// Compute and set actual user settings, client_info.current_user should be set
     void calculateUserSettings();
     void calculateAccessRights();
-
-    /** Check if the current client has access to the specified database.
-      * If access is denied, throw an exception.
-      * NOTE: This method should always be called when the `shared->mutex` mutex is acquired.
-      */
-    void checkDatabaseAccessRightsImpl(const std::string & database_name) const;
 
     template <typename... Args>
     void checkAccessImpl(const Args &... args) const;

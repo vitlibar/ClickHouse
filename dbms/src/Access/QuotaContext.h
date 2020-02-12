@@ -29,15 +29,15 @@ public:
     ~QuotaContext();
 
     /// Tracks resource consumption. If the quota exceeded and `check_exceeded == true`, throws an exception.
-    void used(ResourceType resource_type, ResourceAmount amount, bool check_exceeded = true);
-    void used(const std::pair<ResourceType, ResourceAmount> & resource, bool check_exceeded = true);
-    void used(const std::pair<ResourceType, ResourceAmount> & resource1, const std::pair<ResourceType, ResourceAmount> & resource2, bool check_exceeded = true);
-    void used(const std::pair<ResourceType, ResourceAmount> & resource1, const std::pair<ResourceType, ResourceAmount> & resource2, const std::pair<ResourceType, ResourceAmount> & resource3, bool check_exceeded = true);
-    void used(const std::vector<std::pair<ResourceType, ResourceAmount>> & resources, bool check_exceeded = true);
+    void used(ResourceType resource_type, ResourceAmount amount, bool check_exceeded = true) const;
+    void used(const std::pair<ResourceType, ResourceAmount> & resource, bool check_exceeded = true) const;
+    void used(const std::pair<ResourceType, ResourceAmount> & resource1, const std::pair<ResourceType, ResourceAmount> & resource2, bool check_exceeded = true) const;
+    void used(const std::pair<ResourceType, ResourceAmount> & resource1, const std::pair<ResourceType, ResourceAmount> & resource2, const std::pair<ResourceType, ResourceAmount> & resource3, bool check_exceeded = true) const;
+    void used(const std::vector<std::pair<ResourceType, ResourceAmount>> & resources, bool check_exceeded = true) const;
 
     /// Checks if the quota exceeded. If so, throws an exception.
-    void checkExceeded();
-    void checkExceeded(ResourceType resource_type);
+    void checkExceeded() const;
+    void checkExceeded(ResourceType resource_type) const;
 
     /// Returns the information about this quota context.
     QuotaUsageInfo getUsageInfo() const;
@@ -83,7 +83,7 @@ private:
     boost::atomic_shared_ptr<const Intervals> intervals; /// atomically changed by QuotaUsageManager
 };
 
-using QuotaContextPtr = std::shared_ptr<QuotaContext>;
+using QuotaContextPtr = std::shared_ptr<const QuotaContext>;
 
 
 /// The information about a quota context.

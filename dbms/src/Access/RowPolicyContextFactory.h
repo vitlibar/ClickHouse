@@ -4,7 +4,7 @@
 #include <ext/scope_guard.h>
 #include <mutex>
 #include <unordered_map>
-
+#include <ext/shared_ptr_helper.h>
 
 namespace DB
 {

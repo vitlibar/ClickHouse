@@ -623,22 +623,85 @@ const Poco::Util::AbstractConfiguration & Context::getConfigRef() const
     return shared->config ? *shared->config : Poco::Util::Application::instance().config();
 }
 
+
 AccessControlManager & Context::getAccessControlManager()
 {
-    auto lock = getLock();
     return shared->access_control_manager;
 }
 
 const AccessControlManager & Context::getAccessControlManager() const
 {
-    auto lock = getLock();
     return shared->access_control_manager;
 }
+
+
+void Context::setUser(const String & name, const String & password, const Poco::Net::SocketAddress & address, const String & quota_key)
+{
+    auto lock = getLock();
+
+    client_info.current_user = name;
+    client_info.current_password = password;
+    client_info.current_address = address;
+    if (!quota_key.empty())
+        client_info.quota_key = quota_key;
+
+    auto new_user_id = getAccessControlManager().getID<User>(name);
+    auto new_access_rights = getAccessControlManager().getAccessRightsContext(new_user_id, settings, current_database, client_info, false);
+
+    auto user = new_access_rights->getUser();
+    user->allowed_client_hosts.checkContains(address.host());
+    user->authentication.checkPassword(password);
+
+    user_id = new_user_id;
+    access_rights = std::move(new_access_rights);
+    use_access_rights_for_initial_user = false;
+
+    calculateUserSettings();
+}
+
+bool Context::setAccessRightsForInitialUser()
+{
+    auto lock = getLock();
+    auto initial_user_id = getAccessControlManager().find<User>(client_info.initial_user);
+    if (!initial_user_id)
+        return false;
+
+    access_rights = getAccessControlManager().getAccessRightsContext(*initial_user_id, settings, current_database, client_info, true);
+    use_access_rights_for_initial_user = true;
+    return true;
+}
+
+
+std::shared_ptr<const User> Context::getUser() const
+{
+    auto lock = getLock();
+    return access_rights->getUser();
+}
+
+String Context::getUserName() const
+{
+    auto lock = getLock();
+    return access_rights->getUserName();
+}
+
+UUID Context::getUserID() const
+{
+    auto lock = getLock();
+    return user_id;
+}
+
+
+void Context::calculateAccessRights()
+{
+    auto lock = getLock();
+    access_rights = getAccessControlManager().getAccessRightsContext(user_id, settings, current_database, client_info, use_access_rights_for_initial_user);
+}
+
 
 template <typename... Args>
 void Context::checkAccessImpl(const Args &... args) const
 {
-    getAccessRights()->check(args...);
+    getAccessRights()->checkAccess(args...);
 }
 
 void Context::checkAccess(const AccessFlags & access) const { return checkAccessImpl(access); }
@@ -650,23 +713,11 @@ void Context::checkAccess(const AccessFlags & access, const std::string_view & d
 void Context::checkAccess(const AccessRightsElement & access) const { return checkAccessImpl(access); }
 void Context::checkAccess(const AccessRightsElements & access) const { return checkAccessImpl(access); }
 
-void Context::setUsersConfig(const ConfigurationPtr & config)
-{
-    auto lock = getLock();
-    shared->users_config = config;
-    shared->access_control_manager.loadFromConfig(*shared->users_config);
-}
-
-ConfigurationPtr Context::getUsersConfig()
-{
-    auto lock = getLock();
-    return shared->users_config;
-}
 
 void Context::calculateUserSettings()
 {
     auto lock = getLock();
-    String profile = user->profile;
+    String profile = getUser()->profile;
 
     /// 1) Set default settings (hardcoded values)
     /// NOTE: we ignore global_context settings (from which it is usually copied)
@@ -683,13 +734,6 @@ void Context::calculateUserSettings()
     setProfile(profile);
 }
 
-void Context::calculateAccessRights()
-{
-    auto lock = getLock();
-    if (user)
-        std::atomic_store(&access_rights, getAccessControlManager().getAccessRightsContext(user, client_info, settings, current_database));
-}
-
 void Context::setProfile(const String & profile)
 {
     settings.setProfile(profile, *shared->users_config);
@@ -700,76 +744,18 @@ void Context::setProfile(const String & profile)
     settings_constraints = std::move(new_constraints);
 }
 
-std::shared_ptr<const User> Context::getUser() const
-{
-    if (!user)
-        throw Exception("No current user", ErrorCodes::LOGICAL_ERROR);
-    return user;
-}
 
-UUID Context::getUserID() const
-{
-    if (!user)
-        throw Exception("No current user", ErrorCodes::LOGICAL_ERROR);
-    return user_id;
-}
-
-
-void Context::setUser(const String & name, const String & password, const Poco::Net::SocketAddress & address, const String & quota_key)
+void Context::setUsersConfig(const ConfigurationPtr & config)
 {
     auto lock = getLock();
-
-    client_info.current_user = name;
-    client_info.current_address = address;
-    client_info.current_password = password;
-
-    if (!quota_key.empty())
-        client_info.quota_key = quota_key;
-
-    user_id = shared->access_control_manager.getID<User>(name);
-    user = shared->access_control_manager.authorizeAndGetUser(
-        user_id,
-        password,
-        address.host(),
-        [this](const UserPtr & changed_user)
-        {
-            user = changed_user;
-            calculateAccessRights();
-        },
-        &subscription_for_user_change.subscription);
-
-    quota = getAccessControlManager().getQuotaContext(user_id, name, address.host(), quota_key);
-    row_policy = getAccessControlManager().getRowPolicyContext(user_id);
-
-    calculateUserSettings();
-    calculateAccessRights();
+    shared->users_config = config;
+    shared->access_control_manager.loadFromConfig(*shared->users_config);
 }
 
-
-bool Context::setUserNoCheck(const String & name, const Poco::Net::SocketAddress & address_for_quota, const String & quota_key)
+ConfigurationPtr Context::getUsersConfig()
 {
     auto lock = getLock();
-
-    auto id = shared->access_control_manager.find<User>(name);
-    if (!id)
-        return false;
-
-    user_id = *id;
-    user = shared->access_control_manager.getUser(
-        user_id,
-        [this](const UserPtr & changed_user)
-        {
-            user = changed_user;
-            calculateAccessRights();
-        },
-        &subscription_for_user_change.subscription);
-
-    quota = getAccessControlManager().getQuotaContext(user_id, name, address_for_quota.host(), quota_key);
-    row_policy = getAccessControlManager().getRowPolicyContext(user_id);
-
-    calculateUserSettings();
-    calculateAccessRights();
-    return true;
+    return shared->users_config;
 }
 
 
