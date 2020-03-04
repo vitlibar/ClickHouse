@@ -84,6 +84,7 @@ void EnabledRoles::updateImpl()
             auto child_info = child->getInfo();
             new_info_ref.access.merge(child_info->access);
             new_info_ref.access_with_grant_option.merge(child_info->access_with_grant_option);
+            new_info_ref.settings_from_enabled_roles.merge(child_info->settings_from_enabled_roles);
             boost::range::copy(child_info->current_roles, std::back_inserter(new_info_ref.current_roles));
             boost::range::copy(child_info->enabled_roles, std::back_inserter(new_info_ref.enabled_roles));
             boost::range::copy(child_info->enabled_roles_with_admin_option, std::back_inserter(new_info_ref.enabled_roles_with_admin_option));
@@ -123,6 +124,7 @@ void EnabledRoles::updateImpl()
         new_info_ref.access.merge(entry.role->access);
         new_info_ref.access_with_grant_option.merge(entry.role->access_with_grant_option);
         new_info_ref.names_of_roles[id] = entry.role->getName();
+        new_info_ref.settings_from_enabled_roles.merge(entry.role->settings);
 
         entry.in_use = false;
         entry.with_admin_option = false;

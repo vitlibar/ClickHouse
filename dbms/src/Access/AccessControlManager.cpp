@@ -3,6 +3,7 @@
 #include <Access/MemoryAccessStorage.h>
 #include <Access/UsersConfigAccessStorage.h>
 #include <Access/DiskAccessStorage.h>
+<<<<<<< HEAD
 #include <Access/ContextAccess.h>
 #include <Access/RoleCache.h>
 #include <Access/RowPolicyCache.h>
@@ -11,6 +12,13 @@
 #include <Core/Settings.h>
 #include <Poco/ExpireCache.h>
 #include <mutex>
+=======
+#include <Access/AccessRightsContextFactory.h>
+#include <Access/RoleContextFactory.h>
+#include <Access/RowPolicyContextFactory.h>
+#include <Access/QuotaContextFactory.h>
+#include <Access/SettingsProfilesCache.h>
+>>>>>>> 880007787b... Introduce SettingsProoofile as a new access entity type.
 
 
 namespace DB
@@ -102,9 +110,14 @@ std::shared_ptr<const ContextAccess> AccessControlManager::getContextAccess(
     bool use_default_roles,
     const Settings & settings,
     const String & current_database,
-    const ClientInfo & client_info) const
+    const ClientInfo & client_info,
+    const String & default_profile_name) const
 {
+<<<<<<< HEAD
     return context_access_cache->getContextAccess(user_id, current_roles, use_default_roles, settings, current_database, client_info);
+=======
+    return access_rights_context_factory->createContext(user_id, current_roles, use_default_roles, settings, current_database, client_info, default_profile_name);
+>>>>>>> 880007787b... Introduce SettingsProoofile as a new access entity type.
 }
 
 
@@ -132,6 +145,18 @@ std::shared_ptr<const EnabledQuota> AccessControlManager::getEnabledQuota(
 std::vector<QuotaUsageInfo> AccessControlManager::getQuotaUsageInfo() const
 {
     return quota_cache->getUsageInfo();
+}
+
+
+SettingsProfilePtr AccessControlManager::getSettingsProfile(const String & name) const
+{
+    return settings_profiles_cache->getProfile(name);
+}
+
+
+SettingsProfilesWatcherPtr AccessControlManager::getSettingsProfilesWatcher(const UUID & user_id, const std::vector<UUID> & enabled_roles) const
+{
+    return settings_profiles_cache->getWatcher(user_id, enabled_roles);
 }
 
 }

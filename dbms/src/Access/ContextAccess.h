@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <Access/AccessRights.h>
 #include <Access/RowPolicy.h>
@@ -22,6 +22,8 @@ class EnabledRoles;
 class EnabledRowPolicies;
 class EnabledQuota;
 struct Settings;
+class SettingsConstraints;
+class SettingsProfilesWatcher;
 class AccessControlManager;
 class IAST;
 using ASTPtr = std::shared_ptr<IAST>;
@@ -43,6 +45,7 @@ public:
         ClientInfo::HTTPMethod http_method = ClientInfo::HTTPMethod::UNKNOWN;
         Poco::Net::IPAddress address;
         String quota_key;
+        String default_profile_name;
 
         friend bool operator ==(const Params & lhs, const Params & rhs);
         friend bool operator !=(const Params & lhs, const Params & rhs) { return !(lhs == rhs); }
@@ -68,9 +71,16 @@ public:
     std::vector<UUID> getEnabledRoles() const;
     Strings getEnabledRolesNames() const;
 
+<<<<<<< HEAD:dbms/src/Access/ContextAccess.h
     std::shared_ptr<const EnabledRowPolicies> getRowPolicies() const;
     ASTPtr getRowPolicyCondition(const String & database, const String & table_name, RowPolicy::ConditionType index, const ASTPtr & extra_condition = nullptr) const;
     std::shared_ptr<const EnabledQuota> getQuota() const;
+=======
+    RowPolicyContextPtr getRowPolicy() const;
+    QuotaContextPtr getQuota() const;
+    std::shared_ptr<const Settings> getDefaultSettings() const;
+    std::shared_ptr<const SettingsConstraints> getSettingsConstraints() const;
+>>>>>>> 880007787b... Introduce SettingsProoofile as a new access entity type.:dbms/src/Access/AccessRightsContext.h
 
     /// Checks if a specified access is granted, and throws an exception if not.
     /// Empty database means the current database.
@@ -121,7 +131,12 @@ private:
     ContextAccess(const AccessControlManager & manager_, const Params & params_); /// AccessRightsContext should be created by AccessRightsContextFactory.
 
     void setUser(const UserPtr & user_) const;
+<<<<<<< HEAD:dbms/src/Access/ContextAccess.h
     void setRolesInfo(const std::shared_ptr<const EnabledRolesInfo> & roles_info_) const;
+=======
+    void setRolesInfo(const CurrentRolesInfoPtr & roles_info_) const;
+    void setSettingsAndConstraints() const;
+>>>>>>> 880007787b... Introduce SettingsProoofile as a new access entity type.:dbms/src/Access/AccessRightsContext.h
 
     template <int mode, bool grant_option, typename... Args>
     bool checkAccessImpl(Poco::Logger * log_, const AccessFlags & access, const Args &... args) const;
@@ -146,8 +161,20 @@ private:
     mutable std::shared_ptr<const EnabledRolesInfo> roles_info;
     mutable boost::atomic_shared_ptr<const boost::container::flat_set<UUID>> roles_with_admin_option;
     mutable boost::atomic_shared_ptr<const AccessRights> result_access_cache[7];
+<<<<<<< HEAD:dbms/src/Access/ContextAccess.h
     mutable std::shared_ptr<const EnabledRowPolicies> enabled_row_policies;
     mutable std::shared_ptr<const EnabledQuota> enabled_quota;
+=======
+    mutable RowPolicyContextPtr row_policy_context;
+    mutable QuotaContextPtr quota_context;
+
+    mutable std::shared_ptr<const SettingsProfilesWatcher> settings_profiles_watcher;
+    mutable ext::scope_guard subscription_for_settings_profiles_change;
+    mutable ext::scope_guard subscription_for_default_profile_change;
+    mutable std::shared_ptr<const Settings> default_settings;
+    mutable std::shared_ptr<const SettingsConstraints> settings_constraints;
+
+>>>>>>> 880007787b... Introduce SettingsProoofile as a new access entity type.:dbms/src/Access/AccessRightsContext.h
     mutable std::mutex mutex;
 };
 

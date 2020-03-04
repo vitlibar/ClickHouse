@@ -43,10 +43,14 @@ namespace
         if (user.allowed_client_hosts != AllowedClientHosts::AnyHostTag{})
             query->hosts = user.allowed_client_hosts;
 
+<<<<<<< HEAD
         if (!user.profile.empty())
             query->profile = user.profile;
 
         if (user.default_roles != ExtendedRoleSet::AllTag{})
+=======
+        if (user.default_roles != GenericRoleSet::AllTag{})
+>>>>>>> 880007787b... Introduce SettingsProoofile as a new access entity type.
         {
             if (attach_mode)
                 query->default_roles = ExtendedRoleSet{user.default_roles}.toAST();

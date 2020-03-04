@@ -1,10 +1,21 @@
 #include <Access/ContextAccess.h>
 #include <Access/AccessControlManager.h>
+<<<<<<< HEAD:dbms/src/Access/ContextAccess.cpp
 #include <Access/EnabledRoles.h>
 #include <Access/EnabledRowPolicies.h>
 #include <Access/EnabledQuota.h>
 #include <Access/User.h>
 #include <Access/EnabledRolesInfo.h>
+=======
+#include <Access/RoleContext.h>
+#include <Access/RowPolicyContext.h>
+#include <Access/SettingsProfilesWatcher.h>
+#include <Access/QuotaContext.h>
+#include <Access/User.h>
+#include <Access/CurrentRolesInfo.h>
+#include <Access/SettingsProfile.h>
+#include <Access/SettingsProfilesWatcher.h>
+>>>>>>> 880007787b... Introduce SettingsProoofile as a new access entity type.:dbms/src/Access/AccessRightsContext.cpp
 #include <Common/Exception.h>
 #include <Common/quoteString.h>
 #include <Core/Settings.h>
@@ -103,6 +114,13 @@ ContextAccess::ContextAccess(const AccessControlManager & manager_, const Params
     : manager(&manager_)
     , params(params_)
 {
+    if (!params.default_profile_name.empty())
+    {
+        subscription_for_default_profile_change = manager->subscribeForChanges(
+            manager->getID<SettingsProfile>(params.default_profile_name),
+            [this](const UUID &, const AccessEntityPtr &) { setSettingsAndConstraints(); });
+    }
+
     subscription_for_user_change = manager->subscribeForChanges(
         *params.user_id, [this](const UUID &, const AccessEntityPtr & entity)
     {
@@ -124,12 +142,23 @@ void ContextAccess::setUser(const UserPtr & user_) const
         auto nothing_granted = boost::make_shared<AccessRights>();
         boost::range::fill(result_access_cache, nothing_granted);
         subscription_for_user_change = {};
+<<<<<<< HEAD:dbms/src/Access/ContextAccess.cpp
         subscription_for_roles_changes = {};
         enabled_roles = nullptr;
         roles_info = nullptr;
         roles_with_admin_option = nullptr;
         enabled_row_policies = nullptr;
         enabled_quota = nullptr;
+=======
+        subscription_for_roles_info_change = {};
+        subscription_for_default_profile_change = {};
+        subscription_for_settings_profiles_change = {};
+        role_context = nullptr;
+        enabled_roles_with_admin_option = boost::make_shared<boost::container::flat_set<UUID>>();
+        row_policy_context = std::make_shared<RowPolicyContext>();
+        quota_context = std::make_shared<QuotaContext>();
+        settings_profiles_watcher = nullptr;
+>>>>>>> 880007787b... Introduce SettingsProoofile as a new access entity type.:dbms/src/Access/AccessRightsContext.cpp
         return;
     }
 
@@ -177,8 +206,38 @@ void ContextAccess::setRolesInfo(const std::shared_ptr<const EnabledRolesInfo> &
     roles_info = roles_info_;
     roles_with_admin_option.store(nullptr /* need to recalculate */);
     boost::range::fill(result_access_cache, nullptr /* need recalculate */);
+<<<<<<< HEAD:dbms/src/Access/ContextAccess.cpp
     enabled_row_policies = manager->getEnabledRowPolicies(*params.user_id, roles_info->enabled_roles);
     enabled_quota = manager->getEnabledQuota(user_name, *params.user_id, roles_info->enabled_roles, params.address, params.quota_key);
+=======
+    row_policy_context = manager->getRowPolicyContext(*params.user_id, roles_info->enabled_roles);
+    quota_context = manager->getQuotaContext(user_name, *params.user_id, roles_info->enabled_roles, params.address, params.quota_key);
+
+    settings_profiles_watcher = manager->getSettingsProfilesWatcher(*params.user_id, roles_info->enabled_roles);
+    subscription_for_settings_profiles_change = settings_profiles_watcher->subscribeForChanges(
+        [this](const std::shared_ptr<const SettingsChanges> &, const std::shared_ptr<const SettingsConstraints> &)
+        {
+            setSettingsAndConstraints();
+        });
+}
+
+
+void AccessRightsContext::setSettingsAndConstraints() const
+{
+    auto new_settings = std::make_shared<Settings>();
+    auto new_constraints = std::make_shared<SettingsConstraints>();
+    if (!params.default_profile_name.empty())
+    {
+        auto default_profile = manager->getSettingsProfile(params.default_profile_name);
+        new_settings->applyChanges(default_profile->settings);
+        new_constraints->merge(default_profile->constraints);
+    }
+
+    new_settings->applyChanges(*settings_profiles_watcher->getSettings());
+    new_constraints->merge(*settings_profiles_watcher->getConstraints());
+    default_settings = std::move(new_settings);
+    settings_constraints = std::move(new_constraints);
+>>>>>>> 880007787b... Introduce SettingsProoofile as a new access entity type.:dbms/src/Access/AccessRightsContext.cpp
 }
 
 
@@ -500,9 +559,14 @@ Strings ContextAccess::getCurrentRolesNames() const
     return roles_info ? roles_info->getCurrentRolesNames() : Strings{};
 }
 
+<<<<<<< HEAD:dbms/src/Access/ContextAccess.cpp
 std::vector<UUID> ContextAccess::getEnabledRoles() const
 {
     std::lock_guard lock{mutex};
+=======
+std::vector<UUID> AccessRightsContext::getEnabledRoles() const
+{    std::lock_guard lock{mutex};
+>>>>>>> 880007787b... Introduce SettingsProoofile as a new access entity type.:dbms/src/Access/AccessRightsContext.cpp
     return roles_info ? roles_info->enabled_roles : std::vector<UUID>{};
 }
 
@@ -531,13 +595,32 @@ std::shared_ptr<const EnabledQuota> ContextAccess::getQuota() const
 }
 
 
+<<<<<<< HEAD:dbms/src/Access/ContextAccess.cpp
 bool operator <(const ContextAccess::Params & lhs, const ContextAccess::Params & rhs)
+=======
+std::shared_ptr<const Settings> AccessRightsContext::getDefaultSettings() const
+{
+    std::lock_guard lock{mutex};
+    return default_settings;
+}
+
+
+std::shared_ptr<const SettingsConstraints> AccessRightsContext::getSettingsConstraints() const
+{
+    std::lock_guard lock{mutex};
+    return settings_constraints;
+}
+
+
+bool operator <(const AccessRightsContext::Params & lhs, const AccessRightsContext::Params & rhs)
+>>>>>>> 880007787b... Introduce SettingsProoofile as a new access entity type.:dbms/src/Access/AccessRightsContext.cpp
 {
 #define CONTEXT_ACCESS_PARAMS_COMPARE_HELPER(field) \
     if (lhs.field < rhs.field) \
         return true; \
     if (lhs.field > rhs.field) \
         return false
+<<<<<<< HEAD:dbms/src/Access/ContextAccess.cpp
     CONTEXT_ACCESS_PARAMS_COMPARE_HELPER(user_id);
     CONTEXT_ACCESS_PARAMS_COMPARE_HELPER(current_roles);
     CONTEXT_ACCESS_PARAMS_COMPARE_HELPER(use_default_roles);
@@ -549,6 +632,20 @@ bool operator <(const ContextAccess::Params & lhs, const ContextAccess::Params &
     CONTEXT_ACCESS_PARAMS_COMPARE_HELPER(allow_introspection);
     CONTEXT_ACCESS_PARAMS_COMPARE_HELPER(interface);
     CONTEXT_ACCESS_PARAMS_COMPARE_HELPER(http_method);
+=======
+    ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(user_id);
+    ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(current_roles);
+    ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(use_default_roles);
+    ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(address);
+    ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(quota_key);
+    ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(current_database);
+    ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(readonly);
+    ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(allow_ddl);
+    ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(allow_introspection);
+    ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(interface);
+    ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(http_method);
+    ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(default_profile_name);
+>>>>>>> 880007787b... Introduce SettingsProoofile as a new access entity type.:dbms/src/Access/AccessRightsContext.cpp
     return false;
 #undef CONTEXT_ACCESS_PARAMS_COMPARE_HELPER
 }
@@ -559,6 +656,7 @@ bool operator ==(const ContextAccess::Params & lhs, const ContextAccess::Params 
 #define CONTEXT_ACCESS_PARAMS_COMPARE_HELPER(field) \
     if (lhs.field != rhs.field) \
         return false
+<<<<<<< HEAD:dbms/src/Access/ContextAccess.cpp
     CONTEXT_ACCESS_PARAMS_COMPARE_HELPER(user_id);
     CONTEXT_ACCESS_PARAMS_COMPARE_HELPER(current_roles);
     CONTEXT_ACCESS_PARAMS_COMPARE_HELPER(use_default_roles);
@@ -570,6 +668,20 @@ bool operator ==(const ContextAccess::Params & lhs, const ContextAccess::Params 
     CONTEXT_ACCESS_PARAMS_COMPARE_HELPER(allow_introspection);
     CONTEXT_ACCESS_PARAMS_COMPARE_HELPER(interface);
     CONTEXT_ACCESS_PARAMS_COMPARE_HELPER(http_method);
+=======
+    ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(user_id);
+    ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(current_roles);
+    ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(use_default_roles);
+    ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(address);
+    ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(quota_key);
+    ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(current_database);
+    ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(readonly);
+    ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(allow_ddl);
+    ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(allow_introspection);
+    ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(interface);
+    ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(http_method);
+    ACCESS_RIGHTS_CONTEXT_PARAMS_COMPARE_HELPER(default_profile_name);
+>>>>>>> 880007787b... Introduce SettingsProoofile as a new access entity type.:dbms/src/Access/AccessRightsContext.cpp
     return true;
 #undef CONTEXT_ACCESS_PARAMS_COMPARE_HELPER
 }

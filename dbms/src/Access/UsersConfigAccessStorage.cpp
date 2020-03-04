@@ -2,11 +2,15 @@
 #include <Access/Quota.h>
 #include <Access/RowPolicy.h>
 #include <Access/User.h>
+#include <Access/SettingsProfile.h>
 #include <Dictionaries/IDictionary.h>
 #include <Common/StringUtils/StringUtils.h>
 #include <Common/quoteString.h>
 #include <Poco/Util/AbstractConfiguration.h>
 #include <Poco/MD5Engine.h>
+#include <common/logger_useful.h>
+#include <boost/range/algorithm/copy.hpp>
+#include <boost/range/adaptor/map.hpp>
 #include <cstring>
 
 
@@ -29,6 +33,8 @@ namespace
             return 'Q';
         if (type == typeid(RowPolicy))
             return 'P';
+        if (type == typeid(SettingsProfile))
+            return 'S';
         return 0;
     }
 
@@ -81,8 +87,6 @@ namespace
             user->authentication = Authentication{Authentication::DOUBLE_SHA1_PASSWORD};
             user->authentication.setPasswordHashHex(config.getString(user_config + ".password_double_sha1_hex"));
         }
-
-        user->profile = config.getString(user_config + ".profile");
 
         /// Fill list of allowed hosts.
         const auto networks_config = user_config + ".networks";
@@ -331,6 +335,90 @@ namespace
         }
         return policies;
     }
+
+
+    std::shared_ptr<SettingsProfile> parseSettingsProfile(
+        const Poco::Util::AbstractConfiguration & config,
+        const String & profile_name,
+        std::unordered_map<String, std::shared_ptr<SettingsProfile>> & parsed_profiles)
+    {
+        auto it = parsed_profiles.find(profile_name);
+        if (it != parsed_profiles.end())
+            return it->second;
+
+        auto profile = std::make_shared<SettingsProfile>();
+        profile->setName(profile_name);
+        String profile_config = "profiles." + profile_name;
+
+        Poco::Util::AbstractConfiguration::Keys keys;
+        config.keys(profile_config, keys);
+
+        for (const std::string & key : keys)
+        {
+            if (key == "profile" || key.starts_with("profile["))
+            {
+                auto parent_profile_name = config.getString(profile_config + "." + key);
+                auto parent_profile = parseSettingsProfile(config, parent_profile_name, parsed_profiles);
+                boost::range::copy(parent_profile->settings, std::back_inserter(profile->settings));
+                profile->constraints.merge(parent_profile->constraints);
+                continue;
+            }
+
+            if (key == "constraints" || key.starts_with("constraints["))
+            {
+                profile->constraints.loadFromConfig(profile_config + "." + key, config);
+                continue;
+            }
+
+            Settings::findIndexStrict(key);  /// Check the setting does exist.
+            String value = config.getString(profile_config + "." + key);
+            profile->settings.push_back({std::move(key), std::move(value)});
+        }
+
+        parsed_profiles[profile_name] = profile;
+        return profile;
+    }
+
+
+    std::vector<AccessEntityPtr> parseSettingsProfiles(const Poco::Util::AbstractConfiguration & config, Poco::Logger * log)
+    {
+        Poco::Util::AbstractConfiguration::Keys profile_names;
+        config.keys("profiles", profile_names);
+        std::unordered_map<String, std::shared_ptr<SettingsProfile>> profiles;
+        for (const auto & profile_name : profile_names)
+        {
+            try
+            {
+                parseSettingsProfile(config, profile_name, profiles);
+            }
+            catch (...)
+            {
+                tryLogCurrentException(log, "Could not parse profile " + backQuote(profile_name));
+            }
+        }
+
+        Poco::Util::AbstractConfiguration::Keys user_names;
+        config.keys("users", user_names);
+        std::unordered_map<String, std::vector<UUID>> profile_to_user_ids;
+        for (const auto & user_name : user_names)
+        {
+            if (config.has("users." + user_name + ".profile"))
+            {
+                auto profile_name = config.getString("users." + user_name + ".profile");
+                auto it = profiles.find(profile_name);
+                if (it == profiles.end())
+                {
+                    LOG_ERROR(log, "Profile " + backQuote(profile_name) + " not found.");
+                    continue;
+                }
+                it->second->to_roles.ids.insert(generateID(typeid(User), user_name));
+            }
+        }
+
+        std::vector<AccessEntityPtr> profiles_as_vector;
+        boost::range::copy(profiles | boost::adaptors::map_values, std::back_inserter(profiles_as_vector));
+        return profiles_as_vector;
+    }
 }
 
 
@@ -350,6 +438,8 @@ void UsersConfigAccessStorage::setConfiguration(const Poco::Util::AbstractConfig
     for (const auto & entity : parseQuotas(config, getLogger()))
         all_entities.emplace_back(generateID(*entity), entity);
     for (const auto & entity : parseRowPolicies(config, getLogger()))
+        all_entities.emplace_back(generateID(*entity), entity);
+    for (const auto & entity : parseSettingsProfiles(config, getLogger()))
         all_entities.emplace_back(generateID(*entity), entity);
     memory_storage.setAll(all_entities);
 }

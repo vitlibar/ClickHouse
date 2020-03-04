@@ -30,7 +30,7 @@
 #include <Access/ContextAccess.h>
 #include <Access/EnabledRowPolicies.h>
 #include <Access/User.h>
-#include <Access/SettingsConstraints.h>
+#include <Access/SettingsProfile.h>
 #include <Interpreters/ExpressionJIT.h>
 #include <Dictionaries/Embedded/GeoDictionariesLoader.h>
 #include <Interpreters/EmbeddedDictionaries.h>
@@ -646,16 +646,23 @@ void Context::setUser(const String & name, const String & password, const Poco::
         client_info.quota_key = quota_key;
 
     auto new_user_id = getAccessControlManager().getID<User>(name);
+<<<<<<< HEAD
     auto new_access = getAccessControlManager().getContextAccess(new_user_id, {}, true, settings, current_database, client_info);
     new_access->checkHostIsAllowed();
     new_access->checkPassword(password);
+=======
+    auto new_access_rights = getAccessControlManager().getAccessRightsContext(
+        new_user_id, {}, true, settings, current_database, client_info, getDefaultProfileName());
+    new_access_rights->checkHostIsAllowed();
+    new_access_rights->checkPassword(password);
+>>>>>>> 880007787b... Introduce SettingsProoofile as a new access entity type.
 
     user_id = new_user_id;
     access = std::move(new_access);
     current_roles.clear();
     use_default_roles = true;
 
-    calculateUserSettings();
+    setSettings(*access_rights->getDefaultSettings());
 }
 
 std::shared_ptr<const User> Context::getUser() const
@@ -724,7 +731,11 @@ void Context::calculateAccessRights()
 {
     auto lock = getLock();
     if (user_id)
+<<<<<<< HEAD
         access = getAccessControlManager().getContextAccess(*user_id, current_roles, use_default_roles, settings, current_database, client_info);
+=======
+        access_rights = getAccessControlManager().getAccessRightsContext(*user_id, current_roles, use_default_roles, settings, current_database, client_info, getDefaultProfileName());
+>>>>>>> 880007787b... Introduce SettingsProoofile as a new access entity type.
 }
 
 
@@ -777,42 +788,10 @@ std::shared_ptr<const EnabledQuota> Context::getQuota() const
 }
 
 
-void Context::calculateUserSettings()
+void Context::setProfile(const String & profile_name)
 {
-    auto lock = getLock();
-    String profile = getUser()->profile;
-
-    bool old_readonly = settings.readonly;
-    bool old_allow_ddl = settings.allow_ddl;
-    bool old_allow_introspection_functions = settings.allow_introspection_functions;
-
-    /// 1) Set default settings (hardcoded values)
-    /// NOTE: we ignore global_context settings (from which it is usually copied)
-    /// NOTE: global_context settings are immutable and not auto updated
-    settings = Settings();
-    settings_constraints = nullptr;
-
-    /// 2) Apply settings from default profile
-    auto default_profile_name = getDefaultProfileName();
-    if (profile != default_profile_name)
-        setProfile(default_profile_name);
-
-    /// 3) Apply settings from current user
-    setProfile(profile);
-
-    /// 4) Recalculate access rights if it's necessary.
-    if ((settings.readonly != old_readonly) || (settings.allow_ddl != old_allow_ddl) || (settings.allow_introspection_functions != old_allow_introspection_functions))
-        calculateAccessRights();
-}
-
-void Context::setProfile(const String & profile)
-{
-    settings.setProfile(profile, *shared->users_config);
-
-    auto new_constraints
-        = settings_constraints ? std::make_shared<SettingsConstraints>(*settings_constraints) : std::make_shared<SettingsConstraints>();
-    new_constraints->setProfile(profile, *shared->users_config);
-    settings_constraints = std::move(new_constraints);
+    auto profile = getAccessControlManager().getSettingsProfile(profile_name);
+    applySettingsChanges(profile->settings);
 }
 
 
@@ -1219,15 +1198,22 @@ void Context::applySettingsChanges(const SettingsChanges & changes)
 
 void Context::checkSettingsConstraints(const SettingChange & change)
 {
-    if (settings_constraints)
+    if (auto settings_constraints = getSettingsConstraints())
         settings_constraints->check(settings, change);
 }
 
 
 void Context::checkSettingsConstraints(const SettingsChanges & changes)
 {
-    if (settings_constraints)
+    if (auto settings_constraints = getSettingsConstraints())
         settings_constraints->check(settings, changes);
+}
+
+
+std::shared_ptr<const SettingsConstraints> Context::getSettingsConstraints() const
+{
+    auto lock = getLock();
+    return access_rights->getSettingsConstraints();
 }
 
 
