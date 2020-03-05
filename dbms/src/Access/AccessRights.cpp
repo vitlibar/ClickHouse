@@ -23,13 +23,6 @@ namespace
         COLUMN_LEVEL,
     };
 
-    enum RevokeMode
-    {
-        NORMAL_REVOKE_MODE,  /// for AccessRights::revoke()
-        PARTIAL_REVOKE_MODE, /// for AccessRights::partialRevoke()
-        FULL_REVOKE_MODE,    /// for AccessRights::fullRevoke()
-    };
-
     struct Helper
     {
         static const Helper & instance()
@@ -41,6 +34,7 @@ namespace
         const AccessFlags database_level_flags = AccessFlags::databaseLevel();
         const AccessFlags table_level_flags = AccessFlags::tableLevel();
         const AccessFlags column_level_flags = AccessFlags::columnLevel();
+
         const AccessFlags show_flag = AccessType::SHOW;
         const AccessFlags exists_flag = AccessType::EXISTS;
         const AccessFlags create_table_flag = AccessType::CREATE_TABLE;
@@ -61,13 +55,10 @@ struct AccessRights::Node
 public:
     std::shared_ptr<const String> node_name;
     Level level = GLOBAL_LEVEL;
-    AccessFlags explicit_grants;
-    AccessFlags partial_revokes;
-    AccessFlags inherited_access; /// the access inherited from the parent node
-    AccessFlags raw_access;       /// raw_access = (inherited_access - partial_revokes) | explicit_grants
-    AccessFlags access;           /// access = raw_access | implicit_access
-    AccessFlags min_access;       /// min_access = access & child[0].access & ... | child[N-1].access
-    AccessFlags max_access;       /// max_access = access | child[0].access | ... | child[N-1].access
+    AccessFlags access;           /// access = (inherited_access - partial_revokes) | explicit_grants
+    AccessFlags final_access;     /// final_access = access | implicit_access
+    AccessFlags min_access;       /// min_access = final_access & child[0].final_access & ... & child[N-1].final_access
+    AccessFlags max_access;       /// max_access = final_access | child[0].final_access | ... | child[N-1].final_access
     std::unique_ptr<std::unordered_map<std::string_view, Node>> children;
 
     Node() = default;
@@ -77,11 +68,8 @@ public:
     {
         node_name = src.node_name;
         level = src.level;
-        inherited_access = src.inherited_access;
-        explicit_grants = src.explicit_grants;
-        partial_revokes = src.partial_revokes;
-        raw_access = src.raw_access;
         access = src.access;
+        final_access = src.final_access;
         min_access = src.min_access;
         max_access = src.max_access;
         if (src.children)
@@ -122,13 +110,8 @@ public:
             access_to_grant = grantable;
         }
 
-        AccessFlags new_explicit_grants = access_to_grant - partial_revokes;
-        if (level == TABLE_LEVEL)
-            removeExplicitGrantsRec(new_explicit_grants);
-        removePartialRevokesRec(access_to_grant);
-        explicit_grants |= new_explicit_grants;
-
-        calculateAllAccessRec(helper);
+        access |= access_to_grant;
+        calculateFinalAccessRec(helper);
     }
 
     template <typename ... Args>
@@ -136,9 +119,8 @@ public:
     {
         auto & child = getChild(name);
         child.grant(access_to_grant, helper, subnames...);
-        eraseChildIfEmpty(child);
-        calculateImplicitAccess(helper);
-        calculateMinAndMaxAccess();
+        eraseChildIfPossible(child);
+        calculateFinalAccess(helper);
     }
 
     template <typename StringT>
@@ -148,79 +130,37 @@ public:
         {
             auto & child = getChild(name);
             child.grant(access_to_grant, helper);
-            eraseChildIfEmpty(child);
+            eraseChildIfPossible(child);
         }
-        calculateImplicitAccess(helper);
-        calculateMinAndMaxAccess();
+        calculateFinalAccess(helper);
     }
 
-    template <int mode>
     void revoke(const AccessFlags & access_to_revoke, const Helper & helper)
     {
-        if constexpr (mode == NORMAL_REVOKE_MODE)
-        {
-            if (level == TABLE_LEVEL)
-                removeExplicitGrantsRec(access_to_revoke);
-            else
-                removeExplicitGrants(access_to_revoke);
-        }
-        else if constexpr (mode == PARTIAL_REVOKE_MODE)
-        {
-            AccessFlags new_partial_revokes = access_to_revoke - explicit_grants;
-            if (level == TABLE_LEVEL)
-                removeExplicitGrantsRec(access_to_revoke);
-            else
-                removeExplicitGrants(access_to_revoke);
-            removePartialRevokesRec(new_partial_revokes);
-            partial_revokes |= new_partial_revokes;
-        }
-        else /// mode == FULL_REVOKE_MODE
-        {
-            AccessFlags new_partial_revokes = access_to_revoke - explicit_grants;
-            removeExplicitGrantsRec(access_to_revoke);
-            removePartialRevokesRec(new_partial_revokes);
-            partial_revokes |= new_partial_revokes;
-        }
-        calculateAllAccessRec(helper);
+        access &= ~access_to_revoke;
+        calculateFinalAccessRec(helper);
     }
 
-    template <int mode, typename... Args>
+    template <typename... Args>
     void revoke(const AccessFlags & access_to_revoke, const Helper & helper, const std::string_view & name, const Args &... subnames)
     {
-        Node * child;
-        if (mode == NORMAL_REVOKE_MODE)
-        {
-            if (!(child = tryGetChild(name)))
-                return;
-        }
-        else
-            child = &getChild(name);
+        auto & child = getChild(name);
 
-        child->revoke<mode>(access_to_revoke, helper, subnames...);
-        eraseChildIfEmpty(*child);
-        calculateImplicitAccess(helper);
-        calculateMinAndMaxAccess();
+        child.revoke(access_to_revoke, helper, subnames...);
+        eraseChildIfPossible(child);
+        calculateFinalAccess(helper);
     }
 
-    template <int mode, typename StringT>
+    template <typename StringT>
     void revoke(const AccessFlags & access_to_revoke, const Helper & helper, const std::vector<StringT> & names)
     {
-        Node * child;
         for (const auto & name : names)
         {
-            if (mode == NORMAL_REVOKE_MODE)
-            {
-                if (!(child = tryGetChild(name)))
-                    continue;
-            }
-            else
-                child = &getChild(name);
-
-            child->revoke<mode>(access_to_revoke, helper);
-            eraseChildIfEmpty(*child);
+            auto & child = getChild(name);
+            child.revoke(access_to_revoke, helper);
+            eraseChildIfPossible(child);
         }
-        calculateImplicitAccess(helper);
-        calculateMinAndMaxAccess();
+        calculateFinalAccess(helper);
     }
 
     bool isGranted(const AccessFlags & flags) const
@@ -240,7 +180,7 @@ public:
         if (child)
             return child->isGranted(flags, subnames...);
         else
-            return access.contains(flags);
+            return final_access.contains(flags);
     }
 
     template <typename StringT>
@@ -261,7 +201,7 @@ public:
             }
             else
             {
-                if (!access.contains(flags))
+                if (!final_access.contains(flags))
                     return false;
             }
         }
@@ -270,7 +210,7 @@ public:
 
     friend bool operator ==(const Node & left, const Node & right)
     {
-        if ((left.explicit_grants != right.explicit_grants) || (left.partial_revokes != right.partial_revokes))
+        if (left.access != right.access)
             return false;
 
         if (!left.children)
@@ -283,33 +223,24 @@ public:
 
     friend bool operator!=(const Node & left, const Node & right) { return !(left == right); }
 
-    bool isEmpty() const
-    {
-        return !explicit_grants && !partial_revokes && !children;
-    }
-
     void merge(const Node & other, const Helper & helper)
     {
-        mergeRawAccessRec(other);
-        calculateGrantsAndPartialRevokesRec();
-        calculateAllAccessRec(helper);
+        mergeAccessRec(other);
+        calculateFinalAccessRec(helper);
     }
 
-    void traceTree(Poco::Logger * log) const
+    void logTree(Poco::Logger * log) const
     {
         LOG_TRACE(log, "Tree(" << level << "): name=" << (node_name ? *node_name : "NULL")
-                  << ", explicit_grants=" << explicit_grants.toString()
-                  << ", partial_revokes=" << partial_revokes.toString()
-                  << ", inherited_access=" << inherited_access.toString()
-                  << ", raw_access=" << raw_access.toString()
                   << ", access=" << access.toString()
+                  << ", final_access=" << final_access.toString()
                   << ", min_access=" << min_access.toString()
                   << ", max_access=" << max_access.toString()
                   << ", num_children=" << (children ? children->size() : 0));
         if (children)
         {
             for (auto & child : *children | boost::adaptors::map_values)
-                child.traceTree(log);
+                child.logTree(log);
         }
     }
 
@@ -345,14 +276,13 @@ private:
         Node & new_child = (*children)[*new_child_name];
         new_child.node_name = std::move(new_child_name);
         new_child.level = static_cast<Level>(level + 1);
-        new_child.inherited_access = raw_access;
-        new_child.raw_access = raw_access;
+        new_child.access = access;
         return new_child;
     }
 
-    void eraseChildIfEmpty(Node & child)
+    void eraseChildIfPossible(Node & child)
     {
-        if (!child.isEmpty())
+        if (!canEraseChild(child))
             return;
         auto it = children->find(*child.node_name);
         children->erase(it);
@@ -360,22 +290,50 @@ private:
             children = nullptr;
     }
 
-    void calculateImplicitAccess(const Helper & helper)
+    bool canEraseChild(const Node & child) const
     {
-        access = raw_access;
-        if (access & helper.database_level_flags)
-            access |= helper.show_flag | helper.exists_flag;
-        else if ((level >= DATABASE_LEVEL) && children)
-            access |= helper.exists_flag;
-
-        if ((level == GLOBAL_LEVEL) && (access & helper.create_table_flag))
-            access |= helper.create_temporary_table_flag;
+        return (access == child.access) && !child.children;
     }
 
-    void calculateMinAndMaxAccess()
+    void calculateFinalAccessRec(const Helper & helper)
     {
-        min_access = access;
-        max_access = access;
+        /// Traverse tree.
+        if (children)
+        {
+            for (auto it = children->begin(); it != children->end();)
+            {
+                auto & child = it->second;
+                child.calculateFinalAccessRec(helper);
+                if (canEraseChild(child))
+                    it = children->erase(it);
+                else
+                    ++it;
+            }
+            if (children->empty())
+                children = nullptr;
+        }
+
+        calculateFinalAccess(helper);
+    }
+
+    void calculateFinalAccess(const Helper & helper)
+    {
+        /// Add implicit access flags:
+        /// final_access = access | implicit_access
+        final_access = access;
+        if (final_access & helper.database_level_flags)
+            final_access |= helper.show_flag | helper.exists_flag;
+        else if ((level >= DATABASE_LEVEL) && children)
+            final_access |= helper.exists_flag;
+
+        if ((level == GLOBAL_LEVEL) && (final_access & helper.create_table_flag))
+            final_access |= helper.create_temporary_table_flag;
+
+        /// Calculate min and max access:
+        /// min_access = final_access & child[0].final_access & ... & child[N-1].final_access
+        /// max_access = final_access | child[0].final_access | ... | child[N-1].final_access
+        min_access = final_access;
+        max_access = final_access;
         if (children)
         {
             for (const auto & child : *children | boost::adaptors::map_values)
@@ -386,84 +344,21 @@ private:
         }
     }
 
-    void calculateAllAccessRec(const Helper & helper)
-    {
-        partial_revokes &= inherited_access;
-        raw_access = (inherited_access - partial_revokes) | explicit_grants;
-
-        /// Traverse tree.
-        if (children)
-        {
-            for (auto it = children->begin(); it != children->end();)
-            {
-                auto & child = it->second;
-                child.inherited_access = raw_access;
-                child.calculateAllAccessRec(helper);
-                if (child.isEmpty())
-                    it = children->erase(it);
-                else
-                    ++it;
-            }
-            if (children->empty())
-                children = nullptr;
-        }
-
-        calculateImplicitAccess(helper);
-        calculateMinAndMaxAccess();
-    }
-
-    void removeExplicitGrants(const AccessFlags & change)
-    {
-        explicit_grants -= change;
-    }
-
-    void removeExplicitGrantsRec(const AccessFlags & change)
-    {
-        removeExplicitGrants(change);
-        if (children)
-        {
-            for (auto & child : *children | boost::adaptors::map_values)
-                child.removeExplicitGrantsRec(change);
-        }
-    }
-
-    void removePartialRevokesRec(const AccessFlags & change)
-    {
-        partial_revokes -= change;
-        if (children)
-        {
-            for (auto & child : *children | boost::adaptors::map_values)
-                child.removePartialRevokesRec(change);
-        }
-    }
-
-    void mergeRawAccessRec(const Node & rhs)
+    void mergeAccessRec(const Node & rhs)
     {
         if (rhs.children)
         {
             for (const auto & [rhs_childname, rhs_child] : *rhs.children)
-                getChild(rhs_childname).mergeRawAccessRec(rhs_child);
+                getChild(rhs_childname).mergeAccessRec(rhs_child);
         }
-        raw_access |= rhs.raw_access;
+        access |= rhs.access;
         if (children)
         {
             for (auto & [lhs_childname, lhs_child] : *children)
             {
-                lhs_child.inherited_access = raw_access;
                 if (!rhs.tryGetChild(lhs_childname))
-                    lhs_child.raw_access |= rhs.raw_access;
+                    lhs_child.access |= rhs.access;
             }
-        }
-    }
-
-    void calculateGrantsAndPartialRevokesRec()
-    {
-        explicit_grants = raw_access - inherited_access;
-        partial_revokes = inherited_access - raw_access;
-        if (children)
-        {
-            for (auto & child : *children | boost::adaptors::map_values)
-                child.calculateGrantsAndPartialRevokesRec();
         }
     }
 };
@@ -515,7 +410,7 @@ void AccessRights::grantImpl(const AccessFlags & access, const Args &... args)
     if (!root)
         root = std::make_unique<Node>();
     root->grant(access, Helper::instance(), args...);
-    if (root->isEmpty())
+    if (!root->access && !root->children)
         root = nullptr;
 }
 
@@ -563,79 +458,59 @@ void AccessRights::grant(const AccessFlags & access, const std::string_view & da
 void AccessRights::grant(const AccessRightsElement & element, std::string_view current_database) { grantImpl(element, current_database); }
 void AccessRights::grant(const AccessRightsElements & elements, std::string_view current_database) { grantImpl(elements, current_database); }
 
-template <int mode, typename... Args>
+template <typename... Args>
 void AccessRights::revokeImpl(const AccessFlags & access, const Args &... args)
 {
     if (!root)
         return;
-    root->revoke<mode>(access, Helper::instance(), args...);
-    if (root->isEmpty())
+    root->revoke(access, Helper::instance(), args...);
+    if (!root->access && !root->children)
         root = nullptr;
 }
 
-template <int mode>
 void AccessRights::revokeImpl(const AccessRightsElement & element, std::string_view current_database)
 {
     if (element.any_database)
     {
-        revokeImpl<mode>(element.access_flags);
+        revokeImpl(element.access_flags);
     }
     else if (element.any_table)
     {
         if (element.database.empty())
-            revokeImpl<mode>(element.access_flags, checkCurrentDatabase(current_database));
+            revokeImpl(element.access_flags, checkCurrentDatabase(current_database));
         else
-            revokeImpl<mode>(element.access_flags, element.database);
+            revokeImpl(element.access_flags, element.database);
     }
     else if (element.any_column)
     {
         if (element.database.empty())
-            revokeImpl<mode>(element.access_flags, checkCurrentDatabase(current_database), element.table);
+            revokeImpl(element.access_flags, checkCurrentDatabase(current_database), element.table);
         else
-            revokeImpl<mode>(element.access_flags, element.database, element.table);
+            revokeImpl(element.access_flags, element.database, element.table);
     }
     else
     {
         if (element.database.empty())
-            revokeImpl<mode>(element.access_flags, checkCurrentDatabase(current_database), element.table, element.columns);
+            revokeImpl(element.access_flags, checkCurrentDatabase(current_database), element.table, element.columns);
         else
-            revokeImpl<mode>(element.access_flags, element.database, element.table, element.columns);
+            revokeImpl(element.access_flags, element.database, element.table, element.columns);
     }
 }
 
-template <int mode>
 void AccessRights::revokeImpl(const AccessRightsElements & elements, std::string_view current_database)
 {
     for (const auto & element : elements)
-        revokeImpl<mode>(element, current_database);
+        revokeImpl(element, current_database);
 }
 
-void AccessRights::revoke(const AccessFlags & access) { revokeImpl<NORMAL_REVOKE_MODE>(access); }
-void AccessRights::revoke(const AccessFlags & access, const std::string_view & database) { revokeImpl<NORMAL_REVOKE_MODE>(access, database); }
-void AccessRights::revoke(const AccessFlags & access, const std::string_view & database, const std::string_view & table) { revokeImpl<NORMAL_REVOKE_MODE>(access, database, table); }
-void AccessRights::revoke(const AccessFlags & access, const std::string_view & database, const std::string_view & table, const std::string_view & column) { revokeImpl<NORMAL_REVOKE_MODE>(access, database, table, column); }
-void AccessRights::revoke(const AccessFlags & access, const std::string_view & database, const std::string_view & table, const std::vector<std::string_view> & columns) { revokeImpl<NORMAL_REVOKE_MODE>(access, database, table, columns); }
-void AccessRights::revoke(const AccessFlags & access, const std::string_view & database, const std::string_view & table, const Strings & columns) { revokeImpl<NORMAL_REVOKE_MODE>(access, database, table, columns); }
-void AccessRights::revoke(const AccessRightsElement & element, std::string_view current_database) { revokeImpl<NORMAL_REVOKE_MODE>(element, current_database); }
-void AccessRights::revoke(const AccessRightsElements & elements, std::string_view current_database) { revokeImpl<NORMAL_REVOKE_MODE>(elements, current_database); }
-
-void AccessRights::partialRevoke(const AccessFlags & access) { revokeImpl<PARTIAL_REVOKE_MODE>(access); }
-void AccessRights::partialRevoke(const AccessFlags & access, const std::string_view & database) { revokeImpl<PARTIAL_REVOKE_MODE>(access, database); }
-void AccessRights::partialRevoke(const AccessFlags & access, const std::string_view & database, const std::string_view & table) { revokeImpl<PARTIAL_REVOKE_MODE>(access, database, table); }
-void AccessRights::partialRevoke(const AccessFlags & access, const std::string_view & database, const std::string_view & table, const std::string_view & column) { revokeImpl<PARTIAL_REVOKE_MODE>(access, database, table, column); }
-void AccessRights::partialRevoke(const AccessFlags & access, const std::string_view & database, const std::string_view & table, const std::vector<std::string_view> & columns) { revokeImpl<PARTIAL_REVOKE_MODE>(access, database, table, columns); }
-void AccessRights::partialRevoke(const AccessFlags & access, const std::string_view & database, const std::string_view & table, const Strings & columns) { revokeImpl<PARTIAL_REVOKE_MODE>(access, database, table, columns); }
-void AccessRights::partialRevoke(const AccessRightsElement & element, std::string_view current_database) { revokeImpl<PARTIAL_REVOKE_MODE>(element, current_database); }
-void AccessRights::partialRevoke(const AccessRightsElements & elements, std::string_view current_database) { revokeImpl<PARTIAL_REVOKE_MODE>(elements, current_database); }
-
-void AccessRights::fullRevoke(const AccessFlags & access) { revokeImpl<FULL_REVOKE_MODE>(access); }
-void AccessRights::fullRevoke(const AccessFlags & access, const std::string_view & database) { revokeImpl<FULL_REVOKE_MODE>(access, database); }
-void AccessRights::fullRevoke(const AccessFlags & access, const std::string_view & database, const std::string_view & table) { revokeImpl<FULL_REVOKE_MODE>(access, database, table); }
-void AccessRights::fullRevoke(const AccessFlags & access, const std::string_view & database, const std::string_view & table, const std::string_view & column) { revokeImpl<FULL_REVOKE_MODE>(access, database, table, column); }
-void AccessRights::fullRevoke(const AccessFlags & access, const std::string_view & database, const std::string_view & table, const std::vector<std::string_view> & columns) { revokeImpl<FULL_REVOKE_MODE>(access, database, table, columns); }
-void AccessRights::fullRevoke(const AccessFlags & access, const std::string_view & database, const std::string_view & table, const Strings & columns) { revokeImpl<FULL_REVOKE_MODE>(access, database, table, columns); }
-void AccessRights::fullRevoke(const AccessRightsElement & element, std::string_view current_database) { revokeImpl<FULL_REVOKE_MODE>(element, current_database); }
-void AccessRights::fullRevoke(const AccessRightsElements & elements, std::string_view current_database) { revokeImpl<FULL_REVOKE_MODE>(elements, current_database); }
+void AccessRights::revoke(const AccessFlags & access) { revokeImpl(access); }
+void AccessRights::revoke(const AccessFlags & access, const std::string_view & database) { revokeImpl(access, database); }
+void AccessRights::revoke(const AccessFlags & access, const std::string_view & database, const std::string_view & table) { revokeImpl(access, database, table); }
+void AccessRights::revoke(const AccessFlags & access, const std::string_view & database, const std::string_view & table, const std::string_view & column) { revokeImpl(access, database, table, column); }
+void AccessRights::revoke(const AccessFlags & access, const std::string_view & database, const std::string_view & table, const std::vector<std::string_view> & columns) { revokeImpl(access, database, table, columns); }
+void AccessRights::revoke(const AccessFlags & access, const std::string_view & database, const std::string_view & table, const Strings & columns) { revokeImpl(access, database, table, columns); }
+void AccessRights::revoke(const AccessRightsElement & element, std::string_view current_database) { revokeImpl(element, current_database); }
+void AccessRights::revoke(const AccessRightsElements & elements, std::string_view current_database) { revokeImpl(elements, current_database); }
 
 
 AccessRights::Elements AccessRights::getElements() const
@@ -643,32 +518,39 @@ AccessRights::Elements AccessRights::getElements() const
     if (!root)
         return {};
     Elements res;
-    if (root->explicit_grants)
-        res.grants.push_back({root->explicit_grants});
+    auto global_access = root->access;
+    if (global_access)
+        res.grants.push_back({global_access});
     if (root->children)
     {
         for (const auto & [db_name, db_node] : *root->children)
         {
-            if (db_node.partial_revokes)
-                res.partial_revokes.push_back({db_node.partial_revokes, db_name});
-            if (db_node.explicit_grants)
-                res.grants.push_back({db_node.explicit_grants, db_name});
+            auto db_grants = db_node.access - global_access;
+            auto db_partial_revokes = global_access - db_node.access;
+            if (db_partial_revokes)
+                res.partial_revokes.push_back({db_partial_revokes, db_name});
+            if (db_grants)
+                res.grants.push_back({db_grants, db_name});
             if (db_node.children)
             {
                 for (const auto & [table_name, table_node] : *db_node.children)
                 {
-                    if (table_node.partial_revokes)
-                        res.partial_revokes.push_back({table_node.partial_revokes, db_name, table_name});
-                    if (table_node.explicit_grants)
-                        res.grants.push_back({table_node.explicit_grants, db_name, table_name});
+                    auto table_grants = table_node.access - db_node.access;
+                    auto table_partial_revokes = db_node.access - table_node.access;
+                    if (table_partial_revokes)
+                        res.partial_revokes.push_back({table_partial_revokes, db_name, table_name});
+                    if (table_grants)
+                        res.grants.push_back({table_grants, db_name, table_name});
                     if (table_node.children)
                     {
                         for (const auto & [column_name, column_node] : *table_node.children)
                         {
-                            if (column_node.partial_revokes)
-                                res.partial_revokes.push_back({column_node.partial_revokes, db_name, table_name, column_name});
-                            if (column_node.explicit_grants)
-                                res.grants.push_back({column_node.explicit_grants, db_name, table_name, column_name});
+                            auto column_grants = column_node.access - table_node.access;
+                            auto column_partial_revokes = table_node.access - column_node.access;
+                            if (column_partial_revokes)
+                                res.partial_revokes.push_back({column_partial_revokes, db_name, table_name, column_name});
+                            if (column_grants)
+                                res.grants.push_back({column_grants, db_name, table_name, column_name});
                         }
                     }
                 }
@@ -776,17 +658,17 @@ void AccessRights::merge(const AccessRights & other)
     if (other.root)
     {
         root->merge(*other.root, Helper::instance());
-        if (root->isEmpty())
+        if (!root->access && !root->children)
             root = nullptr;
     }
 }
 
 
-void AccessRights::traceTree() const
+void AccessRights::logTree() const
 {
     auto * log = &Poco::Logger::get("AccessRights");
     if (root)
-        root->traceTree(log);
+        root->logTree(log);
     else
         LOG_TRACE(log, "Tree: NULL");
 }

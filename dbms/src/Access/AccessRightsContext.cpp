@@ -439,23 +439,23 @@ boost::shared_ptr<const AccessRights> AccessRightsContext::calculateResultAccess
         result.grant(AccessType::SELECT, "system");
 
     if (readonly_)
-        result.fullRevoke(write_table_access | all_dcl | AccessType::SYSTEM | AccessType::KILL);
+        result.revoke(write_table_access | all_dcl | AccessType::SYSTEM | AccessType::KILL);
 
     if (readonly_ || !allow_ddl_)
-        result.fullRevoke(table_and_dictionary_ddl);
+        result.revoke(table_and_dictionary_ddl);
 
     if (readonly_ && grant_option)
-        result.fullRevoke(AccessType::ALL);
+        result.revoke(AccessType::ALL);
 
     if (readonly_ == 1)
     {
         /// Table functions are forbidden in readonly mode.
         /// For example, for readonly = 2 - allowed.
-        result.fullRevoke(AccessType::CREATE_TEMPORARY_TABLE | AccessType::TABLE_FUNCTIONS);
+        result.revoke(AccessType::CREATE_TEMPORARY_TABLE | AccessType::TABLE_FUNCTIONS);
     }
 
     if (!allow_introspection_)
-        result.fullRevoke(AccessType::INTROSPECTION);
+        result.revoke(AccessType::INTROSPECTION);
 
     result_access_cache[cache_index].store(result_ptr);
 
