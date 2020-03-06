@@ -44,7 +44,6 @@ BlockInputStreamPtr InterpreterExistsQuery::executeImpl()
     {
         if (exists_query->temporary)
         {
-            context.checkAccess(AccessType::EXISTS, "", exists_query->table);
             result = context.isExternalTableExist(exists_query->table);
         }
         else
@@ -52,7 +51,7 @@ BlockInputStreamPtr InterpreterExistsQuery::executeImpl()
             String database = exists_query->database;
             if (database.empty())
                 database = context.getCurrentDatabase();
-            context.checkAccess(AccessType::EXISTS, database, exists_query->table);
+            context.checkAccess(AccessType::SHOW_TABLES, database, exists_query->table);
             result = context.isTableExist(database, exists_query->table);
         }
     }
@@ -63,7 +62,7 @@ BlockInputStreamPtr InterpreterExistsQuery::executeImpl()
         String database = exists_query->database;
         if (database.empty())
             database = context.getCurrentDatabase();
-        context.checkAccess(AccessType::EXISTS, database, exists_query->table);
+        context.checkAccess(AccessType::SHOW_DICTIONARIES, database, exists_query->table);
         result = context.isDictionaryExists(exists_query->database, exists_query->table);
     }
 

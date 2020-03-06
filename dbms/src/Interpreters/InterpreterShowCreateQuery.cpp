@@ -51,7 +51,7 @@ BlockInputStreamPtr InterpreterShowCreateQuery::executeImpl()
             create_query = context.getCreateExternalTableQuery(show_query->table);
         else
         {
-            context.checkAccess(AccessType::SHOW, show_query->database, show_query->table);
+            context.checkAccess(AccessType::SHOW_COLUMNS, show_query->database, show_query->table);
             create_query = context.getDatabase(show_query->database)->getCreateTableQuery(context, show_query->table);
         }
     }
@@ -59,14 +59,14 @@ BlockInputStreamPtr InterpreterShowCreateQuery::executeImpl()
     {
         if (show_query->temporary)
             throw Exception("Temporary databases are not possible.", ErrorCodes::SYNTAX_ERROR);
-        context.checkAccess(AccessType::SHOW, show_query->database);
+        context.checkAccess(AccessType::SHOW_DATABASES, show_query->database);
         create_query = context.getDatabase(show_query->database)->getCreateDatabaseQuery(context);
     }
     else if ((show_query = query_ptr->as<ASTShowCreateDictionaryQuery>()))
     {
         if (show_query->temporary)
             throw Exception("Temporary dictionaries are not possible.", ErrorCodes::SYNTAX_ERROR);
-        context.checkAccess(AccessType::SHOW, show_query->database, show_query->table);
+        context.checkAccess(AccessType::SHOW_DICTIONARIES, show_query->database, show_query->table);
         create_query = context.getDatabase(show_query->database)->getCreateDictionaryQuery(context, show_query->table);
     }
 

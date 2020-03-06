@@ -435,8 +435,7 @@ boost::shared_ptr<const AccessRights> AccessRightsContext::calculateResultAccess
         | AccessType::DROP_ROLE | AccessType::DROP_POLICY | AccessType::DROP_QUOTA | AccessType::ROLE_ADMIN;
 
     /// Anyone has access to the "system" database.
-    if (!result.isGranted(AccessType::SELECT, "system"))
-        result.grant(AccessType::SELECT, "system");
+    result.grant(AccessType::SELECT, "system");
 
     if (readonly_)
         result.revoke(write_table_access | all_dcl | AccessType::SYSTEM | AccessType::KILL);
