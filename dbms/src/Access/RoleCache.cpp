@@ -1,50 +1,51 @@
-#include <Access/RoleContextFactory.h>
+#include <Access/RoleCache.h>
 #include <boost/container/flat_set.hpp>
 
 
 namespace DB
 {
 
-RoleContextFactory::RoleContextFactory(const AccessControlManager & manager_)
+RoleCache::RoleCache(const AccessControlManager & manager_)
     : manager(manager_), cache(600000 /* 10 minutes */) {}
 
 
-RoleContextFactory::~RoleContextFactory() = default;
+RoleCache::~RoleCache() = default;
 
 
-RoleContextPtr RoleContextFactory::createContext(
+std::shared_ptr<const EnabledRoles> RoleCache::getEnabledRoles(
     const std::vector<UUID> & roles, const std::vector<UUID> & roles_with_admin_option)
 {
     if (roles.size() == 1 && roles_with_admin_option.empty())
-        return createContextImpl(roles[0], false);
+        return getEnabledRolesImpl(roles[0], false);
 
     if (roles.size() == 1 && roles_with_admin_option == roles)
-        return createContextImpl(roles[0], true);
+        return getEnabledRolesImpl(roles[0], true);
 
-    std::vector<RoleContextPtr> children;
+    std::vector<std::shared_ptr<const EnabledRoles>> children;
     children.reserve(roles.size());
     for (const auto & role : roles_with_admin_option)
-        children.push_back(createContextImpl(role, true));
+        children.push_back(getEnabledRolesImpl(role, true));
 
     boost::container::flat_set<UUID> roles_with_admin_option_set{roles_with_admin_option.begin(), roles_with_admin_option.end()};
     for (const auto & role : roles)
     {
         if (!roles_with_admin_option_set.contains(role))
-            children.push_back(createContextImpl(role, false));
+            children.push_back(getEnabledRolesImpl(role, false));
     }
 
-    return ext::shared_ptr_helper<RoleContext>::create(std::move(children));
+    auto res = std::shared_ptr<const EnabledRoles>(new EnabledRoles(std::move(children)));
+    return res;
 }
 
 
-RoleContextPtr RoleContextFactory::createContextImpl(const UUID & id, bool with_admin_option)
+std::shared_ptr<const EnabledRoles> RoleCache::getEnabledRolesImpl(const UUID & id, bool with_admin_option)
 {
     std::lock_guard lock{mutex};
     auto key = std::make_pair(id, with_admin_option);
     auto x = cache.get(key);
     if (x)
         return *x;
-    auto res = ext::shared_ptr_helper<RoleContext>::create(manager, id, with_admin_option);
+    auto res = std::shared_ptr<const EnabledRoles>(new EnabledRoles(manager, id, with_admin_option));
     cache.add(key, res);
     return res;
 }

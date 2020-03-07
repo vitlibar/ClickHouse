@@ -10,7 +10,7 @@
 #include <Parsers/ASTAlterQuery.h>
 #include <Parsers/ParserAlterQuery.h>
 #include <Parsers/parseQuery.h>
-#include <Access/AccessRightsContext.h>
+#include <Access/ContextAccess.h>
 #include <Columns/ColumnString.h>
 #include <Common/typeid_cast.h>
 #include <DataTypes/DataTypeString.h>
@@ -99,7 +99,7 @@ static QueryDescriptors extractQueriesExceptMeAndCheckAccess(const Block & proce
         if (my_client.current_user != query_user)
         {
             if (!can_kill_query_started_by_another_user)
-                can_kill_query_started_by_another_user = context.getAccessRights()->isGranted(&Poco::Logger::get("InterpreterKillQueryQuery"), AccessType::KILL_QUERY);
+                can_kill_query_started_by_another_user = context.getAccess()->isGranted(&Poco::Logger::get("InterpreterKillQueryQuery"), AccessType::KILL_QUERY);
             if (!*can_kill_query_started_by_another_user)
             {
                 access_denied = true;
@@ -264,7 +264,7 @@ BlockIO InterpreterKillQueryQuery::execute()
                     ParserAlterCommand parser;
                     const auto & command_ast = parseQuery(parser, command_col.getDataAt(i).toString(), 0)->as<const ASTAlterCommand &>();
                     required_access_rights = InterpreterAlterQuery::getRequiredAccessForCommand(command_ast, database_name, table_name);
-                    if (!context.getAccessRights()->isGranted(&Poco::Logger::get("InterpreterKillQueryQuery"), required_access_rights))
+                    if (!context.getAccess()->isGranted(&Poco::Logger::get("InterpreterKillQueryQuery"), required_access_rights))
                     {
                         access_denied = true;
                         continue;

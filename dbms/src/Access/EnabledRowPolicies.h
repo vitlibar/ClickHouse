@@ -15,23 +15,18 @@ using ASTPtr = std::shared_ptr<IAST>;
 
 
 /// Provides fast access to row policies' conditions for a specific user and tables.
-class RowPolicyContext
+class EnabledRowPolicies
 {
 public:
-    /// Default constructor makes a row policy usage context which restricts nothing.
-    RowPolicyContext();
+    ~EnabledRowPolicies();
 
-    ~RowPolicyContext();
-
-    using ConditionIndex = RowPolicy::ConditionIndex;
+    using ConditionType = RowPolicy::ConditionType;
 
     /// Returns prepared filter for a specific table and operations.
     /// The function can return nullptr, that means there is no filters applied.
     /// The returned filter can be a combination of the filters defined by multiple row policies.
-    ASTPtr getCondition(const String & database, const String & table_name, ConditionIndex index) const;
-
-    /// Combines two conditions into one by using the logical AND operator.
-    static ASTPtr combineConditionsUsingAnd(const ASTPtr & lhs, const ASTPtr & rhs);
+    ASTPtr getCondition(const String & database, const String & table_name, ConditionType type) const;
+    ASTPtr getCondition(const String & database, const String & table_name, ConditionType type, const ASTPtr & extra_condition) const;
 
     /// Returns IDs of all the policies used by the current user.
     std::vector<UUID> getCurrentPolicyIDs() const;
@@ -40,9 +35,8 @@ public:
     std::vector<UUID> getCurrentPolicyIDs(const String & database, const String & table_name) const;
 
 private:
-    friend class RowPolicyContextFactory;
-    friend struct ext::shared_ptr_helper<RowPolicyContext>;
-    RowPolicyContext(const UUID & user_id_, const std::vector<UUID> & enabled_roles_); /// RowPolicyContext should be created by RowPolicyContextFactory.
+    friend class RowPolicyCache;
+    EnabledRowPolicies(const UUID & user_id_, const std::vector<UUID> & enabled_roles_);
 
     using DatabaseAndTableName = std::pair<String, String>;
     using DatabaseAndTableNameRef = std::pair<std::string_view, std::string_view>;
@@ -50,8 +44,8 @@ private:
     {
         size_t operator()(const DatabaseAndTableNameRef & database_and_table_name) const;
     };
-    static constexpr size_t MAX_CONDITION_INDEX = RowPolicy::MAX_CONDITION_INDEX;
-    using ParsedConditions = std::array<ASTPtr, MAX_CONDITION_INDEX>;
+    static constexpr size_t MAX_CONDITION_TYPE = RowPolicy::MAX_CONDITION_TYPE;
+    using ParsedConditions = std::array<ASTPtr, MAX_CONDITION_TYPE>;
     struct MixedConditions
     {
         std::unique_ptr<DatabaseAndTableName> database_and_table_name_keeper;
@@ -65,6 +59,4 @@ private:
     mutable boost::atomic_shared_ptr<const MapOfMixedConditions> map_of_mixed_conditions;
 };
 
-
-using RowPolicyContextPtr = std::shared_ptr<const RowPolicyContext>;
 }

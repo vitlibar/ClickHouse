@@ -1,6 +1,6 @@
-#include <Access/RoleContext.h>
+#include <Access/EnabledRoles.h>
 #include <Access/Role.h>
-#include <Access/CurrentRolesInfo.h>
+#include <Access/EnabledRolesInfo.h>
 #include <Access/AccessControlManager.h>
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/algorithm/find.hpp>
@@ -19,27 +19,27 @@ namespace
 }
 
 
-RoleContext::RoleContext(const AccessControlManager & manager_, const UUID & current_role_, bool with_admin_option_)
+EnabledRoles::EnabledRoles(const AccessControlManager & manager_, const UUID & current_role_, bool with_admin_option_)
     : manager(&manager_), current_role(current_role_), with_admin_option(with_admin_option_)
 {
     update();
 }
 
 
-RoleContext::RoleContext(std::vector<RoleContextPtr> && children_)
+EnabledRoles::EnabledRoles(std::vector<std::shared_ptr<const EnabledRoles>> && children_)
     : children(std::move(children_))
 {
     update();
 }
 
 
-RoleContext::~RoleContext() = default;
+EnabledRoles::~EnabledRoles() = default;
 
 
-void RoleContext::update()
+void EnabledRoles::update()
 {
     std::vector<OnChangeHandler> handlers_to_notify;
-    CurrentRolesInfoPtr info_to_notify;
+    std::shared_ptr<const EnabledRolesInfo> info_to_notify;
 
     {
         std::lock_guard lock{mutex};
@@ -59,11 +59,11 @@ void RoleContext::update()
 }
 
 
-void RoleContext::updateImpl()
+void EnabledRoles::updateImpl()
 {
     if (!current_role && children.empty())
     {
-        info = std::make_shared<CurrentRolesInfo>();
+        info = std::make_shared<EnabledRolesInfo>();
         return;
     }
 
@@ -73,10 +73,10 @@ void RoleContext::updateImpl()
         {
             for (const auto & child : children)
                 subscriptions_for_change_children.emplace_back(
-                    child->subscribeForChanges([this](const CurrentRolesInfoPtr &) { update(); }));
+                    child->subscribeForChanges([this](const std::shared_ptr<const EnabledRolesInfo> &) { update(); }));
         }
 
-        auto new_info = std::make_shared<CurrentRolesInfo>();
+        auto new_info = std::make_shared<EnabledRolesInfo>();
         auto & new_info_ref = *new_info;
 
         for (const auto & child : children)
@@ -99,7 +99,7 @@ void RoleContext::updateImpl()
     assert(current_role);
     traverseRoles(*current_role, with_admin_option);
 
-    auto new_info = std::make_shared<CurrentRolesInfo>();
+    auto new_info = std::make_shared<EnabledRolesInfo>();
     auto & new_info_ref = *new_info;
 
     for (auto it = roles_map.begin(); it != roles_map.end();)
@@ -133,7 +133,7 @@ void RoleContext::updateImpl()
 }
 
 
-void RoleContext::traverseRoles(const UUID & id_, bool with_admin_option_)
+void EnabledRoles::traverseRoles(const UUID & id_, bool with_admin_option_)
 {
     auto it = roles_map.find(id_);
     if (it == roles_map.end())
@@ -178,14 +178,14 @@ void RoleContext::traverseRoles(const UUID & id_, bool with_admin_option_)
 }
 
 
-CurrentRolesInfoPtr RoleContext::getInfo() const
+std::shared_ptr<const EnabledRolesInfo> EnabledRoles::getInfo() const
 {
     std::lock_guard lock{mutex};
     return info;
 }
 
 
-ext::scope_guard RoleContext::subscribeForChanges(const OnChangeHandler & handler) const
+ext::scope_guard EnabledRoles::subscribeForChanges(const OnChangeHandler & handler) const
 {
     std::lock_guard lock{mutex};
     handlers.push_back(handler);
