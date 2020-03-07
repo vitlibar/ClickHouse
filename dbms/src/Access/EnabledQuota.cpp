@@ -1,4 +1,5 @@
-#include <Access/QuotaContext.h>
+#include <Access/EnabledQuota.h>
+#include <Access/QuotaUsageInfo.h>
 #include <Common/Exception.h>
 #include <Common/quoteString.h>
 #include <ext/chrono_io.h>
@@ -14,7 +15,7 @@ namespace ErrorCodes
     extern const int QUOTA_EXPIRED;
 }
 
-struct QuotaContext::Impl
+struct EnabledQuota::Impl
 {
     [[noreturn]] static void throwQuotaExceed(
         const String & user_name,
@@ -133,7 +134,7 @@ struct QuotaContext::Impl
 };
 
 
-QuotaContext::Interval & QuotaContext::Interval::operator =(const Interval & src)
+EnabledQuota::Interval & EnabledQuota::Interval::operator =(const Interval & src)
 {
     randomize_interval = src.randomize_interval;
     duration = src.duration;
@@ -147,7 +148,7 @@ QuotaContext::Interval & QuotaContext::Interval::operator =(const Interval & src
 }
 
 
-QuotaUsageInfo QuotaContext::Intervals::getUsageInfo(std::chrono::system_clock::time_point current_time) const
+QuotaUsageInfo EnabledQuota::Intervals::getUsageInfo(std::chrono::system_clock::time_point current_time) const
 {
     QuotaUsageInfo info;
     info.quota_id = quota_id;
@@ -171,13 +172,7 @@ QuotaUsageInfo QuotaContext::Intervals::getUsageInfo(std::chrono::system_clock::
 }
 
 
-QuotaContext::QuotaContext()
-    : intervals(boost::make_shared<Intervals>()) /// Unlimited quota.
-{
-}
-
-
-QuotaContext::QuotaContext(
+EnabledQuota::EnabledQuota(
     const String & user_name_,
     const UUID & user_id_,
     const std::vector<UUID> & enabled_roles_,
@@ -188,16 +183,16 @@ QuotaContext::QuotaContext(
 }
 
 
-QuotaContext::~QuotaContext() = default;
+EnabledQuota::~EnabledQuota() = default;
 
 
-void QuotaContext::used(ResourceType resource_type, ResourceAmount amount, bool check_exceeded) const
+void EnabledQuota::used(ResourceType resource_type, ResourceAmount amount, bool check_exceeded) const
 {
     used({resource_type, amount}, check_exceeded);
 }
 
 
-void QuotaContext::used(const std::pair<ResourceType, ResourceAmount> & resource, bool check_exceeded) const
+void EnabledQuota::used(const std::pair<ResourceType, ResourceAmount> & resource, bool check_exceeded) const
 {
     auto loaded = intervals.load();
     auto current_time = std::chrono::system_clock::now();
@@ -205,7 +200,7 @@ void QuotaContext::used(const std::pair<ResourceType, ResourceAmount> & resource
 }
 
 
-void QuotaContext::used(const std::pair<ResourceType, ResourceAmount> & resource1, const std::pair<ResourceType, ResourceAmount> & resource2, bool check_exceeded) const
+void EnabledQuota::used(const std::pair<ResourceType, ResourceAmount> & resource1, const std::pair<ResourceType, ResourceAmount> & resource2, bool check_exceeded) const
 {
     auto loaded = intervals.load();
     auto current_time = std::chrono::system_clock::now();
@@ -214,7 +209,7 @@ void QuotaContext::used(const std::pair<ResourceType, ResourceAmount> & resource
 }
 
 
-void QuotaContext::used(const std::pair<ResourceType, ResourceAmount> & resource1, const std::pair<ResourceType, ResourceAmount> & resource2, const std::pair<ResourceType, ResourceAmount> & resource3, bool check_exceeded) const
+void EnabledQuota::used(const std::pair<ResourceType, ResourceAmount> & resource1, const std::pair<ResourceType, ResourceAmount> & resource2, const std::pair<ResourceType, ResourceAmount> & resource3, bool check_exceeded) const
 {
     auto loaded = intervals.load();
     auto current_time = std::chrono::system_clock::now();
@@ -224,7 +219,7 @@ void QuotaContext::used(const std::pair<ResourceType, ResourceAmount> & resource
 }
 
 
-void QuotaContext::used(const std::vector<std::pair<ResourceType, ResourceAmount>> & resources, bool check_exceeded) const
+void EnabledQuota::used(const std::vector<std::pair<ResourceType, ResourceAmount>> & resources, bool check_exceeded) const
 {
     auto loaded = intervals.load();
     auto current_time = std::chrono::system_clock::now();
@@ -233,35 +228,24 @@ void QuotaContext::used(const std::vector<std::pair<ResourceType, ResourceAmount
 }
 
 
-void QuotaContext::checkExceeded() const
+void EnabledQuota::checkExceeded() const
 {
     auto loaded = intervals.load();
     Impl::checkExceeded(user_name, *loaded, std::chrono::system_clock::now());
 }
 
 
-void QuotaContext::checkExceeded(ResourceType resource_type) const
+void EnabledQuota::checkExceeded(ResourceType resource_type) const
 {
     auto loaded = intervals.load();
     Impl::checkExceeded(user_name, *loaded, resource_type, std::chrono::system_clock::now());
 }
 
 
-QuotaUsageInfo QuotaContext::getUsageInfo() const
+QuotaUsageInfo EnabledQuota::getUsageInfo() const
 {
     auto loaded = intervals.load();
     return loaded->getUsageInfo(std::chrono::system_clock::now());
 }
 
-
-QuotaUsageInfo::QuotaUsageInfo() : quota_id(UUID(UInt128(0)))
-{
-}
-
-
-QuotaUsageInfo::Interval::Interval()
-{
-    boost::range::fill(used, 0);
-    boost::range::fill(max, 0);
-}
 }

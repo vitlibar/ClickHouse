@@ -2,7 +2,6 @@
 
 #include <Core/UUID.h>
 #include <ext/scope_guard.h>
-#include <ext/shared_ptr_helper.h>
 #include <list>
 #include <mutex>
 #include <unordered_map>
@@ -13,28 +12,27 @@ namespace DB
 {
 struct Role;
 using RolePtr = std::shared_ptr<const Role>;
-struct CurrentRolesInfo;
-using CurrentRolesInfoPtr = std::shared_ptr<const CurrentRolesInfo>;
+struct EnabledRolesInfo;
 class AccessControlManager;
 
 
-class RoleContext
+class EnabledRoles
 {
 public:
-    ~RoleContext();
+    ~EnabledRoles();
 
     /// Returns all the roles specified in the constructor.
-    CurrentRolesInfoPtr getInfo() const;
+    std::shared_ptr<const EnabledRolesInfo> getInfo() const;
 
-    using OnChangeHandler = std::function<void(const CurrentRolesInfoPtr & info)>;
+    using OnChangeHandler = std::function<void(const std::shared_ptr<const EnabledRolesInfo> & info)>;
 
     /// Called when either the specified roles or the roles granted to the specified roles are changed.
     ext::scope_guard subscribeForChanges(const OnChangeHandler & handler) const;
 
 private:
-    friend struct ext::shared_ptr_helper<RoleContext>;
-    RoleContext(const AccessControlManager & manager_, const UUID & current_role_, bool with_admin_option_);
-    RoleContext(std::vector<std::shared_ptr<const RoleContext>> && children_);
+    friend class RoleCache;
+    EnabledRoles(const AccessControlManager & manager_, const UUID & current_role_, bool with_admin_option_);
+    EnabledRoles(std::vector<std::shared_ptr<const EnabledRoles>> && children_);
 
     void update();
     void updateImpl();
@@ -44,7 +42,7 @@ private:
     const AccessControlManager * manager = nullptr;
     std::optional<UUID> current_role;
     bool with_admin_option = false;
-    std::vector<std::shared_ptr<const RoleContext>> children;
+    std::vector<std::shared_ptr<const EnabledRoles>> children;
     std::vector<ext::scope_guard> subscriptions_for_change_children;
 
     struct RoleEntry
@@ -55,10 +53,9 @@ private:
         bool in_use = false;
     };
     mutable std::unordered_map<UUID, RoleEntry> roles_map;
-    mutable CurrentRolesInfoPtr info;
+    mutable std::shared_ptr<const EnabledRolesInfo> info;
     mutable std::list<OnChangeHandler> handlers;
     mutable std::mutex mutex;
 };
 
-using RoleContextPtr = std::shared_ptr<const RoleContext>;
 }

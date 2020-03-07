@@ -8,39 +8,39 @@
 
 namespace DB
 {
-class ASTGenericRoleSet;
+class ASTGeneralizedRoleSet;
 class AccessControlManager;
 
 
 /// Represents a set of users/roles like
 /// {user_name | role_name | CURRENT_USER} [,...] | NONE | ALL | ALL EXCEPT {user_name | role_name | CURRENT_USER} [,...]
 /// Similar to ASTGenericRoleSet, but with IDs instead of names.
-struct GenericRoleSet
+struct GeneralizedRoleSet
 {
-    GenericRoleSet();
-    GenericRoleSet(const GenericRoleSet & src);
-    GenericRoleSet & operator =(const GenericRoleSet & src);
-    GenericRoleSet(GenericRoleSet && src);
-    GenericRoleSet & operator =(GenericRoleSet && src);
+    GeneralizedRoleSet();
+    GeneralizedRoleSet(const GeneralizedRoleSet & src);
+    GeneralizedRoleSet & operator =(const GeneralizedRoleSet & src);
+    GeneralizedRoleSet(GeneralizedRoleSet && src);
+    GeneralizedRoleSet & operator =(GeneralizedRoleSet && src);
 
     struct AllTag {};
-    GenericRoleSet(AllTag);
+    GeneralizedRoleSet(AllTag);
 
-    GenericRoleSet(const UUID & id);
-    GenericRoleSet(const std::vector<UUID> & ids_);
-    GenericRoleSet(const boost::container::flat_set<UUID> & ids_);
+    GeneralizedRoleSet(const UUID & id);
+    GeneralizedRoleSet(const std::vector<UUID> & ids_);
+    GeneralizedRoleSet(const boost::container::flat_set<UUID> & ids_);
 
     /// The constructor from AST requires the AccessControlManager if `ast.id_mode == false`.
-    GenericRoleSet(const ASTGenericRoleSet & ast);
-    GenericRoleSet(const ASTGenericRoleSet & ast, const UUID & current_user_id);
-    GenericRoleSet(const ASTGenericRoleSet & ast, const AccessControlManager & manager);
-    GenericRoleSet(const ASTGenericRoleSet & ast, const AccessControlManager & manager, const UUID & current_user_id);
+    GeneralizedRoleSet(const ASTGeneralizedRoleSet & ast);
+    GeneralizedRoleSet(const ASTGeneralizedRoleSet & ast, const UUID & current_user_id);
+    GeneralizedRoleSet(const ASTGeneralizedRoleSet & ast, const AccessControlManager & manager);
+    GeneralizedRoleSet(const ASTGeneralizedRoleSet & ast, const AccessControlManager & manager, const UUID & current_user_id);
 
-    std::shared_ptr<ASTGenericRoleSet> toAST() const;
+    std::shared_ptr<ASTGeneralizedRoleSet> toAST() const;
     String toString() const;
     Strings toStrings() const;
 
-    std::shared_ptr<ASTGenericRoleSet> toASTWithNames(const AccessControlManager & manager) const;
+    std::shared_ptr<ASTGeneralizedRoleSet> toASTWithNames(const AccessControlManager & manager) const;
     String toStringWithNames(const AccessControlManager & manager) const;
     Strings toStringsWithNames(const AccessControlManager & manager) const;
 
@@ -63,15 +63,15 @@ struct GenericRoleSet
     std::vector<UUID> getMatchingRoles(const AccessControlManager & manager) const;
     std::vector<UUID> getMatchingUsersAndRoles(const AccessControlManager & manager) const;
 
-    friend bool operator ==(const GenericRoleSet & lhs, const GenericRoleSet & rhs);
-    friend bool operator !=(const GenericRoleSet & lhs, const GenericRoleSet & rhs) { return !(lhs == rhs); }
+    friend bool operator ==(const GeneralizedRoleSet & lhs, const GeneralizedRoleSet & rhs);
+    friend bool operator !=(const GeneralizedRoleSet & lhs, const GeneralizedRoleSet & rhs) { return !(lhs == rhs); }
 
     boost::container::flat_set<UUID> ids;
     bool all = false;
     boost::container::flat_set<UUID> except_ids;
 
 private:
-    void init(const ASTGenericRoleSet & ast, const AccessControlManager * manager = nullptr, const UUID * current_user_id = nullptr);
+    void init(const ASTGeneralizedRoleSet & ast, const AccessControlManager * manager = nullptr, const UUID * current_user_id = nullptr);
 };
 
 }

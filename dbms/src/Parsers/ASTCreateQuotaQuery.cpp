@@ -1,5 +1,5 @@
 #include <Parsers/ASTCreateQuotaQuery.h>
-#include <Parsers/ASTGenericRoleSet.h>
+#include <Parsers/ASTGeneralizedRoleSet.h>
 #include <Common/quoteString.h>
 #include <Common/IntervalKind.h>
 #include <ext/range.h>
@@ -94,7 +94,7 @@ namespace
         }
     }
 
-    void formatToRoles(const ASTGenericRoleSet & roles, const IAST::FormatSettings & settings)
+    void formatToRoles(const ASTGeneralizedRoleSet & roles, const IAST::FormatSettings & settings)
     {
         settings.ostr << (settings.hilite ? IAST::hilite_keyword : "") << " TO " << (settings.hilite ? IAST::hilite_none : "");
         roles.format(settings);

@@ -3,7 +3,6 @@
 #include <Access/Quota.h>
 #include <Core/UUID.h>
 #include <Poco/Net/IPAddress.h>
-#include <ext/shared_ptr_helper.h>
 #include <boost/noncopyable.hpp>
 #include <boost/smart_ptr/atomic_shared_ptr.hpp>
 #include <atomic>
@@ -16,17 +15,14 @@ namespace DB
 struct QuotaUsageInfo;
 
 
-/// Instances of `QuotaContext` are used to track resource consumption.
-class QuotaContext : public boost::noncopyable
+/// Instances of `EnabledQuota` are used to track resource consumption.
+class EnabledQuota : public boost::noncopyable
 {
 public:
     using ResourceType = Quota::ResourceType;
     using ResourceAmount = Quota::ResourceAmount;
 
-    /// Default constructors makes an unlimited quota.
-    QuotaContext();
-
-    ~QuotaContext();
+    ~EnabledQuota();
 
     /// Tracks resource consumption. If the quota exceeded and `check_exceeded == true`, throws an exception.
     void used(ResourceType resource_type, ResourceAmount amount, bool check_exceeded = true) const;
@@ -39,15 +35,12 @@ public:
     void checkExceeded() const;
     void checkExceeded(ResourceType resource_type) const;
 
-    /// Returns the information about this quota context.
+    /// Returns the information about quota consumption.
     QuotaUsageInfo getUsageInfo() const;
 
 private:
-    friend class QuotaContextFactory;
-    friend struct ext::shared_ptr_helper<QuotaContext>;
-
-    /// Instances of this class are created by QuotaContextFactory.
-    QuotaContext(const String & user_name_, const UUID & user_id_, const std::vector<UUID> & enabled_roles_, const Poco::Net::IPAddress & address_, const String & client_key_);
+    friend class QuotaCache;
+    EnabledQuota(const String & user_name_, const UUID & user_id_, const std::vector<UUID> & enabled_roles_, const Poco::Net::IPAddress & address_, const String & client_key_);
 
     static constexpr size_t MAX_RESOURCE_TYPE = Quota::MAX_RESOURCE_TYPE;
 
@@ -84,30 +77,4 @@ private:
     boost::atomic_shared_ptr<const Intervals> intervals; /// atomically changed by QuotaUsageManager
 };
 
-using QuotaContextPtr = std::shared_ptr<const QuotaContext>;
-
-
-/// The information about a quota context.
-struct QuotaUsageInfo
-{
-    using ResourceType = Quota::ResourceType;
-    using ResourceAmount = Quota::ResourceAmount;
-    static constexpr size_t MAX_RESOURCE_TYPE = Quota::MAX_RESOURCE_TYPE;
-
-    struct Interval
-    {
-        ResourceAmount used[MAX_RESOURCE_TYPE];
-        ResourceAmount max[MAX_RESOURCE_TYPE];
-        std::chrono::seconds duration = std::chrono::seconds::zero();
-        bool randomize_interval = false;
-        std::chrono::system_clock::time_point end_of_interval;
-        Interval();
-    };
-
-    std::vector<Interval> intervals;
-    UUID quota_id;
-    String quota_name;
-    String quota_key;
-    QuotaUsageInfo();
-};
 }

@@ -1,4 +1,4 @@
-#include <Parsers/ASTGenericRoleSet.h>
+#include <Parsers/ASTGeneralizedRoleSet.h>
 #include <Common/quoteString.h>
 
 
@@ -20,7 +20,7 @@ namespace
     }
 }
 
-void ASTGenericRoleSet::formatImpl(const FormatSettings & settings, FormatState &, FormatStateStacked) const
+void ASTGeneralizedRoleSet::formatImpl(const FormatSettings & settings, FormatState &, FormatStateStacked) const
 {
     if (empty())
     {

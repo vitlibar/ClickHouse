@@ -5,12 +5,13 @@
 #include <Parsers/ASTCreateQuotaQuery.h>
 #include <Parsers/ASTCreateRowPolicyQuery.h>
 #include <Parsers/ASTShowCreateAccessEntityQuery.h>
-#include <Parsers/ASTGenericRoleSet.h>
+#include <Parsers/ASTGeneralizedRoleSet.h>
 #include <Parsers/ExpressionListParsers.h>
 #include <Parsers/formatAST.h>
 #include <Parsers/parseQuery.h>
 #include <Access/AccessControlManager.h>
-#include <Access/QuotaContext.h>
+#include <Access/EnabledQuota.h>
+#include <Access/QuotaUsageInfo.h>
 #include <Access/User.h>
 #include <Access/Role.h>
 #include <Columns/ColumnString.h>
@@ -45,12 +46,12 @@ namespace
         if (!user.profile.empty())
             query->profile = user.profile;
 
-        if (user.default_roles != GenericRoleSet::AllTag{})
+        if (user.default_roles != GeneralizedRoleSet::AllTag{})
         {
             if (attach_mode)
-                query->default_roles = GenericRoleSet{user.default_roles}.toAST();
+                query->default_roles = GeneralizedRoleSet{user.default_roles}.toAST();
             else
-                query->default_roles = GenericRoleSet{user.default_roles}.toASTWithNames(*manager);
+                query->default_roles = GeneralizedRoleSet{user.default_roles}.toASTWithNames(*manager);
         }
 
         if (attach_mode && (user.authentication.getType() != Authentication::NO_PASSWORD))
@@ -118,7 +119,7 @@ namespace
         if (policy.isRestrictive())
             query->is_restrictive = policy.isRestrictive();
 
-        for (auto index : ext::range_with_static_cast<RowPolicy::ConditionIndex>(RowPolicy::MAX_CONDITION_INDEX))
+        for (auto index : ext::range_with_static_cast<RowPolicy::ConditionType>(RowPolicy::MAX_CONDITION_TYPE))
         {
             const auto & condition = policy.conditions[index];
             if (!condition.empty())

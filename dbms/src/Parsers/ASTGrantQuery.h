@@ -6,7 +6,7 @@
 
 namespace DB
 {
-class ASTGenericRoleSet;
+class ASTGeneralizedRoleSet;
 
 
 /** GRANT access_type[(column_name [,...])] [,...] ON {db.table|db.*|*.*|table|*} TO {user_name | CURRENT_USER} [,...] [WITH GRANT OPTION]
@@ -26,8 +26,8 @@ public:
     Kind kind = Kind::GRANT;
     bool attach = false;
     AccessRightsElements access_rights_elements;
-    std::shared_ptr<ASTGenericRoleSet> roles;
-    std::shared_ptr<ASTGenericRoleSet> to_roles;
+    std::shared_ptr<ASTGeneralizedRoleSet> roles;
+    std::shared_ptr<ASTGeneralizedRoleSet> to_roles;
     bool grant_option = false;
     bool admin_option = false;
 

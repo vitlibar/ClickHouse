@@ -81,7 +81,7 @@ bool RowPolicy::equal(const IAccessEntity & other) const
 }
 
 
-const char * RowPolicy::conditionIndexToString(ConditionIndex index)
+const char * RowPolicy::conditionTypeToString(ConditionType index)
 {
     switch (index)
     {
@@ -95,7 +95,7 @@ const char * RowPolicy::conditionIndexToString(ConditionIndex index)
 }
 
 
-const char * RowPolicy::conditionIndexToColumnName(ConditionIndex index)
+const char * RowPolicy::conditionTypeToColumnName(ConditionType index)
 {
     switch (index)
     {

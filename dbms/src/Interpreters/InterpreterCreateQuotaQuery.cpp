@@ -1,6 +1,6 @@
 #include <Interpreters/InterpreterCreateQuotaQuery.h>
 #include <Parsers/ASTCreateQuotaQuery.h>
-#include <Parsers/ASTGenericRoleSet.h>
+#include <Parsers/ASTGeneralizedRoleSet.h>
 #include <Interpreters/Context.h>
 #include <Access/AccessControlManager.h>
 #include <Access/AccessFlags.h>
@@ -14,7 +14,7 @@ namespace DB
 {
 namespace
 {
-void updateQuotaFromQueryImpl(Quota & quota, const ASTCreateQuotaQuery & query, const std::optional<GenericRoleSet> & roles_from_query = {})
+void updateQuotaFromQueryImpl(Quota & quota, const ASTCreateQuotaQuery & query, const std::optional<GeneralizedRoleSet> & roles_from_query = {})
     {
         if (query.alter)
         {
@@ -61,8 +61,8 @@ void updateQuotaFromQueryImpl(Quota & quota, const ASTCreateQuotaQuery & query, 
             }
         }
 
-        const GenericRoleSet * roles = nullptr;
-        std::optional<GenericRoleSet> temp_role_set;
+        const GeneralizedRoleSet * roles = nullptr;
+        std::optional<GeneralizedRoleSet> temp_role_set;
         if (roles_from_query)
             roles = &*roles_from_query;
         else if (query.roles)
@@ -80,9 +80,9 @@ BlockIO InterpreterCreateQuotaQuery::execute()
     auto & access_control = context.getAccessControlManager();
     context.checkAccess(query.alter ? AccessType::ALTER_QUOTA : AccessType::CREATE_QUOTA);
 
-    std::optional<GenericRoleSet> roles_from_query;
+    std::optional<GeneralizedRoleSet> roles_from_query;
     if (query.roles)
-        roles_from_query = GenericRoleSet{*query.roles, access_control, context.getUserID()};
+        roles_from_query = GeneralizedRoleSet{*query.roles, access_control, context.getUserID()};
 
     if (query.alter)
     {
