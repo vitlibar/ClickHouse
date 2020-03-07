@@ -19,7 +19,7 @@
 #include <Interpreters/TraceLog.h>
 #include <Interpreters/TextLog.h>
 #include <Interpreters/MetricLog.h>
-#include <Access/AccessRightsContext.h>
+#include <Access/ContextAccess.h>
 #include <Databases/IDatabase.h>
 #include <Storages/StorageDistributed.h>
 #include <Storages/StorageReplicatedMergeTree.h>
@@ -136,17 +136,17 @@ void startStopAction(Context & context, Poco::Logger * log, ASTSystemQuery & que
     }
     else
     {
+        auto access = context.getAccess();
         for (auto & elem : context.getDatabases())
         {
             for (auto iterator = elem.second->getTablesIterator(context); iterator->isValid(); iterator->next())
             {
-                if (context.getAccessRights()->isGranted(log, getRequiredAccessType(action_type), elem.first, iterator->name()))
-                {
-                    if (start)
-                        manager->remove(iterator->table(), action_type);
-                    else
-                        manager->add(iterator->table(), action_type);
-                }
+                if (access && !access->isGranted(log, getRequiredAccessType(action_type), elem.first, iterator->name()))
+                    continue;
+                if (start)
+                    manager->remove(iterator->table(), action_type);
+                else
+                    manager->add(iterator->table(), action_type);
             }
         }
     }

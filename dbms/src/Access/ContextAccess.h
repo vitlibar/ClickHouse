@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Access/AccessRights.h>
+#include <Access/RowPolicy.h>
 #include <Interpreters/ClientInfo.h>
 #include <Core/UUID.h>
 #include <ext/scope_guard.h>
@@ -16,19 +17,17 @@ namespace DB
 {
 struct User;
 using UserPtr = std::shared_ptr<const User>;
-struct CurrentRolesInfo;
-using CurrentRolesInfoPtr = std::shared_ptr<const CurrentRolesInfo>;
-class RoleContext;
-using RoleContextPtr = std::shared_ptr<const RoleContext>;
-class RowPolicyContext;
-using RowPolicyContextPtr = std::shared_ptr<const RowPolicyContext>;
-class QuotaContext;
-using QuotaContextPtr = std::shared_ptr<const QuotaContext>;
+struct EnabledRolesInfo;
+class EnabledRoles;
+class EnabledRowPolicies;
+class EnabledQuota;
 struct Settings;
 class AccessControlManager;
+class IAST;
+using ASTPtr = std::shared_ptr<IAST>;
 
 
-class AccessRightsContext
+class ContextAccess
 {
 public:
     struct Params
@@ -53,9 +52,6 @@ public:
         friend bool operator >=(const Params & lhs, const Params & rhs) { return !(lhs < rhs); }
     };
 
-    /// Default constructor creates access rights' context which allows everything.
-    AccessRightsContext();
-
     const Params & getParams() const { return params; }
     UserPtr getUser() const;
     String getUserName() const;
@@ -63,14 +59,15 @@ public:
     void checkPassword(const String & password) const;
     void checkHostIsAllowed() const;
 
-    CurrentRolesInfoPtr getRolesInfo() const;
+    std::shared_ptr<const EnabledRolesInfo> getRolesInfo() const;
     std::vector<UUID> getCurrentRoles() const;
     Strings getCurrentRolesNames() const;
     std::vector<UUID> getEnabledRoles() const;
     Strings getEnabledRolesNames() const;
 
-    RowPolicyContextPtr getRowPolicy() const;
-    QuotaContextPtr getQuota() const;
+    std::shared_ptr<const EnabledRowPolicies> getRowPolicies() const;
+    ASTPtr getRowPolicyCondition(const String & database, const String & table_name, RowPolicy::ConditionType index, const ASTPtr & extra_condition = nullptr) const;
+    std::shared_ptr<const EnabledQuota> getQuota() const;
 
     /// Checks if a specified access is granted, and throws an exception if not.
     /// Empty database means the current database.
@@ -117,12 +114,11 @@ public:
     void checkAdminOption(const UUID & role_id) const;
 
 private:
-    friend class AccessRightsContextFactory;
-    friend struct ext::shared_ptr_helper<AccessRightsContext>;
-    AccessRightsContext(const AccessControlManager & manager_, const Params & params_); /// AccessRightsContext should be created by AccessRightsContextFactory.
+    friend class AccessControlManager;
+    ContextAccess(const AccessControlManager & manager_, const Params & params_); /// AccessRightsContext should be created by AccessRightsContextFactory.
 
     void setUser(const UserPtr & user_) const;
-    void setRolesInfo(const CurrentRolesInfoPtr & roles_info_) const;
+    void setRolesInfo(const std::shared_ptr<const EnabledRolesInfo> & roles_info_) const;
 
     template <int mode, bool grant_option, typename... Args>
     bool checkAccessImpl(Poco::Logger * log_, const AccessFlags & access, const Args &... args) const;
@@ -142,16 +138,14 @@ private:
     mutable UserPtr user;
     mutable String user_name;
     mutable ext::scope_guard subscription_for_user_change;
-    mutable RoleContextPtr role_context;
-    mutable ext::scope_guard subscription_for_roles_info_change;
-    mutable CurrentRolesInfoPtr roles_info;
-    mutable boost::atomic_shared_ptr<const boost::container::flat_set<UUID>> enabled_roles_with_admin_option;
+    mutable std::shared_ptr<const EnabledRoles> enabled_roles;
+    mutable ext::scope_guard subscription_for_roles_changes;
+    mutable std::shared_ptr<const EnabledRolesInfo> roles_info;
+    mutable boost::atomic_shared_ptr<const boost::container::flat_set<UUID>> roles_with_admin_option;
     mutable boost::atomic_shared_ptr<const AccessRights> result_access_cache[7];
-    mutable RowPolicyContextPtr row_policy_context;
-    mutable QuotaContextPtr quota_context;
+    mutable std::shared_ptr<const EnabledRowPolicies> enabled_row_policies;
+    mutable std::shared_ptr<const EnabledQuota> enabled_quota;
     mutable std::mutex mutex;
 };
-
-using AccessRightsContextPtr = std::shared_ptr<const AccessRightsContext>;
 
 }
