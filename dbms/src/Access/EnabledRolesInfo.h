@@ -18,6 +18,7 @@ struct EnabledRolesInfo
     std::unordered_map<UUID, String> names_of_roles;
     AccessRights access;
     AccessRights access_with_grant_option;
+    std::vector<UUID> quotas_for_enabled_roles;
 
     Strings getCurrentRolesNames() const;
     Strings getEnabledRolesNames() const;

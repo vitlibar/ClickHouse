@@ -176,6 +176,7 @@ EnabledQuota::EnabledQuota(
     const String & user_name_,
     const UUID & user_id_,
     const std::vector<UUID> & enabled_roles_,
+    const std::vector<UUID> & enabled_quotas_,
     const Poco::Net::IPAddress & address_,
     const String & client_key_)
     : user_name(user_name_), user_id(user_id_), enabled_roles(enabled_roles_), address(address_), client_key(client_key_)

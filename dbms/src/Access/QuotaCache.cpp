@@ -252,20 +252,37 @@ void QuotaCache::chooseQuotaToConsume()
 void QuotaCache::chooseQuotaToConsumeFor(EnabledQuota & enabled)
 {
     /// `mutex` is already locked.
-    boost::shared_ptr<const Intervals> intervals;
-    for (auto & info : all_quotas | boost::adaptors::map_values)
+    std::optional<UUID> chosen_quota;
+    for (const UUID & quota_id : enabled.enabled_quotas)
     {
-        if (info.roles->match(enabled.user_id, enabled.enabled_roles))
+        if (all_quotas.contains(quota_id))
         {
-            String key = info.calculateKey(enabled);
-            intervals = info.getOrBuildIntervals(key);
+            chosen_quota = quota_id;
             break;
         }
     }
 
-    if (!intervals)
-        intervals = boost::make_shared<Intervals>(); /// No quota == no limits.
+    if (!chosen_quota)
+    {
+        for (auto & info : all_quotas | boost::adaptors::map_values)
+        {
+            if (info.roles->match(enabled.user_id, enabled.enabled_roles))
+            {
+                chosen_quota = info.quota_id;
+                break;
+            }
+        }
+    }
 
+    if (!chosen_quota)
+    {
+        enabled.intervals.store(boost::make_shared<Intervals>()); /// No quota == no limits.
+        return;
+    }
+
+    auto & info = all_quotas[*chosen_quota];
+    String key = info.calculateKey(enabled);
+    auto intervals = info.getOrBuildIntervals(key);
     enabled.intervals.store(intervals);
 }
 

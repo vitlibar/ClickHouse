@@ -240,6 +240,23 @@ namespace
             return true;
         });
     }
+
+
+    bool parseQuotaName(IParserBase::Pos & pos, Expected & expected, std::optional<String> & quota)
+    {
+        return IParserBase::wrapParseImpl(pos, [&]
+        {
+            if (!ParserKeyword{"QUOTA"}.ignore(pos, expected))
+                return false;
+
+            ASTPtr ast;
+            if (!ParserStringLiteral{}.parse(pos, ast, expected))
+                return false;
+
+            quota = ast->as<const ASTLiteral &>().value.safeGet<String>();
+            return true;
+        });
+    }
 }
 
 
@@ -291,6 +308,7 @@ bool ParserCreateUserQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expec
     std::optional<AllowedClientHosts> remove_hosts;
     std::shared_ptr<ASTGeneralizedRoleSet> default_roles;
     std::optional<String> profile;
+    std::optional<String> quota;
 
     while (true)
     {
@@ -301,6 +319,9 @@ bool ParserCreateUserQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expec
             continue;
 
         if (!profile && parseProfileName(pos, expected, profile))
+            continue;
+
+        if (!quota && parseQuotaName(pos, expected, quota))
             continue;
 
         if (!default_roles && parseDefaultRoles(pos, expected, attach, default_roles))
@@ -342,6 +363,7 @@ bool ParserCreateUserQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expec
     query->remove_hosts = std::move(remove_hosts);
     query->default_roles = std::move(default_roles);
     query->profile = std::move(profile);
+    query->quota = std::move(quota);
 
     return true;
 }

@@ -14,6 +14,7 @@ class ASTGeneralizedRoleSet;
   *      [HOST {LOCAL | NAME 'name' | NAME REGEXP 'name_regexp' | IP 'address' | LIKE 'pattern'} [,...] | ANY | NONE]
   *      [DEFAULT ROLE role [,...]]
   *      [PROFILE 'profile_name']
+  *      [QUOTA 'quota_name']
   *
   * ALTER USER [IF EXISTS] name
   *      [RENAME TO new_name]
@@ -21,6 +22,7 @@ class ASTGeneralizedRoleSet;
   *      [[ADD|REMOVE] HOST {LOCAL | NAME 'name' | NAME REGEXP 'name_regexp' | IP 'address' | LIKE 'pattern'} [,...] | ANY | NONE]
   *      [DEFAULT ROLE role [,...] | ALL | ALL EXCEPT role [,...] ]
   *      [PROFILE 'profile_name']
+  *      [QUOTA 'quota_name']
   */
 class ASTCreateUserQuery : public IAST
 {
@@ -44,6 +46,7 @@ public:
     std::shared_ptr<ASTGeneralizedRoleSet> default_roles;
 
     std::optional<String> profile;
+    std::shared_ptr<ASTAccessEntityReference> quota;
 
     String getID(char) const override;
     ASTPtr clone() const override;

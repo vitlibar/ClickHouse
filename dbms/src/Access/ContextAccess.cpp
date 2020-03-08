@@ -178,7 +178,11 @@ void ContextAccess::setRolesInfo(const std::shared_ptr<const EnabledRolesInfo> &
     roles_with_admin_option.store(nullptr /* need to recalculate */);
     boost::range::fill(result_access_cache, nullptr /* need recalculate */);
     enabled_row_policies = manager->getEnabledRowPolicies(*params.user_id, roles_info->enabled_roles);
-    enabled_quota = manager->getEnabledQuota(user_name, *params.user_id, roles_info->enabled_roles, params.address, params.quota_key);
+
+    std::vector<UUID> quotas_for_enabled_roles = roles_info->enabled_roles;
+    if (user->quota)
+        quotas_for_enabled_roles.insert(quotas_for_enabled_roles.begin(), *user->quota);
+    enabled_quota = manager->getEnabledQuota(user_name, *params.user_id, roles_info->enabled_roles, quotas_for_enabled_roles, params.address, params.quota_key);
 }
 
 

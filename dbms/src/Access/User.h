@@ -23,6 +23,7 @@ struct User : public IAccessEntity
     boost::container::flat_set<UUID> granted_roles_with_admin_option;
     GeneralizedRoleSet default_roles = GeneralizedRoleSet::AllTag{};
     String profile;
+    std::optional<UUID> quota;
 
     bool equal(const IAccessEntity & other) const override;
     std::shared_ptr<IAccessEntity> clone() const override { return cloneImpl<User>(); }

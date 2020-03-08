@@ -40,7 +40,7 @@ public:
 
 private:
     friend class QuotaCache;
-    EnabledQuota(const String & user_name_, const UUID & user_id_, const std::vector<UUID> & enabled_roles_, const Poco::Net::IPAddress & address_, const String & client_key_);
+    EnabledQuota(const String & user_name_, const UUID & user_id_, const std::vector<UUID> & enabled_roles_, const std::vector<UUID> & enabled_quotas_, const Poco::Net::IPAddress & address_, const String & client_key_);
 
     static constexpr size_t MAX_RESOURCE_TYPE = Quota::MAX_RESOURCE_TYPE;
 
@@ -72,6 +72,7 @@ private:
     const String user_name;
     const UUID user_id;
     const std::vector<UUID> enabled_roles;
+    const std::vector<UUID> enabled_quotas;
     const Poco::Net::IPAddress address;
     const String client_key;
     boost::atomic_shared_ptr<const Intervals> intervals; /// atomically changed by QuotaUsageManager

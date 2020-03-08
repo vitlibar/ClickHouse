@@ -15,6 +15,7 @@ struct Role : public IAccessEntity
     AccessRights access_with_grant_option;
     boost::container::flat_set<UUID> granted_roles;
     boost::container::flat_set<UUID> granted_roles_with_admin_option;
+    std::optional<UUID> quota;
 
     bool equal(const IAccessEntity & other) const override;
     std::shared_ptr<IAccessEntity> clone() const override { return cloneImpl<Role>(); }

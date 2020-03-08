@@ -147,6 +147,12 @@ namespace
         settings.ostr << (settings.hilite ? IAST::hilite_keyword : "") << " PROFILE " << (settings.hilite ? IAST::hilite_none : "")
                       << quoteString(profile_name);
     }
+
+    void formatQuota(const String & quota_name, const IAST::FormatSettings & settings)
+    {
+        settings.ostr << (settings.hilite ? IAST::hilite_keyword : "") << " QUOTA " << (settings.hilite ? IAST::hilite_none : "")
+                      << quoteString(quota_name);
+    }
 }
 
 
@@ -201,5 +207,8 @@ void ASTCreateUserQuery::formatImpl(const FormatSettings & settings, FormatState
 
     if (profile)
         formatProfile(*profile, settings);
+
+    if (quota)
+        formatQuota(*quota, settings);
 }
 }

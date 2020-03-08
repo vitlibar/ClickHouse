@@ -88,10 +88,12 @@ void EnabledRoles::updateImpl()
             boost::range::copy(child_info->enabled_roles, std::back_inserter(new_info_ref.enabled_roles));
             boost::range::copy(child_info->enabled_roles_with_admin_option, std::back_inserter(new_info_ref.enabled_roles_with_admin_option));
             boost::range::copy(child_info->names_of_roles, std::inserter(new_info_ref.names_of_roles, new_info_ref.names_of_roles.end()));
+            boost::range::copy(child_info->quotas_for_enabled_roles, std::back_inserter(new_info_ref.quotas_for_enabled_roles));
         }
         makeUnique(new_info_ref.current_roles);
         makeUnique(new_info_ref.enabled_roles);
         makeUnique(new_info_ref.enabled_roles_with_admin_option);
+        makeUnique(new_info_ref.quotas_for_enabled_roles);
         info = new_info;
         return;
     }
@@ -123,6 +125,8 @@ void EnabledRoles::updateImpl()
         new_info_ref.access.merge(entry.role->access);
         new_info_ref.access_with_grant_option.merge(entry.role->access_with_grant_option);
         new_info_ref.names_of_roles[id] = entry.role->getName();
+        if (entry.role->quota)
+            new_info_ref.quotas_for_enabled_roles.emplace_back(entry.role->quota);
 
         entry.in_use = false;
         entry.with_admin_option = false;

@@ -13,13 +13,14 @@ namespace DB
 {
 namespace
 {
-    void updateUserFromQueryImpl(User & user, const ASTCreateUserQuery & query, const std::optional<GeneralizedRoleSet> & default_roles_from_query = {})
+    void updateUserFromQueryImpl(User & user, const ASTCreateUserQuery & query, const std::optional<GeneralizedRoleSet> & default_roles_from_query = {}, const std::optional<UUID> & quota_from_query = {})
     {
         if (query.alter)
         {
             if (!query.new_name.empty())
                 user.setName(query.new_name);
         }
+
         else
             user.setName(query.name);
 
@@ -50,6 +51,10 @@ namespace
 
         if (query.profile)
             user.profile = *query.profile;
+
+        std::optional
+        if (query.quota)
+            user.quota =
     }
 }
 
@@ -71,12 +76,16 @@ BlockIO InterpreterCreateUserQuery::execute()
         }
     }
 
+    std::optional<UUID> quota_from_query;
+    if (query.quota)
+        quota_from_query = access_control.getID<Quota>(*query.quota);
+
     if (query.alter)
     {
         auto update_func = [&](const AccessEntityPtr & entity) -> AccessEntityPtr
         {
             auto updated_user = typeid_cast<std::shared_ptr<User>>(entity->clone());
-            updateUserFromQueryImpl(*updated_user, query, default_roles_from_query);
+            updateUserFromQueryImpl(*updated_user, query, default_roles_from_query, quota_from_query);
             return updated_user;
         };
         if (query.if_exists)
@@ -90,7 +99,7 @@ BlockIO InterpreterCreateUserQuery::execute()
     else
     {
         auto new_user = std::make_shared<User>();
-        updateUserFromQueryImpl(*new_user, query, default_roles_from_query);
+        updateUserFromQueryImpl(*new_user, query, default_roles_from_query, quota_from_query);
 
         if (query.if_not_exists)
             access_control.tryInsert(new_user);
