@@ -23,7 +23,7 @@ def started_cluster():
             node.query("CREATE TABLE sometable(date Date, id UInt32, value Int32) ENGINE = MergeTree() ORDER BY id;")
             node.query("INSERT INTO sometable VALUES (toDate('2020-01-20'), 1, 1)")
 
-        distributed.query("CREATE TABLE proxy (date Date, id UInt32, value Int32) ENGINE = Distributed(test_cluster, default, sometable);")
+        distributed.query("CREATE TABLE proxy (date Date, id UInt32, value Int32) ENGINE = Distributed(test_cluster, default, sometable, rand());")
         distributed.query("CREATE TABLE sysproxy (name String, value String) ENGINE = Distributed(test_cluster, system, settings);")
 
         yield cluster
@@ -79,3 +79,6 @@ def test_shard_clamps_settings(started_cluster):
                                                                                                  'node1\treadonly\t2\n'\
                                                                                                  'node2\tmax_memory_usage\t10000000000\n'\
                                                                                                  'node2\treadonly\t1\n'
+
+def test_send(started_cluster):
+    distributed.query("INSERT INTO proxy VALUES (toDate('2020-02-20'), 2, 2), (toDate('2020-02-20'), 2, 2), (toDate('2020-02-20'), 2, 2), (toDate('2020-02-20'), 2, 2)", settings={"max_memory_usage": 40000000})

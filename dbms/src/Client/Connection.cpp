@@ -399,12 +399,14 @@ void Connection::sendQuery(
             client_info_to_send.query_kind = ClientInfo::QueryKind::INITIAL_QUERY;
             client_info_to_send.fillOSUserHostNameAndVersionInfo();
             client_info_to_send.client_name = (DBMS_NAME " ") + client_name;
+            //LOG_INFO(&Poco::Logger::get("XYXYX"), "sending initial query");
         }
         else
         {
             /// This query is initiated by another query.
             client_info_to_send = *client_info;
             client_info_to_send.query_kind = ClientInfo::QueryKind::SECONDARY_QUERY;
+            LOG_INFO(&Poco::Logger::get("XYXYX"), "sending secondary query");
         }
 
         client_info_to_send.write(*out, server_revision);

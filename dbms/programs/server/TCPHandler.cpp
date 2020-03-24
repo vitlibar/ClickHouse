@@ -943,6 +943,10 @@ void TCPHandler::receiveQuery()
     state.compression = static_cast<Protocol::Compression>(compression);
 
     readStringBinary(state.query, *in);
+
+    LOG_INFO(&Poco::Logger::get("XYXYX"), "query=" << state.query << ", kind="
+             << static_cast<size_t>(client_info.query_kind)
+             << ", max_memory_usage=" << settings.max_memory_usage);
 }
 
 void TCPHandler::receiveUnexpectedQuery()

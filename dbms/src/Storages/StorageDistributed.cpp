@@ -422,6 +422,10 @@ BlockOutputStreamPtr StorageDistributed::write(const ASTPtr &, const Context & c
     auto cluster = getCluster();
     const auto & settings = context.getSettingsRef();
 
+    LOG_INFO(&Poco::Logger::get("XYXYX"), "StorageDistributed::write(): "
+             << "kind=" << static_cast<size_t>(context.getClientInfo().query_kind)
+             << ", max_memory_usage=" << settings.max_memory_usage);
+
     /// Ban an attempt to make async insert into the table belonging to DatabaseMemory
     if (!volume && !owned_cluster && !settings.insert_distributed_sync)
     {

@@ -67,6 +67,9 @@ DistributedBlockOutputStream::DistributedBlockOutputStream(
         cluster(cluster_), insert_sync(insert_sync_),
         insert_timeout(insert_timeout_), log(&Logger::get("DistributedBlockOutputStream"))
 {
+    LOG_INFO(&Poco::Logger::get("XYXYX"), "DistributedBlockOutputStream::DistributedBlockOutputStream: "
+             << "kind=" << static_cast<size_t>(context.getClientInfo().query_kind)
+             << ", max_memory_usage=" << context.getSettingsRef().max_memory_usage);
 }
 
 
@@ -212,6 +215,10 @@ void DistributedBlockOutputStream::waitForJobs()
 
 ThreadPool::Job DistributedBlockOutputStream::runWritingJob(DistributedBlockOutputStream::JobReplica & job, const Block & current_block)
 {
+    LOG_INFO(&Poco::Logger::get("XYXYX"), "DistributedBlockOutputStream::runWritingJob: "
+             << "kind=" << static_cast<size_t>(context.getClientInfo().query_kind)
+             << ", max_memory_usage=" << context.getSettingsRef().max_memory_usage);
+
     auto thread_group = CurrentThread::getGroup();
     return [this, thread_group, &job, &current_block]()
     {
@@ -290,7 +297,7 @@ ThreadPool::Job DistributedBlockOutputStream::runWritingJob(DistributedBlockOutp
                 if (throttler)
                     job.connection_entry->setThrottler(throttler);
 
-                job.stream = std::make_shared<RemoteBlockOutputStream>(*job.connection_entry, timeouts, query_string, &settings);
+                job.stream = std::make_shared<RemoteBlockOutputStream>(*job.connection_entry, timeouts, query_string, &settings, &context.getClientInfo());
                 job.stream->writePrefix();
             }
 
