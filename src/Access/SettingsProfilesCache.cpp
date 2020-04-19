@@ -171,7 +171,7 @@ void SettingsProfilesCache::substituteProfiles(SettingsProfileElements & element
                 continue;
 
             const auto & parent_profile_elements = parent_profile->second->elements;
-            elements.insert(elements.begin() + i + 1, parent_profile_elements.begin(), parent_profile_elements.end());
+            elements.insert(elements.begin() + i, parent_profile_elements.begin(), parent_profile_elements.end());
             i += parent_profile_elements.size();
             stop_substituting = false;
         }

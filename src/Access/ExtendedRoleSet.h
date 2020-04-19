@@ -37,11 +37,9 @@ struct ExtendedRoleSet
 
     std::shared_ptr<ASTExtendedRoleSet> toAST() const;
     String toString() const;
-    Strings toStrings() const;
 
     std::shared_ptr<ASTExtendedRoleSet> toASTWithNames(const AccessControlManager & manager) const;
     String toStringWithNames(const AccessControlManager & manager) const;
-    Strings toStringsWithNames(const AccessControlManager & manager) const;
 
     bool empty() const;
     void clear();

@@ -143,19 +143,6 @@ String ExtendedRoleSet::toString() const
 }
 
 
-Strings ExtendedRoleSet::toStrings() const
-{
-    if (all || !except_ids.empty())
-        return {toString()};
-
-    Strings names;
-    names.reserve(ids.size());
-    for (const UUID & id : ids)
-        names.emplace_back(::DB::toString(id));
-    return names;
-}
-
-
 std::shared_ptr<ASTExtendedRoleSet> ExtendedRoleSet::toASTWithNames(const AccessControlManager & manager) const
 {
     auto ast = std::make_shared<ASTExtendedRoleSet>();
@@ -193,24 +180,6 @@ String ExtendedRoleSet::toStringWithNames(const AccessControlManager & manager) 
 {
     auto ast = toASTWithNames(manager);
     return serializeAST(*ast);
-}
-
-
-Strings ExtendedRoleSet::toStringsWithNames(const AccessControlManager & manager) const
-{
-    if (all || !except_ids.empty())
-        return {toStringWithNames(manager)};
-
-    Strings names;
-    names.reserve(ids.size());
-    for (const UUID & id : ids)
-    {
-        auto name = manager.tryReadName(id);
-        if (name)
-            names.emplace_back(std::move(*name));
-    }
-    boost::range::sort(names);
-    return names;
 }
 
 
