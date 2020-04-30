@@ -750,11 +750,6 @@ ASTPtr Context::getRowPolicyCondition(const String & database, const String & ta
     return getAccess()->getRowPolicyCondition(database, table_name, type, initial_condition);
 }
 
-std::shared_ptr<const EnabledRowPolicies> Context::getRowPolicies() const
-{
-    return getAccess()->getRowPolicies();
-}
-
 void Context::setInitialRowPolicy()
 {
     auto lock = getLock();

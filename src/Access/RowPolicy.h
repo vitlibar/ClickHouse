@@ -13,23 +13,29 @@ class Context;
   */
 struct RowPolicy : public IAccessEntity
 {
-    void setDatabase(const String & database_);
-    void setTableName(const String & table_name_);
-    void setName(const String & policy_name_) override;
-    void setFullName(const String & database_, const String & table_name_, const String & policy_name_);
-
-    String getDatabase() const { return database; }
-    String getTableName() const { return table_name; }
-    String getName() const override { return policy_name; }
-
     struct FullNameParts
     {
         String database;
         String table_name;
         String policy_name;
+
+        auto toTuple() const { return std::tie(database, table_name, policy_name); }
+        friend bool operator ==(const FullNameParts & left, const FullNameParts & right) { return left.toTuple() == right.toTuple(); }
+        friend bool operator !=(const FullNameParts & left, const FullNameParts & right) { return left.toTuple() != right.toTuple(); }
         String getFullName() const;
         String getFullName(const Context & context) const;
     };
+
+    void setDatabase(const String & database_);
+    void setTableName(const String & table_name_);
+    void setName(const String & policy_name_) override;
+    void setFullName(const String & database_, const String & table_name_, const String & policy_name_);
+    void setFullName(const FullNameParts & parts);
+
+    String getDatabase() const { return full_name_parts.database; }
+    String getTableName() const { return full_name_parts.table_name; }
+    String getName() const override { return full_name_parts.policy_name; }
+    FullNameParts getFullNameParts() const { return full_name_parts; }
 
     /// Filter is a SQL conditional expression used to figure out which rows should be visible
     /// for user or available for modification. If the expression returns NULL or false for some rows
@@ -40,14 +46,15 @@ struct RowPolicy : public IAccessEntity
     enum ConditionType
     {
         SELECT_FILTER,
+#if 0 /// Row-level security for INSERT, UPDATE, DELETE is not implemented yet.
         INSERT_CHECK,
         UPDATE_FILTER,
         UPDATE_CHECK,
         DELETE_FILTER,
+#endif
     };
-    static constexpr size_t MAX_CONDITION_TYPE = 5;
+    static constexpr size_t MAX_CONDITION_TYPE = 1;
     static const char * conditionTypeToString(ConditionType index);
-    static const char * conditionTypeToColumnName(ConditionType index);
 
     String conditions[MAX_CONDITION_TYPE];
 
@@ -70,9 +77,7 @@ struct RowPolicy : public IAccessEntity
     ExtendedRoleSet to_roles;
 
 private:
-    String database;
-    String table_name;
-    String policy_name;
+    FullNameParts full_name_parts;
     bool restrictive = false;
 };
 

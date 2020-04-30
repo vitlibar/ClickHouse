@@ -78,9 +78,11 @@ namespace
         return IParserBase::wrapParseImpl(pos, [&]
         {
             static constexpr char select_op[] = "SELECT";
+#if 0 /// INSERT, UPDATE, DELETE are not supported yet
             static constexpr char insert_op[] = "INSERT";
             static constexpr char update_op[] = "UPDATE";
             static constexpr char delete_op[] = "DELETE";
+#endif
             std::vector<const char *> ops;
 
             if (ParserKeyword{"FOR"}.ignore(pos, expected))
@@ -154,6 +156,7 @@ namespace
             {
                 if ((op == select_op) && filter)
                     set_condition(RowPolicy::SELECT_FILTER, *filter);
+#if 0 /// INSERT, UPDATE, DELETE are not supported yet
                 else if ((op == insert_op) && check)
                     set_condition(RowPolicy::INSERT_CHECK, *check);
                 else if (op == update_op)
@@ -165,8 +168,7 @@ namespace
                 }
                 else if ((op == delete_op) && filter)
                     set_condition(RowPolicy::DELETE_FILTER, *filter);
-                else
-                    __builtin_unreachable();
+#endif
             }
 
             return true;

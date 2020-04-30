@@ -68,10 +68,6 @@ public:
     /// The function can return nullptr.
     std::shared_ptr<const EnabledRolesInfo> getRolesInfo() const;
 
-    /// Returns information about enabled row policies.
-    /// The function can return nullptr.
-    std::shared_ptr<const EnabledRowPolicies> getRowPolicies() const;
-
     /// Returns the row policy filter for a specified table.
     /// The function returns nullptr if there is no filter to apply.
     ASTPtr getRowPolicyCondition(const String & database, const String & table_name, RowPolicy::ConditionType index, const ASTPtr & extra_condition = nullptr) const;

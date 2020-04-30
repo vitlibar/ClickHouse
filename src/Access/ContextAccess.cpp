@@ -478,12 +478,6 @@ std::shared_ptr<const EnabledRolesInfo> ContextAccess::getRolesInfo() const
     return roles_info;
 }
 
-std::shared_ptr<const EnabledRowPolicies> ContextAccess::getRowPolicies() const
-{
-    std::lock_guard lock{mutex};
-    return enabled_row_policies;
-}
-
 ASTPtr ContextAccess::getRowPolicyCondition(const String & database, const String & table_name, RowPolicy::ConditionType index, const ASTPtr & extra_condition) const
 {
     std::lock_guard lock{mutex};

@@ -40,8 +40,7 @@ public:
     String new_policy_name;
 
     std::optional<bool> is_restrictive;
-    using ConditionType = RowPolicy::ConditionType;
-    std::vector<std::pair<ConditionType, ASTPtr>> conditions;
+    ASTPtr conditions[RowPolicy::MAX_CONDITION_TYPE];
 
     std::shared_ptr<ASTExtendedRoleSet> roles;
 
