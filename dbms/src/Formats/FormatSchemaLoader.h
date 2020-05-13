@@ -3,10 +3,8 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <unordered_map>
 #include <boost/noncopyable.hpp>
 #include <Poco/Path.h>
-#include <Common/config.h>
 #include <Core/Types.h>
 
 
@@ -22,68 +20,87 @@ namespace DB
 {
 class Connection;
 class Context;
-class ProtobufSchemaParser;
 
-/// Loads and caches format schemas.
-/// This class tries to load a format schema from a couple of sources, in the following order:
-/// 1) the local directory specified by calling setDirectory(),
-/// 2) from the remote server specified by calling setConnectionParameters().
-/// After a format schema is loaded successfully it's cached in memory.
+/// Loads and parses format schemas.
+/// If a path to a schema file is relative it's searched in the local directory (if set) and then in the directory at server (if set).
+/// If a path to a schema file is absolute it's searched in the local file system (if enabled).
+/// Successfully loaded schemas are cached in memory.
 /// This class is thread-safe.
 class FormatSchemaLoader : private boost::noncopyable
 {
 public:
-    FormatSchemaLoader(const Context & context_);
+    explicit FormatSchemaLoader(const Context & context_);
     ~FormatSchemaLoader();
 
-    /// Sets a local directory to search schemas.
-    void setDirectory(const String & directory_, bool allow_paths_break_out_ = false);
+    /// Sets a local directory for retrieving schema files specified by relative paths.
+    void setDirectory(const String & directory_);
 
-    /// Enables using absolute paths (by default they're disabled).
-    void setAbsolutePathsAreAllowed(bool allowed);
-
-    /// Sets connection parameters to load schema from a remote server.
+    /// Sets connection parameters for retrieving schema files specified by relative paths from a remote server.
     void setConnectionParameters(const String & host_, UInt16 port_, const String & user_, const String & password_);
 
-    /// Clears caches with loaded schemas.
-    void clearCaches();
+    /// Enables using absolute paths for retrieving schema files from the local file system. By default it's disabled.
+    void enableAbsolutePaths(bool enable);
 
-    /// Finds all paths we have schemas for.
-    Strings getAllPaths();
+    /// Enables expanding environment variables in a path (relative or absolute) to a schema file. By default it's disabled.
+    void enableEnvironmentVariables(bool enable);
 
-    /// Loads a schema as a raw text.
-    String getRawSchema(const String & path);
-    bool tryGetRawSchema(const String & path, String & schema);
+    /// Whether there is a schema file accessible by the specified path.
+    bool fileExists(const String & path);
 
-#if USE_PROTOBUF
-    /// Loads a protobuf schema. Throws an exception if failed to load or parse.
-    const google::protobuf::Descriptor * getProtobufSchema(const String & format_schema_setting);
-#endif
+    /// Loads a schema file as a raw text. Throws an exception if failed to load.
+    String getFileContents(const String & path);
 
-    /// Loads a cap'n proto schema. Throws an exception if failed to load or parse.
-    //const capnp::SchemaParser::ParsedSchema & getCapnpSchema(const String & format_schema_setting);
+    /// Finds paths to schema files.
+    /// This function returns list of all relative paths inside the directory specified by call setDirectory(),
+    /// and all relative paths retrieved from the remote server specified by call setConnectionParameters().
+    Strings getAllPaths() { return getPathsStartingWith(""); }
+    Strings getPathsStartingWith(const String & prefix);
+
+    class IFormatSpecific
+    {
+    public:
+        IFormatSpecific(FormatSchemaLoader & loader_, const String & format_, const String & file_extension_)
+            : loader(loader_), format(format_), file_extension(file_extension_) {}
+        virtual ~IFormatSpecific() {}
+
+        struct SchemaLocation
+        {
+            Poco::Path path;
+            String message_type;
+        };
+        SchemaLocation splitFormatSchemaSetting(const String & format_schema_setting);
+        Poco::Path addMissingFileExtension(const Poco::Path & path);
+
+        FormatSchemaLoader & loader;
+        const String format;
+        const String file_extension;
+    };
+
+    template <typename FormatSpecificType,
+              typename std::enable_if_t<std::is_base_of_v<IFormatSpecific, FormatSpecificType>, int> = 0>
+    FormatSpecificType & get()
+    {
+        std::type_index type_index = typeid(FormatSpecificType);
+        auto it = format_specifics.find(type_index);
+        if (it == format_specifics.end())
+            it = format_specifics.emplace(type_index, std::make_unique<FormatSpecificType>(*this)).first;
+        return static_cast<FormatSpecificType &>(*it->second);
+    }
 
 private:
-    String getRawSchemaImpl(const String & path);
-    bool tryGetRawSchemaImpl(const String & path, String & schema);
-    bool tryGetRawSchemaFromDirectory(const Poco::Path & path, String & schema);
-    bool tryGetRawSchemaFromConnection(const Poco::Path & path, String & schema);
-    size_t sendQueryToConnection(const String & query, Strings & result);
+    Poco::Path resolvePath(const String & path);
+    Strings sendQueryToConnection(const String & query);
 
     const Context & context;
     std::optional<Poco::Path> directory;
-    bool allow_paths_break_out = false;
-    bool allow_absolute_paths = false;
+    bool enable_absolute_paths = false;
+    bool enable_environment_variables = false;
     String host;
     UInt16 port;
     String user;
     String password;
     std::unique_ptr<Connection> connection;
-    std::unordered_map<String, String> schemas_by_path;
-#if USE_PROTOBUF
-    std::unordered_map<String, ProtobufSchemaParser> protobuf_parsers;
-#endif
-    //std::unique_ptr<CapnProtoSchemaParserForFormatSchemaLoader> capnproto_schema_parser;
+    std::unordered_map<std::type_index, std::unique_ptr<IFormatSpecific>> format_specifics;
     std::mutex mutex;
 };
 

@@ -76,7 +76,7 @@ FormatSchemaLoader::FormatSchemaLoader(const Context & context_) : context(conte
 FormatSchemaLoader::~FormatSchemaLoader() = default;
 
 
-void FormatSchemaLoader::setDirectory(const String & directory_, bool allow_paths_break_out_)
+void FormatSchemaLoader::setDirectory(const String & directory_)
 {
     std::cout << "setDirectory(" << directory_ << ")" << std::endl;
     std::lock_guard lock{mutex};
@@ -87,13 +87,6 @@ void FormatSchemaLoader::setDirectory(const String & directory_, bool allow_path
         Poco::File(*new_directory).createDirectories();
     }
     directory = new_directory;
-    allow_paths_break_out = allow_paths_break_out_;
-}
-
-
-void FormatSchemaLoader::setAbsolutePathsAreAllowed(bool allowed)
-{
-    allow_absolute_paths = allowed;
 }
 
 
@@ -107,128 +100,185 @@ void FormatSchemaLoader::setConnectionParameters(const String & host_, UInt16 po
 }
 
 
-void FormatSchemaLoader::clearCaches()
+/// Enables using absolute paths for retrieving schema files from the local file system. By default it's disabled.
+void FormatSchemaLoader::enableAbsolutePaths(bool enable)
 {
     std::lock_guard lock{mutex};
-    schemas_by_path.clear();
-#if USE_PROTOBUF
-    protobuf_parsers.reset();
-#endif
+    enable_absolute_paths = enable;
+}
+
+/// Enables expanding environment variables in a path (relative or absolute) to a schema file. By default it's disabled.
+void FormatSchemaLoader::enableEnvironmentVariables(bool enable)
+{
+    std::lock_guard lock{mutex};
+    enable_environment_variables = enable;
+}
+
+
+bool FormatSchemaLoader::schemaFileExists(const String & path)
+{
+    std::lock_guard lock{mutex};
+    const Poco::Path p = resolvePath(path);
+    if (p.isAbsolute())
+    {
+        Poco::File file(p);
+        return file.exists() && file.isFile();
+    }
+
+    if (directory)
+    {
+        Poco::File file(Poco::Path(*directory).resolve(p));
+        if (file.exists() && file.isFile())
+            return true;
+    }
+
+    if (!host.empty())
+    {
+        WriteBufferFromOwnString escaped_path;
+        writeQuotedString(p, escaped_path);
+        const String query = "SELECT ANY(path) FROM system.format_schemas WHERE path = " + escaped_path;
+        return !sendQueryToConnection(query).empty();
+    }
+}
+
+
+String FormatSchemaLoader::getSchemaFile(const String & path)
+{
+    std::lock_guard lock{mutex};
+    const Poco::Path p = resolvePath(path);
+    if (p.isAbsolute())
+    {
+        ReadBufferFromFile buf(p.toString());
+        String file_contents;
+        readStringUntilEOF(file_contents, buf);
+        return file_contents;
+    }
+
+    if (directory)
+    {
+        Poco::File file(Poco::Path(*directory).resolve(p));
+        if (file.exists() && file.isFile())
+        {
+            ReadBufferFromFile buf(p.toString());
+            String file_contents;
+            readStringUntilEOF(file_contents, buf);
+            return file_contents;
+        }
+    }
+
+    if (!host.empty())
+    {
+        WriteBufferFromOwnString escaped_path;
+        writeQuotedString(p, escaped_path);
+        const String query = "SELECT file_contents FROM system.format_schemas WHERE path = " + escaped_path;
+        Strings query_result = sendQueryToConnection(query);
+        if (!query_result.empty())
+            return query_result.front();
+    }
+
+    throw Exception("Format schema '" + path + "' not found", ErrorCodes::FILE_DOESNT_EXIST);
 }
 
 
 Strings FormatSchemaLoader::getAllPaths()
 {
+    return getPathsStartingWith("");
+}
+
+Strings FormatSchemaLoader::getPathsStartingWith(const String & prefix)
+{
     std::lock_guard lock{mutex};
-    Strings all_paths;
+    Strings paths;
 
     if (directory)
     {
         std::cout << "FormatSchemaLoader: Searching files in directory " << directory->toString() << std::endl;
-        findAllPathsInDirectoryTree(*directory, {}, all_paths);
+        if (endsWith(prefix, "/"))
+            findAllPathsInDirectoryTree(*directory, Poco::Path(prefix), all_paths);
+        else
+        {
+            findAllPathsInDirectoryTree(*directory, {}, paths);
+            paths.erase(std::remove_if(paths.begin(), paths.end(), [&prefix](const String & path) { return startsWith(prefix); }),
+                        paths.end());
+        }
     }
 
     if (!host.empty())
     {
-        String query = "SELECT path FROM system.format_schemas";
-        sendQueryToConnection(query, all_paths);
+        String pattern = prefix + "%";
+        WriteBufferFromOwnString escaped_pattern;
+        writeQuotedString(pattern, escaped_pattern);
+        String query = "SELECT path FROM system.format_schemas WHERE path LIKE " + escaped_pattern;
+        sendQueryToConnection(query, paths);
     }
 
     return all_paths;
 }
 
 
-String FormatSchemaLoader::getRawSchema(const String & path)
+void FormatSchemaLoader::clearCaches()
 {
     std::lock_guard lock{mutex};
-    return getRawSchemaImpl(path);
+    protobuf_cache.reset();
+    capnproto_cache.reset();
 }
 
-String FormatSchemaLoader::getRawSchemaImpl(const String & path)
-{
-    String schema;
-    if (!tryGetRawSchemaImpl(path, schema))
-        throw Exception("Format schema '" + path + "' not found", ErrorCodes::FILE_DOESNT_EXIST);
-    return schema;
-}
 
-bool FormatSchemaLoader::tryGetRawSchema(const String & path, String & schema)
+Poco::Path FormatSchemaLoader::resolvePath(const String & path, const FormatTraits & format_traits)
 {
-    std::lock_guard lock{mutex};
-    return tryGetRawSchemaImpl(path, schema);
-}
+    Poco::Path resolved_path(enable_environment_variables ? Poco::Path::expand(path) : path);
 
-bool FormatSchemaLoader::tryGetRawSchemaImpl(const String & path, String & schema)
-{
-    std::cout << "tryGetRawSchemaImpl(" << path << ")" << std::endl;
-    auto it = schemas_by_path.find(path);
-    if (it != schemas_by_path.end())
+    if (resolved_path.getFileName().empty())
+        throw Exception("Path '" + path + "' to a format schema should contain file name", ErrorCodes::BAD_ARGUMENTS);
+
+    if (resolved_path.isAbsolute())
     {
-        schema = it->second;
-        return true;
-    }
-
-    Poco::Path p(path);
-    if (!tryGetRawSchemaFromDirectory(p, schema) && !tryGetRawSchemaFromConnection(p, schema))
-        return false;
-
-    schemas_by_path.try_emplace(path, schema);
-    return true;
-}
-
-
-bool FormatSchemaLoader::tryGetRawSchemaFromDirectory(const Poco::Path & path, String & schema)
-{
-    std::cout << "tryGetRawSchemaFromDirectory(" << path.toString() << ")" << std::endl;
-    if (!directory)
-        return false;
-
-    if (path.isAbsolute())
-    {
-        if (!allow_absolute_paths)
-            throw Exception("Path '" + path.toString() + "' to format_schema should be relative", ErrorCodes::BAD_ARGUMENTS);
+        if (!enable_absolute_paths)
+            throw Exception("Absolute path '" + path + "' to a format schema is not allowed", ErrorCodes::BAD_ARGUMENTS);
     }
     else
     {
-        if (path.depth() >= 1 && path.directory(0) == ".." && !allow_paths_break_out)
-            throw Exception("Path '" + path.toString() + "' to format_schema should be inside the format_schema_path directory specified in the setting", ErrorCodes::BAD_ARGUMENTS);
+        if (resolved_path.depth() >= 1 && resolved_path[0] == "..")
+        {
+            if (!directory || !enable_absolute_paths)
+                throw Exception("Path '" + path + "' to a format schema should not break out to the parent directory (it shouldn't starts with '../')", ErrorCodes::BAD_ARGUMENTS);
+            resolved_path = Poco::Path(*directory).resolve(resolved_path);
+        }
     }
 
-    Poco::Path resolved_path = Poco::Path(*directory).resolve(path);
-    std::cout << "FormatSchemaLoader: Reading file " << resolved_path.toString() << std::endl;
-    Poco::File file(resolved_path);
-    if (!file.exists() || !file.isFile())
-        return false;
+    if (resolved_path.getExtension().empty() && !format_traits.default_file_extension.empty())
+        resolved_path.setExtension(format_traits.default_file_extension);
 
-    ReadBufferFromFile buf(resolved_path.toString());
-    readStringUntilEOF(schema, buf);
-    return true;
+    return resolved_path;
 }
 
 
-bool FormatSchemaLoader::tryGetRawSchemaFromConnection(const Poco::Path & path, String & schema)
+FormatSchemaLoader::SchemaLocation FormatSchemaLoader::splitFormatSchemaSetting(const String & format_schema_setting, const FormatTraits & format_traits)
 {
-    std::cout << "tryGetRawSchemaFromConnection(" << path.toString() << ")" << std::endl;
-    if (host.empty())
-        return false;
+    if (format_schema_setting.empty())
+        throw Exception(
+            "Format '" + format_traits.format_name + "' requires the 'format_schema' setting to be set. "
+            "This setting should have the following format: 'filename:message', "
+            "for example 'my" + format_traits.format_name + "." + format_traits.default_file_extension + ":Message'",
+            ErrorCodes::BAD_ARGUMENTS);
 
-    if (path.isAbsolute() || (path.depth() >= 1 && path.directory(0) == ".."))
-        return false;
+    size_t colon_pos = format_schema_setting.find(':');
+    if ((colon_pos == String::npos) || (colon_pos == 0) || (colon_pos == format_schema_setting.length() - 1))
+    {
+        throw Exception(
+            "Format '" + format_traits.format_name + "' requires the 'format_schema' setting in the following format: 'filename:message', "
+            "for example 'my" + format_traits.format_name + "." + format_traits.default_file_extension + ":Message'. Got " + format_schema_setting,
+            ErrorCodes::BAD_ARGUMENTS);
+    }
 
-    WriteBufferFromOwnString escaped_path;
-    writeQuotedString(path.toString(), escaped_path);
-    String query = "SELECT schema FROM system.format_schemas WHERE path=" + escaped_path.str();
-    Strings result;
-    sendQueryToConnection(query, result);
-    if (result.empty())
-        return false;
-
-    schema = result.front();
-    return true;
+    SchemaLocation schema_location;
+    schema_location.path = resolvePath(format_schema_setting.substr(0, colon_pos));
+    schema_location.message_type = format_schema_setting.substr(colon_pos + 1);
+    return schema_location;
 }
 
 
-size_t FormatSchemaLoader::sendQueryToConnection(const String & query, Strings & result)
+Strings FormatSchemaLoader::sendQueryToConnection(const String & query)
 {
     std::cout << "sendQueryToConnection(" << query << ")" << std::endl;
     if (!connection)
@@ -247,27 +297,11 @@ size_t FormatSchemaLoader::sendQueryToConnection(const String & query, Strings &
 
     const ColumnString & column = typeid_cast<const ColumnString &>(*block.getByPosition(0).column);
     size_t num_rows = block.rows();
-    result.reserve(result.size() + num_rows);
+    Strings result;
+    result.reserve(num_rows);
     for (size_t i = 0; i != num_rows; ++i)
         result.emplace_back(column.getDataAt(i).toString());
-    return num_rows;
+    return result;
 }
-
-String FormatSchemaLoader::readSchemaFile(const String & basedir, const String & filename)
-{
-
-}
-
-#if USE_PROTOBUF
-const google::protobuf::Descriptor * FormatSchemaLoader::getProtobufSchema(const String & format_schema_setting)
-{
-    std::lock_guard lock{mutex};
-    String path, message_type;
-    splitFormatSchemaSetting(format_schema_setting, "Protobuf", "proto", path, message_type);
-    if (!protobuf_schema_parser)
-        protobuf_schema_parser = std::make_unique<ProtobufSchemaParser>(std::bind(&FormatSchemaLoader::readSchemaFile, this, std::placeholders::_1));
-    return protobuf_schema_parser->getProtobufSchema(path, message_type);
-}
-#endif
 
 }

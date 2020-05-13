@@ -32,7 +32,7 @@ StorageSystemFormatSchemas::StorageSystemFormatSchemas(const String & name_) : n
 {
     NamesAndTypesList names_and_types{
         {"path", std::make_shared<DataTypeString>()},
-        {"schema", std::make_shared<DataTypeString>()},
+        {"file_contents", std::make_shared<DataTypeString>()},
     };
     setColumns(ColumnsDescription(names_and_types));
 }
@@ -46,9 +46,10 @@ BlockInputStreams StorageSystemFormatSchemas::read(
     unsigned /*num_streams*/)
 {
     check(column_names);
-    bool only_path_column = (column_names.size() == 1 && column_names[0] == "path");
-
-    Block sample_block = only_path_column ? getSampleBlockForColumns({"path"}) : getSampleBlock();
+    Block sample_block = getSampleBlockForColumns(column_names);
+    constexpr size_t npos = static_cast<size_t>(-1);
+    const size_t path_pos = sample_block.has("path") ? sample_block.getPositionByName("path") : npos;
+    const size_t file_contents_pos = sample_block.has("file_contents") ? sample_block.getPositionByName("file_contents") : npos;
     MutableColumns res_columns = sample_block.cloneEmptyColumns();
 
     FormatSchemaLoader & format_schema_loader = context.getFormatSchemaLoader();
@@ -56,27 +57,18 @@ BlockInputStreams StorageSystemFormatSchemas::read(
     std::vector<String> paths;
     ASTSelectQuery query = typeid_cast<ASTSelectQuery &>(*query_info.query);
     String filter_by_path;
-    if (query.where_expression && extractFilterByPathFromWhereExpression(*query.where_expression, filter_by_path))
+    if (query.where_expression && extractFilterByPathFromWhereExpression(*query.where_expression, filter_by_path)
+            && format_schema_loader.schemaFileExists(filter_by_path))
         paths.emplace_back(filter_by_path);
     else
         paths = format_schema_loader.getAllPaths();
 
-    if (only_path_column)
+    for (const String & path : paths)
     {
-        for (const String & path : paths)
-            res_columns[0]->insert(path);
-    }
-    else
-    {
-        for (const String & path : paths)
-        {
-            String schema;
-            if (format_schema_loader.tryGetRawSchema(path, schema))
-            {
-                res_columns[0]->insert(path);
-                res_columns[1]->insert(schema);
-            }
-        }
+        if (path_pos != npos)
+            res_columns[path_pos]->insert(path);
+        if (file_contents_pos != npos)
+            res_columns[file_contents_pos]->insert(format_schema_loader.getSchemaFile(path));
     }
 
     return BlockInputStreams(1, std::make_shared<OneBlockInputStream>(sample_block.cloneWithColumns(std::move(res_columns))));
