@@ -64,10 +64,10 @@ std::optional<Poco::Net::SocketAddress> Cluster::Address::getResolvedAddress() c
 }
 
 
-bool Cluster::Address::isLocal(UInt16 clickhouse_port) const
+bool Cluster::Address::isLocal(UInt16/* clickhouse_port*/) const
 {
-    if (auto resolved = getResolvedAddress())
-        return isLocalImpl(*this, *resolved, clickhouse_port);
+    //if (auto resolved = getResolvedAddress())
+    //    return isLocalImpl(*this, *resolved, clickhouse_port);
     return false;
 }
 

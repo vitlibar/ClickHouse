@@ -882,6 +882,8 @@ void TCPHandler::receiveQuery()
     if (client_revision >= DBMS_MIN_REVISION_WITH_CLIENT_INFO)
         client_info.read(*in, client_revision);
 
+    LOG_INFO(&Poco::Logger::get("XYXYX"), "just read client_info=" << static_cast<size_t>(client_info.query_kind));
+
     /// For better support of old clients, that does not send ClientInfo.
     if (client_info.query_kind == ClientInfo::QueryKind::NO_QUERY)
     {
@@ -914,14 +916,18 @@ void TCPHandler::receiveQuery()
                                                                                                       : SettingsBinaryFormat::OLD;
     Settings passed_settings;
     passed_settings.deserialize(*in, settings_format);
+    LOG_INFO(&Poco::Logger::get("XYXYX"), "max_memory_usage=" << passed_settings.max_memory_usage);
+
     auto settings_changes = passed_settings.changes();
     if (client_info.query_kind == ClientInfo::QueryKind::INITIAL_QUERY)
     {
+        LOG_INFO(&Poco::Logger::get("XYXYX"), "check settings constraints");
         /// Throw an exception if the passed settings violate the constraints.
         query_context->checkSettingsConstraints(settings_changes);
     }
     else
     {
+        LOG_INFO(&Poco::Logger::get("XYXYX"), "clamp settings constraints");
         /// Quietly clamp to the constraints if it's not an initial query.
         query_context->clampToSettingsConstraints(settings_changes);
     }
@@ -941,6 +947,8 @@ void TCPHandler::receiveQuery()
     state.compression = static_cast<Protocol::Compression>(compression);
 
     readStringBinary(state.query, *in);
+
+    LOG_INFO(&Poco::Logger::get("XYXYX"), "query=" << state.query << ", query_kind=" << static_cast<size_t>(client_info.query_kind));
 }
 
 void TCPHandler::receiveUnexpectedQuery()
