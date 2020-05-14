@@ -316,6 +316,14 @@ enum QueryLogElementType : int8_t
 using SettingLogQueriesType = SettingEnum<QueryLogElementType>;
 
 
+enum class ActionOnViolationSettingsConstraints
+{
+    THROW,
+    CLAMP,
+};
+using SettingActionOnViolationSettingsConstraints = SettingEnum<ActionOnViolationSettingsConstraints>;
+
+
 enum class SettingsBinaryFormat
 {
     OLD,     /// Part of the settings are serialized as strings, and other part as varints. This is the old behaviour.

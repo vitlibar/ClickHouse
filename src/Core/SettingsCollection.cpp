@@ -556,6 +556,12 @@ IMPLEMENT_SETTING_ENUM(QueryLogElementType, LOG_QUERIES_TYPE_LIST_OF_NAMES, Erro
 IMPLEMENT_SETTING_ENUM(DefaultDatabaseEngine , DEFAULT_DATABASE_ENGINE_LIST_OF_NAMES, ErrorCodes::BAD_ARGUMENTS)
 
 
+#define ACTION_OF_VIOLATION_SETTINGS_CONSTRAINTS_LIST_OF_NAMES(M) \
+    M(THROW, "throw") \
+    M(CLAMP, "clamp")
+IMPLEMENT_SETTING_ENUM(ActionOnViolationSettingsConstraints , ACTION_OF_VIOLATION_SETTINGS_CONSTRAINTS_LIST_OF_NAMES, ErrorCodes::BAD_ARGUMENTS)
+
+
 namespace details
 {
     void SettingsCollectionUtils::serializeName(const StringRef & name, WriteBuffer & buf)
