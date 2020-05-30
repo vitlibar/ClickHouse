@@ -39,3 +39,19 @@ def test_access_control_on_cluster():
     assert "There is no user `Alex`" in ch2.query_and_get_error("SHOW CREATE USER Alex")
     assert "There is no user `Alex`" in ch3.query_and_get_error("SHOW CREATE USER Alex")
 
+
+def test_row_policies_on_cluster():
+    ch1.query("CREATE POLICY pol1 ON mydb.mytable ON CLUSTER 'cluster'")
+    ch1.query("CREATE POLICY pol2 ON mydb.mytable ON CLUSTER 'cluster'")
+    ch1.query("CREATE POLICY pol3 ON mydb.mytable ON CLUSTER 'cluster'")
+    ch1.query("CREATE POLICY pol4 ON CLUSTER 'cluster' ON mydb.mytable")
+    ch1.query("CREATE POLICY pol5 ON CLUSTER 'cluster' ON mydb.mytable")
+    ch1.query("CREATE POLICY pol6 ON CLUSTER 'cluster' ON mydb.mytable")
+    ch1.query("CREATE POLICY pol7 ON mydb.mytable ON CLUSTER 'cluster'")
+    ch1.query("CREATE POLICY pol8 ON mydb.mytable2 ON CLUSTER 'cluster'")
+
+    ch2.query("DROP POLICY pol1 ON mydb.mytable ON CLUSTER 'cluster'")
+    ch2.query("DROP POLICY pol2 ON CLUSTER 'cluster' ON mydb.mytable")
+    ch2.query("DROP POLICY pol3, pol4 ON mydb.mytable ON CLUSTER 'cluster'")
+    ch2.query("DROP POLICY pol5, pol6 ON CLUSTER 'cluster' ON mydb.mytable")
+    ch2.query("DROP POLICY pol7 ON mydb.mytable, pol8 ON mydb.mytable2 ON CLUSTER 'cluster'")

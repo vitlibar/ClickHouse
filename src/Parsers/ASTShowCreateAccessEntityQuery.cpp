@@ -1,4 +1,5 @@
 #include <Parsers/ASTShowCreateAccessEntityQuery.h>
+#include <Parsers/ASTRowPolicyName.h>
 #include <Common/quoteString.h>
 
 
@@ -30,14 +31,18 @@ void ASTShowCreateAccessEntityQuery::formatQueryImpl(const FormatSettings & sett
     }
     else if (type == EntityType::ROW_POLICY)
     {
-        const String & database = row_policy_name_parts.database;
-        const String & table_name = row_policy_name_parts.table_name;
-        const String & short_name = row_policy_name_parts.short_name;
-        settings.ostr << ' ' << backQuoteIfNeed(short_name) << (settings.hilite ? hilite_keyword : "") << " ON "
-                      << (settings.hilite ? hilite_none : "") << (database.empty() ? String{} : backQuoteIfNeed(database) + ".")
-                      << backQuoteIfNeed(table_name);
+        settings.ostr << " ";
+        row_policy_name->format(settings);
     }
     else
         settings.ostr << " " << backQuoteIfNeed(name);
 }
+
+
+void ASTShowCreateAccessEntityQuery::replaceEmptyDatabaseWithCurrent(const String & current_database)
+{
+    if (row_policy_name)
+        row_policy_name->replaceEmptyDatabaseWithCurrent(current_database);
+}
+
 }

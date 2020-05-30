@@ -1,11 +1,13 @@
 #pragma once
 
 #include <Parsers/ASTQueryWithOutput.h>
-#include <Access/RowPolicy.h>
+#include <Access/IAccessEntity.h>
 
 
 namespace DB
 {
+class ASTRowPolicyName;
+
 /** SHOW CREATE QUOTA [name | CURRENT]
   * SHOW CREATE [ROW] POLICY name ON [database.]table
   * SHOW CREATE USER [name | CURRENT_USER]
@@ -21,10 +23,12 @@ public:
     String name;
     bool current_quota = false;
     bool current_user = false;
-    RowPolicy::NameParts row_policy_name_parts;
+    std::shared_ptr<ASTRowPolicyName> row_policy_name;
 
     String getID(char) const override;
     ASTPtr clone() const override;
+
+    void replaceEmptyDatabaseWithCurrent(const String & current_database);
 
 protected:
     void formatQueryImpl(const FormatSettings & settings, FormatState &, FormatStateStacked) const override;
