@@ -6,7 +6,9 @@
 #include <Parsers/ExpressionElementParsers.h>
 #include <Parsers/ExpressionListParsers.h>
 #include <Parsers/ASTLiteral.h>
+#include <Parsers/ASTUserNameWithHost.h>
 #include <Parsers/ASTExtendedRoleSet.h>
+#include <Parsers/ParserUserNameWithHost.h>
 #include <Parsers/ParserExtendedRoleSet.h>
 #include <Parsers/ASTSettingsProfileElement.h>
 #include <Parsers/ParserSettingsProfileElement.h>
@@ -16,21 +18,16 @@
 
 namespace DB
 {
-namespace ErrorCodes
-{
-}
-
-
 namespace
 {
-    bool parseRenameTo(IParserBase::Pos & pos, Expected & expected, String & new_name, std::optional<String> & new_host_pattern)
+    bool parseRenameTo(IParserBase::Pos & pos, Expected & expected, String & new_name)
     {
         return IParserBase::wrapParseImpl(pos, [&]
         {
             if (!ParserKeyword{"RENAME TO"}.ignore(pos, expected))
                 return false;
 
-            return parseUserName(pos, expected, new_name, new_host_pattern);
+            return parseUserName(pos, expected, new_name);
         });
     }
 
@@ -268,13 +265,13 @@ bool ParserCreateUserQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expec
             or_replace = true;
     }
 
-    String name;
-    std::optional<String> host_pattern;
-    if (!parseUserName(pos, expected, name, host_pattern))
+    ASTPtr names_ast;
+    if (!ParserUserNamesWithHost{}.parse(pos, names_ast, expected))
         return false;
+    auto names = typeid_cast<std::shared_ptr<ASTUserNamesWithHost>>(names_ast);
+    auto names_ref = names->names;
 
     String new_name;
-    std::optional<String> new_host_pattern;
     std::optional<Authentication> authentication;
     std::optional<AllowedClientHosts> hosts;
     std::optional<AllowedClientHosts> add_hosts;
@@ -302,7 +299,7 @@ bool ParserCreateUserQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expec
 
         if (alter)
         {
-            if (new_name.empty() && parseRenameTo(pos, expected, new_name, new_host_pattern))
+            if (new_name.empty() && (names->size() == 1) && parseRenameTo(pos, expected, new_name))
                 continue;
 
             if (parseHosts(pos, expected, "ADD", add_hosts) || parseHosts(pos, expected, "DROP", remove_hosts))
@@ -312,13 +309,17 @@ bool ParserCreateUserQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expec
         break;
     }
 
-    if (!hosts)
+    if (!alter && !hosts)
     {
-        if (!alter && host_pattern)
-            hosts.emplace().addLikePattern(*host_pattern);
-        else if (alter && new_host_pattern)
-            hosts.emplace().addLikePattern(*new_host_pattern);
+        String common_host_pattern;
+        if (names->getHostPatternIfCommon(common_host_pattern) && !common_host_pattern.empty())
+        {
+            hosts.emplace().addLikePattern(common_host_pattern);
+            names->concatParts();
+        }
     }
+    else if (alter)
+        names->concatParts();
 
     auto query = std::make_shared<ASTCreateUserQuery>();
     node = query;
@@ -329,7 +330,7 @@ bool ParserCreateUserQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expec
     query->if_not_exists = if_not_exists;
     query->or_replace = or_replace;
     query->cluster = std::move(cluster);
-    query->name = std::move(name);
+    query->names = std::move(names);
     query->new_name = std::move(new_name);
     query->authentication = std::move(authentication);
     query->hosts = std::move(hosts);
