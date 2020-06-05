@@ -105,82 +105,102 @@ namespace
     }
 
 
-    bool parseHosts(IParserBase::Pos & pos, Expected & expected, const char * prefix, std::optional<AllowedClientHosts> & hosts)
+    bool parseHostsWithoutPrefix(IParserBase::Pos & pos, Expected & expected, AllowedClientHosts & hosts)
+    {
+        AllowedClientHosts res_hosts;
+
+        auto parse_element = [&]
+        {
+            if (ParserKeyword{"NONE"}.ignore(pos, expected))
+                return true;
+
+            if (ParserKeyword{"ANY"}.ignore(pos, expected))
+            {
+                res_hosts.addAnyHost();
+                return true;
+            }
+
+            if (ParserKeyword{"LOCAL"}.ignore(pos, expected))
+            {
+                res_hosts.addLocalHost();
+                return true;
+            }
+
+            if (ParserKeyword{"REGEXP"}.ignore(pos, expected))
+            {
+                ASTPtr ast;
+                if (!ParserList{std::make_unique<ParserStringLiteral>(), std::make_unique<ParserToken>(TokenType::Comma), false}.parse(pos, ast, expected))
+                    return false;
+
+                for (const auto & name_regexp_ast : ast->children)
+                    res_hosts.addNameRegexp(name_regexp_ast->as<const ASTLiteral &>().value.safeGet<String>());
+                return true;
+            }
+
+            if (ParserKeyword{"NAME"}.ignore(pos, expected))
+            {
+                ASTPtr ast;
+                if (!ParserList{std::make_unique<ParserStringLiteral>(), std::make_unique<ParserToken>(TokenType::Comma), false}.parse(pos, ast, expected))
+                    return false;
+
+                for (const auto & name_ast : ast->children)
+                    res_hosts.addName(name_ast->as<const ASTLiteral &>().value.safeGet<String>());
+
+                return true;
+            }
+
+            if (ParserKeyword{"IP"}.ignore(pos, expected))
+            {
+                ASTPtr ast;
+                if (!ParserList{std::make_unique<ParserStringLiteral>(), std::make_unique<ParserToken>(TokenType::Comma), false}.parse(pos, ast, expected))
+                    return false;
+
+                for (const auto & subnet_ast : ast->children)
+                    res_hosts.addSubnet(subnet_ast->as<const ASTLiteral &>().value.safeGet<String>());
+
+                return true;
+            }
+
+            if (ParserKeyword{"LIKE"}.ignore(pos, expected))
+            {
+                ASTPtr ast;
+                if (!ParserList{std::make_unique<ParserStringLiteral>(), std::make_unique<ParserToken>(TokenType::Comma), false}.parse(pos, ast, expected))
+                    return false;
+
+                for (const auto & pattern_ast : ast->children)
+                    res_hosts.addLikePattern(pattern_ast->as<const ASTLiteral &>().value.safeGet<String>());
+
+                return true;
+            }
+
+            return false;
+        };
+
+        if (!ParserList::parseUtil(pos, expected, parse_element, false))
+            return false;
+
+        hosts = std::move(res_hosts);
+        return true;
+    }
+
+
+    bool parseHosts(IParserBase::Pos & pos, Expected & expected, const String & prefix, std::optional<AllowedClientHosts> & hosts)
     {
         return IParserBase::wrapParseImpl(pos, [&]
         {
-            if (prefix && !ParserKeyword{prefix}.ignore(pos, expected))
+            if (!prefix.empty() && !ParserKeyword{prefix.c_str()}.ignore(pos, expected))
                 return false;
 
             if (!ParserKeyword{"HOST"}.ignore(pos, expected))
                 return false;
 
-            if (ParserKeyword{"ANY"}.ignore(pos, expected))
-            {
-                if (!hosts)
-                    hosts.emplace();
-                hosts->addAnyHost();
-                return true;
-            }
-
-            if (ParserKeyword{"NONE"}.ignore(pos, expected))
-            {
-                if (!hosts)
-                    hosts.emplace();
-                return true;
-            }
-
-            AllowedClientHosts new_hosts;
-            do
-            {
-                if (ParserKeyword{"LOCAL"}.ignore(pos, expected))
-                {
-                    new_hosts.addLocalHost();
-                }
-                else if (ParserKeyword{"REGEXP"}.ignore(pos, expected))
-                {
-                    ASTPtr ast;
-                    if (!ParserList{std::make_unique<ParserStringLiteral>(), std::make_unique<ParserToken>(TokenType::Comma), false}.parse(pos, ast, expected))
-                        return false;
-
-                    for (const auto & name_regexp_ast : ast->children)
-                        new_hosts.addNameRegexp(name_regexp_ast->as<const ASTLiteral &>().value.safeGet<String>());
-                }
-                else if (ParserKeyword{"NAME"}.ignore(pos, expected))
-                {
-                    ASTPtr ast;
-                    if (!ParserList{std::make_unique<ParserStringLiteral>(), std::make_unique<ParserToken>(TokenType::Comma), false}.parse(pos, ast, expected))
-                        return false;
-
-                    for (const auto & name_ast : ast->children)
-                        new_hosts.addName(name_ast->as<const ASTLiteral &>().value.safeGet<String>());
-                }
-                else if (ParserKeyword{"IP"}.ignore(pos, expected))
-                {
-                    ASTPtr ast;
-                    if (!ParserList{std::make_unique<ParserStringLiteral>(), std::make_unique<ParserToken>(TokenType::Comma), false}.parse(pos, ast, expected))
-                        return false;
-
-                    for (const auto & subnet_ast : ast->children)
-                        new_hosts.addSubnet(subnet_ast->as<const ASTLiteral &>().value.safeGet<String>());
-                }
-                else if (ParserKeyword{"LIKE"}.ignore(pos, expected))
-                {
-                    ASTPtr ast;
-                    if (!ParserList{std::make_unique<ParserStringLiteral>(), std::make_unique<ParserToken>(TokenType::Comma), false}.parse(pos, ast, expected))
-                        return false;
-
-                    for (const auto & pattern_ast : ast->children)
-                        new_hosts.addLikePattern(pattern_ast->as<const ASTLiteral &>().value.safeGet<String>());
-                }
-                else
-                    return false;
-            }
-            while (ParserToken{TokenType::Comma}.ignore(pos, expected));
+            AllowedClientHosts res_hosts;
+            if (!parseHostsWithoutPrefix(pos, expected, res_hosts))
+                return false;
 
             if (!hosts)
                 hosts.emplace();
-            hosts->add(new_hosts);
+            hosts->add(std::move(res_hosts));
             return true;
         });
     }
@@ -215,7 +235,7 @@ namespace
 
             ASTPtr new_settings_ast;
             ParserSettingsProfileElements elements_p;
-            elements_p.useInheritKeyword(true).useIDMode(id_mode);
+            elements_p.useIDMode(id_mode);
             if (!elements_p.parse(pos, new_settings_ast, expected))
                 return false;
 
@@ -289,7 +309,7 @@ bool ParserCreateUserQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expec
         if (!authentication && parseAuthentication(pos, expected, authentication))
             continue;
 
-        if (parseHosts(pos, expected, nullptr, hosts))
+        if (parseHosts(pos, expected, "", hosts))
             continue;
 
         if (parseSettings(pos, expected, attach_mode, settings))

@@ -34,7 +34,7 @@ namespace
 
             ASTPtr ast;
             ParserRolesOrUsersSet users_p;
-            users_p.allowUserNames().allowCurrentUserTag();
+            users_p.allowUserNames().allowCurrentUser();
             if (!users_p.parse(pos, ast, expected))
                 return false;
 

@@ -132,7 +132,9 @@ namespace
         query->names.emplace_back(quota.getName());
         query->attach = attach_mode;
 
-        query->key_type = quota.key_type;
+        if (quota.key_type != Quota::KeyType::NONE)
+            query->key_type = quota.key_type;
+
         query->all_limits.reserve(quota.all_limits.size());
 
         for (const auto & limits : quota.all_limits)
@@ -177,7 +179,7 @@ namespace
             {
                 ParserExpression parser;
                 ASTPtr expr = parseQuery(parser, condition, 0, DBMS_DEFAULT_MAX_PARSER_DEPTH);
-                query->conditions[static_cast<size_t>(type)] = expr;
+                query->conditions.emplace_back(type, expr);
             }
         }
 
