@@ -7,6 +7,7 @@
 
 namespace DB
 {
+class AccessControlManager;
 class ASTShowGrantsQuery;
 struct IAccessEntity;
 
@@ -18,6 +19,7 @@ public:
 
     BlockIO execute() override;
 
+    static ASTs getGrantQueries(const IAccessEntity & user_or_role, const AccessControlManager & access_control);
     static ASTs getAttachGrantQueries(const IAccessEntity & user_or_role);
 
 private:

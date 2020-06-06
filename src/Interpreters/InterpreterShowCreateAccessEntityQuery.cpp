@@ -264,44 +264,71 @@ ASTs InterpreterShowCreateAccessEntityQuery::getCreateQueries(ASTShowCreateAcces
     const auto & access_control = context.getAccessControlManager();
     context.checkAccess(getRequiredAccess());
     show_query.replaceEmptyDatabaseWithCurrent(context.getCurrentDatabase());
+    ASTs list;
+
+    if (show_query.all)
+    {
+        auto ids = access_control.findAll(show_query.type);
+        for (const auto & id : ids)
+        {
+            auto entity = access_control.tryRead(id);
+            if (!entity)
+                continue;
+            if (!show_query.all_on_table_name.empty())
+            {
+                if (auto policy = typeid_cast<RowPolicyPtr>(entity))
+                {
+                    if ((policy->getTableName() != show_query.all_on_table_name)
+                        || (policy->getDatabase() != show_query.all_on_database))
+                    continue;
+                }
+            }
+            list.push_back(getCreateQuery(*entity, access_control));
+        }
+        return list;
+    }
 
     if (show_query.current_user)
     {
         auto user = context.getUser();
-        if (!user)
-            return {};
-        return {getCreateQueryImpl(*user, &access_control, false)};
+        if (user)
+            list.emplace_back(getCreateQuery(*user, access_control));
+        return list;
     }
 
     if (show_query.current_quota)
     {
         auto usage = context.getQuotaUsage();
-        if (!usage)
-            return {};
-        auto quota = access_control.read<Quota>(usage->quota_id);
-        return {getCreateQueryImpl(*quota, &access_control, false)};
+        if (usage)
+        {
+            auto quota = access_control.read<Quota>(usage->quota_id);
+            list.emplace_back(getCreateQuery(*quota, access_control));
+        }
+        return list;
     }
-
-    ASTs list;
 
     if (show_query.type == EntityType::ROW_POLICY)
     {
         for (const String & name : show_query.row_policy_names->toStrings())
         {
             RowPolicyPtr policy = access_control.read<RowPolicy>(name);
-            list.push_back(getCreateQueryImpl(*policy, &access_control, false));
+            list.push_back(getCreateQuery(*policy, access_control));
         }
-    }
-    else
-    {
-        for (const String & name : show_query.names)
-        {
-            auto entity = access_control.read(access_control.getID(show_query.type, name));
-            list.push_back(getCreateQueryImpl(*entity, &access_control, false));
-        }
+        return list;
     }
 
+    for (const String & name : show_query.names)
+    {
+        auto entity = access_control.read(access_control.getID(show_query.type, name));
+        list.push_back(getCreateQuery(*entity, access_control));
+    }
     return list;
+}
+
+
+ASTPtr InterpreterShowCreateAccessEntityQuery::getCreateQuery(const IAccessEntity & entity, const AccessControlManager & access_control)
+{
+    return getCreateQueryImpl(entity, &access_control, false);
 }
 
 

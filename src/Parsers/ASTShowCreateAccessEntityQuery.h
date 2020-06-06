@@ -8,11 +8,11 @@ namespace DB
 {
 class ASTRowPolicyNames;
 
-/** SHOW CREATE QUOTA [name]
-  * SHOW CREATE [ROW] POLICY name ON [database.]table
-  * SHOW CREATE USER [name | CURRENT_USER]
-  * SHOW CREATE ROLE name
-  * SHOW CREATE [SETTINGS] PROFILE name
+/** SHOW CREATE QUOTA [name [, name2 ...] | ALL]
+  * SHOW CREATE [ROW] POLICY {name ON [database.]table [, name2 ON database2.table2 ...] | ALL}
+  * SHOW CREATE USER [name [, name2 ...] | CURRENT_USER | ALL]
+  * SHOW CREATE ROLE {name [, name2 ...] | ALL}
+  * SHOW CREATE [SETTINGS] PROFILE {name [, name2 ...] | ALL}
   */
 class ASTShowCreateAccessEntityQuery : public ASTQueryWithOutput
 {
@@ -24,6 +24,10 @@ public:
     bool current_quota = false;
     bool current_user = false;
     std::shared_ptr<ASTRowPolicyNames> row_policy_names;
+
+    bool all = false;
+    String all_on_database;
+    String all_on_table_name;
 
     String getID(char) const override;
     ASTPtr clone() const override;

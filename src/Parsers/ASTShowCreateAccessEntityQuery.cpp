@@ -41,15 +41,29 @@ void ASTShowCreateAccessEntityQuery::formatQueryImpl(const FormatSettings & sett
                   << (settings.hilite ? hilite_none : "");
 
     if (current_user || current_quota)
+        return;
+
+    if (all)
     {
+        settings.ostr << (settings.hilite ? hilite_keyword : "") << " ALL" << (settings.hilite ? hilite_none : "");
+        if ((type == EntityType::ROW_POLICY) && !all_on_table_name.empty())
+        {
+            settings.ostr << (settings.hilite ? hilite_keyword : "") << " ON " << (settings.hilite ? hilite_none : "");
+            if (!all_on_database.empty())
+                settings.ostr << backQuoteIfNeed(all_on_database) << ".";
+            settings.ostr << backQuoteIfNeed(all_on_table_name);
+        }
+        return;
     }
-    else if (type == EntityType::ROW_POLICY)
+
+    if (type == EntityType::ROW_POLICY)
     {
         settings.ostr << " ";
         row_policy_names->format(settings);
+        return;
     }
-    else
-        formatNames(names, settings);
+
+    formatNames(names, settings);
 }
 
 
@@ -57,6 +71,9 @@ void ASTShowCreateAccessEntityQuery::replaceEmptyDatabaseWithCurrent(const Strin
 {
     if (row_policy_names)
         row_policy_names->replaceEmptyDatabaseWithCurrent(current_database);
+
+    if (all_on_database.empty() && !all_on_table_name.empty())
+        all_on_database = current_database;
 }
 
 }

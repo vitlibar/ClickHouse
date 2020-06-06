@@ -10,6 +10,8 @@
 #include <Access/AccessControlManager.h>
 #include <Access/User.h>
 #include <Access/Role.h>
+#include <Access/RolesOrUsersSet.h>
+#include <boost/range/algorithm_ext/push_back.hpp>
 
 
 namespace DB
@@ -151,18 +153,26 @@ BlockInputStreamPtr InterpreterShowGrantsQuery::executeImpl()
 ASTs InterpreterShowGrantsQuery::getGrantQueries(const ASTShowGrantsQuery & show_query) const
 {
     const auto & access_control = context.getAccessControlManager();
+    auto ids = RolesOrUsersSet{*show_query.for_roles, access_control, context.getUserID()}.getMatchingIDs(access_control);
 
-    AccessEntityPtr user_or_role;
-    if (show_query.current_user)
-        user_or_role = context.getUser();
-    else
+    ASTs grant_queries;
+    for (const auto & id : ids)
     {
-        user_or_role = access_control.tryRead<User>(show_query.name);
-        if (!user_or_role)
-            user_or_role = access_control.read<Role>(show_query.name);
+        auto entity = access_control.tryRead(id);
+        if (entity)
+        {
+            auto new_grant_queries = getGrantQueries(*entity, access_control);
+            boost::range::push_back(grant_queries, std::move(new_grant_queries));
+        }
     }
 
-    return getGrantQueriesImpl(*user_or_role, &access_control);
+    return grant_queries;
+}
+
+
+ASTs InterpreterShowGrantsQuery::getGrantQueries(const IAccessEntity & user_or_role, const AccessControlManager & access_control)
+{
+    return getGrantQueriesImpl(user_or_role, &access_control, false);
 }
 
 

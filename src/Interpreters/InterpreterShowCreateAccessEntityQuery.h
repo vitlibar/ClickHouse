@@ -7,6 +7,7 @@
 
 namespace DB
 {
+class AccessControlManager;
 class Context;
 class ASTShowCreateAccessEntityQuery;
 class AccessRightsElements;
@@ -25,6 +26,7 @@ public:
     bool ignoreQuota() const override { return ignore_quota; }
     bool ignoreLimits() const override { return ignore_quota; }
 
+    static ASTPtr getCreateQuery(const IAccessEntity & entity, const AccessControlManager & access_control);
     static ASTPtr getAttachQuery(const IAccessEntity & entity);
 
 private:
