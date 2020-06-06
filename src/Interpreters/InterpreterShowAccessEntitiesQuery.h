@@ -20,6 +20,8 @@ public:
 
 private:
     String getRewrittenQuery() const;
+    BlockInputStreamPtr getInputStreamFromAllCreateAndGrantQueries() const;
+    ASTs getCreateAndGrantQueries() const;
 
     ASTPtr query_ptr;
     Context & context;

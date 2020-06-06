@@ -6,13 +6,17 @@ namespace DB
 {
 namespace ErrorCodes
 {
-    extern const int NOT_IMPLEMENTED;
+    extern const int LOGICAL_ERROR;
 }
 
 
 const char * ASTShowAccessEntitiesQuery::getKeyword() const
 {
-    switch (type)
+    if (all_access)
+        return "SHOW ACCESS";
+    if (!type)
+        throw Exception("Type of ASTShowAccessEntitiesQuery not set", ErrorCodes::LOGICAL_ERROR);
+    switch (*type)
     {
         case EntityType::ROW_POLICY:
             return "SHOW ROW POLICIES";
@@ -27,7 +31,7 @@ const char * ASTShowAccessEntitiesQuery::getKeyword() const
         case EntityType::MAX:
             break;
     }
-    throw Exception(toString(type) + ": type is not supported by SHOW query", ErrorCodes::NOT_IMPLEMENTED);
+    throw Exception(toString(*type) + ": type is not supported by SHOW query", ErrorCodes::LOGICAL_ERROR);
 }
 
 

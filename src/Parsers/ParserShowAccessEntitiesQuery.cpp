@@ -31,8 +31,13 @@ bool ParserShowAccessEntitiesQuery::parseImpl(Pos & pos, ASTPtr & node, Expected
     bool current_quota = false;
     bool current_roles = false;
     bool enabled_roles = false;
+    bool all_access = false;
 
-    if (ParserKeyword{"USERS"}.ignore(pos, expected))
+    if (ParserKeyword{"ACCESS"}.ignore(pos, expected))
+    {
+        all_access = true;
+    }
+    else if (ParserKeyword{"USERS"}.ignore(pos, expected))
     {
         type = EntityType::USER;
     }
@@ -77,12 +82,13 @@ bool ParserShowAccessEntitiesQuery::parseImpl(Pos & pos, ASTPtr & node, Expected
     auto query = std::make_shared<ASTShowAccessEntitiesQuery>();
     node = query;
 
-    query->type = *type;
+    query->type = type;
     query->current_quota = current_quota;
     query->current_roles = current_roles;
     query->enabled_roles = enabled_roles;
     query->database = std::move(database);
     query->table_name = std::move(table_name);
+    query->all_access = all_access;
 
     return true;
 }
