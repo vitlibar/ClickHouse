@@ -8,6 +8,7 @@
 #include <Columns/ColumnNullable.h>
 #include <Columns/ColumnsNumber.h>
 #include <Access/AccessControlManager.h>
+#include <Access/AccessRightsElement.h>
 #include <Access/Role.h>
 #include <Access/User.h>
 #include <Interpreters/Context.h>
@@ -16,7 +17,19 @@
 
 namespace DB
 {
-using EntityType = IAccessEntity::Type;
+namespace
+{
+    using EntityType = IAccessEntity::Type;
+    using Kind = AccessRightsElementWithOptions::Kind;
+
+    DataTypeEnum8::Values getKindEnumValues()
+    {
+        DataTypeEnum8::Values enum_values;
+        enum_values.emplace_back("GRANT", static_cast<Int8>(Kind::GRANT));
+        enum_values.emplace_back("REVOKE", static_cast<Int8>(Kind::REVOKE));
+        return enum_values;
+    }
+}
 
 
 NamesAndTypesList StorageSystemGrants::getNamesAndTypes()
@@ -24,11 +37,12 @@ NamesAndTypesList StorageSystemGrants::getNamesAndTypes()
     NamesAndTypesList names_and_types{
         {"user_name", std::make_shared<DataTypeNullable>(std::make_shared<DataTypeString>())},
         {"role_name", std::make_shared<DataTypeNullable>(std::make_shared<DataTypeString>())},
+        {"kind", std::make_shared<DataTypeEnum8>(getKindEnumValues())},
         {"access_type", std::make_shared<DataTypeEnum8>(StorageSystemPrivileges::getAccessTypeEnumValues())},
         {"database", std::make_shared<DataTypeNullable>(std::make_shared<DataTypeString>())},
         {"table", std::make_shared<DataTypeNullable>(std::make_shared<DataTypeString>())},
         {"column", std::make_shared<DataTypeNullable>(std::make_shared<DataTypeString>())},
-        {"is_partial_revoke", std::make_shared<DataTypeUInt8>()},
+        {"level", std::make_shared<DataTypeUInt8>()},
         {"grant_option", std::make_shared<DataTypeUInt8>()},
     };
     return names_and_types;
@@ -42,20 +56,21 @@ void StorageSystemGrants::fillData(MutableColumns & res_columns, const Context &
     std::vector<UUID> ids = access_control.findAll<User>();
     boost::range::push_back(ids, access_control.findAll<Role>());
 
-    size_t column_index = 0;
-    auto & column_user_name = assert_cast<ColumnString &>(assert_cast<ColumnNullable &>(*res_columns[column_index]).getNestedColumn());
-    auto & column_user_name_null_map = assert_cast<ColumnNullable &>(*res_columns[column_index++]).getNullMapData();
-    auto & column_role_name = assert_cast<ColumnString &>(assert_cast<ColumnNullable &>(*res_columns[column_index]).getNestedColumn());
-    auto & column_role_name_null_map = assert_cast<ColumnNullable &>(*res_columns[column_index++]).getNullMapData();
-    auto & column_access_type = assert_cast<ColumnInt8 &>(*res_columns[column_index++]).getData();
-    auto & column_database = assert_cast<ColumnString &>(assert_cast<ColumnNullable &>(*res_columns[column_index]).getNestedColumn());
-    auto & column_database_null_map = assert_cast<ColumnNullable &>(*res_columns[column_index++]).getNullMapData();
-    auto & column_table = assert_cast<ColumnString &>(assert_cast<ColumnNullable &>(*res_columns[column_index]).getNestedColumn());
-    auto & column_table_null_map = assert_cast<ColumnNullable &>(*res_columns[column_index++]).getNullMapData();
-    auto & column_column = assert_cast<ColumnString &>(assert_cast<ColumnNullable &>(*res_columns[column_index]).getNestedColumn());
-    auto & column_column_null_map = assert_cast<ColumnNullable &>(*res_columns[column_index++]).getNullMapData();
-    auto & column_is_partial_revoke = assert_cast<ColumnUInt8 &>(*res_columns[column_index++]).getData();
-    auto & column_grant_option = assert_cast<ColumnUInt8 &>(*res_columns[column_index++]).getData();
+    size_t i = 0;
+    auto & column_user_name = assert_cast<ColumnString &>(assert_cast<ColumnNullable &>(*res_columns[i]).getNestedColumn());
+    auto & column_user_name_null_map = assert_cast<ColumnNullable &>(*res_columns[i++]).getNullMapData();
+    auto & column_role_name = assert_cast<ColumnString &>(assert_cast<ColumnNullable &>(*res_columns[i]).getNestedColumn());
+    auto & column_role_name_null_map = assert_cast<ColumnNullable &>(*res_columns[i++]).getNullMapData();
+    auto & column_kind = assert_cast<ColumnInt8 &>(*res_columns[i++]).getData();
+    auto & column_access_type = assert_cast<ColumnInt8 &>(*res_columns[i++]).getData();
+    auto & column_database = assert_cast<ColumnString &>(assert_cast<ColumnNullable &>(*res_columns[i]).getNestedColumn());
+    auto & column_database_null_map = assert_cast<ColumnNullable &>(*res_columns[i++]).getNullMapData();
+    auto & column_table = assert_cast<ColumnString &>(assert_cast<ColumnNullable &>(*res_columns[i]).getNestedColumn());
+    auto & column_table_null_map = assert_cast<ColumnNullable &>(*res_columns[i++]).getNullMapData();
+    auto & column_column = assert_cast<ColumnString &>(assert_cast<ColumnNullable &>(*res_columns[i]).getNestedColumn());
+    auto & column_column_null_map = assert_cast<ColumnNullable &>(*res_columns[i++]).getNullMapData();
+    auto & column_level = assert_cast<ColumnUInt8 &>(*res_columns[i++]).getData();
+    auto & column_grant_option = assert_cast<ColumnUInt8 &>(*res_columns[i++]).getData();
 
     auto add_row = [&](const String & grantee_name,
                        EntityType grantee_type,
@@ -63,7 +78,7 @@ void StorageSystemGrants::fillData(MutableColumns & res_columns, const Context &
                        const String * database,
                        const String * table,
                        const String * column,
-                       bool is_partial_revoke,
+                       Kind kind,
                        bool grant_option)
     {
         if (grantee_type == EntityType::USER)
@@ -83,12 +98,15 @@ void StorageSystemGrants::fillData(MutableColumns & res_columns, const Context &
         else
             assert(false);
 
+        column_kind.push_back(static_cast<Int8>(kind));
         column_access_type.push_back(static_cast<Int8>(access_type));
 
+        UInt8 level = 0;
         if (database)
         {
             column_database.insertData(database->data(), database->length());
             column_database_null_map.push_back(false);
+            level = 1;
         }
         else
         {
@@ -100,6 +118,7 @@ void StorageSystemGrants::fillData(MutableColumns & res_columns, const Context &
         {
             column_table.insertData(table->data(), table->length());
             column_table_null_map.push_back(false);
+            level = 2;
         }
         else
         {
@@ -111,6 +130,7 @@ void StorageSystemGrants::fillData(MutableColumns & res_columns, const Context &
         {
             column_column.insertData(column->data(), column->length());
             column_column_null_map.push_back(false);
+            level = 3;
         }
         else
         {
@@ -118,15 +138,13 @@ void StorageSystemGrants::fillData(MutableColumns & res_columns, const Context &
             column_column_null_map.push_back(true);
         }
 
-        column_is_partial_revoke.push_back(is_partial_revoke);
+        column_level.push_back(level);
         column_grant_option.push_back(grant_option);
     };
 
     auto add_rows = [&](const String & grantee_name,
                         IAccessEntity::Type grantee_type,
-                        const AccessRightsElements & elements,
-                        bool is_partial_revoke,
-                        bool grant_option)
+                        const AccessRightsElementsWithOptions & elements)
     {
         for (const auto & element : elements)
         {
@@ -140,13 +158,13 @@ void StorageSystemGrants::fillData(MutableColumns & res_columns, const Context &
             if (element.any_column)
             {
                 for (const auto & access_type : access_types)
-                    add_row(grantee_name, grantee_type, access_type, database, table, nullptr, is_partial_revoke, grant_option);
+                    add_row(grantee_name, grantee_type, access_type, database, table, nullptr, element.kind, element.grant_option);
             }
             else
             {
                 for (const auto & access_type : access_types)
                     for (const auto & column : element.columns)
-                        add_row(grantee_name, grantee_type, access_type, database, table, &column, is_partial_revoke, grant_option);
+                        add_row(grantee_name, grantee_type, access_type, database, table, &column, element.kind, element.grant_option);
             }
         }
     };
@@ -157,7 +175,7 @@ void StorageSystemGrants::fillData(MutableColumns & res_columns, const Context &
         if (!entity)
             continue;
 
-        const GrantedAccess * access = nullptr;
+        const AccessRights * access = nullptr;
         if (auto role = typeid_cast<RolePtr>(entity))
             access = &role->access;
         else if (auto user = typeid_cast<UserPtr>(entity))
@@ -167,13 +185,8 @@ void StorageSystemGrants::fillData(MutableColumns & res_columns, const Context &
 
         const String & grantee_name = entity->getName();
         const auto grantee_type = entity->getType();
-        auto grants_and_revokes = access->access.getGrantsAndPartialRevokes();
-        auto grants_and_revokes_with_grant_option = access->access_with_grant_option.getGrantsAndPartialRevokes();
-
-        add_rows(grantee_name, grantee_type, grants_and_revokes.grants, /* is_partial_revoke = */ false, /* grant_option = */ false);
-        add_rows(grantee_name, grantee_type, grants_and_revokes.revokes, /* is_partial_revoke = */ true, /* grant_option = */ false);
-        add_rows(grantee_name, grantee_type, grants_and_revokes_with_grant_option.grants, /* is_partial_revoke = */ false, /* grant_option = */ true);
-        add_rows(grantee_name, grantee_type, grants_and_revokes_with_grant_option.revokes, /* is_partial_revoke = */ true, /* grant_option = */ true);
+        auto elements = access->getElements();
+        add_rows(grantee_name, grantee_type, elements);
     }
 }
 
