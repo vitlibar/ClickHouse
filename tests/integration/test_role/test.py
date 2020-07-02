@@ -97,6 +97,23 @@ def test_admin_option():
     assert instance.query("SELECT * FROM test_table", user='B') == "1\t5\n2\t10\n"
 
 
+def test_revoke_requires_admin_option():
+    instance.query("CREATE USER A")
+    instance.query("CREATE USER B")
+    instance.query("CREATE ROLE R1")
+    
+    instance.query("GRANT R1 TO B")
+    assert instance.query("SHOW GRANTS FOR B") == "GRANT R1 TO B\n"
+
+    expected_error = "Not enough privileges"
+    print instance.query_and_get_error("REVOKE R1 FROM B", user='A')
+
+    instance.query("GRANT R1 TO A")
+    expected_error = "privileges have been granted, but without grant option"
+    print instance.query_and_get_error("REVOKE R1 FROM B", user='A')
+
+
+
 def test_introspection():
     instance.query("CREATE USER A")
     instance.query("CREATE USER B")

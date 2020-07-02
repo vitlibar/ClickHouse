@@ -30,6 +30,65 @@ namespace ErrorCodes
     extern const int UNKNOWN_USER;
 }
 
+
+namespace
+{
+    std::shared_ptr<AccessRights> mixAccessRightsFromUserAndRoles(const User & user, const EnabledRolesInfo & roles_info)
+    {
+        auto res = std::make_shared<AccessRights>(user.access);
+        res->makeUnion(roles_info.access);
+        return res;
+    }
+
+    std::shared_ptr<AccessRights> applyParamsToAccessRights(const AccessRights & access, const ContextAccessParams & params)
+    {
+        auto res = std::make_shared<AccessRights>(access);
+
+        static const AccessFlags table_ddl = AccessType::CREATE_DATABASE | AccessType::CREATE_TABLE | AccessType::CREATE_VIEW
+            | AccessType::ALTER_TABLE | AccessType::ALTER_VIEW | AccessType::DROP_DATABASE | AccessType::DROP_TABLE | AccessType::DROP_VIEW
+            | AccessType::TRUNCATE;
+
+        static const AccessFlags dictionary_ddl = AccessType::CREATE_DICTIONARY | AccessType::DROP_DICTIONARY;
+        static const AccessFlags table_and_dictionary_ddl = table_ddl | dictionary_ddl;
+        static const AccessFlags write_table_access = AccessType::INSERT | AccessType::OPTIMIZE;
+        static const AccessFlags write_dcl_access = AccessType::ACCESS_MANAGEMENT - AccessType::SHOW_ACCESS;
+
+        if (params.readonly)
+            res->revoke(write_table_access | table_and_dictionary_ddl | write_dcl_access | AccessType::SYSTEM | AccessType::KILL_QUERY);
+
+        if (params.readonly == 1)
+        {
+            /// Table functions are forbidden in readonly mode.
+            /// For example, for readonly = 2 - allowed.
+            res->revoke(AccessType::CREATE_TEMPORARY_TABLE);
+        }
+
+        if (!params.allow_ddl)
+            res->revoke(table_and_dictionary_ddl);
+
+        if (!params.allow_introspection)
+            res->revoke(AccessType::INTROSPECTION);
+
+        /// Anyone has access to the "system" database.
+        res->grant(AccessType::SELECT, DatabaseCatalog::SYSTEM_DATABASE);
+
+        if (params.readonly != 1)
+        {
+            /// User has access to temporary or external table if such table was resolved in session or query context
+            res->grant(AccessFlags::allTableFlags() | AccessFlags::allColumnFlags(), DatabaseCatalog::TEMPORARY_DATABASE);
+        }
+
+        if (params.readonly)
+        {
+            /// No grant option in readonly mode.
+            res->revokeGrantOption(AccessType::ALL);
+        }
+
+        return res;
+    }
+}
+
+
 ContextAccess::ContextAccess(const AccessControlManager & manager_, const Params & params_)
     : manager(&manager_)
     , params(params_)
@@ -54,6 +113,10 @@ void ContextAccess::setUser(const UserPtr & user_) const
         /// User has been dropped.
         auto nothing_granted = std::make_shared<AccessRights>();
         access = nothing_granted;
+        access_without_readonly = nothing_granted;
+        access_with_allow_ddl = nothing_granted;
+        access_with_allow_introspection = nothing_granted;
+        access_from_user_and_roles = nothing_granted;
         subscription_for_user_change = {};
         subscription_for_roles_changes = {};
         enabled_roles = nullptr;
@@ -108,56 +171,18 @@ void ContextAccess::setRolesInfo(const std::shared_ptr<const EnabledRolesInfo> &
     enabled_row_policies = manager->getEnabledRowPolicies(*params.user_id, roles_info->enabled_roles);
     enabled_quota = manager->getEnabledQuota(*params.user_id, user_name, roles_info->enabled_roles, params.address, params.quota_key);
     enabled_settings = manager->getEnabledSettings(*params.user_id, user->settings, roles_info->enabled_roles, roles_info->settings_from_enabled_roles);
-    setFinalAccess();
+    calculateAccessRights();
 }
 
 
-void ContextAccess::setFinalAccess() const
+void ContextAccess::calculateAccessRights() const
 {
-    auto final_access = std::make_shared<AccessRights>();
-    *final_access = user->access;
-    if (roles_info)
-        final_access->merge(roles_info->access);
+    access_from_user_and_roles = mixAccessRightsFromUserAndRoles(*user, *roles_info);
+    access = applyParamsToAccessRights(*access_from_user_and_roles, params);
 
-    static const AccessFlags table_ddl = AccessType::CREATE_DATABASE | AccessType::CREATE_TABLE | AccessType::CREATE_VIEW
-        | AccessType::ALTER_TABLE | AccessType::ALTER_VIEW | AccessType::DROP_DATABASE | AccessType::DROP_TABLE | AccessType::DROP_VIEW
-        | AccessType::TRUNCATE;
-
-    static const AccessFlags dictionary_ddl = AccessType::CREATE_DICTIONARY | AccessType::DROP_DICTIONARY;
-    static const AccessFlags table_and_dictionary_ddl = table_ddl | dictionary_ddl;
-    static const AccessFlags write_table_access = AccessType::INSERT | AccessType::OPTIMIZE;
-    static const AccessFlags write_dcl_access = AccessType::ACCESS_MANAGEMENT - AccessType::SHOW_ACCESS;
-
-    if (params.readonly)
-        final_access->revoke(write_table_access | table_and_dictionary_ddl | write_dcl_access | AccessType::SYSTEM | AccessType::KILL_QUERY);
-
-    if (params.readonly == 1)
-    {
-        /// Table functions are forbidden in readonly mode.
-        /// For example, for readonly = 2 - allowed.
-        final_access->revoke(AccessType::CREATE_TEMPORARY_TABLE);
-    }
-
-    if (!params.allow_ddl)
-        final_access->revoke(table_and_dictionary_ddl);
-
-    if (!params.allow_introspection)
-        final_access->revoke(AccessType::INTROSPECTION);
-
-    /// Anyone has access to the "system" database.
-    final_access->grant(AccessType::SELECT, DatabaseCatalog::SYSTEM_DATABASE);
-
-    if (params.readonly != 1)
-    {
-        /// User has access to temporary or external table if such table was resolved in session or query context
-        final_access->grant(AccessFlags::allTableFlags() | AccessFlags::allColumnFlags(), DatabaseCatalog::TEMPORARY_DATABASE);
-    }
-
-    if (params.readonly)
-    {
-        /// No grant option in readonly mode.
-        final_access->revokeGrantOption(AccessType::ALL);
-    }
+    access_without_readonly = nullptr;
+    access_with_allow_ddl = nullptr;
+    access_with_allow_introspection = nullptr;
 
     if (trace_log)
     {
@@ -168,10 +193,8 @@ void ContextAccess::setFinalAccess() const
                 boost::algorithm::join(roles_info->getEnabledRolesNames(), ", "));
         }
         LOG_TRACE(trace_log, "Settings: readonly={}, allow_ddl={}, allow_introspection_functions={}", params.readonly, params.allow_ddl, params.allow_introspection);
-        LOG_TRACE(trace_log, "List of all grants: {}", final_access->toString());
+        LOG_TRACE(trace_log, "List of all grants: {}", access->toString());
     }
-
-    access = final_access;
 }
 
 
@@ -361,9 +384,7 @@ void ContextAccess::checkAccessImpl2(const AccessFlags & flags, const Args &... 
     std::lock_guard lock{mutex};
 
     if (!user)
-    {
         show_error("User has been dropped", ErrorCodes::UNKNOWN_USER);
-    }
 
     if (grant_option && access->isGranted(flags, args...))
     {
@@ -381,7 +402,7 @@ void ContextAccess::checkAccessImpl2(const AccessFlags & flags, const Args &... 
         {
             Params changed_params = params;
             changed_params.readonly = 0;
-            access_without_readonly = manager->getContextAccess(changed_params);
+            access_without_readonly = applyParamsToAccessRights(*access_from_user_and_roles, changed_params);
         }
 
         if (access_without_readonly->isGranted(flags, args...))
@@ -402,7 +423,7 @@ void ContextAccess::checkAccessImpl2(const AccessFlags & flags, const Args &... 
         {
             Params changed_params = params;
             changed_params.allow_ddl = true;
-            access_with_allow_ddl = manager->getContextAccess(changed_params);
+            access_with_allow_ddl = applyParamsToAccessRights(*access_from_user_and_roles, changed_params);
         }
 
         if (access_with_allow_ddl->isGranted(flags, args...))
@@ -417,7 +438,7 @@ void ContextAccess::checkAccessImpl2(const AccessFlags & flags, const Args &... 
         {
             Params changed_params = params;
             changed_params.allow_introspection = true;
-            access_with_allow_introspection = manager->getContextAccess(changed_params);
+            access_with_allow_introspection = applyParamsToAccessRights(*access_from_user_and_roles, changed_params);
         }
 
         if (access_with_allow_introspection->isGranted(flags, args...))
@@ -495,13 +516,29 @@ void ContextAccess::checkAdminOption(const UUID & role_id) const
     if (!user)
         throw Exception(user_name + ": User has been dropped", ErrorCodes::UNKNOWN_USER);
 
-    std::optional<String> role_name = manager->readName(role_id);
+    std::optional<String> role_name;
+    if (info)
+    {
+        auto it = info->names_of_roles.find(role_id);
+        if (it != info->names_of_roles.end())
+            role_name = it->second;
+    }
+    if (!role_name)
+        role_name = manager->readName(role_id);
+
     if (!role_name)
         role_name = "ID {" + toString(role_id) + "}";
     throw Exception(
         getUserName() + ": Not enough privileges. To execute this query it's necessary to have the grant " + backQuoteIfNeed(*role_name)
             + " WITH ADMIN OPTION ",
         ErrorCodes::ACCESS_DENIED);
+}
+
+
+void ContextAccess::checkAdminOption(const std::vector<UUID> & role_ids) const
+{
+    for (const UUID & role_id : role_ids)
+        checkAdminOption(role_id);
 }
 
 }
