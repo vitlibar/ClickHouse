@@ -33,17 +33,16 @@ namespace ErrorCodes
 
 namespace
 {
-    std::shared_ptr<AccessRights> mixAccessRightsFromUserAndRoles(const User & user, const EnabledRolesInfo & roles_info)
+    AccessRights mixAccessRightsFromUserAndRoles(const User & user, const EnabledRolesInfo & roles_info)
     {
-        auto res = std::make_shared<AccessRights>(user.access);
-        res->makeUnion(roles_info.access);
+        AccessRights res = user.access;
+        res.makeUnion(roles_info.access);
         return res;
     }
 
-    std::shared_ptr<AccessRights> applyParamsToAccessRights(const AccessRights & access, const ContextAccessParams & params)
-    {
-        auto res = std::make_shared<AccessRights>(access);
 
+    void applyParamsToAccessRights(AccessRights & access, const ContextAccessParams & params)
+    {
         static const AccessFlags table_ddl = AccessType::CREATE_DATABASE | AccessType::CREATE_TABLE | AccessType::CREATE_VIEW
             | AccessType::ALTER_TABLE | AccessType::ALTER_VIEW | AccessType::DROP_DATABASE | AccessType::DROP_TABLE | AccessType::DROP_VIEW
             | AccessType::TRUNCATE;
@@ -54,37 +53,100 @@ namespace
         static const AccessFlags write_dcl_access = AccessType::ACCESS_MANAGEMENT - AccessType::SHOW_ACCESS;
 
         if (params.readonly)
-            res->revoke(write_table_access | table_and_dictionary_ddl | write_dcl_access | AccessType::SYSTEM | AccessType::KILL_QUERY);
+            access.revoke(write_table_access | table_and_dictionary_ddl | write_dcl_access | AccessType::SYSTEM | AccessType::KILL_QUERY);
 
         if (params.readonly == 1)
         {
             /// Table functions are forbidden in readonly mode.
             /// For example, for readonly = 2 - allowed.
-            res->revoke(AccessType::CREATE_TEMPORARY_TABLE);
+            access.revoke(AccessType::CREATE_TEMPORARY_TABLE);
         }
 
         if (!params.allow_ddl)
-            res->revoke(table_and_dictionary_ddl);
+            access.revoke(table_and_dictionary_ddl);
 
         if (!params.allow_introspection)
-            res->revoke(AccessType::INTROSPECTION);
+            access.revoke(AccessType::INTROSPECTION);
 
         /// Anyone has access to the "system" database.
-        res->grant(AccessType::SELECT, DatabaseCatalog::SYSTEM_DATABASE);
+        access.grant(AccessType::SELECT, DatabaseCatalog::SYSTEM_DATABASE);
 
         if (params.readonly != 1)
         {
             /// User has access to temporary or external table if such table was resolved in session or query context
-            res->grant(AccessFlags::allTableFlags() | AccessFlags::allColumnFlags(), DatabaseCatalog::TEMPORARY_DATABASE);
+            access.grant(AccessFlags::allTableFlags() | AccessFlags::allColumnFlags(), DatabaseCatalog::TEMPORARY_DATABASE);
         }
 
         if (params.readonly)
         {
             /// No grant option in readonly mode.
-            res->revokeGrantOption(AccessType::ALL);
+            access.revokeGrantOption(AccessType::ALL);
         }
+    }
 
-        return res;
+
+    void addImplicitAccessRights(AccessRights & access)
+    {
+        bool create_table_granted = false;
+        boost::container::flat_set<std::string_view> databases_with_grants_on_tables;
+        boost::container::flat_set<std::pair<std::string_view, std::string_view>> tables_with_grants_on_columns;
+
+        auto modifier = [&](AccessFlags & flags, const std::string_view & database, const std::string_view & table, const std::string_view & column)
+        {
+            if (flags & AccessType::CREATE_TABLE)
+            {
+                flags |= AccessType::CREATE_VIEW;
+                create_table_granted = true;
+            }
+
+            if (flags & AccessType::DROP_TABLE)
+                flags |= AccessType::DROP_VIEW;
+
+            if (flags & AccessType::ALTER_TABLE)
+                flags |= AccessType::ALTER_VIEW;
+
+            if (flags & AccessType::ALTER_TTL)
+                flags |= AccessType::ALTER_MATERIALIZE_TTL;
+
+            if (database.empty() && (flags & AccessType::SYSTEM_RELOAD_DICTIONARY))
+                flags |= AccessType::SYSTEM_RELOAD_EMBEDDED_DICTIONARIES;
+
+            if (flags & AccessFlags::allColumnFlags())
+                flags |= AccessType::SHOW_COLUMNS;
+
+            if (flags & AccessFlags::allTableFlags())
+                flags |= AccessType::SHOW_TABLES;
+
+            if (flags & AccessFlags::allDictionaryFlags())
+                flags |= AccessType::SHOW_DICTIONARIES;
+
+            if (flags & AccessFlags::allDatabaseFlags())
+                flags |= AccessType::SHOW_DATABASES;
+
+            if (!column.empty())
+                tables_with_grants_on_columns.emplace(database, table);
+            else if (!table.empty())
+                databases_with_grants_on_tables.emplace(database);
+        };
+        access.modifyFlags(modifier);
+
+        if (create_table_granted)
+            access.grant(AccessType::CREATE_TEMPORARY_TABLE);
+
+        for (const auto & [database, table] : tables_with_grants_on_columns)
+        {
+            access.grant(AccessType::SHOW_TABLES, database, table);
+            databases_with_grants_on_tables.emplace(database);
+        }
+    }
+
+
+    AccessRights calculateFinalAccessRights(const AccessRights & access_from_user_and_roles, const ContextAccessParams & params)
+    {
+        AccessRights res_access = access_from_user_and_roles;
+        applyParamsToAccessRights(res_access, params);
+        addImplicitAccessRights(res_access);
+        return res_access;
     }
 
 
@@ -185,8 +247,8 @@ void ContextAccess::setRolesInfo(const std::shared_ptr<const EnabledRolesInfo> &
 
 void ContextAccess::calculateAccessRights() const
 {
-    access_from_user_and_roles = mixAccessRightsFromUserAndRoles(*user, *roles_info);
-    access = applyParamsToAccessRights(*access_from_user_and_roles, params);
+    access_from_user_and_roles = std::make_shared<AccessRights>(mixAccessRightsFromUserAndRoles(*user, *roles_info));
+    access = std::make_shared<AccessRights>(calculateFinalAccessRights(*access_from_user_and_roles, params));
 
     access_without_readonly = nullptr;
     access_with_allow_ddl = nullptr;
@@ -410,7 +472,7 @@ void ContextAccess::checkAccessImpl2(const AccessFlags & flags, const Args &... 
         {
             Params changed_params = params;
             changed_params.readonly = 0;
-            access_without_readonly = applyParamsToAccessRights(*access_from_user_and_roles, changed_params);
+            access_without_readonly = std::make_shared<AccessRights>(calculateFinalAccessRights(*access_from_user_and_roles, changed_params));
         }
 
         if (access_without_readonly->isGranted(flags, args...))
@@ -431,7 +493,7 @@ void ContextAccess::checkAccessImpl2(const AccessFlags & flags, const Args &... 
         {
             Params changed_params = params;
             changed_params.allow_ddl = true;
-            access_with_allow_ddl = applyParamsToAccessRights(*access_from_user_and_roles, changed_params);
+            access_with_allow_ddl = std::make_shared<AccessRights>(calculateFinalAccessRights(*access_from_user_and_roles, changed_params));
         }
 
         if (access_with_allow_ddl->isGranted(flags, args...))
@@ -446,7 +508,7 @@ void ContextAccess::checkAccessImpl2(const AccessFlags & flags, const Args &... 
         {
             Params changed_params = params;
             changed_params.allow_introspection = true;
-            access_with_allow_introspection = applyParamsToAccessRights(*access_from_user_and_roles, changed_params);
+            access_with_allow_introspection = std::make_shared<AccessRights>(calculateFinalAccessRights(*access_from_user_and_roles, changed_params));
         }
 
         if (access_with_allow_introspection->isGranted(flags, args...))

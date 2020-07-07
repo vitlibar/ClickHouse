@@ -95,7 +95,13 @@ public:
     /// It's used to combine access rights from multiple roles.
     void makeUnion(const AccessRights & other);
 
+    /// Makes an intersection of access rights.
     void makeIntersection(const AccessRights & other);
+
+    /// Traverse the tree and modify each access flags.
+    using ModifyFlagsFunction = std::function<void(AccessFlags & access_flags, const std::string_view & database, const std::string_view & table, const std::string_view & column)>;
+    void modifyFlags(const ModifyFlagsFunction & function);
+    void modifyFlagsWithGrantOption(const ModifyFlagsFunction & function);
 
     friend bool operator ==(const AccessRights & left, const AccessRights & right);
     friend bool operator !=(const AccessRights & left, const AccessRights & right) { return !(left == right); }
