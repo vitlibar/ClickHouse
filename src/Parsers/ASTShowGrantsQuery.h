@@ -6,13 +6,16 @@
 namespace DB
 {
 class ASTRolesOrUsersSet;
+class ASTSettingsProfileElements;
 
-/** SHOW GRANTS [FOR user_name]
+/** SHOW GRANTS
+  * SHOW GRANTS FOR role_name [,...]
+  * SHOW GRANTS FOR user_name [,...]
   */
 class ASTShowGrantsQuery : public ASTQueryWithOutput
 {
 public:
-    std::shared_ptr<ASTRolesOrUsersSet> for_roles;
+    std::shared_ptr<ASTRolesOrUsersSet> for_whom;
 
     String getID(char) const override;
     ASTPtr clone() const override;

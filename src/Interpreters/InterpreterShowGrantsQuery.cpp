@@ -8,6 +8,7 @@
 #include <DataStreams/OneBlockInputStream.h>
 #include <DataTypes/DataTypeString.h>
 #include <Access/AccessControlManager.h>
+#include <Access/ContextAccess.h>
 #include <Access/User.h>
 #include <Access/Role.h>
 #include <Access/RolesOrUsersSet.h>
@@ -24,20 +25,14 @@ namespace ErrorCodes
 
 namespace
 {
-    template <typename T>
-    ASTs getGrantQueriesImpl(
-        const T & grantee,
-        const AccessControlManager * manager /* not used if attach_mode == true */,
-        bool attach_mode = false)
+    void buildGrantQueries(const String & grantee_name, const AccessRights & access, ASTs & res)
     {
-        ASTs res;
-
         std::shared_ptr<ASTRolesOrUsersSet> to_roles = std::make_shared<ASTRolesOrUsersSet>();
-        to_roles->names.push_back(grantee.getName());
+        to_roles->names.push_back(grantee_name);
 
         std::shared_ptr<ASTGrantQuery> current_query = nullptr;
 
-        auto elements = grantee.access.getElements();
+        auto elements = access.getElements();
         for (const auto & element : elements)
         {
             if (current_query)
@@ -55,7 +50,6 @@ namespace
             {
                 current_query = std::make_shared<ASTGrantQuery>();
                 current_query->kind = element.kind;
-                current_query->attach = attach_mode;
                 current_query->grant_option = element.grant_option;
                 current_query->to_roles = to_roles;
                 res.push_back(current_query);
@@ -63,8 +57,18 @@ namespace
 
             current_query->access_rights_elements.emplace_back(std::move(element));
         }
+    }
 
-        auto grants_roles = grantee.granted_roles.getGrants();
+
+    void buildGrantQueries(const String & grantee_name, const GrantedRoles & granted_roles,
+                           const AccessControlManager * manager /* not used if attach_mode == true */,
+                           bool attach_mode,
+                           ASTs & res)
+    {
+        std::shared_ptr<ASTRolesOrUsersSet> to_roles = std::make_shared<ASTRolesOrUsersSet>();
+        to_roles->names.push_back(grantee_name);
+
+        auto grants_roles = granted_roles.getGrants();
 
         for (bool admin_option : {false, true})
         {
@@ -84,20 +88,33 @@ namespace
                 grant_query->roles = RolesOrUsersSet{roles}.toASTWithNames(*manager);
             res.push_back(std::move(grant_query));
         }
-
-        return res;
     }
 
-    ASTs getGrantQueriesImpl(
+
+    template <typename T>
+    void buildGrantQueries(
+        const T & grantee,
+        const AccessControlManager * manager /* not used if attach_mode == true */,
+        bool attach_mode,
+        ASTs & res)
+    {
+        buildGrantQueries(grantee.getName(), grantee.access, res);
+        buildGrantQueries(grantee.getName(), grantee.granted_roles, manager, attach_mode, res);
+    }
+
+
+    void buildGrantQueries(
         const IAccessEntity & entity,
         const AccessControlManager * manager /* not used if attach_mode == true */,
-        bool attach_mode = false)
+        bool attach_mode,
+        ASTs & res)
     {
         if (const User * user = typeid_cast<const User *>(&entity))
-            return getGrantQueriesImpl(*user, manager, attach_mode);
-        if (const Role * role = typeid_cast<const Role *>(&entity))
-            return getGrantQueriesImpl(*role, manager, attach_mode);
-        throw Exception(entity.outputTypeAndName() + " is expected to be user or role", ErrorCodes::LOGICAL_ERROR);
+            buildGrantQueries(*user, manager, attach_mode, res);
+        else if (const Role * role = typeid_cast<const Role *>(&entity))
+            buildGrantQueries(*role, manager, attach_mode, res);
+        else
+            throw Exception(entity.outputTypeAndName() + " is expected to be user or role", ErrorCodes::LOGICAL_ERROR);
     }
 
 }
@@ -143,7 +160,7 @@ std::vector<AccessEntityPtr> InterpreterShowGrantsQuery::getEntities() const
 {
     const auto & show_query = query_ptr->as<ASTShowGrantsQuery &>();
     const auto & access_control = context.getAccessControlManager();
-    auto ids = RolesOrUsersSet{*show_query.for_roles, access_control, context.getUserID()}.getMatchingIDs(access_control);
+    auto ids = RolesOrUsersSet{*show_query.for_whom, access_control, context.getUserID()}.getMatchingIDs(access_control);
 
     std::vector<AccessEntityPtr> entities;
     for (const auto & id : ids)
@@ -160,26 +177,44 @@ std::vector<AccessEntityPtr> InterpreterShowGrantsQuery::getEntities() const
 
 ASTs InterpreterShowGrantsQuery::getGrantQueries() const
 {
-    auto entities = getEntities();
+    const auto & show_query = query_ptr->as<ASTShowGrantsQuery &>();
     const auto & access_control = context.getAccessControlManager();
 
-    ASTs grant_queries;
-    for (const auto & entity : entities)
-        boost::range::push_back(grant_queries, getGrantQueries(*entity, access_control));
+    ASTs res;
 
-    return grant_queries;
+    if (!show_query.for_whom)
+    {
+        if (auto user = context.getUser())
+        {
+            /// Shows the current access rights with the current roles and settings taken into account.
+            buildGrantQueries(user->getName(), *context.getAccess()->getAccess(), res);
+            buildGrantQueries(user->getName(), user->granted_roles, &access_control, false, res);
+        }
+        return res;
+    }
+
+    auto entities = getEntities();
+
+    for (const auto & entity : entities)
+        buildGrantQueries(*entity, &access_control, false, res);
+
+    return res;
 }
 
 
 ASTs InterpreterShowGrantsQuery::getGrantQueries(const IAccessEntity & user_or_role, const AccessControlManager & access_control)
 {
-    return getGrantQueriesImpl(user_or_role, &access_control, false);
+    ASTs res;
+    buildGrantQueries(user_or_role, &access_control, false, res);
+    return res;
 }
 
 
 ASTs InterpreterShowGrantsQuery::getAttachGrantQueries(const IAccessEntity & user_or_role)
 {
-    return getGrantQueriesImpl(user_or_role, nullptr, true);
+    ASTs res;
+    buildGrantQueries(user_or_role, nullptr, true, res);
+    return res;
 }
 
 }

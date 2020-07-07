@@ -13,7 +13,7 @@ bool ParserShowGrantsQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expec
     if (!ParserKeyword{"SHOW GRANTS"}.ignore(pos, expected))
         return false;
 
-    std::shared_ptr<ASTRolesOrUsersSet> for_roles;
+    std::shared_ptr<ASTRolesOrUsersSet> for_whom;
 
     if (ParserKeyword{"FOR"}.ignore(pos, expected))
     {
@@ -23,16 +23,11 @@ bool ParserShowGrantsQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expec
         if (!for_roles_p.parse(pos, for_roles_ast, expected))
             return false;
 
-        for_roles = typeid_cast<std::shared_ptr<ASTRolesOrUsersSet>>(for_roles_ast);
-    }
-    else
-    {
-        for_roles = std::make_shared<ASTRolesOrUsersSet>();
-        for_roles->current_user = true;
+        for_whom = typeid_cast<std::shared_ptr<ASTRolesOrUsersSet>>(for_roles_ast);
     }
 
     auto query = std::make_shared<ASTShowGrantsQuery>();
-    query->for_roles = std::move(for_roles);
+    query->for_whom = std::move(for_whom);
     node = query;
 
     return true;
