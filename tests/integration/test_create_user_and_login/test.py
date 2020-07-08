@@ -114,6 +114,42 @@ def test_revoke_requires_grant_option():
     assert instance.query("SHOW GRANTS FOR B") == ""
 
 
+def test_implicit_grants():
+    instance.query("CREATE USER A")
+    assert instance.query("select count() FROM system.databases WHERE name='test'", user="A") == "0\n"
+    assert instance.query("select count() FROM system.tables WHERE database='test' AND name='table'", user="A") == "0\n"
+    assert instance.query("select count() FROM system.columns WHERE database='test' AND table='table'", user="A") == "0\n"
+
+    instance.query("GRANT SELECT(x) ON test.table TO A")
+    assert instance.query("SHOW GRANTS FOR A") == "GRANT SELECT(x) ON test.table TO A\n"
+    assert instance.query("select count() FROM system.databases WHERE name='test'", user="A") == "1\n"
+    assert instance.query("select count() FROM system.tables WHERE database='test' AND name='table'", user="A") == "1\n"
+    assert instance.query("select count() FROM system.columns WHERE database='test' AND table='table'", user="A") == "1\n"
+
+    instance.query("GRANT SELECT ON test.table TO A")
+    assert instance.query("SHOW GRANTS FOR A") == "GRANT SELECT ON test.table TO A\n"
+    assert instance.query("select count() FROM system.databases WHERE name='test'", user="A") == "1\n"
+    assert instance.query("select count() FROM system.tables WHERE database='test' AND name='table'", user="A") == "1\n"
+    assert instance.query("select count() FROM system.columns WHERE database='test' AND table='table'", user="A") == "2\n"
+
+    instance.query("GRANT SELECT ON test.* TO A")
+    assert instance.query("SHOW GRANTS FOR A") == "GRANT SELECT ON test.* TO A\n"
+    assert instance.query("select count() FROM system.databases WHERE name='test'", user="A") == "1\n"
+    assert instance.query("select count() FROM system.tables WHERE database='test' AND name='table'", user="A") == "1\n"
+    assert instance.query("select count() FROM system.columns WHERE database='test' AND table='table'", user="A") == "2\n"
+
+    instance.query("GRANT SELECT ON *.* TO A")
+    assert instance.query("SHOW GRANTS FOR A") == "GRANT SELECT ON *.* TO A\n"
+    assert instance.query("select count() FROM system.databases WHERE name='test'", user="A") == "1\n"
+    assert instance.query("select count() FROM system.tables WHERE database='test' AND name='table'", user="A") == "1\n"
+    assert instance.query("select count() FROM system.columns WHERE database='test' AND table='table'", user="A") == "2\n"
+
+    instance.query("REVOKE ALL ON *.* FROM A")
+    assert instance.query("select count() FROM system.databases WHERE name='test'", user="A") == "0\n"
+    assert instance.query("select count() FROM system.tables WHERE database='test' AND name='table'", user="A") == "0\n"
+    assert instance.query("select count() FROM system.columns WHERE database='test' AND table='table'", user="A") == "0\n"
+
+
 def test_introspection():
     instance.query("CREATE USER A")
     instance.query("CREATE USER B")
