@@ -19,7 +19,7 @@ SRCS(
     PostgreSQLProtocol.cpp
     NamesAndTypes.cpp
     Settings.cpp
-    SettingsCollection.cpp
+    SettingsEnums.cpp
     SortDescription.cpp
 )
 

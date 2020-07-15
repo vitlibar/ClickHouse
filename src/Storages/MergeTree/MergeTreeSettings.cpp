@@ -4,7 +4,7 @@
 #include <Parsers/ASTSetQuery.h>
 #include <Parsers/ASTFunction.h>
 #include <Common/Exception.h>
-#include <Core/SettingsCollectionImpl.h>
+#include <Core/BaseSettingsImpl.h>
 
 
 namespace DB
@@ -17,7 +17,7 @@ namespace ErrorCodes
     extern const int UNKNOWN_SETTING;
 }
 
-IMPLEMENT_SETTINGS_COLLECTION(MergeTreeSettings, LIST_OF_MERGE_TREE_SETTINGS)
+IMPLEMENT_SETTINGS_TRAITS(MergeTreeSettingsTraits, LIST_OF_MERGE_TREE_SETTINGS)
 
 void MergeTreeSettings::loadFromConfig(const String & config_elem, const Poco::Util::AbstractConfiguration & config)
 {

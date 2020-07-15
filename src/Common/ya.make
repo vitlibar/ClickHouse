@@ -24,6 +24,7 @@ SRCS(
     ActionLock.cpp
     AlignedBuffer.cpp
     Allocator.cpp
+    BaseSettings.cpp
     checkStackSize.cpp
     ClickHouseRevision.cpp
     Config/AbstractConfigurationComparison.cpp
@@ -75,6 +76,7 @@ SRCS(
     RWLock.cpp
     SensitiveDataMasker.cpp
     setThreadName.cpp
+    SettingField.cpp
     SharedLibrary.cpp
     ShellCommand.cpp
     StackTrace.cpp

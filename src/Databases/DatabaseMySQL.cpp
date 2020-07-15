@@ -4,7 +4,7 @@
 
 #if USE_MYSQL
 #    include <string>
-#    include <Core/SettingsCollection.h>
+#    include <Core/BaseSettings.h>
 #    include <DataTypes/DataTypeDateTime.h>
 #    include <DataTypes/DataTypeNullable.h>
 #    include <DataTypes/DataTypeString.h>

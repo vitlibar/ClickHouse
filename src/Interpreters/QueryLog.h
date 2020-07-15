@@ -2,7 +2,7 @@
 
 #include <Interpreters/SystemLog.h>
 #include <Interpreters/ClientInfo.h>
-#include <Core/SettingsCollection.h>
+#include <Core/BaseSettings.h>
 
 
 namespace ProfileEvents

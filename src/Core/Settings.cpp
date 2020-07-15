@@ -1,11 +1,9 @@
-#include "Settings.h"
+#include "Core/Settings.h"
 
 #include <Poco/Util/AbstractConfiguration.h>
 #include <Columns/ColumnArray.h>
 #include <Common/typeid_cast.h>
-#include <string.h>
 #include <boost/program_options/options_description.hpp>
-#include <Core/SettingsCollectionImpl.h>
 
 namespace DB
 {
@@ -17,7 +15,7 @@ namespace ErrorCodes
 }
 
 
-IMPLEMENT_SETTINGS_COLLECTION(Settings, LIST_OF_SETTINGS)
+IMPLEMENT_SETTINGS_TRAITS(SettingsTraits, LIST_OF_SETTINGS)
 
 
 /** Set the settings from the profile (in the server configuration, many settings can be listed in one profile).
@@ -99,14 +97,15 @@ void Settings::dumpToArrayColumns(IColumn * column_names_, IColumn * column_valu
 
 void Settings::addProgramOptions(boost::program_options::options_description & options)
 {
-    for (size_t index = 0; index != Settings::size(); ++index)
+    for (size_t i : ext::range(Traits::size())
     {
+        std::string_view name = Traits::getName(i);
         auto on_program_option
-            = boost::function1<void, const std::string &>([this, index](const std::string & value) { set(index, value); });
+            = boost::function1<void, const std::string &>([this, name](const std::string & value) { set(name, value); });
         options.add(boost::shared_ptr<boost::program_options::option_description>(new boost::program_options::option_description(
-            Settings::getName(index).data,
+            name,
             boost::program_options::value<std::string>()->composing()->notifier(on_program_option),
-            Settings::getDescription(index).data)));
+            Traits::getDescription(i).data)));
     }
 }
 }
