@@ -138,7 +138,7 @@ void StorageSystemProcesses::fillData(MutableColumns & res_columns, const Contex
             IColumn * column_settings_values = res_columns[i++].get();
 
             if (process.query_settings)
-                process.query_settings->dumpToArrayColumns(column_settings_names, column_settings_values, true);
+                process.query_settings->dumpToArrayColumns(column_settings_names, column_settings_values);
             else
             {
                 column_settings_names->insertDefault();

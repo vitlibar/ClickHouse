@@ -63,31 +63,23 @@ public:
     void clear();
     bool empty() const { return constraints_by_index.empty(); }
 
-    void setMinValue(const StringRef & setting_name, const Field & min_value);
-    void setMinValue(size_t setting_index, const Field & min_value);
-    Field getMinValue(const StringRef & setting_name) const;
-    Field getMinValue(size_t setting_index) const;
+    void setMinValue(const std::string_view & setting_name, const Field & min_value);
+    Field getMinValue(const std::string_view & setting_name) const;
 
-    void setMaxValue(const StringRef & setting_name, const Field & max_value);
-    void setMaxValue(size_t setting_index, const Field & max_value);
-    Field getMaxValue(const StringRef & setting_name) const;
-    Field getMaxValue(size_t setting_index) const;
+    void setMaxValue(const std::string_view & setting_name, const Field & max_value);
+    Field getMaxValue(const std::string_view & setting_name) const;
 
-    void setReadOnly(const StringRef & setting_name, bool read_only);
-    void setReadOnly(size_t setting_index, bool read_only);
-    bool isReadOnly(const StringRef & setting_name) const;
-    bool isReadOnly(size_t setting_index) const;
+    void setReadOnly(const std::string_view & setting_name, bool read_only);
+    bool isReadOnly(const std::string_view & setting_name) const;
 
-    void set(const StringRef & setting_name, const Field & min_value, const Field & max_value, bool read_only);
-    void set(size_t setting_index, const Field & min_value, const Field & max_value, bool read_only);
-    void get(const StringRef & setting_name, Field & min_value, Field & max_value, bool & read_only) const;
-    void get(size_t setting_index, Field & min_value, Field & max_value, bool & read_only) const;
+    void set(const std::string_view & setting_name, const Field & min_value, const Field & max_value, bool read_only);
+    void get(const std::string_view & setting_name, Field & min_value, Field & max_value, bool & read_only) const;
 
     void merge(const SettingsConstraints & other);
 
     struct Info
     {
-        StringRef name;
+        String name;
         Field min;
         Field max;
         bool read_only = false;
@@ -126,10 +118,10 @@ private:
         bool operator !=(const Constraint & rhs) const { return !(*this == rhs); }
     };
 
-    Constraint & getConstraintRef(size_t index);
-    const Constraint * tryGetConstraint(size_t) const;
+    Constraint & getConstraintRef(const std::string_view & setting_name);
+    const Constraint * tryGetConstraint(const std::string_view & setting_name) const;
 
-    std::unordered_map<size_t, Constraint> constraints_by_index;
+    std::unordered_map<std::string_view, Constraint> constraints_by_index;
 };
 
 }
