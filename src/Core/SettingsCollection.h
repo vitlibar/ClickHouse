@@ -181,11 +181,15 @@ public:
     /// Casts a value to a string according to a specified setting without actual changing this settings.
     static String valueToString(size_t index, const Field & value) { return members()[index].value_to_string(value); }
     static String valueToString(const StringRef & name, const Field & value) { return members().findStrict(name).value_to_string(value); }
+    static String valueToString(const std::string_view & name, const Field & value) { return valueToString(StringRef{name}, value); }
+    static String valueToString(const String & name, const Field & value) { return valueToString(StringRef{name}, value); }
 
     /// Casts a value to a type according to a specified setting without actual changing this settings.
     /// E.g. for SettingInt64 it casts Field to Field::Types::Int64.
     static Field valueToCorrespondingType(size_t index, const Field & value);
     static Field valueToCorrespondingType(const StringRef & name, const Field & value);
+    static Field valueToCorrespondingType(const std::string_view & name, const Field & value) { return valueToCorrespondingType(StringRef{name}, value); }
+    static Field valueToCorrespondingType(const String & name, const Field & value) { return valueToCorrespondingType(StringRef{name}, value); }
 
     iterator begin() { return iterator(castToDerived(), members().data()); }
     const_iterator begin() const { return const_iterator(castToDerived(), members().data()); }
