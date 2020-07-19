@@ -187,6 +187,8 @@ template <> struct NearestFieldTypeImpl<DecimalField<Decimal128>> { using Type =
 template <> struct NearestFieldTypeImpl<Float32> { using Type = Float64; };
 template <> struct NearestFieldTypeImpl<Float64> { using Type = Float64; };
 template <> struct NearestFieldTypeImpl<const char *> { using Type = String; };
+template <> struct NearestFieldTypeImpl<char *> { using Type = String; };
+template <> struct NearestFieldTypeImpl<std::string_view> { using Type = String; };
 template <> struct NearestFieldTypeImpl<String> { using Type = String; };
 template <> struct NearestFieldTypeImpl<Array> { using Type = Array; };
 template <> struct NearestFieldTypeImpl<Tuple> { using Type = Tuple; };
@@ -293,20 +295,17 @@ public:
     }
 
     template <typename T>
-    Field(T && rhs, std::enable_if_t<!std::is_same_v<std::decay_t<T>, Field>, void *> = nullptr);
+    Field(T && rhs, std::enable_if_t<!std::is_same_v<NearestFieldType<std::decay_t<T>>, String>, void *> = nullptr);
 
     /// Create a string inplace.
+    Field(const std::string_view & str) { create(str.data(), str.size()); }
+    Field(const String & str) { create(std::string_view{str}); }
+    Field(String && str) { create(std::move(str)); }
+    Field(const char * str) { create(std::string_view{str}); }
+
     template <typename CharT>
     Field(const CharT * data, size_t size)
     {
-        create(data, size);
-    }
-
-    /// NOTE In case when field already has string type, more direct assign is possible.
-    template <typename CharT>
-    void assignString(const CharT * data, size_t size)
-    {
-        destroy();
         create(data, size);
     }
 
@@ -341,8 +340,13 @@ public:
     }
 
     template <typename T>
-    std::enable_if_t<!std::is_same_v<std::decay_t<T>, Field>, Field &>
-    operator= (T && rhs);
+    std::enable_if_t<!std::is_same_v<NearestFieldType<std::decay_t<T>>, String>, Field &>
+    operator=(T && rhs);
+
+    Field & operator =(const std::string_view & str);
+    Field & operator =(const String & str) { return *this = std::string_view{str}; }
+    Field & operator =(String && str);
+    Field & operator =(const char * str) { return *this = std::string_view{str}; }
 
     ~Field()
     {
@@ -590,6 +594,20 @@ private:
         *ptr = std::forward<T>(x);
     }
 
+    template <typename CharT>
+    std::enable_if_t<sizeof(CharT) == 1> assignString(const CharT * data, size_t size)
+    {
+        assert(which == Types::String);
+        String * ptr = reinterpret_cast<String *>(&storage);
+        ptr->assign(reinterpret_cast<const char *>(data), size);
+    }
+
+    void assignString(String && str)
+    {
+        assert(which == Types::String);
+        String * ptr = reinterpret_cast<String *>(&storage);
+        ptr->assign(std::move(str));
+    }
 
     void create(const Field & x)
     {
@@ -615,6 +633,12 @@ private:
     std::enable_if_t<sizeof(CharT) == 1> create(const CharT * data, size_t size)
     {
         new (&storage) String(reinterpret_cast<const char *>(data), size);
+        which = Types::String;
+    }
+
+    void create(String && str)
+    {
+        new (&storage) String(std::move(str));
         which = Types::String;
     }
 
@@ -761,15 +785,15 @@ decltype(auto) castToNearestFieldType(T && x)
 /// 1. float <--> int needs explicit cast
 /// 2. customized types needs explicit cast
 template <typename T>
-Field::Field(T && rhs, std::enable_if_t<!std::is_same_v<std::decay_t<T>, Field>, void *>)
+Field::Field(T && rhs, std::enable_if_t<!std::is_same_v<NearestFieldType<std::decay_t<T>>, String>, void *>)
 {
     auto && val = castToNearestFieldType(std::forward<T>(rhs));
     createConcrete(std::forward<decltype(val)>(val));
 }
 
 template <typename T>
-std::enable_if_t<!std::is_same_v<std::decay_t<T>, Field>, Field &>
-Field::operator= (T && rhs)
+std::enable_if_t<!std::is_same_v<NearestFieldType<std::decay_t<T>>, String>, Field &>
+Field::operator=(T && rhs)
 {
     auto && val = castToNearestFieldType(std::forward<T>(rhs));
     using U = decltype(val);
@@ -780,10 +804,33 @@ Field::operator= (T && rhs)
     }
     else
         assignConcrete(std::forward<U>(val));
-
     return *this;
 }
 
+
+inline Field & Field::operator=(const std::string_view & str)
+{
+    if (which != Types::String)
+    {
+        destroy();
+        create(str.data(), str.size());
+    }
+    else
+        assignString(str.data(), str.size());
+    return *this;
+}
+
+inline Field & Field::operator=(String && str)
+{
+    if (which != Types::String)
+    {
+        destroy();
+        create(std::move(str));
+    }
+    else
+        assignString(std::move(str));
+    return *this;
+}
 
 class ReadBuffer;
 class WriteBuffer;
