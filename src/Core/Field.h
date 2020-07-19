@@ -151,6 +151,7 @@ private:
     UInt32 scale;
 };
 
+
 /// char may be signed or unsigned, and behave identically to signed char or unsigned char,
 ///  but they are always three different types.
 /// signedness of char is different in Linux on x86 and Linux on ARM.
@@ -187,6 +188,8 @@ template <> struct NearestFieldTypeImpl<DecimalField<Decimal128>> { using Type =
 template <> struct NearestFieldTypeImpl<Float32> { using Type = Float64; };
 template <> struct NearestFieldTypeImpl<Float64> { using Type = Float64; };
 template <> struct NearestFieldTypeImpl<const char *> { using Type = String; };
+template <> struct NearestFieldTypeImpl<char *> { using Type = String; };
+template <> struct NearestFieldTypeImpl<std::string_view> { using Type = String; };
 template <> struct NearestFieldTypeImpl<String> { using Type = String; };
 template <> struct NearestFieldTypeImpl<Array> { using Type = Array; };
 template <> struct NearestFieldTypeImpl<Tuple> { using Type = Tuple; };
@@ -201,6 +204,19 @@ struct NearestFieldTypeImpl<T, std::enable_if_t<std::is_enum_v<T>>>
 {
     using Type = NearestFieldType<std::underlying_type_t<T>>;
 };
+
+template <typename T, typename SFINAE = void>
+struct IsStorableInFieldImpl : public std::false_type {};
+
+template <typename T>
+struct IsStorableInFieldImpl<T, std::enable_if_t<std::is_same_v<T, NearestFieldType<T>>>> : public std::true_type {};
+
+template <>
+struct IsStorableInFieldImpl<FieldVector> : public std::true_type {};
+
+template <typename T>
+constexpr bool is_storable_in_field_v = IsStorableInFieldImpl<T>::value;
+
 
 /** 32 is enough. Round number is used for alignment and for better arithmetic inside std::vector.
   * NOTE: Actually, sizeof(std::string) is 32 when using libc++, so Field is 40 bytes.
@@ -265,6 +281,9 @@ public:
 
             throw Exception("Bad type of Field", ErrorCodes::BAD_TYPE_OF_FIELD);
         }
+
+        template <typename T>
+        static const char * toString();
     };
 
 
@@ -272,7 +291,17 @@ public:
     template <typename T> struct TypeToEnum;
     template <Types::Which which> struct EnumToType;
 
-    static bool IsDecimal(Types::Which which) { return which >= Types::Decimal32 && which <= Types::Decimal128; }
+
+    /// Templates to avoid ambiguity.
+    template <typename T, typename Z = void *>
+    using enable_if_not_field_or_stringlike_t = std::enable_if_t<!std::is_same_v<std::decay_t<T>, Field> && !std::is_same_v<NearestFieldType<std::decay_t<T>>, String>, Z>;
+
+    template <typename T, typename Z = void *>
+    using enable_if_storable_in_field_t = std::enable_if_t<is_storable_in_field_v<std::decay_t<T>>, Z>;
+
+    template <typename T, typename Z = void *>
+    using enable_if_not_storable_in_field_t = std::enable_if_t<!is_storable_in_field_v<std::decay_t<T>>, Z>;
+
 
     Field()
         : which(Types::Null)
@@ -293,20 +322,17 @@ public:
     }
 
     template <typename T>
-    Field(T && rhs, std::enable_if_t<!std::is_same_v<std::decay_t<T>, Field>, void *> = nullptr);
+    Field(T && rhs, enable_if_not_field_or_stringlike_t<T> = nullptr);
 
     /// Create a string inplace.
+    Field(const std::string_view & str) { create(str.data(), str.size()); }
+    Field(const String & str) { create(std::string_view{str}); }
+    Field(String && str) { create(std::move(str)); }
+    Field(const char * str) { create(std::string_view{str}); }
+
     template <typename CharT>
     Field(const CharT * data, size_t size)
     {
-        create(data, size);
-    }
-
-    /// NOTE In case when field already has string type, more direct assign is possible.
-    template <typename CharT>
-    void assignString(const CharT * data, size_t size)
-    {
-        destroy();
         create(data, size);
     }
 
@@ -340,9 +366,19 @@ public:
         return *this;
     }
 
+    /// Allows expressions like
+    /// Field f = 1;
+    /// Things to note:
+    /// 1. float <--> int needs explicit cast
+    /// 2. customized types needs explicit cast
     template <typename T>
-    std::enable_if_t<!std::is_same_v<std::decay_t<T>, Field>, Field &>
-    operator= (T && rhs);
+    enable_if_not_field_or_stringlike_t<T, Field> &
+    operator=(T && rhs);
+
+    Field & operator =(const std::string_view & str);
+    Field & operator =(const String & str) { return *this = std::string_view{str}; }
+    Field & operator =(String && str);
+    Field & operator =(const char * str) { return *this = std::string_view{str}; }
 
     ~Field()
     {
@@ -355,60 +391,48 @@ public:
 
     bool isNull() const { return which == Types::Null; }
 
+    /// Checks if the stored value has a specified type.
+    template <typename T, typename = std::enable_if_t<is_storable_in_field_v<T>>>
+    bool is() const;
+
+    /// Checks if the stored value can be converted to a specified type.
+    template <typename T>
+    bool isConvertibleTo() const;
+
+
+    /// Converts the stored value to a specified type, checks if that's possible only in debug builds.
+    /// If the stored value's type is the target type the function returns a reference.
+    /// For example, get<Int64>() returns Int64&, get<UInt8>() returns UInt8,
+    /// get<String> returns String&, get<std::string_view>() returns std::string_view.
+    template <typename T>
+    std::decay_t<T> & get(enable_if_storable_in_field_t<T> = nullptr);
 
     template <typename T>
-    T & get();
+    const std::decay_t<T> & get(enable_if_storable_in_field_t<T> = nullptr) const { return const_cast<Field *>(this)->get<T>(); }
 
     template <typename T>
-    const T & get() const
-    {
-        auto mutable_this = const_cast<std::decay_t<decltype(*this)> *>(this);
-        return mutable_this->get<T>();
-    }
+    std::decay_t<T> get(enable_if_not_storable_in_field_t<T> = nullptr) const;
+
+    /// Converts the stored value to a specified type, throws an exception if that's not possible.
+    template <typename T>
+    std::decay_t<T> & safeGet(enable_if_storable_in_field_t<T> = nullptr);
 
     template <typename T>
-    T & reinterpret();
+    const std::decay_t<T> & safeGet(enable_if_storable_in_field_t<T> = nullptr) const { return const_cast<Field *>(this)->safeGet<T>(); }
 
     template <typename T>
-    const T & reinterpret() const
-    {
-        auto mutable_this = const_cast<std::decay_t<decltype(*this)> *>(this);
-        return mutable_this->reinterpret<T>();
-    }
+    std::decay_t<T> safeGet(enable_if_not_storable_in_field_t<T> = nullptr) const;
 
-    template <typename T> bool tryGet(T & result)
-    {
-        const Types::Which requested = TypeToEnum<std::decay_t<T>>::value;
-        if (which != requested)
-            return false;
-        result = get<T>();
-        return true;
-    }
+    /// Converts the stored value to a specified type, returns false if that's not possible.
+    template <typename T>
+    bool tryGet(T & result) const;
 
-    template <typename T> bool tryGet(T & result) const
-    {
-        const Types::Which requested = TypeToEnum<std::decay_t<T>>::value;
-        if (which != requested)
-            return false;
-        result = get<T>();
-        return true;
-    }
+    /// Gets a reference to the stored value.
+    template <typename T, typename = enable_if_storable_in_field_t<T>>
+    std::decay_t<T> & reinterpret();
 
-    template <typename T> T & safeGet()
-    {
-        const Types::Which requested = TypeToEnum<std::decay_t<T>>::value;
-        if (which != requested)
-            throw Exception("Bad get: has " + std::string(getTypeName()) + ", requested " + std::string(Types::toString(requested)), ErrorCodes::BAD_GET);
-        return get<T>();
-    }
-
-    template <typename T> const T & safeGet() const
-    {
-        const Types::Which requested = TypeToEnum<std::decay_t<T>>::value;
-        if (which != requested)
-            throw Exception("Bad get: has " + std::string(getTypeName()) + ", requested " + std::string(Types::toString(requested)), ErrorCodes::BAD_GET);
-        return get<T>();
-    }
+    template <typename T>
+    const std::decay_t<T> & reinterpret() const { return const_cast<Field *>(this)->reinterpret<T>(); }
 
 
     bool operator< (const Field & rhs) const
@@ -590,6 +614,20 @@ private:
         *ptr = std::forward<T>(x);
     }
 
+    template <typename CharT>
+    std::enable_if_t<sizeof(CharT) == 1> assignString(const CharT * data, size_t size)
+    {
+        assert(which == Types::String);
+        String * ptr = reinterpret_cast<String *>(&storage);
+        ptr->assign(reinterpret_cast<const char *>(data), size);
+    }
+
+    void assignString(String && str)
+    {
+        assert(which == Types::String);
+        String * ptr = reinterpret_cast<String *>(&storage);
+        ptr->assign(std::move(str));
+    }
 
     void create(const Field & x)
     {
@@ -615,6 +653,12 @@ private:
     std::enable_if_t<sizeof(CharT) == 1> create(const CharT * data, size_t size)
     {
         new (&storage) String(reinterpret_cast<const char *>(data), size);
+        which = Types::String;
+    }
+
+    void create(String && str)
+    {
+        new (&storage) String(std::move(str));
         which = Types::String;
     }
 
@@ -683,60 +727,156 @@ template <> struct Field::EnumToType<Field::Types::Decimal64> { using Type = Dec
 template <> struct Field::EnumToType<Field::Types::Decimal128> { using Type = DecimalField<Decimal128>; };
 template <> struct Field::EnumToType<Field::Types::AggregateFunctionState> { using Type = DecimalField<AggregateFunctionStateData>; };
 
-inline constexpr bool isInt64FieldType(Field::Types::Which t)
+template <typename T>
+const char * Field::Types::toString()
 {
-    return t == Field::Types::Int64
-        || t == Field::Types::UInt64;
+    if constexpr (std::is_same_v<T, FieldVector>)
+        return "FieldVector";
+    else
+        return Field::Types::toString(Field::TypeToEnum<T>::value);
+}
+
+template <typename T, typename>
+bool Field::is() const
+{
+    if constexpr(std::is_same_v<T, FieldVector>)
+        return (which == Types::Array || which == Types::Tuple);
+    else
+        return (which == TypeToEnum<T>::value);
+}
+
+template <typename T, typename>
+std::decay_t<T> & Field::reinterpret()
+{
+    using ValueType = std::decay_t<T>;
+    return *reinterpret_cast<ValueType *>(&storage);
+}
+
+template <typename T>
+bool Field::isConvertibleTo() const
+{
+    using ValueType = std::decay_t<T>;
+    if constexpr(std::is_same_v<ValueType, FieldVector>)
+    {
+        return (which == Types::Array || which == Types::Tuple);
+    }
+    else
+    {
+        using StoredType = NearestFieldType<ValueType>;
+        constexpr Field::Types::Which target = TypeToEnum<StoredType>::value;
+        if (which != target)
+        {
+            // Disregard signedness when converting between int64 types.
+            constexpr auto is_int64_or_uint64 = [](Field::Types::Which t) { return t == Field::Types::Int64 || t == Field::Types::UInt64; };
+            if (!is_int64_or_uint64(which) || !is_int64_or_uint64(target))
+                return false;
+        }
+#if 0
+        if constexpr (!std::is_same_v<ValueType, StoredType> && std::is_arithmetic_v<ValueType>)
+        {
+            const auto & value = reinterpret<StoredType>();
+            if (static_cast<ValueType>(value) != value)
+                return false;
+        }
+#endif
+        return true;
+    }
 }
 
 // Field value getter with type checking in debug builds.
 template <typename T>
-T & Field::get()
+std::decay_t<T> & Field::get(enable_if_storable_in_field_t<T>)
 {
     using ValueType = std::decay_t<T>;
-
-#ifndef NDEBUG
-    // Disregard signedness when converting between int64 types.
-    constexpr Field::Types::Which target = TypeToEnum<NearestFieldType<ValueType>>::value;
-    assert(target == which
-           || (isInt64FieldType(target) && isInt64FieldType(which)));
-#endif
-
-    ValueType * MAY_ALIAS ptr = reinterpret_cast<ValueType *>(&storage);
-    return *ptr;
+    assert(isConvertibleTo<ValueType>());
+    return reinterpret<ValueType>();
 }
 
 template <typename T>
-T & Field::reinterpret()
+std::decay_t<T> Field::get(enable_if_not_storable_in_field_t<T>) const
 {
     using ValueType = std::decay_t<T>;
-    ValueType * MAY_ALIAS ptr = reinterpret_cast<ValueType *>(&storage);
-    return *ptr;
+    assert(isConvertibleTo<ValueType>());
+    return static_cast<ValueType>(reinterpret<NearestFieldType<ValueType>>());
 }
 
 template <typename T>
-T get(const Field & field)
+std::decay_t<T> & Field::safeGet(enable_if_storable_in_field_t<T>)
 {
-    return field.template get<T>();
+    using ValueType = std::decay_t<T>;
+    if (!isConvertibleTo<ValueType>())
+    {
+        throw Exception(
+            "Bad get: value of type " + std::string(getTypeName()) + " cannot be converted to "
+                + std::string(Types::toString<ValueType>()),
+            ErrorCodes::BAD_GET);
+    }
+    return reinterpret<ValueType>();
 }
 
 template <typename T>
-T get(Field & field)
+std::decay_t<T> Field::safeGet(enable_if_not_storable_in_field_t<T>) const
 {
-    return field.template get<T>();
+    using ValueType = std::decay_t<T>;
+    if (!isConvertibleTo<ValueType>())
+    {
+        throw Exception(
+            "Bad get: value of type " + std::string(getTypeName()) + " cannot be converted to "
+                + std::string(Types::toString<ValueType>()),
+            ErrorCodes::BAD_GET);
+    }
+    return static_cast<ValueType>(reinterpret<NearestFieldType<ValueType>>());
 }
 
 template <typename T>
-T safeGet(const Field & field)
+bool Field::tryGet(T & result) const
 {
-    return field.template safeGet<T>();
+    using ValueType = std::decay_t<T>;
+    if (!isConvertibleTo<ValueType>())
+        return false;
+    if constexpr (is_storable_in_field_v<ValueType>)
+        result = reinterpret<ValueType>();
+    else
+        result = static_cast<ValueType>(reinterpret<NearestFieldType<ValueType>>());
+    return true;
 }
 
 template <typename T>
-T safeGet(Field & field)
+std::decay_t<T> & get(Field & field, Field::enable_if_storable_in_field_t<T> = nullptr)
 {
-    return field.template safeGet<T>();
+    return field.get<T>();
 }
+
+template <typename T>
+const std::decay_t<T> & get(const Field & field, Field::enable_if_storable_in_field_t<T> = nullptr)
+{
+    return field.get<T>();
+}
+
+template <typename T>
+std::decay_t<T> get(const Field & field, Field::enable_if_not_storable_in_field_t<T> = nullptr)
+{
+    return field.get<T>();
+}
+
+template <typename T>
+std::decay_t<T> & safeGet(Field & field, Field::enable_if_storable_in_field_t<T> = nullptr)
+{
+    return field.safeGet<T>();
+}
+
+template <typename T>
+const std::decay_t<T> & safeGet(const Field & field, Field::enable_if_storable_in_field_t<T> = nullptr)
+{
+    return field.safeGet<T>();
+}
+
+template <typename T>
+std::decay_t<T> safeGet(const Field & field, Field::enable_if_not_storable_in_field_t<T> = nullptr)
+{
+    return field.safeGet<T>();
+}
+
 
 
 template <> struct TypeName<Array> { static std::string get() { return "Array"; } };
@@ -753,23 +893,16 @@ decltype(auto) castToNearestFieldType(T && x)
         return U(x);
 }
 
-/// This (rather tricky) code is to avoid ambiguity in expressions like
-/// Field f = 1;
-/// instead of
-/// Field f = Int64(1);
-/// Things to note:
-/// 1. float <--> int needs explicit cast
-/// 2. customized types needs explicit cast
 template <typename T>
-Field::Field(T && rhs, std::enable_if_t<!std::is_same_v<std::decay_t<T>, Field>, void *>)
+Field::Field(T && rhs, enable_if_not_field_or_stringlike_t<T>)
 {
     auto && val = castToNearestFieldType(std::forward<T>(rhs));
     createConcrete(std::forward<decltype(val)>(val));
 }
 
 template <typename T>
-std::enable_if_t<!std::is_same_v<std::decay_t<T>, Field>, Field &>
-Field::operator= (T && rhs)
+Field::enable_if_not_field_or_stringlike_t<T, Field> &
+Field::operator=(T && rhs)
 {
     auto && val = castToNearestFieldType(std::forward<T>(rhs));
     using U = decltype(val);
@@ -780,10 +913,33 @@ Field::operator= (T && rhs)
     }
     else
         assignConcrete(std::forward<U>(val));
-
     return *this;
 }
 
+
+inline Field & Field::operator=(const std::string_view & str)
+{
+    if (which != Types::String)
+    {
+        destroy();
+        create(str.data(), str.size());
+    }
+    else
+        assignString(str.data(), str.size());
+    return *this;
+}
+
+inline Field & Field::operator=(String && str)
+{
+    if (which != Types::String)
+    {
+        destroy();
+        create(std::move(str));
+    }
+    else
+        assignString(std::move(str));
+    return *this;
+}
 
 class ReadBuffer;
 class WriteBuffer;
