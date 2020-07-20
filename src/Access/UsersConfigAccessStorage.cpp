@@ -360,9 +360,9 @@ namespace
             for (const String & constraint_type : constraint_types)
             {
                 if (constraint_type == "min")
-                    profile_element.min_value = Settings::stringToValue(setting_name, config.getString(path_to_name + "." + constraint_type));
+                    profile_element.min_value = Settings::castValue(setting_name, config.getString(path_to_name + "." + constraint_type));
                 else if (constraint_type == "max")
-                    profile_element.max_value = Settings::stringToValue(setting_name, config.getString(path_to_name + "." + constraint_type));
+                    profile_element.max_value = Settings::castValue(setting_name, config.getString(path_to_name + "." + constraint_type));
                 else if (constraint_type == "readonly")
                     profile_element.readonly = true;
                 else
@@ -403,9 +403,8 @@ namespace
 
             const auto & setting_name = key;
             SettingsProfileElement profile_element;
-            size_t setting_index = Settings::findIndexStrict(key);
             profile_element.setting_name = setting_name;
-            profile_element.value = Settings::stringToValue(setting_name, config.getString(profile_config + "." + key));
+            profile_element.value = Settings::castValue(setting_name, config.getString(profile_config + "." + key));
             profile->elements.emplace_back(std::move(profile_element));
         }
 

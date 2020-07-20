@@ -142,11 +142,11 @@ void SettingsConstraints::clamp(const Settings & current_settings, SettingsChang
 void SettingsConstraints::checkImpl(const Settings & current_settings, SettingChange & change, ReactionOnViolation reaction) const
 {
     const String & setting_name = change.name;
-    Field current_value;
-    if (!current_settings.tryGet(setting_name, current_value))
+    if (!current_settings.canGet(setting_name))
         return;
 
     /// Setting isn't checked if value has not been changed.
+    Field current_value = current_settings.get(setting_name);
     if (change.value == current_value)
         return;
 

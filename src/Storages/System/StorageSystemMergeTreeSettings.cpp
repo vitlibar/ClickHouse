@@ -22,11 +22,11 @@ void SystemMergeTreeSettings::fillData(MutableColumns & res_columns, const Conte
 {
     for (const auto & setting : context.getMergeTreeSettings())
     {
-        res_columns[0]->insert(setting.getName().toString());
-        res_columns[1]->insert(setting.getValueAsString());
-        res_columns[2]->insert(setting.isChanged());
-        res_columns[3]->insert(setting.getDescription().toString());
-        res_columns[4]->insert(setting.getType().toString());
+        res_columns[0]->insert(setting.getName());
+        res_columns[1]->insert(setting.getValueString());
+        res_columns[2]->insert(setting.isValueChanged());
+        res_columns[3]->insert(setting.getDescription());
+        res_columns[4]->insert(setting.getTypeName());
     }
 }
 

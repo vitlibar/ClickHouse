@@ -1493,17 +1493,16 @@ void MergeTreeData::checkAlterIsPossible(const AlterCommands & commands, const S
 
     if (old_metadata.hasSettingsChanges())
     {
-
         const auto current_changes = old_metadata.getSettingsChanges()->as<const ASTSetQuery &>().changes;
         const auto & new_changes = new_metadata.settings_changes->as<const ASTSetQuery &>().changes;
         for (const auto & changed_setting : new_changes)
         {
             const auto & setting_name = changed_setting.name;
-            const auto & new_value = changed_setting.value;
-            if (MergeTreeSettings::findIndex(setting_name) == MergeTreeSettings::npos)
+            if (!MergeTreeSettings::canSet(setting_name))
                 throw Exception{"Storage '" + getName() + "' doesn't have setting '" + setting_name + "'",
                                 ErrorCodes::UNKNOWN_SETTING};
 
+            const auto & new_value = changed_setting.value;
             const Field * current_value = current_changes.tryGet(setting_name);
 
             if ((!current_value || *current_value != new_value)
