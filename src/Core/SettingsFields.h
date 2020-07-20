@@ -213,7 +213,7 @@ struct SettingFieldEnum
     EnumType value;
     bool changed = false;
 
-    SettingFieldEnum(EnumType x) : value(x) {}
+    SettingFieldEnum(EnumType x = static_cast<EnumType>(0)) : value(x) {}
 
     operator EnumType() const { return value; }
     SettingFieldEnum & operator=(EnumType x) { set(x); return *this; }

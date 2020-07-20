@@ -42,11 +42,11 @@ void SettingsProfileElement::init(const ASTSettingsProfileElement & ast, const A
         readonly = ast.readonly;
 
         if (!value.isNull())
-            value = Settings::valueToCorrespondingType(setting_name, value);
+            value = Settings::castValue(setting_name, value);
         if (!min_value.isNull())
-            min_value = Settings::valueToCorrespondingType(setting_name, min_value);
+            min_value = Settings::castValue(setting_name, min_value);
         if (!max_value.isNull())
-            max_value = Settings::valueToCorrespondingType(setting_name, max_value);
+            max_value = Settings::castValue(setting_name, max_value);
     }
 }
 

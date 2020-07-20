@@ -137,7 +137,7 @@ void QueryLogElement::appendToBlock(MutableColumns & columns) const
     {
         auto * column_names = columns[i++].get();
         auto * column_values = columns[i++].get();
-        query_settings->dumpToArrayColumns(column_names, column_values, true);
+        query_settings->dumpToArrayColumns(column_names, column_values);
     }
     else
     {

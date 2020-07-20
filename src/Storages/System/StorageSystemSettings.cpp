@@ -32,11 +32,11 @@ void StorageSystemSettings::fillData(MutableColumns & res_columns, const Context
     auto settings_constraints = context.getSettingsConstraints();
     for (const auto & setting : settings)
     {
-        std::string_view setting_name{setting.getName()};
+        const auto & setting_name = setting.getName();
         res_columns[0]->insert(setting_name);
         res_columns[1]->insert(setting.getValueAsString());
-        res_columns[2]->insert(setting.isChanged());
-        res_columns[3]->insert(setting.getDescription().toString());
+        res_columns[2]->insert(setting.isValueChanged());
+        res_columns[3]->insert(setting.getDescription());
 
         Field min, max;
         bool read_only = false;
@@ -60,7 +60,7 @@ void StorageSystemSettings::fillData(MutableColumns & res_columns, const Context
         res_columns[4]->insert(min);
         res_columns[5]->insert(max);
         res_columns[6]->insert(read_only);
-        res_columns[7]->insert(setting.getType().toString());
+        res_columns[7]->insert(setting.getType());
     }
 }
 

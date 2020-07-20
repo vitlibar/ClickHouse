@@ -33,7 +33,7 @@ void SettingsConstraints::clear()
 
 void SettingsConstraints::setMinValue(const std::string_view & setting_name, const Field & min_value)
 {
-    getConstraintRef(setting_name).min_value = Settings::valueToCorrespondingType(setting_name, min_value);
+    getConstraintRef(setting_name).min_value = Settings::castValue(setting_name, min_value);
 }
 
 Field SettingsConstraints::getMinValue(const std::string_view & setting_name) const
@@ -48,7 +48,7 @@ Field SettingsConstraints::getMinValue(const std::string_view & setting_name) co
 
 void SettingsConstraints::setMaxValue(const std::string_view & setting_name, const Field & max_value)
 {
-    getConstraintRef(setting_name).max_value = Settings::valueToCorrespondingType(setting_name, max_value);
+    getConstraintRef(setting_name).max_value = Settings::castValue(setting_name, max_value);
 }
 
 Field SettingsConstraints::getMaxValue(const std::string_view & setting_name) const
@@ -79,8 +79,8 @@ bool SettingsConstraints::isReadOnly(const std::string_view & setting_name) cons
 void SettingsConstraints::set(const std::string_view & setting_name, const Field & min_value, const Field & max_value, bool read_only)
 {
     auto & ref = getConstraintRef(setting_name);
-    ref.min_value = Settings::valueToCorrespondingType(setting_name, min_value);
-    ref.max_value = Settings::valueToCorrespondingType(setting_name, max_value);
+    ref.min_value = Settings::castValue(setting_name, min_value);
+    ref.max_value = Settings::castValue(setting_name, max_value);
     ref.read_only = read_only;
 }
 
@@ -142,15 +142,15 @@ void SettingsConstraints::clamp(const Settings & current_settings, SettingsChang
 void SettingsConstraints::checkImpl(const Settings & current_settings, SettingChange & change, ReactionOnViolation reaction) const
 {
     const String & setting_name = change.name;
-    Field current_value;
-    if (!current_settings.tryGet(setting_name, current_value))
+    if (!current_settings.canGet(setting_name))
         return;
 
     /// Setting isn't checked if value has not been changed.
+    Field current_value = current_settings.get(setting_name);
     if (change.value == current_value)
         return;
 
-    Field new_value = Settings::valueToCorrespondingType(setting_name, new_value);
+    Field new_value = Settings::castValue(setting_name, new_value);
     if (applyVisitor(FieldVisitorAccurateEquals{}, new_value, current_value))
         return;
 
@@ -209,9 +209,9 @@ void SettingsConstraints::checkImpl(const Settings & current_settings, SettingCh
         Field min_value = constraint->min_value;
         Field max_value = constraint->max_value;
         if (!min_value.isNull())
-            min_value = Settings::valueToCorrespondingType(setting_name, min_value);
+            min_value = Settings::castValue(setting_name, min_value);
         if (!max_value.isNull())
-            max_value = Settings::valueToCorrespondingType(setting_name, max_value);
+            max_value = Settings::castValue(setting_name, max_value);
 
         if (!min_value.isNull() && !max_value.isNull() &&
             applyVisitor(FieldVisitorAccurateLess{}, max_value, min_value))
