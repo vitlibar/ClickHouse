@@ -350,12 +350,12 @@ void SettingFieldURI::readBinary(ReadBuffer & buf)
 }
 
 
-void SettingFieldEnumHelper::writeBinary(const std::string_view & str, WriteBuffer & out)
+void SettingFieldEnumHelpers::writeBinary(const std::string_view & str, WriteBuffer & out)
 {
     writeStringBinary(str, out);
 }
 
-String SettingFieldEnumHelper::readBinary(ReadBuffer & in)
+String SettingFieldEnumHelpers::readBinary(ReadBuffer & in)
 {
     String str;
     readStringBinary(str, in);

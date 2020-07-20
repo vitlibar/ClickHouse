@@ -229,7 +229,7 @@ struct SettingFieldEnum
     void readBinary(ReadBuffer & in);
 };
 
-struct SettingFieldEnumHelper
+struct SettingFieldEnumHelpers
 {
     static void writeBinary(const std::string_view & str, WriteBuffer & out);
     static String readBinary(ReadBuffer & in);
@@ -238,13 +238,13 @@ struct SettingFieldEnumHelper
 template <typename EnumType, typename NameValueConverter>
 inline void SettingFieldEnum<EnumType, NameValueConverter>::writeBinary(WriteBuffer & out) const
 {
-    SettingFieldEnumHelper::writeBinary(toString(), out);
+    SettingFieldEnumHelpers::writeBinary(toString(), out);
 }
 
 template <typename EnumType, typename NameValueConverter>
 inline void SettingFieldEnum<EnumType, NameValueConverter>::readBinary(ReadBuffer & in)
 {
-    set(SettingFieldEnumHelper::readBinary(in));
+    set(SettingFieldEnumHelpers::readBinary(in));
 }
 
 #define DECLARE_SETTING_ENUM(ENUM_TYPE) \
