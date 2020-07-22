@@ -757,6 +757,12 @@ bool Field::isConvertibleTo() const
             if (!is_int64_or_uint64(which) || !is_int64_or_uint64(target))
                 return false;
         }
+        if constexpr (!std::is_same_v<ValueType, StoredType> && std::is_arithmetic_v<ValueType>)
+        {
+            const auto & value = reinterpret<StoredType>();
+            if (static_cast<ValueType>(value) != value)
+                return false;
+        }
         return true;
     }
 }
