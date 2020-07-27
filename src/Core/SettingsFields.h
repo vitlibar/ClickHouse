@@ -25,6 +25,7 @@ template <typename T>
 struct SettingFieldNumber
 {
     using Type = T;
+    static const char * getTypeName();
 
     Type value;
     bool changed = false;
@@ -57,6 +58,8 @@ using SettingFieldBool = SettingFieldNumber<bool>;
   */
 struct SettingFieldMaxThreads
 {
+    static const char * getTypeName();
+
     bool is_auto;
     UInt64 value;
     bool changed = false;
@@ -90,6 +93,8 @@ struct SettingFieldTimespan
     using Unit = SettingFieldTimespanUnit;
     static constexpr Unit unit = unit_;
     static constexpr UInt64 microseconds_per_unit = (unit == SettingFieldTimespanUnit::Millisecond) ? 1000 : 1000000;
+    static const char * getTypeName();
+
     Poco::Timespan value;
     bool changed = false;
 
@@ -135,6 +140,8 @@ using SettingFieldMilliseconds = SettingFieldTimespan<SettingFieldTimespanUnit::
 
 struct SettingFieldString
 {
+    static const char * getTypeName();
+
     String value;
     bool changed = false;
 
@@ -164,6 +171,8 @@ struct SettingFieldString
 struct SettingFieldChar
 {
 public:
+    static const char * getTypeName();
+
     char value;
     bool changed = false;
 
@@ -186,6 +195,8 @@ public:
 
 struct SettingFieldURI
 {
+    static const char * getTypeName();
+
     Poco::URI value;
     bool changed = false;
 
@@ -226,6 +237,7 @@ template <typename EnumT, typename Traits>
 struct SettingFieldEnum
 {
     using EnumType = EnumT;
+    static const char * getTypeName() { return Traits::getTypeName(); }
 
     EnumType value;
     bool changed = false;
@@ -274,6 +286,7 @@ void SettingFieldEnum<EnumT, Traits>::readBinary(ReadBuffer & in)
     struct SettingField##NEW_NAME##Traits \
     { \
         using EnumType = ENUM_TYPE; \
+        static const char * getTypeName(); \
         static const String & toString(EnumType value); \
         static EnumType fromString(const std::string_view & str); \
     }; \
@@ -281,6 +294,11 @@ void SettingFieldEnum<EnumT, Traits>::readBinary(ReadBuffer & in)
     using SettingField##NEW_NAME = SettingFieldEnum<ENUM_TYPE, SettingField##NEW_NAME##Traits>;
 
 #define IMPLEMENT_SETTING_ENUM_WITH_RENAME(NEW_NAME, ERROR_CODE_FOR_UNEXPECTED_NAME, ...) \
+    const char * SettingField##NEW_NAME##Traits::getTypeName() \
+    { \
+        return #NEW_NAME; \
+    } \
+    \
     const String & SettingField##NEW_NAME##Traits::toString(typename SettingField##NEW_NAME::EnumType value) \
     { \
         static const std::unordered_map<EnumType, String> map = [] { \

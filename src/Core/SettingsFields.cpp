@@ -111,6 +111,22 @@ void SettingFieldNumber<T>::readBinary(ReadBuffer & in)
     }
 }
 
+template <typename T>
+const char * SettingFieldNumber<T>::getTypeName()
+{
+    if constexpr (std::is_same_v<T, UInt64>)
+        return "UInt64";
+    else if constexpr (std::is_same_v<T, Int64>)
+        return "Int64";
+    else if constexpr (std::is_same_v<T, float>)
+        return "Float";
+    else
+    {
+        static_assert(std::is_same_v<T, bool>);
+        return "Bool";
+    }
+}
+
 template struct SettingFieldNumber<UInt64>;
 template struct SettingFieldNumber<Int64>;
 template struct SettingFieldNumber<float>;
@@ -169,6 +185,11 @@ void SettingFieldMaxThreads::readBinary(ReadBuffer & in)
     *this = value;
 }
 
+const char * SettingFieldMaxThreads::getTypeName()
+{
+    return "MaxThreads";
+}
+
 UInt64 SettingFieldMaxThreads::getAuto()
 {
     return getNumberOfPhysicalCPUCores();
@@ -213,6 +234,18 @@ void SettingFieldTimespan<unit_>::readBinary(ReadBuffer & in)
     *this = num_units;
 }
 
+template <SettingFieldTimespanUnit unit_>
+const char * SettingFieldTimespan<unit_>::getTypeName()
+{
+    if constexpr (unit == SettingFieldTimespanUnit::Millisecond)
+        return "Milliseconds";
+    else
+    {
+        static_assert (unit == SettingFieldTimespanUnit::Second);
+        return "Seconds";
+    }
+}
+
 template struct SettingFieldTimespan<SettingFieldTimespanUnit::Second>;
 template struct SettingFieldTimespan<SettingFieldTimespanUnit::Millisecond>;
 
@@ -227,6 +260,11 @@ void SettingFieldString::readBinary(ReadBuffer & in)
     String str;
     readStringBinary(str, in);
     *this = std::move(str);
+}
+
+const char * SettingFieldString::getTypeName()
+{
+    return "String";
 }
 
 
@@ -273,6 +311,11 @@ void SettingFieldChar::readBinary(ReadBuffer & in)
     *this = stringToChar(str);
 }
 
+const char * SettingFieldChar::getTypeName()
+{
+    return "Char";
+}
+
 
 void SettingFieldURI::writeBinary(WriteBuffer & out) const
 {
@@ -284,6 +327,11 @@ void SettingFieldURI::readBinary(ReadBuffer & in)
     String str;
     readStringBinary(str, in);
     *this = Poco::URI{str};
+}
+
+const char * SettingFieldURI::getTypeName()
+{
+    return "URI";
 }
 
 
