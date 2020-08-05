@@ -12,18 +12,22 @@ class MultipleAccessStorage : public IAccessStorage
 {
 public:
     using Storage = IAccessStorage;
+    using StoragePtr = std::shared_ptr<Storage>;
+    using StorageConstPtr = std::shared_ptr<const Storage>;
 
-    MultipleAccessStorage(std::vector<std::unique_ptr<Storage>> nested_storages_);
+    MultipleAccessStorage(const String & storage_name_ = "multiple");
 
-    const Storage * findStorage(const UUID & id) const;
-    Storage * findStorage(const UUID & id);
-    const Storage & getStorage(const UUID & id) const;
-    Storage & getStorage(const UUID & id);
+    size_t getNumberOfStorages() const;
+    StoragePtr getStorageByIndex(size_t i);
+    StorageConstPtr getStorageByIndex(size_t i) const;
+    void setStorages(const std::vector<StoragePtr> & storages);
+    void addStorage(const StoragePtr & new_storage, size_t i = static_cast<size_t>(-1));
+    void removeStorage(size_t i);
 
-    void addStorage(std::unique_ptr<Storage> nested_storage);
-
-    Storage & getStorageByIndex(size_t i) { return *(nested_storages[i]); }
-    const Storage & getStorageByIndex(size_t i) const { return *(nested_storages[i]); }
+    StorageConstPtr findStorage(const UUID & id) const;
+    StoragePtr findStorage(const UUID & id);
+    StorageConstPtr getStorage(const UUID & id) const;
+    StoragePtr getStorage(const UUID & id);
 
 protected:
     std::optional<UUID> findImpl(EntityType type, const String & name) const override;
@@ -41,9 +45,15 @@ protected:
     bool hasSubscriptionImpl(EntityType type) const override;
 
 private:
-    std::vector<std::unique_ptr<Storage>> nested_storages;
-    mutable LRUCache<UUID, Storage *> ids_cache;
-    mutable std::mutex ids_cache_mutex;
+    using Storages = std::vector<StoragePtr>;
+    std::shared_ptr<const Storages> getStorages() const;
+    void updateSubscriptionsToStorages(std::unique_lock<std::mutex> & lock) const;
+
+    std::shared_ptr<const Storages> nested_storages;
+    mutable LRUCache<UUID, Storage> ids_cache;
+    mutable std::list<OnChangedHandler> handlers_by_type[static_cast<size_t>(EntityType::MAX)];
+    mutable std::unordered_map<StoragePtr, ext::scope_guard> subscriptions_to_nested_storages[static_cast<size_t>(EntityType::MAX)];
+    mutable std::mutex mutex;
 };
 
 }

@@ -26,18 +26,6 @@ namespace ErrorCodes
 
 namespace
 {
-    std::vector<std::unique_ptr<IAccessStorage>> createStorages()
-    {
-        std::vector<std::unique_ptr<IAccessStorage>> list;
-        list.emplace_back(std::make_unique<UsersConfigAccessStorage>());
-        list.emplace_back(std::make_unique<DiskAccessStorage>());
-
-#if 0  /// Memory access storage is disabled.
-        list.emplace_back(std::make_unique<MemoryAccessStorage>());
-#endif
-        return list;
-    }
-
     constexpr size_t USERS_CONFIG_ACCESS_STORAGE_INDEX = 0;
     constexpr size_t DISK_ACCESS_STORAGE_INDEX = 1;
 }
@@ -114,7 +102,7 @@ private:
 
 
 AccessControlManager::AccessControlManager()
-    : MultipleAccessStorage(createStorages()),
+    : MultipleAccessStorage("users directories"),
       context_access_cache(std::make_unique<ContextAccessCache>(*this)),
       role_cache(std::make_unique<RoleCache>(*this)),
       row_policy_cache(std::make_unique<RowPolicyCache>(*this)),
@@ -123,10 +111,17 @@ AccessControlManager::AccessControlManager()
       external_authenticators(std::make_unique<ExternalAuthenticators>()),
       custom_settings_prefixes(std::make_unique<CustomSettingsPrefixes>())
 {
+    addStorage(std::make_shared<UsersConfigAccessStorage>());
+    addStorage(std::make_shared<DiskAccessStorage>());
+
+#if 0  /// Memory access storage is disabled.
+    addStorage(std::make_shared<MemoryAccessStorage>());
+#endif
+
     /// Allow UsersConfigAccessStorage to check the names of settings which it will read from users.xml.
     auto check_setting_name_function = [this](const std::string_view & setting_name) { checkSettingNameIsAllowed(setting_name); };
-    auto & users_config_access_storage = dynamic_cast<UsersConfigAccessStorage &>(getStorageByIndex(USERS_CONFIG_ACCESS_STORAGE_INDEX));
-    users_config_access_storage.setCheckSettingNameFunction(check_setting_name_function);
+    auto users_config_access_storage = typeid_cast<std::shared_ptr<UsersConfigAccessStorage>>(getStorageByIndex(USERS_CONFIG_ACCESS_STORAGE_INDEX));
+    users_config_access_storage->setCheckSettingNameFunction(check_setting_name_function);
 }
 
 
@@ -135,8 +130,8 @@ AccessControlManager::~AccessControlManager() = default;
 
 void AccessControlManager::setLocalDirectory(const String & directory_path)
 {
-    auto & disk_access_storage = dynamic_cast<DiskAccessStorage &>(getStorageByIndex(DISK_ACCESS_STORAGE_INDEX));
-    disk_access_storage.setDirectory(directory_path);
+    auto disk_access_storage = typeid_cast<std::shared_ptr<DiskAccessStorage>>(getStorageByIndex(DISK_ACCESS_STORAGE_INDEX));
+    disk_access_storage->setDirectory(directory_path);
 }
 
 
@@ -148,8 +143,8 @@ void AccessControlManager::setExternalAuthenticatorsConfig(const Poco::Util::Abs
 
 void AccessControlManager::setUsersConfig(const Poco::Util::AbstractConfiguration & users_config)
 {
-    auto & users_config_access_storage = dynamic_cast<UsersConfigAccessStorage &>(getStorageByIndex(USERS_CONFIG_ACCESS_STORAGE_INDEX));
-    users_config_access_storage.setConfiguration(users_config);
+    auto users_config_access_storage = typeid_cast<std::shared_ptr<UsersConfigAccessStorage>>(getStorageByIndex(USERS_CONFIG_ACCESS_STORAGE_INDEX));
+    users_config_access_storage->setConfiguration(users_config);
 }
 
 
