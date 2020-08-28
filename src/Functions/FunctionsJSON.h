@@ -51,7 +51,7 @@ namespace ErrorCodes
 class FunctionJSONHelpers
 {
 public:
-    template <typename Name, template<typename> typename Impl, class JSONParser>
+    template <typename Name, template<typename> typename Impl, class JSONParser, bool by_ptr = false>
     class Executor
     {
     public:
@@ -80,7 +80,11 @@ public:
             const ColumnString::Offsets & offsets = col_json_string->getOffsets();
 
             size_t num_index_arguments = Impl<JSONParser>::getNumberOfIndexArguments(block, arguments);
-            std::vector<Move> moves = prepareMoves(Name::name, block, arguments, 1, num_index_arguments);
+            std::vector<Move> moves;
+            if (by_ptr)
+                moves = prepareMovesByPtr(Name::name, block, arguments, 1, num_index_arguments);
+            else
+                moves = prepareMoves(Name::name, block, arguments, 1, num_index_arguments);
 
             /// Preallocate memory in parser if necessary.
             JSONParser parser;
@@ -155,18 +159,20 @@ private:
         Index,
         ConstKey,
         ConstIndex,
+        ConstKeyOrIndex,
     };
 
     struct Move
     {
         Move(MoveType type_, size_t index_ = 0) : type(type_), index(index_) {}
-        Move(MoveType type_, const String & key_) : type(type_), key(key_) {}
+        Move(MoveType type_, const String & key_, size_t index_ = 0) : type(type_), key(key_), index(index_) {}
         MoveType type;
-        size_t index = 0;
         String key;
+        size_t index = 0;
     };
 
     static std::vector<Move> prepareMoves(const char * function_name, Block & block, const ColumnNumbers & arguments, size_t first_index_argument, size_t num_index_arguments);
+    static std::vector<Move> prepareMovesByPtr(const char * function_name, Block & block, const ColumnNumbers & arguments, size_t first_index_argument, size_t num_index_arguments);
 
     /// Performs moves of types MoveType::Index and MoveType::ConstIndex.
     template <typename JSONParser>
@@ -208,6 +214,12 @@ private:
                         return false;
                     break;
                 }
+                case MoveType::ConstKeyOrIndex:
+                {
+                    if (!moveToElementByKeyOrIndex<JSONParser>(res_element, moves[j].key, moves[j].index, key))
+                        return false;
+                    break;
+                }
             }
         }
 
@@ -217,7 +229,7 @@ private:
     }
 
     template <typename JSONParser>
-    static bool moveToElementByIndex(typename JSONParser::Element & element, int index, std::string_view & out_key)
+    static bool moveToElementByIndex(typename JSONParser::Element & element, int index, std::string_view & used_key)
     {
         if (element.isArray())
         {
@@ -230,7 +242,7 @@ private:
             if (static_cast<size_t>(index) >= array.size())
                 return false;
             element = array[index];
-            out_key = {};
+            used_key = {};
             return true;
         }
 
@@ -246,7 +258,7 @@ private:
 
                 if (static_cast<size_t>(index) >= object.size())
                     return false;
-                std::tie(out_key, element) = object[index];
+                std::tie(used_key, element) = object[index];
                 return true;
             }
         }
@@ -264,11 +276,34 @@ private:
         return object.find(key, element);
     }
 
+    template <typename JSONParser>
+    static bool moveToElementByKeyOrIndex(typename JSONParser::Element & element, const std::string_view & key_in_object, int index_in_array, std::string_view & used_key)
+    {
+        if (element.isArray())
+        {
+            auto array = element.getArray();
+            if (static_cast<size_t>(index_in_array) >= array.size())
+                return false;
+            element = array[index];
+            used_key = {};
+            return true;
+        }
+
+        if (element.isObject())
+        {
+            auto object = element.getObject();
+            used_key = key_in_object;
+            return object.find(key_in_object, element);
+        }
+
+        return {};
+    }
+
     static size_t calculateMaxSize(const ColumnString::Offsets & offsets);
 };
 
 
-template <typename Name, template<typename> typename Impl>
+template <typename Name, template<typename> typename Impl, bool by_ptr = false>
 class FunctionJSON : public IFunction
 {
 public:
@@ -292,15 +327,15 @@ public:
 #if USE_SIMDJSON
         if (context.getSettingsRef().allow_simdjson)
         {
-            FunctionJSONHelpers::Executor<Name, Impl, SimdJSONParser>::run(block, arguments, result_pos, input_rows_count);
+            FunctionJSONHelpers::Executor<Name, Impl, SimdJSONParser, by_ptr>::run(block, arguments, result_pos, input_rows_count);
             return;
         }
 #endif
 
 #if USE_RAPIDJSON
-        FunctionJSONHelpers::Executor<Name, Impl, RapidJSONParser>::run(block, arguments, result_pos, input_rows_count);
+        FunctionJSONHelpers::Executor<Name, Impl, RapidJSONParser, by_ptr>::run(block, arguments, result_pos, input_rows_count);
 #else
-        FunctionJSONHelpers::Executor<Name, Impl, DummyJSONParser>::run(block, arguments, result_pos, input_rows_count);
+        FunctionJSONHelpers::Executor<Name, Impl, DummyJSONParser, by_ptr>::run(block, arguments, result_pos, input_rows_count);
 #endif
     }
 
@@ -309,8 +344,9 @@ private:
 };
 
 
-struct NameJSONHas { static constexpr auto name{"JSONHas"}; };
 struct NameIsValidJSON { static constexpr auto name{"isValidJSON"}; };
+
+struct NameJSONHas { static constexpr auto name{"JSONHas"}; };
 struct NameJSONLength { static constexpr auto name{"JSONLength"}; };
 struct NameJSONKey { static constexpr auto name{"JSONKey"}; };
 struct NameJSONType { static constexpr auto name{"JSONType"}; };
@@ -324,6 +360,21 @@ struct NameJSONExtractKeysAndValues { static constexpr auto name{"JSONExtractKey
 struct NameJSONExtractRaw { static constexpr auto name{"JSONExtractRaw"}; };
 struct NameJSONExtractArrayRaw { static constexpr auto name{"JSONExtractArrayRaw"}; };
 struct NameJSONExtractKeysAndValuesRaw { static constexpr auto name{"JSONExtractKeysAndValuesRaw"}; };
+
+struct NameJSONHasByPtr { static constexpr auto name{"JSONHasByPtr"}; };
+struct NameJSONLengthByPtr { static constexpr auto name{"JSONLengthByPtr"}; };
+struct NameJSONKeyByPtr { static constexpr auto name{"JSONKeyByPtr"}; };
+struct NameJSONTypeByPtr { static constexpr auto name{"JSONTypeByPtr"}; };
+struct NameJSONExtractIntByPtr { static constexpr auto name{"JSONExtractIntByPtr"}; };
+struct NameJSONExtractUIntByPtr { static constexpr auto name{"JSONExtractUIntByPtr"}; };
+struct NameJSONExtractFloatByPtr { static constexpr auto name{"JSONExtractFloatByPtr"}; };
+struct NameJSONExtractBoolByPtr { static constexpr auto name{"JSONExtractBoolByPtr"}; };
+struct NameJSONExtractStringByPtr { static constexpr auto name{"JSONExtractStringByPtr"}; };
+struct NameJSONExtractByPtr { static constexpr auto name{"JSONExtractByPtr"}; };
+struct NameJSONExtractKeysAndValuesByPtr { static constexpr auto name{"JSONExtractKeysAndValuesByPtr"}; };
+struct NameJSONExtractRawByPtr { static constexpr auto name{"JSONExtractRawByPtr"}; };
+struct NameJSONExtractArrayRawByPtr { static constexpr auto name{"JSONExtractArrayRawByPtr"}; };
+struct NameJSONExtractKeysAndValuesRawByPtr { static constexpr auto name{"JSONExtractKeysAndValuesRawByPtr"}; };
 
 
 template <typename JSONParser>
