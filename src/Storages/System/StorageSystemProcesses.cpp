@@ -7,6 +7,7 @@
 #include <Interpreters/Context.h>
 #include <Core/Settings.h>
 #include <Interpreters/ProfileEventsExt.h>
+#include <Access/ContextAccess.h>
 #include <Common/typeid_cast.h>
 #include <Common/IPv6ToBinary.h>
 #include <Columns/ColumnsNumber.h>
@@ -70,8 +71,19 @@ void StorageSystemProcesses::fillData(MutableColumns & res_columns, const Contex
 {
     ProcessList::Info info = context.getProcessList().getInfo(true, true, true);
 
+    bool show_all_users = context.getAccess()->isGranted(AccessType::SHOW_USERS);
+
     for (const auto & process : info)
     {
+        if (!show_all_users)
+        {
+            bool same_user
+                = ((process.client_info.current_user == context.getUserName())
+                   && (process.client_info.initial_user == context.getUserName()));
+            if (!same_user)
+                continue;
+        }
+
         size_t i = 0;
 
         res_columns[i++]->insert(process.client_info.query_kind == ClientInfo::QueryKind::INITIAL_QUERY);

@@ -74,7 +74,7 @@ StoragesInfoStream::StoragesInfoStream(const SelectQueryInfo & query_info, const
     MutableColumnPtr engine_column_mut = ColumnString::create();
     MutableColumnPtr active_column_mut = ColumnUInt8::create();
 
-    const auto access = context.getAccess();
+    access = context.getAccess();
     const bool check_access_for_tables = !access->isGranted(AccessType::SHOW_TABLES);
 
     {
@@ -212,6 +212,7 @@ StoragesInfo StoragesInfoStream::next()
         }
 
         info.engine = info.storage->getName();
+        info.access = access;
 
         info.data = dynamic_cast<MergeTreeData *>(info.storage.get());
         if (!info.data)

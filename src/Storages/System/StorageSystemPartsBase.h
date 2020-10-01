@@ -20,6 +20,8 @@ struct StoragesInfo
     String table;
     String engine;
 
+    std::shared_ptr<const ContextAccess> access;
+
     bool need_inactive_parts = false;
     MergeTreeData * data = nullptr;
 
@@ -37,7 +39,7 @@ public:
 private:
     String query_id;
     Settings settings;
-
+    std::shared_ptr<const ContextAccess> access;
 
     ColumnPtr database_column;
     ColumnPtr table_column;

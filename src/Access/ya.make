@@ -41,7 +41,7 @@ SRCS(
     SettingsProfilesCache.cpp
     User.cpp
     UsersConfigAccessStorage.cpp
-
+    VisibleAccessEntities.cpp
 )
 
 END()

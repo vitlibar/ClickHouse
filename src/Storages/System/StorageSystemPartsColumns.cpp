@@ -10,6 +10,7 @@
 #include <Storages/VirtualColumnUtils.h>
 #include <Databases/IDatabase.h>
 #include <Parsers/queryToString.h>
+#include <Access/ContextAccess.h>
 
 namespace DB
 {
@@ -83,6 +84,9 @@ void StorageSystemPartsColumns::processNextStorage(MutableColumns & columns_, co
         columns_info[column.name] = column_info;
     }
 
+    /// Whether we should check access for separate columns.
+    bool check_access_for_columns = !info.access->isGranted(AccessType::SHOW_COLUMNS, info.database, info.table);
+
     /// Go through the list of parts.
     MergeTreeData::DataPartStateVector all_parts_state;
     MergeTreeData::DataPartsVector all_parts;
@@ -105,6 +109,9 @@ void StorageSystemPartsColumns::processNextStorage(MutableColumns & columns_, co
         size_t column_position = 0;
         for (const auto & column : part->getColumns())
         {
+            if (check_access_for_columns && !info.access->isGranted(AccessType::SHOW_COLUMNS, info.database, info.table, column.name))
+                continue;
+
             ++column_position;
             size_t j = 0;
             {
