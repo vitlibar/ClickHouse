@@ -6,11 +6,9 @@ Defines the following variables:
   The include directories of the gRPC framework, including the include directories of the C++ wrapper.
 ``gRPC_LIBRARIES``
   The libraries of the gRPC framework.
-``gRPC_UNSECURE_LIBRARIES``
-  The libraries of the gRPC framework without SSL.
-``_gRPC_CPP_PLUGIN``
+``gRPC_CPP_PLUGIN``
   The plugin for generating gRPC client and server C++ stubs from `.proto` files
-``_gRPC_PYTHON_PLUGIN``
+``gRPC_PYTHON_PLUGIN``
   The plugin for generating gRPC client and server Python stubs from `.proto` files
 
 The following :prop_tgt:`IMPORTED` targets are also defined:
@@ -18,6 +16,13 @@ The following :prop_tgt:`IMPORTED` targets are also defined:
 ``grpc++_unsecure``
 ``grpc_cpp_plugin``
 ``grpc_python_plugin``
+
+Set the following variables to adjust the behaviour of this script:
+``gRPC_USE_UNSECURE_LIBRARIES``
+  if set gRPC_LIBRARIES will be filled with the unsecure version of the libraries (i.e. without SSL)
+  instead of the secure ones.
+``gRPC_DEBUG`
+  if set the debug message will be printed.
 
 Add custom commands to process ``.proto`` files to C++::
 protobuf_generate_grpc_cpp(<SRCS> <HDRS>
@@ -278,11 +283,11 @@ else()
 endif()
 
 # Get full path to plugin.
-find_program(_gRPC_CPP_PLUGIN
+find_program(gRPC_CPP_PLUGIN
              NAMES grpc_cpp_plugin
              DOC "The plugin for generating gRPC client and server C++ stubs from `.proto` files") 
 
-find_program(_gRPC_PYTHON_PLUGIN
+find_program(gRPC_PYTHON_PLUGIN
              NAMES grpc_python_plugin
              DOC "The plugin for generating gRPC client and server Python stubs from `.proto` files")
 
@@ -318,13 +323,13 @@ endif()
 #include(FindPackageHandleStandardArgs.cmake)
 FIND_PACKAGE_HANDLE_STANDARD_ARGS(gRPC
                                   REQUIRED_VARS gRPC_LIBRARY gRPC_CPP_LIBRARY gRPC_UNSECURE_LIBRARY gRPC_CPP_UNSECURE_LIBRARY
-                                                gRPC_INCLUDE_DIR gRPC_CPP_INCLUDE_DIR _gRPC_CPP_PLUGIN _gRPC_PYTHON_PLUGIN)
+                                                gRPC_INCLUDE_DIR gRPC_CPP_INCLUDE_DIR gRPC_CPP_PLUGIN gRPC_PYTHON_PLUGIN)
 
 if(gRPC_FOUND)
   if(gRPC_DEBUG)
     message(STATUS "gRPC: INCLUDE_DIRS=${gRPC_INCLUDE_DIRS}")
     message(STATUS "gRPC: LIBRARIES=${gRPC_LIBRARIES}")
-    message(STATUS "gRPC: CPP_PLUGIN=${_gRPC_CPP_PLUGIN}")
-    message(STATUS "gRPC: PYTHON_PLUGIN=${_gRPC_PYTHON_PLUGIN}")
+    message(STATUS "gRPC: CPP_PLUGIN=${gRPC_CPP_PLUGIN}")
+    message(STATUS "gRPC: PYTHON_PLUGIN=${gRPC_PYTHON_PLUGIN}")
   endif()
 endif()
