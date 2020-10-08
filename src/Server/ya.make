@@ -20,6 +20,7 @@ SRCS(
     PostgreSQLHandlerFactory.cpp
     PrometheusMetricsWriter.cpp
     PrometheusRequestHandler.cpp
+    ProtocolServerAdapter.cpp
     ReplicasStatusHandler.cpp
     StaticRequestHandler.cpp
     TCPHandler.cpp
