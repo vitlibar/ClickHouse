@@ -63,7 +63,6 @@
 #include <Common/ThreadFuzzer.h>
 #include <Server/MySQLHandlerFactory.h>
 #include <Server/PostgreSQLHandlerFactory.h>
-#include "GRPCHandler.h"
 
 
 #if !defined(ARCADIA_BUILD)
@@ -83,6 +82,11 @@
 #    include <Poco/Net/Context.h>
 #    include <Poco/Net/SecureServerSocket.h>
 #endif
+
+#if USE_GRPC
+#   include <Server/GRPCServer.h>
+#endif
+
 
 namespace CurrentMetrics
 {
@@ -820,7 +824,30 @@ int Server::main(const std::vector<std::string> & /*args*/)
             listen_hosts.emplace_back("127.0.0.1");
             listen_try = true;
         }
-        std::vector<std::unique_ptr<GRPCServer>> gRPCServers;
+
+#if USE_GRPC
+        std::vector<std::unique_ptr<GRPCServer>> grpc_servers;
+        auto start_grpc_servers = [&]
+        {
+            for (auto & server : grpc_servers)
+            {
+                if (server)
+                    server_pool.start(*server);
+            }
+        };
+        auto stop_grpc_servers = [&]
+        {
+            for (auto & server : grpc_servers)
+            {
+                if (server)
+                    server->stop();
+            }
+        };
+#else
+        auto start_grpc_servers = []{};
+        auto stop_grpc_servers = []{};
+#endif
+
         auto make_socket_address = [&](const std::string & host, UInt16 port)
         {
             Poco::Net::SocketAddress socket_address;
@@ -1038,12 +1065,14 @@ int Server::main(const std::vector<std::string> & /*args*/)
                 LOG_INFO(log, "Listening for PostgreSQL compatibility protocol: " + address.toString());
             });
 
+#if USE_GRPC
             create_server("grpc_port", [&](UInt16 port)
             {
                 Poco::Net::SocketAddress server_address(listen_host, port);
-                gRPCServers.emplace_back(new GRPCServer(server_address.toString(), *this));
+                grpc_servers.emplace_back(new GRPCServer(server_address.toString(), *this));
                 LOG_INFO(log, "Listening for gRPC protocol: " + server_address.toString());
             });
+#endif
 
             /// Prometheus (if defined and not setup yet with http_port)
             create_server("prometheus.port", [&](UInt16 port)
@@ -1067,11 +1096,8 @@ int Server::main(const std::vector<std::string> & /*args*/)
 
         for (auto & server : servers)
             server->start();
-        for (auto & server : gRPCServers)
-        {
-            if (server)
-                server_pool.start(*server);
-        }
+
+        start_grpc_servers();
 
         {
             String level_str = config().getString("text_log.level", "");
@@ -1106,11 +1132,8 @@ int Server::main(const std::vector<std::string> & /*args*/)
                 server->stop();
                 current_connections += server->currentConnections();
             }
-            for (auto & server : gRPCServers)
-            {
-                if (server)
-                    server->stop();
-            }
+
+            stop_grpc_servers();
 
             if (current_connections)
                 LOG_INFO(log, "Closed all listening sockets. Waiting for {} outstanding connections.", current_connections);
