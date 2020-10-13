@@ -247,6 +247,7 @@ find_library(gRPC_LIBRARY NAMES grpc)
 find_library(gRPC_CPP_LIBRARY NAMES grpc++)
 find_library(gRPC_UNSECURE_LIBRARY NAMES grpc_unsecure)
 find_library(gRPC_CPP_UNSECURE_LIBRARY NAMES grpc++_unsecure)
+find_library(gRPC_CARES_LIBRARY NAMES cares)
 
 set(gRPC_LIBRARIES)
 if(gRPC_USE_UNSECURE_LIBRARIES)
@@ -264,6 +265,7 @@ else()
     set(gRPC_LIBRARIES ${gRPC_LIBRARIES} ${gRPC_CPP_LIBRARY})
   endif()
 endif()
+set(gRPC_LIBRARIES ${gRPC_LIBRARIES} ${gRPC_CARES_LIBRARY})
 
 # Restore the original find library ordering.
 if(gRPC_USE_STATIC_LIBS)
@@ -322,7 +324,7 @@ endif()
 
 #include(FindPackageHandleStandardArgs.cmake)
 FIND_PACKAGE_HANDLE_STANDARD_ARGS(gRPC
-                                  REQUIRED_VARS gRPC_LIBRARY gRPC_CPP_LIBRARY gRPC_UNSECURE_LIBRARY gRPC_CPP_UNSECURE_LIBRARY
+                                  REQUIRED_VARS gRPC_LIBRARY gRPC_CPP_LIBRARY gRPC_UNSECURE_LIBRARY gRPC_CPP_UNSECURE_LIBRARY gRPC_CARES_LIBRARY
                                                 gRPC_INCLUDE_DIR gRPC_CPP_INCLUDE_DIR gRPC_CPP_PLUGIN gRPC_PYTHON_PLUGIN)
 
 if(gRPC_FOUND)

@@ -49,6 +49,7 @@ RUN apt-get update \
         libhyperscan-dev \
         libbrotli-dev \
         protobuf-compiler \
+        libc-ares-dev \
         libprotoc-dev \
         libgrpc++-dev \
         protobuf-compiler-grpc \
