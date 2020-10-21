@@ -15,7 +15,6 @@
 #include <Parsers/ParserQuery.h>
 #include <Processors/Executors/PullingAsyncPipelineExecutor.h>
 #include <Server/IServer.h>
-#include <Server/WriteBufferFromGRPC.h>
 #include <Storages/IStorage.h>
 #include <grpc++/server_builder.h>
 
@@ -56,10 +55,10 @@ namespace
             reader_writer.Read(&query_info_, tag);
         }
 
-        /*void write(const GRPCResult & result_)
+        void write(const GRPCResult & result_)
         {
             reader_writer.Write(result_, tag);
-        }*/
+        }
 
         void writeAndFinish(const GRPCResult & result_, const grpc::Status & status_)
         {
@@ -70,11 +69,6 @@ namespace
         {
             String peer = grpc_context.peer();
             return Poco::Net::SocketAddress{peer.substr(peer.find(':') + 1)};
-        }
-
-        grpc::ServerAsyncReaderWriter<GRPCResult, GRPCQueryInfo> & getReaderWriter()
-        {
-            return reader_writer;
         }
 
     private:
@@ -112,10 +106,12 @@ namespace
         void onException(const Exception & exception);
         void close();
 
-        void sendOutput(const Block & block);
-        void sendProgress();
-        void sendTotals(const Block & totals);
-        void sendExtremes(const Block & extremes);
+        void addOutputToResult(const Block & block);
+        void addProgressToResult();
+        void addTotalsToResult(const Block & totals);
+        void addExtremesToResult(const Block & extremes);
+        void sendResult();
+        void sendFinalResult();
         void sendException(const Exception & exception);
 
         IServer & iserver;
@@ -140,7 +136,6 @@ namespace
         bool with_stacktrace = false;
 
         BlockIO io;
-        std::shared_ptr<WriteBufferFromGRPC> out;
         Progress progress;
     };
 
@@ -152,7 +147,6 @@ namespace
         : iserver(iserver_), log(log_), responder(std::move(responder_)), on_finish_callback(on_finish_callback_)
     {
         responder->setTag(this);
-        out = std::make_shared<WriteBufferFromGRPC>(&responder->getReaderWriter(), this, nullptr);
 
         auto runner_function = [this]
         {
@@ -407,19 +401,22 @@ namespace
                         break;
 
                     if (!io.null_format)
-                        sendOutput(block);
+                        addOutputToResult(block);
                 }
 
                 if (after_send_progress.elapsedMicroseconds() >= interactive_delay)
                 {
-                    sendProgress();
+                    addProgressToResult();
                     after_send_progress.restart();
                 }
+
+                if (!result.output().empty() || result.has_progress())
+                    sendResult();
             }
             async_in.readSuffix();
 
-            sendTotals(io.in->getTotals());
-            sendExtremes(io.in->getExtremes());
+            addTotalsToResult(io.in->getTotals());
+            addExtremesToResult(io.in->getExtremes());
         }
     }
 
@@ -434,26 +431,29 @@ namespace
             if (block)
             {
                 if (!io.null_format)
-                    sendOutput(block);
+                    addOutputToResult(block);
             }
 
             if (after_send_progress.elapsedMicroseconds() >= interactive_delay)
             {
-                sendProgress();
+                addProgressToResult();
                 after_send_progress.restart();
             }
+
+            if (!result.output().empty() || result.has_progress())
+                sendResult();
         }
 
-        sendTotals(executor->getTotalsBlock());
-        sendExtremes(executor->getExtremesBlock());
+        addTotalsToResult(executor->getTotalsBlock());
+        addExtremesToResult(executor->getExtremesBlock());
     }
 
     void Call::finishQuery()
     {
         io.onFinish();
         query_scope->logPeakMemoryUsage();
-        out->finalize();
-        waitForSync();
+        sendFinalResult();
+        close();
     }
 
     void Call::onException(const Exception & exception)
@@ -478,90 +478,62 @@ namespace
     void Call::close()
     {
         io = {};
-        out.reset();
         query_scope.reset();
         query_context.reset();
         responder.reset();
     }
 
-    void Call::sendOutput(const Block & block)
+    void Call::addOutputToResult(const Block & block)
     {
-        out->setResponse([](const String & buffer)
-        {
-            GRPCResult tmp_response;
-            tmp_response.set_output(buffer);
-            return tmp_response;
-        });
-        auto my_block_out_stream = query_context->getOutputFormat(output_format, *out, block);
-        my_block_out_stream->write(block);
-        my_block_out_stream->flush();
-        out->next();
+        WriteBufferFromString buf{*result.mutable_output()};
+        auto stream = query_context->getOutputFormat(output_format, buf, block);
+        stream->write(block);
+    }
+
+    void Call::addProgressToResult()
+    {
+        auto & grpc_progress = *result.mutable_progress();
+        auto values = progress.fetchAndResetPiecewiseAtomically();
+        grpc_progress.set_read_rows(values.read_rows);
+        grpc_progress.set_read_bytes(values.read_bytes);
+        grpc_progress.set_total_rows_to_read(values.total_rows_to_read);
+        grpc_progress.set_written_rows(values.written_rows);
+        grpc_progress.set_written_bytes(values.written_bytes);
+    }
+
+    void Call::addTotalsToResult(const Block & totals)
+    {
+        if (!totals)
+            return;
+
+        WriteBufferFromString buf{*result.mutable_totals()};
+        auto stream = query_context->getOutputFormat(output_format, buf, totals);
+        stream->write(totals);
+    }
+
+    void Call::addExtremesToResult(const Block & extremes)
+    {
+        if (!extremes)
+            return;
+
+        WriteBufferFromString buf{*result.mutable_extremes()};
+        auto stream = query_context->getOutputFormat(output_format, buf, extremes);
+        stream->write(extremes);
+    }
+
+    void Call::sendResult()
+    {
+        responder->write(result);
         waitForSync();
+        result.Clear();
     }
 
-    void Call::sendProgress()
+    void Call::sendFinalResult()
     {
-        auto grpc_progress = [](const String & buffer)
-        {
-            auto in = std::make_unique<ReadBufferFromString>(buffer);
-            ProgressValues progress_values;
-            progress_values.read(*in, DBMS_MIN_REVISION_WITH_CLIENT_WRITE_INFO);
-            GRPCProgress tmp_progress;
-            tmp_progress.set_read_rows(progress_values.read_rows);
-            tmp_progress.set_read_bytes(progress_values.read_bytes);
-            tmp_progress.set_total_rows_to_read(progress_values.total_rows_to_read);
-            tmp_progress.set_written_rows(progress_values.written_rows);
-            tmp_progress.set_written_bytes(progress_values.written_bytes);
-            return tmp_progress;
-        };
-
-        out->setResponse([&grpc_progress](const String & buffer)
-        {
-            GRPCResult tmp_response;
-            auto tmp_progress = std::make_unique<GRPCProgress>(grpc_progress(buffer));
-            tmp_response.set_allocated_progress(tmp_progress.release());
-            return tmp_response;
-        });
-        auto increment = progress.fetchAndResetPiecewiseAtomically();
-        increment.write(*out, DBMS_MIN_REVISION_WITH_CLIENT_WRITE_INFO);
-        out->next();
+        responder->writeAndFinish(result, {});
         waitForSync();
-    }
-
-    void Call::sendTotals(const Block & totals)
-    {
-        if (totals)
-        {
-            out->setResponse([](const String & buffer)
-            {
-                GRPCResult tmp_response;
-                tmp_response.set_totals(buffer);
-                return tmp_response;
-            });
-            auto my_block_out_stream = query_context->getOutputFormat(output_format, *out, totals);
-            my_block_out_stream->write(totals);
-            my_block_out_stream->flush();
-            out->next();
-            waitForSync();
-        }
-    }
-
-    void Call::sendExtremes(const Block & extremes)
-    {
-        if (extremes)
-        {
-            out->setResponse([](const String & buffer)
-            {
-                GRPCResult tmp_response;
-                tmp_response.set_extremes(buffer);
-                return tmp_response;
-            });
-            auto my_block_out_stream = query_context->getOutputFormat(output_format, *out, extremes);
-            my_block_out_stream->write(extremes);
-            my_block_out_stream->flush();
-            out->next();
-            waitForSync();
-        }
+        result.Clear();
+        responder.reset(); /// We must not use the `responder` after calling WriteAndFinish().
     }
 
     void Call::sendException(const Exception & exception)
@@ -569,8 +541,7 @@ namespace
         auto & grpc_exception = *result.mutable_exception();
         grpc_exception.set_code(exception.code());
         grpc_exception.set_message(getExceptionMessage(exception, with_stacktrace, true));
-        responder->writeAndFinish(result, {});
-        waitForSync();
+        sendFinalResult();
     }
 
 
