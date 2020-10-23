@@ -11,7 +11,9 @@
 #include <IO/ReadBufferFromString.h>
 #include <IO/ReadHelpers.h>
 #include <Parsers/parseQuery.h>
+#include <Parsers/ASTIdentifier.h>
 #include <Parsers/ASTInsertQuery.h>
+#include <Parsers/ASTQueryWithOutput.h>
 #include <Parsers/ParserQuery.h>
 #include <Processors/Executors/PullingAsyncPipelineExecutor.h>
 #include <Server/IServer.h>
@@ -287,12 +289,14 @@ namespace
         ast = ::DB::parseQuery(parser, begin, end, "", settings.max_query_size, settings.max_parser_depth);
 
         /// Choose output format.
-        output_format = "Values";
-        if (!query_info.format().empty())
+        query_context->setDefaultFormat(query_info.format());
+        if (const auto * ast_query_with_output = dynamic_cast<const ASTQueryWithOutput *>(ast.get());
+            ast_query_with_output && ast_query_with_output->format)
         {
-            output_format = query_info.format();
-            query_context->setDefaultFormat(query_info.format());
+            output_format = getIdentifierName(ast_query_with_output->format);
         }
+        if (output_format.empty())
+            output_format = query_context->getDefaultFormat();
 
         /// Start executing the query.
         auto * insert_query = ast->as<ASTInsertQuery>();
@@ -318,9 +322,6 @@ namespace
         input_format = insert_query->format;
         if (input_format.empty())
             input_format = "Values";
-
-        if (output_format.empty())
-            output_format = input_format;
 
         /// Prepare read buffer with data to insert.
         ConcatReadBuffer::ReadBuffers buffers;
