@@ -148,7 +148,7 @@ namespace
         String input_format;
         String output_format;
         uint64_t interactive_delay;
-        bool with_stacktrace = false;
+        bool send_exception_with_stacktrace = false;
 
         std::atomic<bool> failed_to_send_result = false; /// atomic because it can be accessed both from call_thread and queue_thread
 
@@ -271,6 +271,8 @@ namespace
         query_context->checkSettingsConstraints(settings_changes);
         query_context->applySettingsChanges(settings_changes);
         const Settings & settings = query_context->getSettingsRef();
+
+        send_exception_with_stacktrace = query_context->getSettingsRef().calculate_text_stack_trace;
 
         /// Set the current database if specified.
         if (!query_info.database().empty())
@@ -476,6 +478,8 @@ namespace
     {
         io.onException();
 
+        LOG_ERROR(log, "Code: {}, e.displayText() = {}, Stack trace:\n\n{}", exception.code(), exception.displayText(), exception.getStackTraceString());
+
         if (responder)
         {
             try
@@ -611,7 +615,10 @@ namespace
     {
         auto & grpc_exception = *result.mutable_exception();
         grpc_exception.set_code(exception.code());
-        grpc_exception.set_message(getExceptionMessage(exception, with_stacktrace, true));
+        grpc_exception.set_name(exception.name());
+        grpc_exception.set_display_text(exception.displayText());
+        if (send_exception_with_stacktrace)
+            grpc_exception.set_stack_trace(exception.getStackTraceString());
         sendFinalResult();
     }
 }
