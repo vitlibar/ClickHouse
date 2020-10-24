@@ -61,45 +61,128 @@ namespace
         return std::chrono::seconds(session_timeout);
     }
 
-    /// Requests a connection and provides low-level interface for reading and writing.
-    class Responder
+
+    enum CallType
+    {
+        CALL_SIMPLE,           /// ExecuteQuery() call
+        CALL_STREAMING_INPUT,  /// ExecuteQueryWithStreamingInput() call
+        CALL_STREAMING_OUTPUT, /// ExecuteQueryWithStreamingOutput() call
+        CALL_STREAMING,        /// ExecuteQueryWithStreaming() call
+        CALL_MAX,
+    };
+
+    /// Responder requests a connection and provides low-level interface for reading and writing.
+    class BaseResponder
     {
     public:
-        Responder(
-            GRPCService & grpc_service_, grpc::ServerCompletionQueue & new_call_queue_, grpc::ServerCompletionQueue & notification_queue_)
-            : tag(this)
-        {
-            grpc_service_.RequestExecuteQuery(&grpc_context, &reader_writer, &new_call_queue_, &notification_queue_, tag);
-        }
-
+        BaseResponder() = default;
+        virtual ~BaseResponder() = default;
         void setTag(void * tag_) { tag = tag_; }
-
-        void read(GRPCQueryInfo & query_info_)
-        {
-            reader_writer.Read(&query_info_, tag);
-        }
-
-        void write(const GRPCResult & result_)
-        {
-            reader_writer.Write(result_, tag);
-        }
-
-        void writeAndFinish(const GRPCResult & result_, const grpc::Status & status_)
-        {
-            reader_writer.WriteAndFinish(result_, {}, status_, tag);
-        }
-
-        Poco::Net::SocketAddress getClientAddress() const
-        {
-            String peer = grpc_context.peer();
-            return Poco::Net::SocketAddress{peer.substr(peer.find(':') + 1)};
-        }
-
-    private:
+        virtual CallType getCallType() const = 0;
+        virtual void read(GRPCQueryInfo &) { assert(false); }
+        virtual void write(const GRPCResult &) { assert(false); }
+        virtual void writeAndFinish(const GRPCResult &, const grpc::Status &) { assert(false); }
+        Poco::Net::SocketAddress getClientAddress() const { String peer = grpc_context.peer(); return Poco::Net::SocketAddress{peer.substr(peer.find(':') + 1)}; }
+    protected:
         grpc::ServerContext grpc_context;
-        grpc::ServerAsyncReaderWriter<GRPCResult, GRPCQueryInfo> reader_writer{&grpc_context};
-        void * tag;
+        void * tag = nullptr;
     };
+
+    template <enum CallType call_type>
+    class Responder;
+
+    template<>
+    class Responder<CALL_SIMPLE> : public BaseResponder
+    {
+    public:
+        Responder(GRPCService & grpc_service_,
+                  grpc::ServerCompletionQueue & new_call_queue_,
+                  grpc::ServerCompletionQueue & notification_queue_)
+        {
+            setTag(this);
+            grpc_service_.RequestExecuteQuery(&grpc_context, &query_info, &response_writer, &new_call_queue_, &notification_queue_, tag);
+        }
+        CallType getCallType() const override { return CALL_SIMPLE; }
+        void read(GRPCQueryInfo & query_info_) override { query_info_ = std::move(query_info); }
+        void writeAndFinish(const GRPCResult & result_, const grpc::Status & status_) override { response_writer.Finish(result_, status_, tag); }
+    private:
+        GRPCQueryInfo query_info;
+        grpc::ServerAsyncResponseWriter<GRPCResult> response_writer{&grpc_context};
+    };
+
+    template<>
+    class Responder<CALL_STREAMING_INPUT> : public BaseResponder
+    {
+    public:
+        Responder(GRPCService & grpc_service_,
+                  grpc::ServerCompletionQueue & new_call_queue_,
+                  grpc::ServerCompletionQueue & notification_queue_)
+        {
+            setTag(this);
+            grpc_service_.RequestExecuteQueryWithStreamingInput(&grpc_context, &reader, &new_call_queue_, &notification_queue_, tag);
+        }
+        CallType getCallType() const override { return CALL_STREAMING_INPUT; }
+        void read(GRPCQueryInfo & query_info_) override { reader.Read(&query_info_, tag); }
+        void writeAndFinish(const GRPCResult & result_, const grpc::Status & status_) override { reader.Finish(result_, status_, tag); }
+    private:
+        grpc::ServerAsyncReader<GRPCResult, GRPCQueryInfo> reader{&grpc_context};
+    };
+
+    template<>
+    class Responder<CALL_STREAMING_OUTPUT> : public BaseResponder
+    {
+    public:
+        Responder(GRPCService & grpc_service_,
+                  grpc::ServerCompletionQueue & new_call_queue_,
+                  grpc::ServerCompletionQueue & notification_queue_)
+        {
+            setTag(this);
+            grpc_service_.RequestExecuteQueryWithStreamingOutput(&grpc_context, &query_info, &writer, &new_call_queue_, &notification_queue_, tag);
+        }
+        CallType getCallType() const override { return CALL_STREAMING_OUTPUT; }
+        void read(GRPCQueryInfo & query_info_) override { query_info_ = std::move(query_info); }
+        void write(const GRPCResult & result_) override { writer.Write(result_, tag); }
+        void writeAndFinish(const GRPCResult & result_, const grpc::Status & status_) override { writer.WriteAndFinish(result_, {}, status_, tag); }
+    private:
+        GRPCQueryInfo query_info;
+        grpc::ServerAsyncWriter<GRPCResult> writer{&grpc_context};
+    };
+
+    template<>
+    class Responder<CALL_STREAMING> : public BaseResponder
+    {
+    public:
+        Responder(GRPCService & grpc_service_,
+                  grpc::ServerCompletionQueue & new_call_queue_,
+                  grpc::ServerCompletionQueue & notification_queue_)
+        {
+            setTag(this);
+            grpc_service_.RequestExecuteQueryWithStreaming(&grpc_context, &reader_writer, &new_call_queue_, &notification_queue_, tag);
+        }
+        CallType getCallType() const override { return CALL_STREAMING; }
+        void read(GRPCQueryInfo & query_info_) override { reader_writer.Read(&query_info_, tag); }
+        void write(const GRPCResult & result_) override { reader_writer.Write(result_, tag); }
+        void writeAndFinish(const GRPCResult & result_, const grpc::Status & status_) override { reader_writer.WriteAndFinish(result_, {}, status_, tag); }
+    private:
+        grpc::ServerAsyncReaderWriter<GRPCResult, GRPCQueryInfo> reader_writer{&grpc_context};
+    };
+
+
+    std::unique_ptr<BaseResponder> makeResponder(GRPCService & grpc_service,
+                                                 grpc::ServerCompletionQueue & new_call_queue,
+                                                 grpc::ServerCompletionQueue & notification_queue,
+                                                 CallType call_type)
+    {
+        switch(call_type)
+        {
+            case CALL_SIMPLE: return std::make_unique<Responder<CALL_SIMPLE>>(grpc_service, new_call_queue, notification_queue);
+            case CALL_STREAMING_INPUT: return std::make_unique<Responder<CALL_STREAMING_INPUT>>(grpc_service, new_call_queue, notification_queue);
+            case CALL_STREAMING_OUTPUT: return std::make_unique<Responder<CALL_STREAMING_OUTPUT>>(grpc_service, new_call_queue, notification_queue);
+            case CALL_STREAMING: return std::make_unique<Responder<CALL_STREAMING>>(grpc_service, new_call_queue, notification_queue);
+            case CALL_MAX: break;
+        }
+        __builtin_unreachable();
+    }
 
 
     /// Handles a connection after a responder is ready.
@@ -109,7 +192,7 @@ namespace
         Call(
             IServer & iserver_,
             Poco::Logger * log_,
-            std::unique_ptr<Responder> responder_,
+            std::unique_ptr<BaseResponder> responder_,
             const std::function<void(Call &)> & on_finish_callback_);
         ~Call();
 
@@ -143,7 +226,8 @@ namespace
         IServer & iserver;
         Poco::Logger * log = nullptr;
         InternalTextLogsQueuePtr logs_queue;
-        std::unique_ptr<Responder> responder;
+        std::unique_ptr<BaseResponder> responder;
+        CallType call_type;
         std::function<void(Call &)> on_finish_callback;
 
         ThreadFromGlobalPool runner;
@@ -170,11 +254,12 @@ namespace
     Call::Call(
         IServer & iserver_,
         Poco::Logger * log_,
-        std::unique_ptr<Responder> responder_,
+        std::unique_ptr<BaseResponder> responder_,
         const std::function<void(Call &)> & on_finish_callback_)
         : iserver(iserver_), log(log_), responder(std::move(responder_)), on_finish_callback(on_finish_callback_)
     {
         responder->setTag(this);
+        call_type = responder->getCallType();
 
         auto runner_function = [this]
         {
@@ -249,7 +334,8 @@ namespace
     void Call::receiveQuery()
     {
         responder->read(query_info);
-        waitForSync();
+        if (call_type == CALL_STREAMING || call_type == CALL_STREAMING_INPUT)
+            waitForSync();
     }
 
     void Call::executeQuery()
@@ -364,6 +450,9 @@ namespace
 
         if (!insert_query->data && query_info.input_data().empty() && !query_info.use_next_input_data())
             throw Exception("No data to insert", ErrorCodes::NO_DATA_TO_INSERT);
+
+        if (query_info.use_next_input_data() && (call_type == CALL_SIMPLE || call_type == CALL_STREAMING_OUTPUT))
+            throw Exception("use_next_input_data is allowed to be set only for streaming input", ErrorCodes::NO_DATA_TO_INSERT);
 
         /// Choose input format.
         input_format = insert_query->format;
@@ -568,7 +657,8 @@ namespace
 
     void Call::addOutputToResult(const Block & block)
     {
-        WriteBufferFromString buf{*result.mutable_output()};
+        /// AppendModeTag is necessary because we need to accumulate output if streaming output is disabled.
+        WriteBufferFromString buf{*result.mutable_output(), WriteBufferFromString::AppendModeTag{}};
         auto stream = query_context->getOutputFormat(output_format, buf, block);
         stream->write(block);
     }
@@ -579,11 +669,12 @@ namespace
         if (!values.read_rows && !values.read_bytes && !values.total_rows_to_read && !values.written_rows && !values.written_bytes)
             return;
         auto & grpc_progress = *result.mutable_progress();
-        grpc_progress.set_read_rows(values.read_rows);
-        grpc_progress.set_read_bytes(values.read_bytes);
-        grpc_progress.set_total_rows_to_read(values.total_rows_to_read);
-        grpc_progress.set_written_rows(values.written_rows);
-        grpc_progress.set_written_bytes(values.written_bytes);
+        /// Sum is used because we need to accumulate values for the case if streaming output is disabled.
+        grpc_progress.set_read_rows(grpc_progress.read_rows() + values.read_rows);
+        grpc_progress.set_read_bytes(grpc_progress.read_bytes() + values.read_bytes);
+        grpc_progress.set_total_rows_to_read(grpc_progress.total_rows_to_read() + values.total_rows_to_read);
+        grpc_progress.set_written_rows(grpc_progress.written_rows() + values.written_rows);
+        grpc_progress.set_written_bytes(grpc_progress.written_bytes() + values.written_bytes);
     }
 
     void Call::addTotalsToResult(const Block & totals)
@@ -658,9 +749,12 @@ namespace
 
     void Call::sendResult()
     {
-        responder->write(result);
-        waitForSync();
-        result.Clear();
+        if ((call_type == CALL_STREAMING) || (call_type == CALL_STREAMING_OUTPUT))
+        {
+            responder->write(result);
+            waitForSync();
+            result.Clear();
+        }
     }
 
     void Call::sendFinalResult()
@@ -746,8 +840,9 @@ public:
 private:
     void run()
     {
-        /// Make a responder.
-        responder = std::make_unique<Responder>(owner.grpc_service, *owner.queue, *owner.queue);
+        /// Make responders.
+        for (CallType call_type : ext::range(CALL_MAX))
+            responders[call_type] = makeResponder(owner.grpc_service, *owner.queue, *owner.queue, call_type);
 
         while (true)
         {
@@ -759,18 +854,27 @@ private:
                 break;
             }
 
-            if (tag == responder.get())
+            bool found_responder = false;
+            for (CallType call_type : ext::range(CALL_MAX))
             {
-                /// Connection established and the responder is ready.
-                /// So we pass this responder to a Call and make another responder for next connection.
-                auto old_responder = std::exchange(responder, std::make_unique<Responder>(owner.grpc_service, *owner.queue, *owner.queue));
-                if (ok)
+                if (tag == responders[call_type].get())
                 {
-                    auto on_finish_call = [this](Call & call) { calls.remove(call.getPtr()); };
-                    calls.insert(std::make_shared<Call>(owner.iserver, owner.log, std::move(old_responder), on_finish_call));
+                    auto & responder = responders[call_type];
+                    /// Connection established and the responder is ready.
+                    /// So we pass this responder to a Call and make another responder for next connection.
+                    auto old_responder = std::exchange(responder, makeResponder(owner.grpc_service, *owner.queue, *owner.queue, call_type));
+                    if (ok)
+                    {
+                        auto on_finish_call = [this](Call & call) { calls.remove(call.getPtr()); };
+                        calls.insert(std::make_shared<Call>(owner.iserver, owner.log, std::move(old_responder), on_finish_call));
+                    }
+                    found_responder = true;
+                    break;
                 }
-                continue;
             }
+
+            if (found_responder)
+                continue;
 
             /// Continue handling a Call.
             auto call = static_cast<Call *>(tag)->getPtr();
@@ -780,7 +884,7 @@ private:
 
     GRPCServer & owner;
     ThreadFromGlobalPool runner;
-    std::unique_ptr<Responder> responder;
+    std::unique_ptr<BaseResponder> responders[CALL_MAX];
     Calls calls;
 };
 
