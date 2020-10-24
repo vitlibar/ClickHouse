@@ -65,5 +65,8 @@ message Result {
 }
 
 service ClickHouse {
-   rpc ExecuteQuery(stream QueryInfo) returns (stream Result) {}
+   rpc ExecuteQuery(QueryInfo) returns (Result) {}
+   rpc ExecuteQueryWithStreamingInput(stream QueryInfo) returns (Result) {}
+   rpc ExecuteQueryWithStreamingOutput(QueryInfo) returns (stream Result) {}
+   rpc ExecuteQueryWithStreaming(stream QueryInfo) returns (stream Result) {}
 }

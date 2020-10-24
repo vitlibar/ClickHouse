@@ -39,21 +39,31 @@ def create_channel():
         main_channel = channel
     return channel
 
-def query_common(query_text, input_data=[], output_format='TabSeparated', settings={}, query_id='123', session_id='', channel=None):
+def query_common(query_text, input_data=[], output_format='TabSeparated', settings={}, query_id='123', session_id='', streaming_output=False, channel=None):
     if type(input_data) == str:
         input_data = [input_data]
     if not channel:
         channel = main_channel
     stub = clickhouse_grpc_pb2_grpc.ClickHouseStub(channel)
-    def send_query_info():
+    def query_info():
         input_data_part = input_data.pop(0) if input_data else ''
-        yield clickhouse_grpc_pb2.QueryInfo(user_name='default', quota='default', query=query_text, query_id=query_id, output_format=output_format,
-                                            input_data=input_data_part, use_next_input_data = bool(input_data), settings=settings,
-                                            session_id=session_id)
+        return clickhouse_grpc_pb2.QueryInfo(user_name='default', quota='default', query=query_text, query_id=query_id, output_format=output_format,
+                                             input_data=input_data_part, use_next_input_data = bool(input_data), settings=settings,
+                                             session_id=session_id)
+    def send_query_info():
+        yield query_info()
         while input_data:
             input_data_part = input_data.pop(0)
             yield clickhouse_grpc_pb2.QueryInfo(input_data=input_data_part, use_next_input_data=bool(input_data))
-    return list(stub.ExecuteQuery(send_query_info()))
+    streaming_input = len(input_data) > 1
+    if streaming_input and streaming_output:
+        return list(stub.ExecuteQueryWithStreaming(send_query_info()))
+    elif streaming_input:
+        return [stub.ExecuteQueryWithStreamingInput(send_query_info())]
+    elif streaming_output:
+        return list(stub.ExecuteQueryWithStreamingOutput(query_info()))
+    else:
+        return [stub.ExecuteQuery(query_info())]
 
 def query_no_errors(*args, **kwargs):
     results = query_common(*args, **kwargs)
@@ -158,7 +168,8 @@ def test_logs():
     assert "Peak memory usage" in logs
 
 def test_progress():
-    results = query_no_errors("select number, sleep(0.320) from numbers(8) settings max_block_size=2")
+    results = query_no_errors("select number, sleep(0.320) from numbers(8) settings max_block_size=2", streaming_output=True)
+    #print(results)
     assert str(results) ==\
 """[progress {
   read_rows: 2
