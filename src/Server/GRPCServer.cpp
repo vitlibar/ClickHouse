@@ -1,11 +1,14 @@
 #include "GRPCServer.h"
 #if USE_GRPC
 
+#include <Columns/ColumnString.h>
+#include <Columns/ColumnsNumber.h>
 #include <Common/CurrentThread.h>
 #include <Common/SettingsChanges.h>
 #include <DataStreams/AddingDefaultsBlockInputStream.h>
 #include <DataStreams/AsynchronousBlockInputStream.h>
 #include <Interpreters/Context.h>
+#include <Interpreters/InternalTextLogsQueue.h>
 #include <Interpreters/executeQuery.h>
 #include <IO/ConcatReadBuffer.h>
 #include <IO/ReadBufferFromString.h>
@@ -106,18 +109,21 @@ namespace
         void processOrdinaryQueryWithProcessors();
         void finishQuery();
         void onException(const Exception & exception);
+        void onFatalError();
         void close();
 
         void addOutputToResult(const Block & block);
         void addProgressToResult();
         void addTotalsToResult(const Block & totals);
         void addExtremesToResult(const Block & extremes);
+        void addLogsToResult();
         void sendResult();
         void sendFinalResult();
         void sendException(const Exception & exception);
 
         IServer & iserver;
         Poco::Logger * log = nullptr;
+        InternalTextLogsQueuePtr logs_queue;
         std::unique_ptr<Responder> responder;
         std::function<void(Call &)> on_finish_callback;
 
@@ -268,7 +274,16 @@ namespace
         query_context->applySettingsChanges(settings_changes);
         const Settings & settings = query_context->getSettingsRef();
 
+        /// Prepare for sending exceptions and logs.
         send_exception_with_stacktrace = query_context->getSettingsRef().calculate_text_stack_trace;
+        const auto client_logs_level = query_context->getSettingsRef().send_logs_level;
+        if (client_logs_level != LogsLevel::none)
+        {
+            logs_queue = std::make_shared<InternalTextLogsQueue>();
+            logs_queue->max_priority = Poco::Logger::parseLevel(client_logs_level.toString());
+            CurrentThread::attachInternalTextLogsQueue(logs_queue, client_logs_level);
+            CurrentThread::setFatalErrorCallback([this]{ onFatalError(); });
+        }
 
         /// Set the current database if specified.
         if (!query_info.database().empty())
@@ -413,7 +428,9 @@ namespace
                     after_send_progress.restart();
                 }
 
-                if (!result.output().empty() || result.has_progress())
+                addLogsToResult();
+
+                if (!result.output().empty() || result.has_progress() || result.logs_size())
                     sendResult();
             }
             async_in.readSuffix();
@@ -443,7 +460,9 @@ namespace
                 after_send_progress.restart();
             }
 
-            if (!result.output().empty() || result.has_progress())
+            addLogsToResult();
+
+            if (!result.output().empty() || result.has_progress() || result.logs_size())
                 sendResult();
         }
 
@@ -455,6 +474,7 @@ namespace
     {
         io.onFinish();
         query_scope->logPeakMemoryUsage();
+        addLogsToResult();
         sendFinalResult();
         close();
     }
@@ -469,6 +489,16 @@ namespace
         {
             try
             {
+                /// Try to send logs to client, but it could be risky too.
+                addLogsToResult();
+            }
+            catch (...)
+            {
+                LOG_WARNING(log, "Can't send logs to client");
+            }
+
+            try
+            {
                 sendException(exception);
             }
             catch (...)
@@ -478,6 +508,20 @@ namespace
         }
 
         close();
+    }
+
+    void Call::onFatalError()
+    {
+        if (!responder)
+            return;
+        try
+        {
+            addLogsToResult();
+            sendFinalResult();
+        }
+        catch (...)
+        {
+        }
     }
 
     void Call::close()
@@ -524,6 +568,56 @@ namespace
         WriteBufferFromString buf{*result.mutable_extremes()};
         auto stream = query_context->getOutputFormat(output_format, buf, extremes);
         stream->write(extremes);
+    }
+
+    void Call::addLogsToResult()
+    {
+        if (!logs_queue)
+            return;
+
+        static_assert(::clickhouse::grpc::LogEntry_Priority_FATAL       == static_cast<int>(Poco::Message::PRIO_FATAL));
+        static_assert(::clickhouse::grpc::LogEntry_Priority_CRITICAL    == static_cast<int>(Poco::Message::PRIO_CRITICAL));
+        static_assert(::clickhouse::grpc::LogEntry_Priority_ERROR       == static_cast<int>(Poco::Message::PRIO_ERROR));
+        static_assert(::clickhouse::grpc::LogEntry_Priority_WARNING     == static_cast<int>(Poco::Message::PRIO_WARNING));
+        static_assert(::clickhouse::grpc::LogEntry_Priority_NOTICE      == static_cast<int>(Poco::Message::PRIO_NOTICE));
+        static_assert(::clickhouse::grpc::LogEntry_Priority_INFORMATION == static_cast<int>(Poco::Message::PRIO_INFORMATION));
+        static_assert(::clickhouse::grpc::LogEntry_Priority_DEBUG       == static_cast<int>(Poco::Message::PRIO_DEBUG));
+        static_assert(::clickhouse::grpc::LogEntry_Priority_TRACE       == static_cast<int>(Poco::Message::PRIO_TRACE));
+
+        MutableColumns columns;
+        while (logs_queue->tryPop(columns))
+        {
+            if (columns.empty() || columns[0]->empty())
+                continue;
+
+            size_t col = 0;
+            const auto & column_event_time = typeid_cast<const ColumnUInt32 &>(*columns[col++]);
+            const auto & column_event_time_microseconds = typeid_cast<const ColumnUInt32 &>(*columns[col++]);
+            const auto & column_host_name = typeid_cast<const ColumnString &>(*columns[col++]);
+            const auto & column_query_id = typeid_cast<const ColumnString &>(*columns[col++]);
+            const auto & column_thread_id = typeid_cast<const ColumnUInt64 &>(*columns[col++]);
+            const auto & column_priority = typeid_cast<const ColumnInt8 &>(*columns[col++]);
+            const auto & column_source = typeid_cast<const ColumnString &>(*columns[col++]);
+            const auto & column_text = typeid_cast<const ColumnString &>(*columns[col++]);
+            size_t num_rows = column_event_time.size();
+
+            for (size_t row = 0; row != num_rows; ++row)
+            {
+                auto & log_entry = *result.add_logs();
+                log_entry.set_event_time(column_event_time.getElement(row));
+                log_entry.set_event_time_microseconds(column_event_time_microseconds.getElement(row));
+                StringRef host_name = column_host_name.getDataAt(row);
+                log_entry.set_host_name(host_name.data, host_name.size);
+                StringRef query_id = column_query_id.getDataAt(row);
+                log_entry.set_query_id(query_id.data, query_id.size);
+                log_entry.set_thread_id(column_thread_id.getElement(row));
+                log_entry.set_priority(static_cast<::clickhouse::grpc::LogEntry_Priority>(column_priority.getElement(row)));
+                StringRef source = column_source.getDataAt(row);
+                log_entry.set_source(source.data, source.size);
+                StringRef text = column_text.getDataAt(row);
+                log_entry.set_text(text.data, text.size);
+            }
+        }
     }
 
     void Call::sendResult()
