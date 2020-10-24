@@ -30,12 +30,35 @@ message Exception {
    string stack_trace = 4;
 }
 
+message LogEntry {
+   uint32 event_time = 1;
+   uint32 event_time_microseconds = 2;
+   string host_name = 3;
+   string query_id = 4;
+   uint64 thread_id = 5;
+   enum Priority {
+      UNKNOWN = 0;
+      FATAL = 1;
+      CRITICAL = 2;
+      ERROR = 3;
+      WARNING = 4;
+      NOTICE = 5;
+      INFORMATION = 6;
+      DEBUG = 7;
+      TRACE = 8;
+   }
+   Priority priority = 6;
+   string source = 7;
+   string text = 8;
+}
+
 message Result {
    string output = 1;
    string totals = 2;
    string extremes = 3;
    Progress progress = 4;
    Exception exception = 5;
+   repeated LogEntry logs = 6;
 }
 
 service ClickHouse {
