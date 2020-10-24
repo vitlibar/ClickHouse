@@ -39,7 +39,7 @@ def create_channel():
         main_channel = channel
     return channel
 
-def query_common(query_text, input_data=[], output_format='TabSeparated', settings={}, query_id='123', channel=None):
+def query_common(query_text, input_data=[], output_format='TabSeparated', settings={}, query_id='123', session_id='', channel=None):
     if type(input_data) == str:
         input_data = [input_data]
     if not channel:
@@ -48,7 +48,8 @@ def query_common(query_text, input_data=[], output_format='TabSeparated', settin
     def send_query_info():
         input_data_part = input_data.pop(0) if input_data else ''
         yield clickhouse_grpc_pb2.QueryInfo(user_name='default', quota='default', query=query_text, query_id=query_id, output_format=output_format,
-                                            input_data=input_data_part, use_next_input_data = bool(input_data), settings=settings)
+                                            input_data=input_data_part, use_next_input_data = bool(input_data), settings=settings,
+                                            session_id=session_id)
         while input_data:
             input_data_part = input_data.pop(0)
             yield clickhouse_grpc_pb2.QueryInfo(input_data=input_data_part, use_next_input_data=bool(input_data))
@@ -181,3 +182,17 @@ def test_progress():
 }
 , output: "6\\t0\\n7\\t0\\n"
 , ]"""
+
+def test_session():
+    session_a = "session A"
+    session_b = "session B"
+    query("SET custom_x=1", session_id=session_a)
+    query("SET custom_y=2", session_id=session_a)
+    query("SET custom_x=3", session_id=session_b)
+    query("SET custom_y=4", session_id=session_b)
+    assert query("SELECT getSetting('custom_x'), getSetting('custom_y')", session_id=session_a) == "1\t2\n"
+    assert query("SELECT getSetting('custom_x'), getSetting('custom_y')", session_id=session_b) == "3\t4\n"
+
+def test_no_session():
+    e = query_and_get_error("SET custom_x=1")
+    assert "There is no session" in e.display_text
