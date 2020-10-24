@@ -486,6 +486,7 @@ namespace
     {
         throwIfFailedToSendResult();
         io.onFinish();
+        addProgressToResult();
         query_scope->logPeakMemoryUsage();
         addLogsToResult();
         throwIfFailedToSendResult();
@@ -583,8 +584,10 @@ namespace
 
     void Call::addProgressToResult()
     {
-        auto & grpc_progress = *result.mutable_progress();
         auto values = progress.fetchAndResetPiecewiseAtomically();
+        if (!values.read_rows && !values.read_bytes && !values.total_rows_to_read && !values.written_rows && !values.written_bytes)
+            return;
+        auto & grpc_progress = *result.mutable_progress();
         grpc_progress.set_read_rows(values.read_rows);
         grpc_progress.set_read_bytes(values.read_bytes);
         grpc_progress.set_total_rows_to_read(values.total_rows_to_read);
