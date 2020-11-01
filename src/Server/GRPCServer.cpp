@@ -208,7 +208,24 @@ namespace
 
     void Call::receiveQuery()
     {
+        LOG_INFO(log, "Handling call ExecuteQuery()");
+
         readQueryInfo();
+
+        auto get_query_text = [&]
+        {
+            std::string_view query = query_info.query();
+            const size_t MAX_QUERY_LENGTH_TO_LOG = 64;
+            if (query.length() > MAX_QUERY_LENGTH_TO_LOG)
+                query.remove_suffix(query.length() - MAX_QUERY_LENGTH_TO_LOG);
+            if (size_t format_pos = query.find(" FORMAT "); format_pos != String::npos)
+                query.remove_suffix(query.length() - format_pos - strlen(" FORMAT "));
+            if (query == query_info.query())
+                return String{query};
+            else
+                return String{query} + "...";
+        };
+        LOG_DEBUG(log, "Received initial QueryInfo: query_id: {}, query: {}", query_info.query_id(), get_query_text());
     }
 
     void Call::executeQuery()
@@ -347,6 +364,7 @@ namespace
         while (query_info.use_next_input_data())
         {
             readQueryInfo();
+            LOG_DEBUG(log, "Received extra QueryInfo with input data: {} bytes", query_info.input_data().size());
             if (!query_info.input_data().empty())
             {
                 const char * begin = query_info.input_data().data();
@@ -450,6 +468,7 @@ namespace
         throwIfFailedToSendResult();
         sendFinalResult();
         close();
+        LOG_INFO(log, "Finished call ExecuteQuery()");
     }
 
     void Call::onException(const Exception & exception)
@@ -547,6 +566,7 @@ namespace
     void Call::sendResult()
     {
         /// Send intermediate result without waiting.
+        LOG_DEBUG(log, "Sending intermediate result to the client");
         responder->write(result, [this](bool ok)
         {
             if (!ok)
@@ -560,12 +580,13 @@ namespace
     void Call::throwIfFailedToSendResult()
     {
         if (failed_to_send_result)
-            throw Exception("Failed to send result to client", ErrorCodes::NETWORK_ERROR);
+            throw Exception("Failed to send result to the client", ErrorCodes::NETWORK_ERROR);
     }
 
     void Call::sendFinalResult()
     {
         /// Send final result and wait until it's actually sent.
+        LOG_DEBUG(log, "Sending final result to the client");
         bool completed = false;
 
         responder->writeAndFinish(result, {}, [&](bool ok)
@@ -582,6 +603,7 @@ namespace
         signal.wait(lock, [&] { return completed; });
 
         throwIfFailedToSendResult();
+        LOG_TRACE(log, "Final result has been sent to the client");
     }
 
     void Call::sendException(const Exception & exception)
