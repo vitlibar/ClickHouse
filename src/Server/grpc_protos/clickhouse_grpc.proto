@@ -16,6 +16,7 @@ message QueryInfo {
    uint32 session_timeout = 11;
    string input_data = 12;
    bool use_next_input_data = 13;
+   bool cancel = 14;
 }
 
 message Progress {
@@ -61,7 +62,8 @@ message Result {
    string extremes = 3;
    Progress progress = 4;
    Exception exception = 5;
-   repeated LogEntry logs = 6;
+   bool cancelled = 6;
+   repeated LogEntry logs = 7;
 }
 
 service ClickHouse {

@@ -388,6 +388,8 @@ namespace
         void close();
 
         void readQueryInfo();
+        void startAsyncScanForCancel();
+        bool isQueryCancelled();
         void addOutputToResult(const Block & block);
         void addProgressToResult();
         void addTotalsToResult(const Block & totals);
@@ -422,6 +424,8 @@ namespace
         bool send_exception_with_stacktrace = false;
 
         std::atomic<bool> failed_to_send_result = false; /// atomic because it can be accessed both from call_thread and queue_thread
+        std::atomic<bool> client_want_to_cancel = false; /// atomic because it can be accessed both from call_thread and queue_thread
+        bool cancelled = false; /// client want to cancel and we're handling that.
 
         BlockIO io;
         Progress progress;
@@ -660,6 +664,8 @@ namespace
         while (query_info.use_next_input_data())
         {
             readQueryInfo();
+            if (isQueryCancelled())
+                break;
             LOG_DEBUG(log, "Received extra QueryInfo with input data: {} bytes", query_info.input_data().size());
             if (!query_info.input_data().empty())
             {
@@ -691,6 +697,17 @@ namespace
         AsynchronousBlockInputStream async_in(io.in);
         Stopwatch after_send_progress;
 
+        startAsyncScanForCancel();
+        auto check_for_cancel = [&]
+        {
+            if (isQueryCancelled())
+            {
+                async_in.cancel(false);
+                return true;
+            }
+            return false;
+        };
+
         async_in.readPrefix();
         while (true)
         {
@@ -703,6 +720,8 @@ namespace
             }
 
             throwIfFailedToSendResult();
+            if (check_for_cancel())
+                break;
 
             if (block && !io.null_format)
                 addOutputToResult(block);
@@ -716,14 +735,19 @@ namespace
             addLogsToResult();
 
             throwIfFailedToSendResult();
+            if (check_for_cancel())
+                break;
 
             if (!result.output().empty() || result.has_progress() || result.logs_size())
                 sendResult();
         }
         async_in.readSuffix();
 
-        addTotalsToResult(io.in->getTotals());
-        addExtremesToResult(io.in->getExtremes());
+        if (!isQueryCancelled())
+        {
+            addTotalsToResult(io.in->getTotals());
+            addExtremesToResult(io.in->getExtremes());
+        }
     }
 
     void Call::generateOutputWithProcessors()
@@ -734,10 +758,23 @@ namespace
         auto executor = std::make_shared<PullingAsyncPipelineExecutor>(io.pipeline);
         Stopwatch after_send_progress;
 
+        startAsyncScanForCancel();
+        auto check_for_cancel = [&]
+        {
+            if (isQueryCancelled())
+            {
+                executor->cancel();
+                return true;
+            }
+            return false;
+        };
+
         Block block;
         while (executor->pull(block, interactive_delay / 1000))
         {
             throwIfFailedToSendResult();
+            if (check_for_cancel())
+                break;
 
             if (block && !io.null_format)
                 addOutputToResult(block);
@@ -751,13 +788,18 @@ namespace
             addLogsToResult();
 
             throwIfFailedToSendResult();
+            if (check_for_cancel())
+                break;
 
             if (!result.output().empty() || result.has_progress() || result.logs_size())
                 sendResult();
         }
 
-        addTotalsToResult(executor->getTotalsBlock());
-        addExtremesToResult(executor->getExtremesBlock());
+        if (!isQueryCancelled())
+        {
+            addTotalsToResult(executor->getTotalsBlock());
+            addExtremesToResult(executor->getExtremesBlock());
+        }
     }
 
     void Call::finishQuery()
@@ -854,6 +896,37 @@ namespace
         }
 
         ++query_info_index;
+        if (query_info.cancel())
+            client_want_to_cancel = true;
+    }
+
+    void Call::startAsyncScanForCancel()
+    {
+        /// If input is not streaming then we cannot scan input for the cancel flag.
+        if (!isInputStreaming(call_type))
+            return;
+
+        responder->read(query_info, [this](bool ok)
+        {
+            if (ok && query_info.cancel())
+                client_want_to_cancel = true;
+        });
+    }
+
+    bool Call::isQueryCancelled()
+    {
+        if (cancelled)
+            return true;
+
+        if (client_want_to_cancel)
+        {
+            LOG_INFO(log, "Query cancelled");
+            cancelled = true;
+            result.set_cancelled(true);
+            return true;
+        }
+
+        return false;
     }
 
     void Call::addOutputToResult(const Block & block)
