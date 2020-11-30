@@ -20,8 +20,8 @@ struct KeepAggregateFunctionMatcher
 {
     struct Data
     {
-        const NameSet & group_by_keys;
-        bool keep_aggregator;
+        std::unordered_set<String> & group_by_keys;
+        bool & keep_aggregator;
     };
 
     using Visitor = InDepthNodeVisitor<KeepAggregateFunctionMatcher, true>;
@@ -33,7 +33,7 @@ struct KeepAggregateFunctionMatcher
 
     static void visit(ASTFunction & function_node, Data & data)
     {
-        if (function_node.arguments->children.empty())
+        if ((function_node.arguments->children).empty())
         {
             data.keep_aggregator = true;
             return;
@@ -47,9 +47,12 @@ struct KeepAggregateFunctionMatcher
 
     static void visit(ASTIdentifier & ident, Data & data)
     {
-        /// if variable of a function is not in GROUP BY keys, this function should not be deleted
-        if (!data.group_by_keys.count(ident.getColumnName()))
+        if (!data.group_by_keys.count(ident.shortName()))
+        {
+            /// if variable of a function is not in GROUP BY keys, this function should not be deleted
             data.keep_aggregator = true;
+            return;
+        }
     }
 
     static void visit(const ASTPtr & ast, Data & data)
@@ -72,21 +75,21 @@ struct KeepAggregateFunctionMatcher
     }
 };
 
-using KeepAggregateFunctionVisitor = KeepAggregateFunctionMatcher::Visitor;
+using KeepAggregateFunctionVisitor = InDepthNodeVisitor<KeepAggregateFunctionMatcher, true>;
 
 class SelectAggregateFunctionOfGroupByKeysMatcher
 {
 public:
     struct Data
     {
-        const NameSet & group_by_keys;
+        std::unordered_set<String> & group_by_keys;
     };
 
     static bool needChildVisit(const ASTPtr & node, const ASTPtr &)
     {
         /// Don't descent into table functions and subqueries and special case for ArrayJoin.
-        return !node->as<ASTSubquery>() && !node->as<ASTTableExpression>()
-            && !node->as<ASTSelectWithUnionQuery>() && !node->as<ASTArrayJoin>();
+        return !node->as<ASTSubquery>() &&
+               !(node->as<ASTTableExpression>() || node->as<ASTSelectWithUnionQuery>() || node->as<ASTArrayJoin>());
     }
 
     static void visit(ASTPtr & ast, Data & data)
@@ -96,11 +99,12 @@ public:
         if (function_node && (function_node->name == "min" || function_node->name == "max" ||
                               function_node->name == "any" || function_node->name == "anyLast"))
         {
-            KeepAggregateFunctionVisitor::Data keep_data{data.group_by_keys, false};
+            bool keep_aggregator = false;
+            KeepAggregateFunctionVisitor::Data keep_data{data.group_by_keys, keep_aggregator};
             KeepAggregateFunctionVisitor(keep_data).visit(function_node->arguments);
 
             /// Place argument of an aggregate function instead of function
-            if (!keep_data.keep_aggregator && !function_node->arguments->children.empty())
+            if (!keep_aggregator && !function_node->arguments->children.empty())
             {
                 String alias = function_node->alias;
                 ast = (function_node->arguments->children[0])->clone();

@@ -54,10 +54,14 @@ FROM numbers(3)
 ORDER BY exp(number) ASC
 SELECT roundToExp2(number) AS x
 FROM numbers(3)
-ORDER BY number ASC
+ORDER BY
+    number ASC,
+    number ASC
 SELECT number AS x
 FROM numbers(3)
-ORDER BY number ASC
+ORDER BY
+    number ASC,
+    number ASC
 SELECT number
 FROM numbers(3)
 ORDER BY number DESC
@@ -75,7 +79,9 @@ FROM numbers(3)
 ORDER BY exp(number) DESC
 SELECT roundToExp2(number) AS x
 FROM numbers(3)
-ORDER BY number DESC
+ORDER BY
+    number DESC,
+    number DESC
 0
 1
 2
