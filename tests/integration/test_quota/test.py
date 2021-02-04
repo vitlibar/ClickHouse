@@ -71,11 +71,12 @@ def started_cluster():
 @pytest.fixture(autouse=True)
 def reset_quotas_and_usage_info():
     try:
-        yield
-    finally:
         instance.query("DROP QUOTA IF EXISTS qA, qB")
         copy_quota_xml('simpliest.xml')  # To reset usage info.
         copy_quota_xml('normal_limits.xml')
+        yield
+    finally:
+        pass
 
 
 def test_quota_from_users_xml():
@@ -367,3 +368,11 @@ def test_dcl_management():
 
 def test_users_xml_is_readonly():
     assert re.search("storage is readonly", instance.query_and_get_error("DROP QUOTA myQuota"))
+
+
+def test_consumption_show_tables_quota():
+    instance.query("SHOW TABLES")
+
+    assert re.match(
+        "myQuota\\tdefault\\t.*\\t31556952\\t1\\t1000\\t0\\t\\\\N\\t1\\t\\\\N\\t19\\t\\\\N\\t1\\t1000\\t35\\t\\\\N\\t.*\\t\\\\N\n",
+        instance.query("SHOW QUOTA"))
