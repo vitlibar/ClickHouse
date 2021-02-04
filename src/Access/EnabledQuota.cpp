@@ -52,22 +52,24 @@ struct EnabledQuota::Impl
             return end;
         }
 
+        bool initial_end = !end_loaded.count(); /// whether the end of the interval wasn't calculated before
         const auto duration = interval.duration;
 
         do
         {
             end = end + (current_time - end + duration) / duration * duration;
             if (end_of_interval.compare_exchange_strong(end_loaded, end.time_since_epoch()))
-            {
-                boost::range::fill(interval.used, 0);
                 break;
-            }
             end = std::chrono::system_clock::time_point{end_loaded};
         }
         while (current_time >= end);
 
-        if (counters_were_reset)
-            *counters_were_reset = true;
+        if (!initial_end)
+        {
+            boost::range::fill(interval.used, 0);
+            if (counters_were_reset)
+                *counters_were_reset = true;
+        }
         return end;
     }
 
@@ -116,9 +118,9 @@ struct EnabledQuota::Impl
                 continue;
             if (used > max)
             {
-                bool used_counters_reset = false;
-                std::chrono::system_clock::time_point end_of_interval = getEndOfInterval(interval, current_time, &used_counters_reset);
-                if (!used_counters_reset)
+                bool counters_were_reset = false;
+                std::chrono::system_clock::time_point end_of_interval = getEndOfInterval(interval, current_time, &counters_were_reset);
+                if (!counters_were_reset)
                     throwQuotaExceed(user_name, intervals.quota_name, resource_type, used, max, interval.duration, end_of_interval);
             }
         }
