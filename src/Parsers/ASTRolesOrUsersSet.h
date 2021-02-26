@@ -24,7 +24,7 @@ public:
     bool allow_user_names = true; /// true if this set can contain names of users.
 
     bool empty() const { return names.empty() && !current_user && !all; }
-    void replaceCurrentUserTagWithName(const String & current_user_name);
+    void replaceCurrentUserTag(const String & current_user_name);
 
     String getID(char) const override { return "RolesOrUsersSet"; }
     ASTPtr clone() const override { return std::make_shared<ASTRolesOrUsersSet>(*this); }

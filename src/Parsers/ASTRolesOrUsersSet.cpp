@@ -75,7 +75,7 @@ void ASTRolesOrUsersSet::formatImpl(const FormatSettings & settings, FormatState
 }
 
 
-void ASTRolesOrUsersSet::replaceCurrentUserTagWithName(const String & current_user_name)
+void ASTRolesOrUsersSet::replaceCurrentUserTag(const String & current_user_name)
 {
     if (current_user)
     {

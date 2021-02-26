@@ -186,13 +186,10 @@ void LDAPAccessStorage::applyRoleChangeNoLock(bool grant, const UUID & role_id, 
             if (auto user = typeid_cast<std::shared_ptr<const User>>(entity_))
             {
                 auto changed_user = typeid_cast<std::shared_ptr<User>>(user->clone());
-                auto & granted_roles = changed_user->granted_roles.roles;
-
                 if (grant)
-                    granted_roles.insert(role_id);
+                    changed_user->granted_roles.grant(role_id);
                 else
-                    granted_roles.erase(role_id);
-
+                    changed_user->granted_roles.revoke(role_id);
                 return changed_user;
             }
             return entity_;
@@ -228,7 +225,7 @@ void LDAPAccessStorage::assignRolesNoLock(User & user, const LDAPSearchResultsLi
 void LDAPAccessStorage::assignRolesNoLock(User & user, const LDAPSearchResultsList & external_roles, const std::size_t external_roles_hash) const
 {
     const auto & user_name = user.getName();
-    auto & granted_roles = user.granted_roles.roles;
+    auto & granted_roles = user.granted_roles;
     const auto local_role_names = mapExternalRolesNoLock(external_roles);
 
     auto grant_role = [this, &user_name, &granted_roles] (const String & role_name, const bool common)
@@ -246,7 +243,7 @@ void LDAPAccessStorage::assignRolesNoLock(User & user, const LDAPSearchResultsLi
         if (it != granted_role_ids.end())
         {
             const auto & role_id = it->second;
-            granted_roles.insert(role_id);
+            granted_roles.grant(role_id);
         }
         else
         {
@@ -255,7 +252,7 @@ void LDAPAccessStorage::assignRolesNoLock(User & user, const LDAPSearchResultsLi
     };
 
     external_role_hashes.erase(user_name);
-    granted_roles.clear();
+    granted_roles = {};
     const auto old_role_names = std::move(roles_per_users[user_name]);
 
     // Grant the common roles first.
