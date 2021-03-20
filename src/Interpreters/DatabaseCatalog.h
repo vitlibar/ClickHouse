@@ -33,6 +33,10 @@ using Databases = std::map<String, std::shared_ptr<IDatabase>>;
 using ViewDependencies = std::map<StorageID, std::set<StorageID>>;
 using Dependencies = std::vector<StorageID>;
 
+class IBackup;
+struct BackupParameters;
+struct RestoreParameters;
+
 
 /// Allows executing DDL query only in one thread.
 /// Puts an element into the map, locks tables's mutex, counts how much threads run parallel query on the table,
@@ -196,6 +200,10 @@ public:
     String resolveDictionaryName(const String & name) const;
 
     void waitTableFinallyDropped(const UUID & uuid);
+
+    /// Backup & restore
+    void backup(IBackup & backup, const BackupParameters & params) const;
+    void restore(const IBackup & backup, const RestoreParameters & params);
 
 private:
     // The global instance of database catalog. unique_ptr is to allow
