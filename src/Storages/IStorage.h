@@ -183,7 +183,7 @@ public:
     NameDependencies getDependentViewsByColumn(const Context & context) const;
 
     /// Backup & restore
-    virtual void backup(IBackup & backup, const BackupParameters & params) const;
+    virtual void backup(std::unique_ptr<IBackupSnapshot> & snapshot, const BackupParameters & params) const;
     virtual void restore(const IBackup & backup, const RestoreParameters & params);
 
 protected:
