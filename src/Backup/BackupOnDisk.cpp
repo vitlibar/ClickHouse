@@ -19,15 +19,36 @@ namespace ErrorCodes
 {
     extern const int BAD_ARGUMENTS;
     extern const int BACKUP_VERSION_NOT_SUPPORTED;
+    extern const int BACKUP_DIRECTORY_NOT_EMPTY;
+    extern const int BACKUP_DAMAGED;
     extern const int BACKUP_ENTRY_EXISTS;
     extern const int BACKUP_ENTRY_NOT_EXISTS;
-    extern const int BACKUP_LOCKED;
-    extern const int BACKUP_DAMAGED;
 }
 
 namespace
 {
     extern const UInt64 BACKUP_VERSION = 1;
+
+    String entryNameToPathInBackup(const String & name)
+    {
+        String res;
+        res.reserve(name.length());
+        for (size_t i : ext::range(name.length()))
+        {
+            char c = name[i];
+            if (isWordCharASCII(c))
+                res += c;
+            else if (c == '/' && (i >= 1 && isWordCharASCII(name[i - 1])))
+                res += c;
+            else
+            {
+                res += '%';
+                res += hexDigitUppercase(c / 16);
+                res += hexDigitUppercase(c % 16);
+            }
+        }
+        return res;
+    }
 }
 
 
@@ -35,7 +56,6 @@ BackupOnDisk::BackupOnDisk(OpenMode open_mode_, const DiskPtr & disk_, const Str
     : BackupOnDisk(open_mode_, disk_, directory_, std::shared_ptr<const IBackup>{})
 {
 }
-
 
 BackupOnDisk::BackupOnDisk(OpenMode open_mode_, const DiskPtr & disk_, const String & directory_, const std::shared_ptr<const IBackup> & base_backup_)
     : open_mode(open_mode_), disk(disk_), directory(directory_), base_backup(base_backup_)
@@ -49,7 +69,6 @@ BackupOnDisk::BackupOnDisk(OpenMode open_mode_, const String & disk_name_, const
     open();
 }
 
-
 BackupOnDisk::~BackupOnDisk()
 {
     close();
@@ -61,9 +80,13 @@ void BackupOnDisk::open()
         throw Exception("Directory for backup should end with '/'", ErrorCodes::BAD_ARGUMENTS);
 
     if (open_mode == OpenMode::CREATE)
+    {
         disk->createDirectories(directory);
-
-    writeLockFile();
+        directory_was_empty = disk->isDirectoryEmpty(directory);
+        if (!directory_was_empty)
+            throw Exception("Directory for backup is not empty", ErrorCodes::BACKUP_DIRECTORY_NOT_EMPTY);
+        writeLockFile();
+    }
 
     if (open_mode == OpenMode::READ)
         readHeader();
@@ -72,17 +95,18 @@ void BackupOnDisk::open()
 void BackupOnDisk::close()
 {
     if (open_mode == OpenMode::CREATE)
-        writeHeader();
-
-    removeLockFile();
+    {
+        if (!writing_finished && directory_was_empty)
+        {
+            /// Creating of the backup wasn't finished correctly,
+            /// so the backup cannot be used and it's better to remove its files.
+            disk->removeRecursive(directory);
+        }
+    }
 }
-
 
 void BackupOnDisk::writeLockFile()
 {
-    if (disk->exists(directory + ".write_lock"))
-        throw Exception("Backup is locked", ErrorCodes::BACKUP_LOCKED);
-
     if (open_mode == OpenMode::CREATE)
     {
         String path_to_lock_file = directory + ".write_lock";
@@ -123,7 +147,6 @@ void BackupOnDisk::writeHeader()
     }
 }
 
-
 void BackupOnDisk::readHeader()
 {
     auto in = disk->readFile(directory + ".header");
@@ -154,7 +177,6 @@ void BackupOnDisk::readHeader()
     if (!base_backup_disk_name.empty())
         base_backup = std::make_shared<BackupOnDisk>(OpenMode::READ, base_backup_disk_name, base_backup_path, disk_selector);
 }
-
 
 IBackup::OpenMode BackupOnDisk::getOpenMode() const
 {
@@ -230,7 +252,8 @@ BackupEntry BackupOnDisk::read(const String & name) const
         entry.name = name;
         entry.data_size = it->second.data_size;
         entry.checksum = it->second.checksum;
-        entry.read_buffer = disk->readFile(directory + name);
+        String file_path = directory + entryNameToPathInBackup(entry.name);
+        entry.read_buffer = disk->readFile(file_path);
     }
     return entry;
 }
@@ -275,9 +298,18 @@ void BackupOnDisk::write(BackupEntry && entry)
     if (!entry.checksum)
         in  = &hashing_in.emplace(*entry.read_buffer);
 
-    auto out = disk->writeFile(directory + entry.name);
-    copyData(*in, *out);
-    out.reset();
+    String file_path = directory + entryNameToPathInBackup(entry.name);
+    disk->createDirectories(directoryPath(file_path));
+    try
+    {
+        auto out = disk->writeFile(file_path);
+        copyData(*in, *out);
+    }
+    catch(...)
+    {
+        disk->removeFile(file_path);
+        throw;
+    }
 
     if (!entry.checksum)
     {
@@ -291,6 +323,13 @@ void BackupOnDisk::write(BackupEntry && entry)
     new_entry.checksum = *entry.checksum;
     new_entry.read_from_base = false;
     entries.emplace(entry.name, new_entry);
+}
+
+void BackupOnDisk::finishWriting()
+{
+    writeHeader();
+    removeLockFile();
+    writing_finished = true;
 }
 
 }

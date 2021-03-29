@@ -46,6 +46,9 @@ public:
 
     /// Adds a new entry to the backup.
     virtual void write(BackupEntry && entry) = 0;
+
+    /// Finish writing the backup.
+    virtual void finishWriting() = 0;
 };
 
 }

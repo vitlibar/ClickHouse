@@ -11,6 +11,9 @@ using DiskPtr = std::shared_ptr<IDisk>;
 class DiskSelector;
 
 /// Represents a backup stored on a disk.
+/// A backup is stored as a directory, each entry is stored as a file in that directory,
+/// and also the ".header" file is stored which contains list of the files with their sizes and checksums.
+/// While BackupOnDisk is writing a backup it creates the ".write_lock" file and removes it afterwards.
 class BackupOnDisk : public IBackup
 {
 public:
@@ -28,6 +31,7 @@ public:
     UInt128 getChecksum(const String & name) const override;
     BackupEntry read(const String & name) const override;
     void write(BackupEntry && entry) override;
+    void finishWriting() override;
 
 private:
     void open();
@@ -53,6 +57,8 @@ private:
     std::shared_ptr<const IBackup> base_backup;
     std::unordered_map<String, Entry> entries;
     String lock_file_path;
+    bool directory_was_empty = false;
+    bool writing_finished = false;
     std::mutex mutex;
 };
 
