@@ -6,7 +6,7 @@
 
 namespace DB
 {
-class ReadBuffer;
+class SeekableReadBuffer;
 
 struct BackupEntry
 {
@@ -15,7 +15,7 @@ struct BackupEntry
     String name;
 
     /// ReadBuffer to read the entry's data, not null.
-    std::unique_ptr<ReadBuffer> read_buffer;
+    std::unique_ptr<SeekableReadBuffer> read_buffer;
 
     /// Size of the data.
     size_t data_size;
@@ -23,6 +23,11 @@ struct BackupEntry
     /// Checksum for the data, to be able to skip storing the entry if it's already stored
     /// when incremental backup is enabled.
     std::optional<UInt128> checksum;
+
+    BackupEntry();
+    ~BackupEntry();
+    BackupEntry(BackupEntry && src);
+    BackupEntry & operator =(BackupEntry && src);
 };
 
 }

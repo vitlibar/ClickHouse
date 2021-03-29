@@ -49,7 +49,6 @@ private:
     const String name;
     const DiskPtr disk;
     const PossibleChanges possible_changes;
-    const bool calculate_checksum = false;
     String temp_file_path;
     std::optional<String> data;
     std::optional<size_t> data_size;

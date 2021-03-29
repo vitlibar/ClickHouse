@@ -8,6 +8,9 @@ namespace DB
 {
 struct BackupEntry;
 
+/// Represents a backup, i.e. a storage of BackupEntries which can be accessed by their names.
+/// A backup can be either incremental or non-incremental. An incremental backup doesn't store
+/// the data of the entries which are not changed compared to its base backup.
 class IBackup
 {
 public:
@@ -15,15 +18,16 @@ public:
 
     enum class OpenMode
     {
-        READ_ONLY,
         CREATE,
-        APPEND,
+        READ,
     };
 
+    /// A backup can be open either in CREATE or READ mode.
     virtual OpenMode getOpenMode() const = 0;
 
-    /// Returns the base of this incremental backup, or nullptr if it's not an incremental backup.
-    virtual std::shared_ptr<const IBackup> getIncrementalBase() const = 0;
+    /// Returns the disk's name and the path to the backup on that disk. Can be empty.
+    virtual String getDiskName() const { return ""; }
+    virtual String getPath() const { return ""; }
 
     /// Returns pathes of all the entries stored in the backup.
     virtual Strings list() const = 0;

@@ -24,9 +24,6 @@ struct BackupSnapshotParams
 {
     /// Directory on the source disk where temporary files will be put in.
     String directory_for_temp_files;
-
-    /// Always calculate checksums (this is required for incremental backups).
-    bool calculate_checksums = false;
 };
 
 }

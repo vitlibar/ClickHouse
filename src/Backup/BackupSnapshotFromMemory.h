@@ -20,7 +20,6 @@ public:
 private:
     const String name;
     const String data;
-    const bool calculate_checksum = false;
     bool backup_entry_generated = false;
 };
 

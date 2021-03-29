@@ -2,8 +2,7 @@
 #include <Backup/BackupEntry.h>
 #include <Common/escapeForFileName.h>
 #include <Disks/IDisk.h>
-#include <IO/HashingReadBuffer.h>
-#include <IO/LimitReadBuffer.h>
+#include <IO/LimitSeekableReadBuffer.h>
 #include <IO/ReadBufferFromFileBase.h>
 #include <IO/ReadBufferFromString.h>
 
@@ -24,20 +23,6 @@ namespace
         return directory_for_temp_files + escapeForFileName(entry_name);
     }
 
-    UInt128 calculateChecksum(const String & data)
-    {
-        auto u128 = CityHash_v1_0_2::CityHash128WithSeed(data.data(), data.size(), {0, 0});
-        return UInt128{u128.first, u128.second};
-    }
-
-    UInt128 calculateChecksum(ReadBuffer & buffer)
-    {
-        HashingReadBuffer hashing_buffer(buffer);
-        hashing_buffer.ignoreAll();
-        auto u128 = hashing_buffer.getHash();
-        return UInt128{u128.first, u128.second};
-    }
-
     /// For PossibleChanges::ANY it's the maximum size of the file to store it in RAM.
     /// If the file is larger than this value a disk copy will be made.
     constexpr size_t MAX_BYTES_TO_STORE_IN_RAM = 1024;
@@ -51,9 +36,9 @@ BackupSnapshotFromFile::BackupSnapshotFromFile(
     const std::optional<UInt128> & checksum_,
     PossibleChanges possible_changes_,
     const BackupSnapshotParams & params_)
-    : name(name_), disk(disk_), possible_changes(possible_changes_), calculate_checksum(params_.calculate_checksums), checksum(checksum_)
+    : name(name_), disk(disk_), possible_changes(possible_changes_), checksum(checksum_)
 {
-    if (!params_.directory_for_temp_files.ends_with('/'))
+    if (!params_.directory_for_temp_files.ends_with('/') && !params_.directory_for_temp_files.empty())
         throw Exception("Directory for temp files should end with '/'", ErrorCodes::BAD_ARGUMENTS);
 
     switch (possible_changes)
@@ -109,37 +94,20 @@ bool BackupSnapshotFromFile::getNextEntry(BackupEntry & entry)
     if (backup_entry_generated)
         return false;
 
-    std::unique_ptr<ReadBuffer> read_buffer;
+    std::unique_ptr<SeekableReadBuffer> read_buffer;
     if (data)
     {
         read_buffer = std::make_unique<ReadBufferFromString>(*data);
         if (!data_size)
             data_size = data->size();
-        if (!checksum && calculate_checksum)
-            checksum = calculateChecksum(*data);
     }
     else
     {
-        std::unique_ptr<ReadBufferFromFileBase> buffer_from_file = disk->readFile(temp_file_path);
+        read_buffer = disk->readFile(temp_file_path);
+        if (reading_size_is_limited)
+            read_buffer = std::make_unique<LimitSeekableReadBuffer>(std::move(read_buffer), *data_size);
         if (!data_size)
             data_size = disk->getFileSize(temp_file_path);
-
-        if (!checksum && calculate_checksum)
-        {
-            if (reading_size_is_limited)
-            {
-                LimitReadBuffer limit_buffer{*buffer_from_file, *data_size, true};
-                checksum = calculateChecksum(limit_buffer);
-            }
-            else
-                checksum = calculateChecksum(*buffer_from_file);
-            buffer_from_file->seek(0, SEEK_SET);
-        }
-
-        if (reading_size_is_limited)
-            read_buffer = std::make_unique<LimitReadBuffer>(std::move(buffer_from_file), *data_size, true);
-        else
-            read_buffer = std::move(buffer_from_file);
     }
 
     entry = {};
