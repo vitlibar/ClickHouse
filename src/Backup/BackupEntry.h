@@ -6,7 +6,7 @@
 
 namespace DB
 {
-class SeekableReadBuffer;
+class ReadBuffer;
 
 struct BackupEntry
 {
@@ -14,8 +14,8 @@ struct BackupEntry
     /// Usually it looks like a path and starts with "data/" or "metadata/".
     String name;
 
-    /// ReadBuffer to read the entry's data, not null.
-    std::unique_ptr<SeekableReadBuffer> read_buffer;
+    /// Function returning a ReadBuffer to read the entry's data.
+    std::function<std::unique_ptr<ReadBuffer>()> get_read_buffer_function;
 
     /// Size of the data.
     size_t data_size;

@@ -253,7 +253,7 @@ BackupEntry BackupOnDisk::read(const String & name) const
         entry.data_size = it->second.data_size;
         entry.checksum = it->second.checksum;
         String file_path = directory + entryNameToPathInBackup(entry.name);
-        entry.read_buffer = disk->readFile(file_path);
+        entry.get_read_buffer_function = [this, file_path]() -> std::unique_ptr<ReadBuffer> { return disk->readFile(file_path); };
     }
     return entry;
 }
@@ -265,8 +265,6 @@ void BackupOnDisk::write(BackupEntry && entry)
     if (it != entries.end())
         throw Exception("Entry " + quoteString(entry.name) + " already exists in the backup", ErrorCodes::BACKUP_ENTRY_EXISTS);
 
-    std::optional<HashingReadBuffer> hashing_in;
-
     if (base_backup && base_backup->exists(entry.name))
     {
         size_t data_size_in_base_backup = base_backup->getDataSize(entry.name);
@@ -275,11 +273,10 @@ void BackupOnDisk::write(BackupEntry && entry)
             UInt128 checksum_in_base_backup = base_backup->getChecksum(entry.name);
             if (!entry.checksum)
             {
-                hashing_in.emplace(*entry.read_buffer);
-                hashing_in->ignoreAll();
-                auto u128 = hashing_in->getHash();
-                hashing_in.reset();
-                entry.read_buffer->seek(0, SEEK_SET);
+                auto read_buffer = entry.get_read_buffer_function();
+                HashingReadBuffer hashing_in{*read_buffer};
+                hashing_in.ignoreAll();
+                auto u128 = hashing_in.getHash();
                 entry.checksum = UInt128{CityHash_v1_0_2::Uint128Low64(u128), CityHash_v1_0_2::Uint128High64(u128)};
             }
             if (*entry.checksum == checksum_in_base_backup)
@@ -293,29 +290,31 @@ void BackupOnDisk::write(BackupEntry && entry)
         }
     }
 
-    ReadBuffer * in = entry.read_buffer.get();
-
-    if (!entry.checksum)
-        in  = &hashing_in.emplace(*entry.read_buffer);
-
-    String file_path = directory + entryNameToPathInBackup(entry.name);
-    disk->createDirectories(directoryPath(file_path));
-    try
     {
-        auto out = disk->writeFile(file_path);
-        copyData(*in, *out);
-    }
-    catch(...)
-    {
-        disk->removeFile(file_path);
-        throw;
-    }
+        auto read_buffer = entry.get_read_buffer_function();
+        ReadBuffer * in = read_buffer.get();
+        std::optional<HashingReadBuffer> hashing_in;
+        if (!entry.checksum)
+            in  = &hashing_in.emplace(*in);
 
-    if (!entry.checksum)
-    {
-        auto u128 = hashing_in->getHash();
-        hashing_in.reset();
-        entry.checksum = UInt128{CityHash_v1_0_2::Uint128Low64(u128), CityHash_v1_0_2::Uint128High64(u128)};
+        String file_path = directory + entryNameToPathInBackup(entry.name);
+        disk->createDirectories(directoryPath(file_path));
+        try
+        {
+            auto out = disk->writeFile(file_path);
+            copyData(*in, *out);
+        }
+        catch(...)
+        {
+            disk->removeFile(file_path);
+            throw;
+        }
+
+        if (!entry.checksum)
+        {
+            auto u128 = hashing_in->getHash();
+            entry.checksum = UInt128{CityHash_v1_0_2::Uint128Low64(u128), CityHash_v1_0_2::Uint128High64(u128)};
+        }
     }
 
     Entry new_entry;

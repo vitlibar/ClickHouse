@@ -22,8 +22,8 @@ bool BackupSnapshotFromMemory::getNextEntry(BackupEntry & entry)
 
     entry = {};
     entry.name = name;
-    entry.read_buffer = std::make_unique<ReadBufferFromString>(data);
     entry.data_size = data.size();
+    entry.get_read_buffer_function = [this]() -> std::unique_ptr<ReadBuffer> { return std::make_unique<ReadBufferFromString>(data); };
 
     backup_entry_generated = true;
     return true;

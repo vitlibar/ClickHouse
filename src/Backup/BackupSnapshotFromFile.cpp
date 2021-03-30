@@ -2,7 +2,7 @@
 #include <Backup/BackupEntry.h>
 #include <Common/escapeForFileName.h>
 #include <Disks/IDisk.h>
-#include <IO/LimitSeekableReadBuffer.h>
+#include <IO/LimitReadBuffer.h>
 #include <IO/ReadBufferFromFileBase.h>
 #include <IO/ReadBufferFromString.h>
 
@@ -94,27 +94,29 @@ bool BackupSnapshotFromFile::getNextEntry(BackupEntry & entry)
     if (backup_entry_generated)
         return false;
 
-    std::unique_ptr<SeekableReadBuffer> read_buffer;
-    if (data)
+    if (!data_size)
     {
-        read_buffer = std::make_unique<ReadBufferFromString>(*data);
-        if (!data_size)
+        if (data)
             data_size = data->size();
-    }
-    else
-    {
-        read_buffer = disk->readFile(temp_file_path);
-        if (reading_size_is_limited)
-            read_buffer = std::make_unique<LimitSeekableReadBuffer>(std::move(read_buffer), *data_size);
-        if (!data_size)
+        else
             data_size = disk->getFileSize(temp_file_path);
     }
 
     entry = {};
     entry.name = name;
-    entry.data_size = *data_size;
     entry.checksum = checksum;
-    entry.read_buffer = std::move(read_buffer);
+    entry.data_size = *data_size;
+
+    entry.get_read_buffer_function = [this]() -> std::unique_ptr<ReadBuffer>
+    {
+        if (data)
+            return std::make_unique<ReadBufferFromString>(*data);
+
+        std::unique_ptr<ReadBuffer> read_buffer = disk->readFile(temp_file_path);
+        if (reading_size_is_limited)
+            read_buffer = std::make_unique<LimitReadBuffer>(std::move(read_buffer), *data_size, false);
+        return read_buffer;
+    };
 
     backup_entry_generated = true;
     return true;

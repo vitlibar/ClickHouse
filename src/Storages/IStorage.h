@@ -60,8 +60,8 @@ struct SelectQueryInfo;
 using NameDependencies = std::unordered_map<String, std::vector<String>>;
 
 class IBackup;
+class IBackupSnapshot;
 struct BackupParameters;
-struct RestoreParameters;
 
 struct ColumnSize
 {
@@ -183,14 +183,13 @@ public:
     NameDependencies getDependentViewsByColumn(const Context & context) const;
 
     /// Backup & restore
-    virtual void backup(std::unique_ptr<IBackupSnapshot> & snapshot, const BackupParameters & params) const;
-    virtual void restore(const IBackup & backup, const RestoreParameters & params);
+    virtual std::unique_ptr<IBackupSnapshot> backup(const BackupParameters & params) const;
+    virtual void restore(const IBackup & backup);
 
 protected:
     /// Returns whether the column is virtual - by default all columns are real.
     /// Initially reserved virtual column name may be shadowed by real column.
     bool isVirtualColumn(const String & column_name, const StorageMetadataPtr & metadata_snapshot) const;
-
 
 private:
     StorageID storage_id;
