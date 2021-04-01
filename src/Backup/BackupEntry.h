@@ -30,4 +30,9 @@ struct BackupEntry
     BackupEntry & operator =(BackupEntry && src);
 };
 
+BackupEntry createBackupEntryFromMemory()
+BackupEntry createBackupEntryFromFile()
+BackupEntry createBackupEntryFromImmutableFile()
+BackupEntry createBackupEntryFromAppendableFile()
+
 }

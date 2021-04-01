@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <Backup/IBackupSnapshot.h>
 #include <Common/UInt128.h>
@@ -10,6 +10,7 @@
 namespace DB
 {
 struct BackupEntry;
+class ReadBuffer;
 class IDisk;
 using DiskPtr = std::shared_ptr<IDisk>;
 
@@ -36,23 +37,46 @@ public:
 
     BackupSnapshotFromFile(
         const String & name_,
-        const DiskPtr & disk_,
         const String & file_path_,
-        const std::optional<UInt128> & checksum_,
         PossibleChanges possible_changes_,
         const BackupSnapshotParams & params_);
+
+    BackupSnapshotFromFile(
+        const String & name_,
+        const String & file_path_,
+        const UInt128 & checksum_,
+        PossibleChanges possible_changes_,
+        const BackupSnapshotParams & params_);
+
+    BackupSnapshotFromFile(
+        const String & name_,
+        const DiskPtr & disk_,
+        const String & file_path_,
+        PossibleChanges possible_changes_,
+        const BackupSnapshotParams & params_);
+
+    BackupSnapshotFromFile(
+        const String & name_,
+        const DiskPtr & disk_,
+        const String & file_path_,
+        const UInt128 & checksum_,
+        PossibleChanges possible_changes_,
+        const BackupSnapshotParams & params_);
+
     ~BackupSnapshotFromFile() override;
 
     bool getNextEntry(BackupEntry & entry) override;
 
 private:
+    struct FileUtils;
+
     const String name;
-    const DiskPtr disk;
-    const PossibleChanges possible_changes;
+    std::unique_ptr<FileUtils> file_utils;
     String temp_file_path;
     std::optional<String> data;
     std::optional<size_t> data_size;
     std::optional<UInt128> checksum;
+    const PossibleChanges possible_changes;
     bool reading_size_is_limited = false;
     bool backup_entry_generated = false;
 };

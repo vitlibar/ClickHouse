@@ -1,7 +1,7 @@
 #include <Backup/BackupSnapshotFromFile.h>
 #include <Backup/BackupEntry.h>
+#include <Common/createHardLink.h>
 #include <Common/escapeForFileName.h>
-#include <Disks/IDisk.h>
 #include <IO/LimitReadBuffer.h>
 #include <IO/ReadBufferFromFileBase.h>
 #include <IO/ReadBufferFromString.h>
@@ -28,15 +28,13 @@ namespace
     constexpr size_t MAX_BYTES_TO_STORE_IN_RAM = 1024;
 }
 
-
 BackupSnapshotFromFile::BackupSnapshotFromFile(
     const String & name_,
-    const DiskPtr & disk_,
     const String & file_path_,
     const std::optional<UInt128> & checksum_,
     PossibleChanges possible_changes_,
     const BackupSnapshotParams & params_)
-    : name(name_), disk(disk_), possible_changes(possible_changes_), checksum(checksum_)
+    : name(name_), possible_changes(possible_changes_), checksum(checksum_)
 {
     if (!params_.directory_for_temp_files.ends_with('/') && !params_.directory_for_temp_files.empty())
         throw Exception("Directory for temp files should end with '/'", ErrorCodes::BAD_ARGUMENTS);
@@ -46,32 +44,32 @@ BackupSnapshotFromFile::BackupSnapshotFromFile(
         case PossibleChanges::NONE:
         {
             temp_file_path = generateTempFilePath(params_.directory_for_temp_files, file_path_);
-            disk->createHardLink(file_path_, temp_file_path);
+            utilCreateHardLink(file_path_, temp_file_path);
             break;
         }
 
         case PossibleChanges::APPEND:
         {
-            data_size = disk->getFileSize(file_path_);
+            data_size = utilGetFileSize(file_path_);
             reading_size_is_limited = true;
             temp_file_path = generateTempFilePath(params_.directory_for_temp_files, file_path_);
-            disk->createHardLink(file_path_, temp_file_path);
+            utilCreateHardLink(file_path_, temp_file_path);
             break;
         }
 
         case PossibleChanges::ANY:
         {
-            data_size = disk->getFileSize(file_path_);
+            data_size = utilGetFileSize(file_path_);
             if (*data_size <= MAX_BYTES_TO_STORE_IN_RAM)
             {
                 data.emplace();
                 data->resize(*data_size);
-                disk->readFile(file_path_)->readStrict(data->data(), data->size());
+                utilReadFile(file_path_)->readStrict(data->data(), data->size());
             }
             else
             {
                 temp_file_path = generateTempFilePath(params_.directory_for_temp_files, file_path_);
-                disk->copy(file_path_, disk, temp_file_path);
+                utilCopyFile(file_path_, temp_file_path);
             }
             break;
         }
@@ -84,8 +82,9 @@ BackupSnapshotFromFile::BackupSnapshotFromFile(
 
 BackupSnapshotFromFile::~BackupSnapshotFromFile()
 {
+    close();
     if (!temp_file_path.empty())
-        disk->removeFile(temp_file_path);
+        utilRemoveFile(temp_file_path);
 }
 
 
@@ -99,7 +98,7 @@ bool BackupSnapshotFromFile::getNextEntry(BackupEntry & entry)
         if (data)
             data_size = data->size();
         else
-            data_size = disk->getFileSize(temp_file_path);
+            data_size = utilGetFileSize(temp_file_path);
     }
 
     entry = {};
@@ -112,7 +111,7 @@ bool BackupSnapshotFromFile::getNextEntry(BackupEntry & entry)
         if (data)
             return std::make_unique<ReadBufferFromString>(*data);
 
-        std::unique_ptr<ReadBuffer> read_buffer = disk->readFile(temp_file_path);
+        std::unique_ptr<ReadBuffer> read_buffer = utilReadFile(temp_file_path);
         if (reading_size_is_limited)
             read_buffer = std::make_unique<LimitReadBuffer>(std::move(read_buffer), *data_size, false);
         return read_buffer;
@@ -120,6 +119,31 @@ bool BackupSnapshotFromFile::getNextEntry(BackupEntry & entry)
 
     backup_entry_generated = true;
     return true;
+}
+
+void BackupSnapshotFromFile::utilCopyFile(const String & src_file_path, const String & dest_file_path) const
+{
+    disk->copy(src_file_path, disk, dest_file_path);
+}
+
+void BackupSnapshotFromFile::utilCreateHardLink(const String & src_file_path, const String & dest_file_path) const
+{
+    disk->createHardLink(src_file_path, dest_file_path);
+}
+
+void BackupSnapshotFromFile::utilRemoveFile(const String & file_path) const
+{
+    disk->removeFile(file_path);
+}
+
+size_t BackupSnapshotFromFile::utilGetFileSize(const String & file_path) const
+{
+    return disk->getFileSize(file_path);
+}
+
+std::unique_ptr<ReadBuffer> BackupSnapshotFromFile::utilReadFile(const String & file_path) const
+{
+    return disk->readFile(file_path);
 }
 
 }

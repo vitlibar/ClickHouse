@@ -530,6 +530,12 @@ String DatabaseOnDisk::getObjectMetadataPath(const String & object_name) const
     return getMetadataPath() + escapeForFileName(object_name) + ".sql";
 }
 
+std::unique_ptr<IBackupSnapshot> DatabaseOnDisk::backupTable(const String & table_name, const BackupParameters &params) const
+{
+    return std::make_unique<BackupSnapshotFromFile>()
+
+}
+
 time_t DatabaseOnDisk::getObjectMetadataModificationTime(const String & object_name) const
 {
     String table_metadata_path = getObjectMetadataPath(object_name);
