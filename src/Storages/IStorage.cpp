@@ -200,6 +200,26 @@ NameDependencies IStorage::getDependentViewsByColumn(const Context & context) co
     return name_deps;
 }
 
+BackupEntries IStorage::backup(const Context &) const
+{
+    throw Exception("Table engine " + getName() + " doesn't support backups", ErrorCodes::NOT_IMPLEMENTED);
+}
+
+BackupEntries IStorage::backupPartitions(const std::set<String> &, const Context &) const
+{
+    throw Exception("Table engine " + getName() + " doesn't support backups for partitions", ErrorCodes::NOT_IMPLEMENTED);
+}
+
+void IStorage::restore(const IBackup &, const String &, RestoreMode, const Context &)
+{
+    throw Exception("Table engine " + getName() + " doesn't support backups", ErrorCodes::NOT_IMPLEMENTED);
+}
+
+void IStorage::restorePartitions(const std::set<String> &, const IBackup &, const String &, RestoreMode, const Context &)
+{
+    throw Exception("Table engine " + getName() + " doesn't support backups for partitions", ErrorCodes::NOT_IMPLEMENTED);
+}
+
 std::string PrewhereDAGInfo::dump() const
 {
     WriteBufferFromOwnString ss;

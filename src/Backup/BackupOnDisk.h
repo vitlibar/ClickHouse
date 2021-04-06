@@ -26,11 +26,11 @@ public:
     String getDiskName() const override;
     String getPath() const override;
     Strings list() const override;
-    bool exists(const String & name) const override;
-    size_t getDataSize(const String & name) const override;
-    UInt128 getChecksum(const String & name) const override;
-    BackupEntry read(const String & name) const override;
-    void write(BackupEntry && entry) override;
+    bool exists(const String & path_in_backup) const override;
+    size_t getDataSize(const String & path_in_backup) const override;
+    UInt128 getChecksum(const String & path_in_backup) const override;
+    std::unique_ptr<IBackupEntry> read(const String & path_in_backup) const override;
+    void write(std::unique_ptr<IBackupEntry> entry) override;
     void finishWriting() override;
 
 private:
@@ -41,13 +41,11 @@ private:
     void writeHeader();
     void readHeader();
 
-    struct Entry
+    struct EntryInfo
     {
-        size_t data_size;
+        UInt64 data_size;
         UInt128 checksum;
-
-        /// For incremental backups. This is an index in the vector `incremental_bases`, 0 means this backup.
-        bool read_from_base = false;
+        bool from_base = false; /// for incremental backups
     };
 
     const OpenMode open_mode;
@@ -55,7 +53,7 @@ private:
     const DiskSelector * disk_selector = nullptr;
     const String directory;
     std::shared_ptr<const IBackup> base_backup;
-    std::unordered_map<String, Entry> entries;
+    std::unordered_map<String, EntryInfo> infos;
     String lock_file_path;
     bool directory_was_empty = false;
     bool writing_finished = false;

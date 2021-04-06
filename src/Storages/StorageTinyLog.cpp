@@ -523,6 +523,15 @@ void StorageTinyLog::truncate(
         addFiles(column);
 }
 
+BackupEntries StorageTinyLog::backup(const Context &) const
+{
+    return {};
+}
+
+void StorageTinyLog::restore(const IBackup & backup, const String & path_in_backup, RestoreMode restore_mode, const Context &)
+{
+}
+
 
 void registerStorageTinyLog(StorageFactory & factory)
 {

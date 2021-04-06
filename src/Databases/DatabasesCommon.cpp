@@ -1,6 +1,7 @@
 #include <Databases/DatabasesCommon.h>
 #include <Interpreters/InterpreterCreateQuery.h>
 #include <Interpreters/Context.h>
+#include <Parsers/ASTCreateQuery.h>
 #include <Parsers/ParserCreateQuery.h>
 #include <Parsers/formatAST.h>
 #include <Storages/StorageDictionary.h>
@@ -112,6 +113,40 @@ void DatabaseWithOwnTablesBase::attachTableUnlocked(const String & table_name, c
             DatabaseCatalog::instance().removeUUIDMapping(table_id.uuid);
         throw Exception(ErrorCodes::TABLE_ALREADY_EXISTS, "Table {} already exists.", table_id.getFullTableName());
     }
+}
+
+BackupEntries DatabaseWithOwnTablesBase::backupTable(const String & table_name, const Context & context) const
+{
+    auto storage = tryGetTable(table_name, context);
+    if (!storage)
+        throw Exception(ErrorCodes::UNKNOWN_TABLE, "Table {}.{} doesn't exist",
+                        backQuote(getDatabaseName()), backQuote(table_name));
+
+    auto get_attach_query = [&]
+    {
+        auto ast = typeid_cast<std::shared_ptr<ASTCreateQuery>>(getCreateTableQuery(table_name, context));
+        ast->attach = true;
+        ast->uuid = UUIDHelpers::Nil;
+        return serializeAST(*ast);
+    };
+
+    String attach_query = get_attach_query();
+    BackupEntries entries;
+
+    while (true)
+    {
+        auto entries = storage->backup(context);
+        String new_attach_query = get_attach_query();
+        if (new_attach_query == attach_query)
+            break;
+        attach_query = std::move(new_attach_query);
+    }
+
+    entries.push_back(std::make_unique<BackupEntryFromMemory>(
+                "metadata/" + escapeForFileName(getDatabaseName()) + "/" + escapeForFileName(table_name) + ".sql",
+                attach_query));
+
+    return entries;
 }
 
 void DatabaseWithOwnTablesBase::shutdown()

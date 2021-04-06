@@ -31,6 +31,8 @@ public:
 
     DatabaseTablesIteratorPtr getTablesIterator(const Context & context, const FilterByNameFunction & filter_by_table_name) override;
 
+    BackupEntries backupTable(const String & table_name, const Context & context) const override;
+
     void shutdown() override;
 
     ~DatabaseWithOwnTablesBase() override;

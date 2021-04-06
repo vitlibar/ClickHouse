@@ -60,8 +60,9 @@ struct SelectQueryInfo;
 using NameDependencies = std::unordered_map<String, std::vector<String>>;
 
 class IBackup;
-class IBackupSnapshot;
-struct BackupParameters;
+class IBackupEntry;
+using BackupEntries = std::vector<std::unique_ptr<IBackupEntry>>;
+enum class RestoreMode;
 
 struct ColumnSize
 {
@@ -182,9 +183,13 @@ public:
 
     NameDependencies getDependentViewsByColumn(const Context & context) const;
 
-    /// Backup & restore
-    virtual std::unique_ptr<IBackupSnapshot> backup(const BackupParameters & params) const;
-    virtual void restore(const IBackup & backup);
+    /// Prepares entries to backup all the data of the storage.
+    virtual BackupEntries backup(const Context & context) const;
+    virtual BackupEntries backupPartitions(const std::set<String> & partition_ids, const Context & context) const;
+
+    /// Restores the data of the storage from a backup.
+    virtual void restore(const IBackup & backup, const String & path_in_backup, RestoreMode restore_mode, const Context & context);
+    virtual void restorePartitions(const std::set<String> & partition_ids, const IBackup & backup, const String & path_in_backup, RestoreMode restore_mode, const Context & context);
 
 protected:
     /// Returns whether the column is virtual - by default all columns are real.
