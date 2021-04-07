@@ -530,35 +530,6 @@ String DatabaseOnDisk::getObjectMetadataPath(const String & object_name) const
     return getMetadataPath() + escapeForFileName(object_name) + ".sql";
 }
 
-BackupEntries DatabaseOnDisk::backupTable(const String & table_name) const
-{
-    auto storage = tryGetTable(table_name, global_context);
-    if (!storage)
-        return {};
-    BackupEntries entries = storage->backup();
-    String metadata_entry_name = "metadata/" + getDatabaseName() + escapeForFileName(table_name) + ".sql";
-    entries.push_back(std::make_unique<BackupEntryFromFile>(metadata_entry_name, getObjectMetadataPath(table_name)));
-    return entries;
-}
-
-void DatabaseOnDisk::restoreTable(const IBackup & backup, const String & table_name)
-{
-    String metadata_entry_name = "metadata/" + getDatabaseName() + escapeForFileName(table_name) + ".sql";
-    if (!backup.exists(metadata_entry_name))
-        return;
-    auto entry = backup.read(metadata_entry_name);
-    auto
-    copyData(entry.getReadBuffer(),
-
-    auto storage = tryGetTable(table_name, global_context);
-    if (!storage)
-        return {};
-    BackupEntries entries = storage->backup();
-    entries.push_back(std::make_unique<BackupEntryFromFile>(
-        "metadata/" + getDatabaseName() + escapeForFileName(object_name) + ".sql", getObjectMetadataPath(table_name)));
-    return entries;
-}
-
 time_t DatabaseOnDisk::getObjectMetadataModificationTime(const String & object_name) const
 {
     String table_metadata_path = getObjectMetadataPath(object_name);

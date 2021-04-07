@@ -108,7 +108,7 @@ void ASTBackupQuery::formatImpl(const FormatSettings & format, FormatState &, Fo
         format.ostr << " " << quoteString(disk_name);
     }
 
-    if ((kind == Kind::RESTORE) && (restore_mode != RestoreMode::NO_OLD_DATA))
+    if ((kind == Kind::RESTORE) && (restore_mode != RestoreMode::FROM_SCRATCH))
         formatRestoreMode(restore_mode, format);
 }
 

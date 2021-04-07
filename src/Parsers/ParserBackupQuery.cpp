@@ -32,7 +32,6 @@ namespace
 
             if ((kind == Kind::RESTORE) && ParserKeyword{"AS"}.ignore(pos, expected))
             {
-                ASTPtr ast;
                 if (!ParserIdentifier{}.parse(pos, ast, expected))
                     return false;
 
@@ -63,12 +62,16 @@ namespace
 
             if (ParserKeyword{"PARTITION"}.ignore(pos, expected))
             {
-                ASTPtr ast;
-                if (!ParserList{std::make_unique<ParserStringLiteral>(), std::make_unique<ParserToken>(TokenType::Comma), false}.parse(pos, ast, expected))
+                auto parse_element = [&]
+                {
+                    ASTPtr ast;
+                    if (!ParserStringLiteral{}.parse(pos, ast, expected))
+                        return false;
+                    info.partitions.emplace_back(ast->as<ASTLiteral &>().value.safeGet<String>());
+                    return true;
+                };
+                if (!ParserList::parseUtil(pos, expected, parse_element, false))
                     return false;
-
-                for (const auto & child : ast->children)
-                    info.partitions.emplace_back(child->as<ASTLiteral &>().value.safeGet<String>());
             }
 
             out_info = std::move(info);
@@ -87,36 +90,55 @@ namespace
         return IParserBase::wrapParseImpl(pos, [&]
         {
             bool all_databases = false;
-            if (kind == Kind::BACKUP)
-            {
-                if (ParserKeyword{"ALL DATABASES"}.ignore(pos, expected))
-                    all_databases = true;
-            }
-
             std::vector<DatabaseInfo> databases;
             std::vector<TableInfo> tables;
-            if (!all_databases)
-            {
-                while (true)
-                {
-                    DatabaseInfo database;
-                    TableInfo table;
-                    if (parseDatabaseInfo(pos, expected, kind, database))
-                        databases.emplace_back(std::move(database));
-                    else if (parseTableInfo(pos, expected, kind, table))
-                        tables.emplace_back(std::move(table));
-                    else if (!databases.empty() || !tables.empty())
-                        break;
-                    else
-                        return false;
-                }
 
-                ParserToken{TokenType::Comma}.ignore(pos, expected);
-            }
+            auto parse_element = [&]
+            {
+                if ((kind == Kind::BACKUP) && ParserKeyword{"ALL DATABASES"}.ignore(pos, expected))
+                {
+                    all_databases = true;
+                    return true;
+                }
+                DatabaseInfo database;
+                if (parseDatabaseInfo(pos, expected, kind, database))
+                {
+                    databases.emplace_back(std::move(database));
+                    return true;
+                }
+                TableInfo table;
+                if (parseTableInfo(pos, expected, kind, table))
+                {
+                    tables.emplace_back(std::move(table));
+                    return true;
+                }
+                return false;
+            };
+            if (!ParserList::parseUtil(pos, expected, parse_element, false))
+                return false;
+
+            if (!all_databases && databases.empty() && tables.empty() && (kind == Kind::BACKUP))
+                return false;
 
             out_all_databases = all_databases;
             out_databases = std::move(databases);
             out_tables = std::move(tables);
+            return true;
+        });
+    }
+
+    bool parseOnDisk(IParser::Pos & pos, Expected & expected, String & out_disk_name)
+    {
+        return IParserBase::wrapParseImpl(pos, [&]
+        {
+            String disk_name;
+            if (!ParserKeyword{"ON DISK"}.ignore(pos, expected))
+                return false;
+
+            ASTPtr ast;
+            if (!ParserStringLiteral{}.parse(pos, ast, expected))
+                return false;
+            out_disk_name = ast->as<ASTLiteral &>().value.safeGet<String>();
             return true;
         });
     }
@@ -131,30 +153,21 @@ namespace
             ASTPtr ast;
             if (!ParserStringLiteral{}.parse(pos, ast, expected))
                 return false;
-            String backup_name = ast->as<ASTLiteral &>().value.safeGet<String>();
 
-            String disk_name;
-            if (ParserKeyword{"ON DISK"}.ignore(pos, expected))
-            {
-                if (!ParserStringLiteral{}.parse(pos, ast, expected))
-                    return false;
-                disk_name = ast->as<ASTLiteral &>().value.safeGet<String>();
-            }
-
-            out_backup_name = backup_name;
-            out_disk_name = disk_name;
+            out_backup_name = ast->as<ASTLiteral &>().value.safeGet<String>();
+            parseOnDisk(pos, expected, out_disk_name);
             return true;
         });
     }
 
     bool parseRestoreMode(IParser::Pos & pos, Expected & expected, RestoreMode & out_restore_mode)
     {
-        if (ParserKeyword{"NO OLD DATA"}.ignore(pos, expected))
-            out_restore_mode = RestoreMode::NO_OLD_DATA;
-        else if (ParserKeyword{"KEEP OLD DATA"}.ignore(pos, expected))
-            out_restore_mode = RestoreMode::KEEP_OLD_DATA;
+        if (ParserKeyword{"FROM SCRATCH"}.ignore(pos, expected))
+            out_restore_mode = RestoreMode::FROM_SCRATCH;
         else if (ParserKeyword{"REPLACE OLD DATA"}.ignore(pos, expected))
             out_restore_mode = RestoreMode::REPLACE_OLD_DATA;
+        else if (ParserKeyword{"KEEP OLD DATA"}.ignore(pos, expected))
+            out_restore_mode = RestoreMode::KEEP_OLD_DATA;
         else
             return false;
         return true;
@@ -184,7 +197,7 @@ bool ParserBackupQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
     if (!parseBackupNameAndDisk(pos, expected, kind, backup_name, disk_name))
         return false;
 
-    RestoreMode restore_mode = RestoreMode::NO_OLD_DATA;
+    RestoreMode restore_mode = RestoreMode::FROM_SCRATCH;
     if (kind == Kind::RESTORE)
         parseRestoreMode(pos, expected, restore_mode);
 

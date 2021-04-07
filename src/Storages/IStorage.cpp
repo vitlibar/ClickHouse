@@ -210,12 +210,12 @@ BackupEntries IStorage::backupPartitions(const std::set<String> &, const Context
     throw Exception("Table engine " + getName() + " doesn't support backups for partitions", ErrorCodes::NOT_IMPLEMENTED);
 }
 
-void IStorage::restore(const IBackup &, const String &, RestoreMode, const Context &)
+void IStorage::restoreFromBackup(const IBackup &, const String &, RestoreMode, const Context &)
 {
     throw Exception("Table engine " + getName() + " doesn't support backups", ErrorCodes::NOT_IMPLEMENTED);
 }
 
-void IStorage::restorePartitions(const std::set<String> &, const IBackup &, const String &, RestoreMode, const Context &)
+void IStorage::restorePartitionsFromBackup(const std::set<String> &, const IBackup &, const String &, RestoreMode, const Context &)
 {
     throw Exception("Table engine " + getName() + " doesn't support backups for partitions", ErrorCodes::NOT_IMPLEMENTED);
 }

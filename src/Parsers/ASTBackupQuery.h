@@ -17,7 +17,7 @@ using Strings = std::vector<String>;
   * RESTORE [{DATABASE database_name [AS new_database_name] |
   *           TABLE [db.]table_name [AS db.new_table_name] [PARTITION partition_expr [,...]]} [,...]]
   *         FROM 'backup_name' [ON DISK 'disk_name']
-  *         [NO OLD DATA | KEEP OLD DATA | REMOVE OLD DATA]
+  *         [FROM SCRATCH | REPLACE OLD DATA | KEEP OLD DATA]
   */
 class ASTBackupQuery : public IAST
 {
@@ -50,10 +50,10 @@ public:
 
     std::vector<TableInfo> tables;
 
-    String disk_name;
     String backup_name;
+    String disk_name;
 
-    RestoreMode restore_mode = RestoreMode::NO_OLD_DATA;
+    RestoreMode restore_mode = RestoreMode::FROM_SCRATCH;
 
     String getID(char) const override;
     ASTPtr clone() const override;

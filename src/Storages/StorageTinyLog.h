@@ -46,7 +46,7 @@ public:
     void truncate(const ASTPtr &, const StorageMetadataPtr & metadata_snapshot, const Context &, TableExclusiveLockHolder &) override;
 
     BackupEntries backup(const Context & context) const override;
-    void restore(const IBackup & backup, const String & path_in_backup, RestoreMode restore_mode, const Context & context) override;
+    void restoreFromBackup(const IBackup & backup, const String & path_in_backup, RestoreMode restore_mode, const Context & context) override;
 
 protected:
     StorageTinyLog(

@@ -115,40 +115,6 @@ void DatabaseWithOwnTablesBase::attachTableUnlocked(const String & table_name, c
     }
 }
 
-BackupEntries DatabaseWithOwnTablesBase::backupTable(const String & table_name, const Context & context) const
-{
-    auto storage = tryGetTable(table_name, context);
-    if (!storage)
-        throw Exception(ErrorCodes::UNKNOWN_TABLE, "Table {}.{} doesn't exist",
-                        backQuote(getDatabaseName()), backQuote(table_name));
-
-    auto get_attach_query = [&]
-    {
-        auto ast = typeid_cast<std::shared_ptr<ASTCreateQuery>>(getCreateTableQuery(table_name, context));
-        ast->attach = true;
-        ast->uuid = UUIDHelpers::Nil;
-        return serializeAST(*ast);
-    };
-
-    String attach_query = get_attach_query();
-    BackupEntries entries;
-
-    while (true)
-    {
-        auto entries = storage->backup(context);
-        String new_attach_query = get_attach_query();
-        if (new_attach_query == attach_query)
-            break;
-        attach_query = std::move(new_attach_query);
-    }
-
-    entries.push_back(std::make_unique<BackupEntryFromMemory>(
-                "metadata/" + escapeForFileName(getDatabaseName()) + "/" + escapeForFileName(table_name) + ".sql",
-                attach_query));
-
-    return entries;
-}
-
 void DatabaseWithOwnTablesBase::shutdown()
 {
     /// You can not hold a lock during shutdown.

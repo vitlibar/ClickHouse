@@ -188,8 +188,8 @@ public:
     virtual BackupEntries backupPartitions(const std::set<String> & partition_ids, const Context & context) const;
 
     /// Restores the data of the storage from a backup.
-    virtual void restore(const IBackup & backup, const String & path_in_backup, RestoreMode restore_mode, const Context & context);
-    virtual void restorePartitions(const std::set<String> & partition_ids, const IBackup & backup, const String & path_in_backup, RestoreMode restore_mode, const Context & context);
+    virtual void restoreFromBackup(const IBackup & backup, const String & path_in_backup, RestoreMode restore_mode, const Context & context);
+    virtual void restorePartitionsFromBackup(const std::set<String> & partition_ids, const IBackup & backup, const String & path_in_backup, RestoreMode restore_mode, const Context & context);
 
 protected:
     /// Returns whether the column is virtual - by default all columns are real.

@@ -128,10 +128,6 @@ public:
 using DatabaseTablesIteratorPtr = std::unique_ptr<IDatabaseTablesIterator>;
 using DatabaseDictionariesIteratorPtr = std::unique_ptr<DatabaseDictionariesSnapshotIterator>;
 
-class IBackup;
-class IBackupEntry;
-using BackupEntries = std::vector<std::unique_ptr<IBackupEntry>>;
-
 
 /** Database engine.
   * It is responsible for:
@@ -356,18 +352,6 @@ public:
 
     /// Delete data and metadata stored inside the database, if exists.
     virtual void drop(const Context & /*context*/) {}
-
-    /// Prepares entries to backup the database completely.
-    virtual BackupEntries backup(const Context & context) const;
-
-    /// Restores the database from a specified backup.
-    virtual void restore(const IBackup & backup, const Context & context);
-
-    /// Prepares entriess to backup a table.
-    virtual BackupEntries backupTable(const String & table_name, const Context & context) const {}
-
-    ///
-    virtual void restoreTable(const IBackup & backup, const String & table_name, const Context & context) {}
 
     virtual ~IDatabase() {}
 

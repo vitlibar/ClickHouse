@@ -29,7 +29,6 @@ BackupEntryFromRemovableFileOnDisk::BackupEntryFromRemovableFileOnDisk(const Str
     : IBackupEntry(path_in_backup_, file_size_ ? *file_size_ : disk_->getFileSize(file_path_), checksum_)
     , disk(disk_)
 {
-    disk->createDirectories("tmp");
     temp_file_path = "tmp-backup-" + toString(UUIDHelpers::generateV4());
     disk->createHardLink(file_path_, temp_file_path);
 }

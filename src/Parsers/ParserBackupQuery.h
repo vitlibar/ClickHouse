@@ -14,7 +14,7 @@ namespace DB
   * RESTORE [{DATABASE database_name [AS new_database_name] |
   *           TABLE [db.]table_name [AS db.new_table_name] [PARTITION partition_expr [,...]]} [,...]]
   *         FROM 'backup_name' [ON DISK 'disk_name']
-  *         [NO OLD DATA | KEEP OLD DATA | REMOVE OLD DATA]
+  *         [FROM SCRATCH | REPLACE OLD DATA | KEEP OLD DATA]
   */
 class ParserBackupQuery : public IParserBase
 {

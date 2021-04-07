@@ -36,6 +36,8 @@
 #include <Storages/StorageTinyLog.h>
 #include "StorageLogSettings.h"
 
+#include <Backup/IBackupEntry.h>
+
 #include <Processors/Sources/SourceWithProgress.h>
 #include <Processors/Pipe.h>
 
@@ -528,7 +530,7 @@ BackupEntries StorageTinyLog::backup(const Context &) const
     return {};
 }
 
-void StorageTinyLog::restore(const IBackup & backup, const String & path_in_backup, RestoreMode restore_mode, const Context &)
+void StorageTinyLog::restoreFromBackup(const IBackup &, const String &, RestoreMode, const Context &)
 {
 }
 
