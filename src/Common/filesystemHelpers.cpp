@@ -35,6 +35,13 @@ struct statvfs getStatVFS(const String & path)
     return fs;
 }
 
+struct stat getStat(const String & path)
+{
+    struct stat st;
+    if (stat(path.c_str(), &st))   /// NOTE: man stat does not list EINTR as possible error
+        throwFromErrnoWithPath("Cannot stat ", path, ErrorCodes::SYSTEM_ERROR);
+    return st;
+}
 
 bool enoughSpaceInDirectory(const std::string & path [[maybe_unused]], size_t data_size [[maybe_unused]])
 {

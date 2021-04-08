@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <sys/statvfs.h>
+#include <sys/stat.h>
 #include <Poco/TemporaryFile.h>
 
 
@@ -28,5 +29,6 @@ std::filesystem::path getMountPoint(std::filesystem::path absolute_path);
 String getFilesystemName([[maybe_unused]] const String & mount_point);
 
 struct statvfs getStatVFS(const String & path);
+struct stat getStat(const String & path);
 
 }
