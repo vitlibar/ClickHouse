@@ -53,12 +53,12 @@ bool enoughSpaceInDirectory(const std::string & path [[maybe_unused]], size_t da
 #endif
 }
 
-std::unique_ptr<TemporaryFile> createTemporaryFile(const std::string & path)
+std::unique_ptr<TemporaryFile> createTemporaryFile(const std::string & temp_directory)
 {
-    Poco::File(path).createDirectories();
+    Poco::File(temp_directory).createDirectories();
 
     /// NOTE: std::make_shared cannot use protected constructors
-    return std::make_unique<TemporaryFile>(path);
+    return std::make_unique<TemporaryFile>(temp_directory);
 }
 
 std::filesystem::path getMountPoint(std::filesystem::path absolute_path)
@@ -68,21 +68,13 @@ std::filesystem::path getMountPoint(std::filesystem::path absolute_path)
 
     absolute_path = std::filesystem::canonical(absolute_path);
 
-    const auto get_device_id = [](const std::filesystem::path & p)
-    {
-        struct stat st;
-        if (stat(p.c_str(), &st))   /// NOTE: man stat does not list EINTR as possible error
-            throwFromErrnoWithPath("Cannot stat " + p.string(), p.string(), ErrorCodes::SYSTEM_ERROR);
-        return st.st_dev;
-    };
-
     /// If /some/path/to/dir/ and /some/path/to/ have different device id,
     /// then device which contains /some/path/to/dir/filename is mounted to /some/path/to/dir/
-    auto device_id = get_device_id(absolute_path);
+    auto device_id = getStat(absolute_path).st_dev;
     while (absolute_path.has_relative_path())
     {
         auto parent = absolute_path.parent_path();
-        auto parent_device_id = get_device_id(parent);
+        auto parent_device_id = getStat(parent).st_dev;
         if (device_id != parent_device_id)
             return absolute_path;
         absolute_path = parent;

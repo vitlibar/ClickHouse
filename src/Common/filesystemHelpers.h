@@ -17,7 +17,10 @@ namespace DB
 using TemporaryFile = Poco::TemporaryFile;
 
 bool enoughSpaceInDirectory(const std::string & path, size_t data_size);
-std::unique_ptr<TemporaryFile> createTemporaryFile(const std::string & path);
+
+/// Creates a temporary file in a specified directory.
+/// If that directory doesn't exist it will be created.
+std::unique_ptr<TemporaryFile> createTemporaryFile(const std::string & temp_directory);
 
 /// Returns mount point of filesystem where absolute_path (must exist) is located
 std::filesystem::path getMountPoint(std::filesystem::path absolute_path);

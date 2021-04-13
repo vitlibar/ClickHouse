@@ -16,7 +16,7 @@ namespace
     using DatabaseInfo = ASTBackupQuery::DatabaseInfo;
     using TableInfo = ASTBackupQuery::TableInfo;
 
-    bool parseDatabaseInfo(IParser::Pos & pos, Expected & expected, Kind kind, DatabaseInfo & out_info)
+    bool parseDatabaseInfo(IParser::Pos & pos, Expected & expected, DatabaseInfo & out_info)
     {
         return IParserBase::wrapParseImpl(pos, [&]
         {
@@ -30,7 +30,7 @@ namespace
             DatabaseInfo info;
             info.database_name = getIdentifierName(ast);
 
-            if ((kind == Kind::RESTORE) && ParserKeyword{"AS"}.ignore(pos, expected))
+            if (ParserKeyword{"AS"}.ignore(pos, expected))
             {
                 if (!ParserIdentifier{}.parse(pos, ast, expected))
                     return false;
@@ -43,7 +43,7 @@ namespace
         });
     }
 
-    bool parseTableInfo(IParser::Pos & pos, Expected & expected, Kind kind, TableInfo & out_info)
+    bool parseTableInfo(IParser::Pos & pos, Expected & expected, TableInfo & out_info)
     {
         return IParserBase::wrapParseImpl(pos, [&]
         {
@@ -54,7 +54,7 @@ namespace
             if (!parseDatabaseAndTableName(pos, expected, info.database_name, info.table_name))
                 return false;
 
-            if ((kind == Kind::RESTORE) && ParserKeyword{"AS"}.ignore(pos, expected))
+            if (ParserKeyword{"AS"}.ignore(pos, expected))
             {
                 if (!parseDatabaseAndTableName(pos, expected, info.new_database_name, info.new_table_name))
                     return false;
@@ -101,13 +101,13 @@ namespace
                     return true;
                 }
                 DatabaseInfo database;
-                if (parseDatabaseInfo(pos, expected, kind, database))
+                if (parseDatabaseInfo(pos, expected, database))
                 {
                     databases.emplace_back(std::move(database));
                     return true;
                 }
                 TableInfo table;
-                if (parseTableInfo(pos, expected, kind, table))
+                if (parseTableInfo(pos, expected, table))
                 {
                     tables.emplace_back(std::move(table));
                     return true;
@@ -123,39 +123,6 @@ namespace
             out_all_databases = all_databases;
             out_databases = std::move(databases);
             out_tables = std::move(tables);
-            return true;
-        });
-    }
-
-    bool parseOnDisk(IParser::Pos & pos, Expected & expected, String & out_disk_name)
-    {
-        return IParserBase::wrapParseImpl(pos, [&]
-        {
-            String disk_name;
-            if (!ParserKeyword{"ON DISK"}.ignore(pos, expected))
-                return false;
-
-            ASTPtr ast;
-            if (!ParserStringLiteral{}.parse(pos, ast, expected))
-                return false;
-            out_disk_name = ast->as<ASTLiteral &>().value.safeGet<String>();
-            return true;
-        });
-    }
-
-    bool parseBackupNameAndDisk(IParser::Pos & pos, Expected & expected, Kind kind, String & out_backup_name, String & out_disk_name)
-    {
-        return IParserBase::wrapParseImpl(pos, [&]
-        {
-            if (!ParserKeyword{(kind == Kind::BACKUP) ? "TO" : "FROM"}.ignore(pos, expected))
-                return false;
-
-            ASTPtr ast;
-            if (!ParserStringLiteral{}.parse(pos, ast, expected))
-                return false;
-
-            out_backup_name = ast->as<ASTLiteral &>().value.safeGet<String>();
-            parseOnDisk(pos, expected, out_disk_name);
             return true;
         });
     }
@@ -184,6 +151,17 @@ bool ParserBackupQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
     else
         return false;
 
+    bool use_incremental_backup = false;
+    String base_backup_name;
+    if ((kind == Kind::BACKUP) && ParserKeyword{"DIFFERENCES SINCE"}.ignore(pos, expected))
+    {
+        ASTPtr ast;
+        if (!ParserStringLiteral{}.parse(pos, ast, expected) || !ParserKeyword{"IN"}.ignore(pos, expected))
+            return false;
+        base_backup_name = ast->as<ASTLiteral &>().value.safeGet<String>();
+        use_incremental_backup = true;
+    }
+
     bool all_databases = false;
     std::vector<DatabaseInfo> databases;
     std::vector<TableInfo> tables;
@@ -193,9 +171,12 @@ bool ParserBackupQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
             return false;
     }
 
-    String backup_name, disk_name;
-    if (!parseBackupNameAndDisk(pos, expected, kind, backup_name, disk_name))
+    if (!ParserKeyword{(kind == Kind::BACKUP) ? "TO" : "FROM"}.ignore(pos, expected))
         return false;
+    ASTPtr ast;
+    if (!ParserStringLiteral{}.parse(pos, ast, expected))
+        return false;
+    String backup_name = ast->as<ASTLiteral &>().value.safeGet<String>();
 
     RestoreMode restore_mode = RestoreMode::FROM_SCRATCH;
     if (kind == Kind::RESTORE)
@@ -209,7 +190,8 @@ bool ParserBackupQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
     query->databases = std::move(databases);
     query->tables = std::move(tables);
     query->backup_name = std::move(backup_name);
-    query->disk_name = std::move(disk_name);
+    query->use_incremental_backup = use_incremental_backup;
+    query->base_backup_name = std::move(base_backup_name);
     query->restore_mode = restore_mode;
 
     return true;

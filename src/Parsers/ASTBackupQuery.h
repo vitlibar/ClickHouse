@@ -9,14 +9,15 @@ namespace DB
 using Strings = std::vector<String>;
 
 
-/** BACKUP {ALL DATABASES |
+/** BACKUP [DIFFERENCES SINCE 'base_backup_name' IN]
+  *        {ALL DATABASES |
   *         DATABASE database_name |
   *         TABLE [db.]table_name [PARTITION partition_expr [,...]]} [,...]
-  *        TO 'backup_name' [ON DISK 'disk_name']
+  *        TO 'backup_name'
   *
   * RESTORE [{DATABASE database_name [AS new_database_name] |
   *           TABLE [db.]table_name [AS db.new_table_name] [PARTITION partition_expr [,...]]} [,...]]
-  *         FROM 'backup_name' [ON DISK 'disk_name']
+  *         FROM 'backup_name'
   *         [FROM SCRATCH | REPLACE OLD DATA | KEEP OLD DATA]
   */
 class ASTBackupQuery : public IAST
@@ -51,7 +52,9 @@ public:
     std::vector<TableInfo> tables;
 
     String backup_name;
-    String disk_name;
+
+    bool use_incremental_backup = false;
+    String base_backup_name;
 
     RestoreMode restore_mode = RestoreMode::FROM_SCRATCH;
 

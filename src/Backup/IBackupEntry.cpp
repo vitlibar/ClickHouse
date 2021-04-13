@@ -5,29 +5,11 @@
 namespace DB
 {
 
-UInt64 IBackupEntry::getDataSize() const
-{
-    if (!data_size)
-        data_size = calculateDataSize();
-    return *data_size;
-}
-
 UInt128 IBackupEntry::getChecksum() const
 {
-    if (!checksum)
-        checksum = calculateChecksum();
-    return *checksum;
-}
-
-UInt64 IBackupEntry::calculateDataSize() const
-{
-    auto read_buffer = getReadBuffer();
-    read_buffer->ignoreAll();
-    return read_buffer->count();
-}
-
-UInt128 IBackupEntry::calculateChecksum() const
-{
+    auto maybe_checksum = tryGetChecksumFast();
+    if (maybe_checksum)
+        return *maybe_checksum;
     auto read_buffer = getReadBuffer();
     HashingReadBuffer hashing_in{*read_buffer};
     hashing_in.ignoreAll();

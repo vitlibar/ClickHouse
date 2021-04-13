@@ -10,14 +10,18 @@ namespace DB
 class BackupEntryFromMemory : public IBackupEntry
 {
 public:
-    /// The constructor is allowed to not set `checksum`, in that case it will be calculated from the data.
+    /// The constructor is allowed to not set `checksum_`, in that case it will be calculated from the data.
     BackupEntryFromMemory(const String & path_in_backup_, const void * data_, size_t size_, const std::optional<UInt128> & checksum_ = {});
     BackupEntryFromMemory(const String & path_in_backup_, String data_, const std::optional<UInt128> & checksum_ = {});
 
     std::unique_ptr<ReadBuffer> getReadBuffer() const override;
+    UInt64 getDataSize() const override;
+    UInt128 getChecksum() const override;
+    std::optional<UInt128> tryGetChecksumFast() const override;
 
 private:
     const String data;
+    mutable std::optional<UInt128> checksum;
 };
 
 }

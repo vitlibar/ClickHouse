@@ -25,9 +25,11 @@ public:
     /// A backup can be open either in CREATE or READ mode.
     virtual OpenMode getOpenMode() const = 0;
 
-    /// Returns the disk's name and the path to the backup on that disk. Can be empty.
-    virtual String getDiskName() const { return ""; }
+    /// Returns the path to the backup. Can be empty.
     virtual String getPath() const { return ""; }
+
+    /// Returns the name of the disk where that backup is located. Can be empty.
+    virtual String getDisk() const { return ""; }
 
     /// Returns pathes of all the entries stored in the backup.
     virtual Strings list() const = 0;

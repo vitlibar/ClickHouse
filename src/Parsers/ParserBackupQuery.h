@@ -6,14 +6,15 @@
 namespace DB
 {
 /** Parses queries like
-  * BACKUP {ALL DATABASES |
+  * BACKUP [DIFFERENCES SINCE 'base_backup_name' IN]
+  *        {ALL DATABASES |
   *         DATABASE database_name |
   *         TABLE [db.]table_name [PARTITION partition_expr [,...]]} [,...]
-  *        TO 'backup_name' [ON DISK 'disk_name']
+  *        TO 'backup_name'
   *
   * RESTORE [{DATABASE database_name [AS new_database_name] |
   *           TABLE [db.]table_name [AS db.new_table_name] [PARTITION partition_expr [,...]]} [,...]]
-  *         FROM 'backup_name' [ON DISK 'disk_name']
+  *         FROM 'backup_name'
   *         [FROM SCRATCH | REPLACE OLD DATA | KEEP OLD DATA]
   */
 class ParserBackupQuery : public IParserBase

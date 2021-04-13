@@ -29,27 +29,6 @@ namespace ErrorCodes
 namespace
 {
     extern const UInt64 BACKUP_VERSION = 1;
-
-    String escapePathInBackup(const String & name)
-    {
-        String res;
-        res.reserve(name.length());
-        for (size_t i : ext::range(name.length()))
-        {
-            char c = name[i];
-            if (isWordCharASCII(c))
-                res += c;
-            else if (c == '/' && (i >= 1 && isWordCharASCII(name[i - 1])))
-                res += c;
-            else
-            {
-                res += '%';
-                res += hexDigitUppercase(c / 16);
-                res += hexDigitUppercase(c % 16);
-            }
-        }
-        return res;
-    }
 }
 
 
@@ -138,7 +117,7 @@ void BackupOnDisk::writeHeader()
 
     if (base_backup)
     {
-        writeBinary(base_backup->getDiskName(), *out);
+        writeBinary(base_backup->getDisk(), *out);
         writeBinary(base_backup->getPath(), *out);
     }
     else
@@ -184,7 +163,7 @@ IBackup::OpenMode BackupOnDisk::getOpenMode() const
     return open_mode;
 }
 
-String BackupOnDisk::getDiskName() const
+String BackupOnDisk::getDisk() const
 {
     return disk->getName();
 }
@@ -197,10 +176,10 @@ String BackupOnDisk::getPath() const
 Strings BackupOnDisk::list() const
 {
     std::lock_guard lock{mutex};
-    Strings names;
-    for (const String & name : infos | boost::adaptors::map_keys)
-        names.push_back(name);
-    return names;
+    Strings paths;
+    for (const String & path_in_backup : infos | boost::adaptors::map_keys)
+        paths.push_back(path_in_backup);
+    return paths;
 }
 
 bool BackupOnDisk::exists(const String & path_in_backup) const
@@ -250,7 +229,14 @@ std::unique_ptr<IBackupEntry> BackupOnDisk::read(const String & path_in_backup) 
     }
 
     return std::make_unique<BackupEntryFromFile>(
-        name, disk, directory + escapePathInBackup(path_in_backup), it->second.data_size, it->second.checksum);
+        path_in_backup,
+        disk,
+        directory + path_in_backup,
+        it->second.data_size,
+        it->second.checksum,
+        BackupEntryFromFile::ALWAYS_EXISTS_IMMUTABLE,
+        nullptr,
+        "");
 }
 
 void BackupOnDisk::write(std::unique_ptr<IBackupEntry> entry)
@@ -279,15 +265,15 @@ void BackupOnDisk::write(std::unique_ptr<IBackupEntry> entry)
         }
     }
 
-    std::optional<UInt64> data_size = entry->tryGetDataSize();
-    std::optional<UInt128> checksum = entry->tryGetChecksum();
+    UInt64 data_size = entry->getDataSize();
+    std::optional<UInt128> checksum = entry->tryGetChecksumFast();
     auto read_buffer = entry->getReadBuffer();
     ReadBuffer * in = read_buffer.get();
     std::optional<HashingReadBuffer> hashing_in;
     if (!checksum.has_value())
         in  = &hashing_in.emplace(*in);
 
-    String out_file_path = directory + escapePathInBackup(path_in_backup);
+    String out_file_path = directory + path_in_backup;
     disk->createDirectories(directoryPath(out_file_path));
     try
     {
@@ -307,9 +293,6 @@ void BackupOnDisk::write(std::unique_ptr<IBackupEntry> entry)
         throw;
     }
 
-    if (!data_size.has_value())
-        data_size = in->count();
-
     if (!checksum.has_value())
     {
         auto u128 = hashing_in->getHash();
@@ -317,7 +300,7 @@ void BackupOnDisk::write(std::unique_ptr<IBackupEntry> entry)
     }
 
     EntryInfo new_info;
-    new_info.data_size = *data_size;
+    new_info.data_size = data_size;
     new_info.checksum = *checksum;
     new_info.from_base = false;
     infos.emplace(path_in_backup, new_info);

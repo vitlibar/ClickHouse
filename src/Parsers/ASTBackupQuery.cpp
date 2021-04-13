@@ -84,6 +84,13 @@ void ASTBackupQuery::formatImpl(const FormatSettings & format, FormatState &, Fo
     format.ostr << (format.hilite ? hilite_keyword : "") << ((kind == Kind::BACKUP) ? "BACKUP" : "RESTORE")
                 << (format.hilite ? hilite_none : "");
 
+    if ((kind == Kind::BACKUP) && use_incremental_backup)
+    {
+        format.ostr << (format.hilite ? hilite_keyword : "") << " DIFFERENCES SINCE" << (format.hilite ? hilite_none : "");
+        format.ostr << " " << quoteString(base_backup_name);
+        format.ostr << (format.hilite ? hilite_keyword : "") << " IN" << (format.hilite ? hilite_none : "");
+    }
+
     if (all_databases)
     {
         format.ostr << (format.hilite ? hilite_keyword : "") << " ALL DATABASES" << (format.hilite ? hilite_none : "");
@@ -102,11 +109,6 @@ void ASTBackupQuery::formatImpl(const FormatSettings & format, FormatState &, Fo
 
     format.ostr << (format.hilite ? hilite_keyword : "") << ((kind == Kind::BACKUP) ? " TO" : " FROM") << (format.hilite ? hilite_none : "");
     format.ostr << " " << quoteString(backup_name);
-    if (!disk_name.empty())
-    {
-        format.ostr << (format.hilite ? hilite_keyword : "") << " ON DISK " << (format.hilite ? hilite_none : "");
-        format.ostr << " " << quoteString(disk_name);
-    }
 
     if ((kind == Kind::RESTORE) && (restore_mode != RestoreMode::FROM_SCRATCH))
         formatRestoreMode(restore_mode, format);

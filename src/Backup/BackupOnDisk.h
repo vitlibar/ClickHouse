@@ -23,7 +23,7 @@ public:
     ~BackupOnDisk() override;
 
     OpenMode getOpenMode() const override;
-    String getDiskName() const override;
+    String getDisk() const override;
     String getPath() const override;
     Strings list() const override;
     bool exists(const String & path_in_backup) const override;
