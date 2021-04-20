@@ -12,7 +12,8 @@ namespace DB
   *         TABLE [db.]table_name [PARTITION partition_expr [,...]]} [,...]
   *        TO 'backup_name'
   *
-  * RESTORE [{DATABASE database_name [AS new_database_name] |
+  * RESTORE [{EVERYTHING |
+  *           DATABASE database_name [AS new_database_name] |
   *           TABLE [db.]table_name [AS db.new_table_name] [PARTITION partition_expr [,...]]} [,...]]
   *         FROM 'backup_name'
   *         [FROM SCRATCH | REPLACE OLD DATA | KEEP OLD DATA]

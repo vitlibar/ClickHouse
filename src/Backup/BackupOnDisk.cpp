@@ -173,13 +173,25 @@ String BackupOnDisk::getPath() const
     return directory;
 }
 
-Strings BackupOnDisk::list() const
+Strings BackupOnDisk::list(const String & prefix) const
 {
+    if (!prefix.ends_with('/') && !prefix.empty())
+        throw Exception("prefix should end with '/'", ErrorCodes::BAD_ARGUMENTS);
     std::lock_guard lock{mutex};
-    Strings paths;
-    for (const String & path_in_backup : infos | boost::adaptors::map_keys)
-        paths.push_back(path_in_backup);
-    return paths;
+    Strings elements;
+    for (auto it = infos.lower_bound(prefix); it != infos.end(); ++it)
+    {
+        const String & path = it->first;
+        if (!path.starts_with(prefix))
+            break;
+        size_t start_pos = prefix.length();
+        size_t end_pos = path.find('/', start_pos);
+        std::string_view new_element = std::string_view{path}.substr(start_pos, end_pos - start_pos);
+        if (!elements.empty() && (elements.back() == new_element))
+            continue;
+        elements.push_back(String{new_element});
+    }
+    return elements;
 }
 
 bool BackupOnDisk::exists(const String & path_in_backup) const

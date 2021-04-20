@@ -36,15 +36,15 @@ namespace
             if (i != 0)
                 format.ostr << ",";
             format.ostr << (format.hilite ? IAST::hilite_keyword : "") << " TABLE " << (format.hilite ? IAST::hilite_none : "");
-            if (!info.database_name.empty())
-                format.ostr << backQuoteIfNeed(info.database_name) << ".";
-            format.ostr << backQuoteIfNeed(info.table_name);
-            if (!info.new_table_name.empty() && ((info.new_table_name != info.table_name) || (info.new_database_name != info.database_name)))
+            if (!info.table_name.first.empty())
+                format.ostr << backQuoteIfNeed(info.table_name.first) << ".";
+            format.ostr << backQuoteIfNeed(info.table_name.second);
+            if (!info.new_table_name.second.empty() && (info.new_table_name != info.table_name))
             {
                 format.ostr << (format.hilite ? IAST::hilite_keyword : "") << " AS " << (format.hilite ? IAST::hilite_none : "");
-                if (!info.new_database_name.empty())
-                    format.ostr << backQuoteIfNeed(info.new_database_name) << ".";
-                format.ostr << backQuoteIfNeed(info.new_table_name);
+                if (!info.new_table_name.first.empty())
+                    format.ostr << backQuoteIfNeed(info.new_table_name.first) << ".";
+                format.ostr << backQuoteIfNeed(info.new_table_name.second);
             }
             if (!info.partitions.empty())
             {
@@ -93,7 +93,8 @@ void ASTBackupQuery::formatImpl(const FormatSettings & format, FormatState &, Fo
 
     if (all_databases)
     {
-        format.ostr << (format.hilite ? hilite_keyword : "") << " ALL DATABASES" << (format.hilite ? hilite_none : "");
+        format.ostr << (format.hilite ? hilite_keyword : "") << ((kind == Kind::BACKUP) ? " ALL DATABASES" : " EVERYTHING")
+                    << (format.hilite ? hilite_none : "");
     }
     else
     {

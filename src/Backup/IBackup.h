@@ -31,8 +31,8 @@ public:
     /// Returns the name of the disk where that backup is located. Can be empty.
     virtual String getDisk() const { return ""; }
 
-    /// Returns pathes of all the entries stored in the backup.
-    virtual Strings list() const = 0;
+    /// Returns pathes of all the entries stored in the backup which starts with the specified prefix.
+    virtual Strings list(const String & prefix) const = 0;
 
     /// Checks if an entry with a specified path exists.
     virtual bool exists(const String & path_in_backup) const = 0;

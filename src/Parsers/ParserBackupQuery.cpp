@@ -51,12 +51,12 @@ namespace
                 return false;
 
             TableInfo info;
-            if (!parseDatabaseAndTableName(pos, expected, info.database_name, info.table_name))
+            if (!parseDatabaseAndTableName(pos, expected, info.table_name.first, info.table_name.second))
                 return false;
 
             if (ParserKeyword{"AS"}.ignore(pos, expected))
             {
-                if (!parseDatabaseAndTableName(pos, expected, info.new_database_name, info.new_table_name))
+                if (!parseDatabaseAndTableName(pos, expected, info.new_table_name.first, info.new_table_name.second))
                     return false;
             }
 
@@ -100,6 +100,11 @@ namespace
                     all_databases = true;
                     return true;
                 }
+                if ((kind == Kind::RESTORE) && ParserKeyword{"EVERYTHING"}.ignore(pos, expected))
+                {
+                    all_databases = true;
+                    return true;
+                }
                 DatabaseInfo database;
                 if (parseDatabaseInfo(pos, expected, database))
                 {
@@ -117,8 +122,13 @@ namespace
             if (!ParserList::parseUtil(pos, expected, parse_element, false))
                 return false;
 
-            if (!all_databases && databases.empty() && tables.empty() && (kind == Kind::BACKUP))
-                return false;
+            if (!all_databases && databases.empty() && tables.empty())
+            {
+                if (kind == Kind::BACKUP)
+                    return false;
+                else
+                    all_databases = true;
+            }
 
             out_all_databases = all_databases;
             out_databases = std::move(databases);

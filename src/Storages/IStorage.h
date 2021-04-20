@@ -184,12 +184,12 @@ public:
     NameDependencies getDependentViewsByColumn(const Context & context) const;
 
     /// Prepares entries to backup all the data of the storage.
-    virtual BackupEntries backup(const Context & context) const;
-    virtual BackupEntries backupPartitions(const std::set<String> & partition_ids, const Context & context) const;
+    virtual void backup(BackupEntries & out_backup_entries, const Context & context, const String & path_in_backup) const;
+    virtual void backupPartitions(BackupEntries & out_backup_entries, const Context & context, const String & path_in_backup, const Strings & partition_ids) const;
 
     /// Restores the data of the storage from a backup.
-    virtual void restoreFromBackup(const IBackup & backup, const String & path_in_backup, RestoreMode restore_mode, const Context & context);
-    virtual void restorePartitionsFromBackup(const std::set<String> & partition_ids, const IBackup & backup, const String & path_in_backup, RestoreMode restore_mode, const Context & context);
+    virtual void restoreFromBackup(const Context & context, const IBackup & backup, const String & path_in_backup, RestoreMode restore_mode);
+    virtual void restorePartitionsFromBackup(const Context & context, const IBackup & backup, const String & path_in_backup, RestoreMode restore_mode, const Strings & partition_ids);
 
 protected:
     /// Returns whether the column is virtual - by default all columns are real.

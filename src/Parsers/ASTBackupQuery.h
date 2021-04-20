@@ -7,6 +7,7 @@
 namespace DB
 {
 using Strings = std::vector<String>;
+using DatabaseAndTableName = std::pair<String, String>;
 
 
 /** BACKUP [DIFFERENCES SINCE 'base_backup_name' IN]
@@ -15,7 +16,8 @@ using Strings = std::vector<String>;
   *         TABLE [db.]table_name [PARTITION partition_expr [,...]]} [,...]
   *        TO 'backup_name'
   *
-  * RESTORE [{DATABASE database_name [AS new_database_name] |
+  * RESTORE [{EVERYTHING |
+  *           DATABASE database_name [AS new_database_name] |
   *           TABLE [db.]table_name [AS db.new_table_name] [PARTITION partition_expr [,...]]} [,...]]
   *         FROM 'backup_name'
   *         [FROM SCRATCH | REPLACE OLD DATA | KEEP OLD DATA]
@@ -42,10 +44,8 @@ public:
 
     struct TableInfo
     {
-        String database_name;
-        String table_name;
-        String new_database_name;
-        String new_table_name;
+        DatabaseAndTableName table_name;
+        DatabaseAndTableName new_table_name;
         Strings partitions;
     };
 

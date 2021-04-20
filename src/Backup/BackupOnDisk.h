@@ -1,7 +1,7 @@
 #pragma once
 
 #include <Backup/IBackup.h>
-#include <unordered_map>
+#include <map>
 
 
 namespace DB
@@ -25,7 +25,7 @@ public:
     OpenMode getOpenMode() const override;
     String getDisk() const override;
     String getPath() const override;
-    Strings list() const override;
+    Strings list(const String & prefix) const override;
     bool exists(const String & path_in_backup) const override;
     size_t getDataSize(const String & path_in_backup) const override;
     UInt128 getChecksum(const String & path_in_backup) const override;
@@ -53,7 +53,7 @@ private:
     const DiskSelector * disk_selector = nullptr;
     const String directory;
     std::shared_ptr<const IBackup> base_backup;
-    std::unordered_map<String, EntryInfo> infos;
+    std::map<String, EntryInfo> infos;
     String lock_file_path;
     bool directory_was_empty = false;
     bool writing_finished = false;
