@@ -1,7 +1,6 @@
 #pragma once
 
 #include <Parsers/IAST.h>
-#include <Backup/RestoreMode.h>
 
 
 namespace DB
@@ -10,17 +9,32 @@ using Strings = std::vector<String>;
 using DatabaseAndTableName = std::pair<String, String>;
 
 
-/** BACKUP [DIFFERENCES SINCE 'base_backup_name' IN]
-  *        {ALL DATABASES |
-  *         DATABASE database_name |
-  *         TABLE [db.]table_name [PARTITION partition_expr [,...]]} [,...]
+/** BACKUP {TABLE [db.]table_name [AS db.new_table_name] [PARTITION partition_expr [,...]] |
+  *         DICTIONARY [db.]dictionary_name |
+  *         DATABASE database_name [AS new_database_name] |
+  *         ALL DATABASES EXCEPT SYSTEM } [,...]
+  *        [WITH BASE 'base_backup_name']
   *        TO 'backup_name'
   *
-  * RESTORE [{EVERYTHING |
-  *           DATABASE database_name [AS new_database_name] |
-  *           TABLE [db.]table_name [AS db.new_table_name] [PARTITION partition_expr [,...]]} [,...]]
+  * RESTORE [{TABLE [db.]table_name [AS db.new_table_name] [PARTITION partition_expr [,...] |
+  *           DICTIONARY [db.]dictionary_name [AS db.new_dictionary_name] |
+  *           DATABASE database_name [AS new_database_name] } [,...]
+  *         [WITH REPLACE IF {TABLE|DATABASE} EXISTS]
   *         FROM 'backup_name'
-  *         [FROM SCRATCH | REPLACE OLD DATA | KEEP OLD DATA]
+  *
+  * Notes:
+  * "WITH BASE" allows to specify the base backup, only differences made after
+  * the base backup will be included in a newly created backup.
+  *
+  * "RESTORE" without specifying objects to restore will restore all the contents
+  * of the backup.
+  *
+  * If some of restored tables exists then "RESTORE" will only add restored data
+  * into those tables.
+  * "WITH REPLACE IF TABLE EXISTS" allows to specify that restored tables should
+  * completely replace the tables which currently exist.
+  * "WITH REPLACE IF DATABASE EXISTS" allows to specify that restored databases should
+  * completely replace the databases which currently exist.
   */
 class ASTBackupQuery : public IAST
 {
@@ -32,16 +46,6 @@ public:
     };
     Kind kind = Kind::BACKUP;
 
-    bool all_databases = false;
-
-    struct DatabaseInfo
-    {
-        String database_name;
-        String new_database_name;
-    };
-
-    std::vector<DatabaseInfo> databases;
-
     struct TableInfo
     {
         DatabaseAndTableName table_name;
@@ -51,12 +55,29 @@ public:
 
     std::vector<TableInfo> tables;
 
-    String backup_name;
+    struct DictionaryInfo
+    {
+        DatabaseAndTableName dictionary_name;
+        DatabaseAndTableName new_dictionary_name;
+    };
 
-    bool use_incremental_backup = false;
+    std::vector<DictionaryInfo> dictionaries;
+
+    struct DatabaseInfo
+    {
+        String database_name;
+        String new_database_name;
+    };
+
+    std::vector<DatabaseInfo> databases;
+
+    bool all_databases = false;
+
+    String backup_name;
     String base_backup_name;
 
-    RestoreMode restore_mode = RestoreMode::FROM_SCRATCH;
+    bool replace_table_if_exists = false;
+    bool replace_database_if_exists = false;
 
     String getID(char) const override;
     ASTPtr clone() const override;

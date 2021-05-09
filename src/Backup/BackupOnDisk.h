@@ -38,14 +38,19 @@ private:
     void close();
     void writeLockFile();
     void removeLockFile();
-    void writeHeader();
-    void readHeader();
+    void writeBaseBackupInfo();
+    void readBaseBackupInfo();
+    void writeContents();
+    void readContents();
 
     struct EntryInfo
     {
-        UInt64 data_size;
-        UInt128 checksum;
-        bool from_base = false; /// for incremental backups
+        UInt64 data_size = 0;
+        UInt128 checksum{0, 0};
+
+        /// for incremental backups
+        UInt64 base_data_size = 0;
+        UInt128 base_checksum{0, 0};
     };
 
     const OpenMode open_mode;

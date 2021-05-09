@@ -8,27 +8,11 @@ namespace DB
 {
 namespace
 {
-    using DatabaseInfo = ASTBackupQuery::DatabaseInfo;
     using TableInfo = ASTBackupQuery::TableInfo;
+    using DictionaryInfo = ASTBackupQuery::DictionaryInfo;
+    using DatabaseInfo = ASTBackupQuery::DatabaseInfo;
 
-    void formatDatabaseInfos(const std::vector<DatabaseInfo> & infos, const IAST::FormatSettings & format)
-    {
-        for (size_t i : ext::range(infos.size()))
-        {
-            const auto & info = infos[i];
-            if (i != 0)
-                format.ostr << ",";
-            format.ostr << (format.hilite ? IAST::hilite_keyword : "") << " DATABASE " << (format.hilite ? IAST::hilite_none : "");
-            format.ostr << backQuoteIfNeed(info.database_name);
-            if (!info.new_database_name.empty() && (info.new_database_name != info.database_name))
-            {
-                format.ostr << (format.hilite ? IAST::hilite_keyword : "") << " AS " << (format.hilite ? IAST::hilite_none : "");
-                format.ostr << backQuoteIfNeed(info.new_database_name);
-            }
-        }
-    }
-
-    void formatTableInfos(const std::vector<TableInfo> & infos, const IAST::FormatSettings & format)
+    void formatTableInfos(const IAST::FormatSettings & format, const std::vector<TableInfo> & infos)
     {
         for (size_t i : ext::range(infos.size()))
         {
@@ -60,10 +44,69 @@ namespace
         }
     }
 
-    void formatRestoreMode(RestoreMode restore_mode, const IAST::FormatSettings & format)
+    void formatDictionaryInfos(const IAST::FormatSettings & format, const std::vector<DictionaryInfo> & infos)
     {
-        format.ostr << " " << (format.hilite ? IAST::hilite_keyword : "") << toString(restore_mode)
-                    << (format.hilite ? IAST::hilite_none : "");
+        for (size_t i : ext::range(infos.size()))
+        {
+            const auto & info = infos[i];
+            if (i != 0)
+                format.ostr << ",";
+            format.ostr << (format.hilite ? IAST::hilite_keyword : "") << " DICTIONARY " << (format.hilite ? IAST::hilite_none : "");
+            if (!info.dictionary_name.first.empty())
+                format.ostr << backQuoteIfNeed(info.dictionary_name.first) << ".";
+            format.ostr << backQuoteIfNeed(info.dictionary_name.second);
+            if (!info.new_dictionary_name.second.empty() && (info.new_dictionary_name != info.dictionary_name))
+            {
+                format.ostr << (format.hilite ? IAST::hilite_keyword : "") << " AS " << (format.hilite ? IAST::hilite_none : "");
+                if (!info.new_dictionary_name.first.empty())
+                    format.ostr << backQuoteIfNeed(info.new_dictionary_name.first) << ".";
+                format.ostr << backQuoteIfNeed(info.new_dictionary_name.second);
+            }
+        }
+    }
+
+    void formatDatabaseInfos(const IAST::FormatSettings & format, const std::vector<DatabaseInfo> & infos)
+    {
+        for (size_t i : ext::range(infos.size()))
+        {
+            const auto & info = infos[i];
+            if (i != 0)
+                format.ostr << ",";
+            format.ostr << (format.hilite ? IAST::hilite_keyword : "") << " DATABASE " << (format.hilite ? IAST::hilite_none : "");
+            format.ostr << backQuoteIfNeed(info.database_name);
+            if (!info.new_database_name.empty() && (info.new_database_name != info.database_name))
+            {
+                format.ostr << (format.hilite ? IAST::hilite_keyword : "") << " AS " << (format.hilite ? IAST::hilite_none : "");
+                format.ostr << backQuoteIfNeed(info.new_database_name);
+            }
+        }
+    }
+
+    void formatInfos(
+        const IAST::FormatSettings & format,
+        const std::vector<TableInfo> & tables,
+        const std::vector<DictionaryInfo> & dictionaries,
+        const std::vector<DatabaseInfo> & databases)
+    {
+        bool need_comma = false;
+        if (!tables.empty())
+        {
+            if (std::exchange(need_comma, true))
+                format.ostr << ",";
+            formatTableInfos(format, tables);
+        }
+        if (!dictionaries.empty())
+        {
+            if (std::exchange(need_comma, true))
+                format.ostr << ",";
+            formatDictionaryInfos(format, dictionaries);
+        }
+        if (!databases.empty())
+        {
+            if (std::exchange(need_comma, true))
+                format.ostr << ",";
+            formatDatabaseInfos(format, databases);
+        }
     }
 }
 
@@ -84,35 +127,32 @@ void ASTBackupQuery::formatImpl(const FormatSettings & format, FormatState &, Fo
     format.ostr << (format.hilite ? hilite_keyword : "") << ((kind == Kind::BACKUP) ? "BACKUP" : "RESTORE")
                 << (format.hilite ? hilite_none : "");
 
-    if ((kind == Kind::BACKUP) && use_incremental_backup)
-    {
-        format.ostr << (format.hilite ? hilite_keyword : "") << " DIFFERENCES SINCE" << (format.hilite ? hilite_none : "");
-        format.ostr << " " << quoteString(base_backup_name);
-        format.ostr << (format.hilite ? hilite_keyword : "") << " IN" << (format.hilite ? hilite_none : "");
-    }
-
     if (all_databases)
     {
-        format.ostr << (format.hilite ? hilite_keyword : "") << ((kind == Kind::BACKUP) ? " ALL DATABASES" : " EVERYTHING")
-                    << (format.hilite ? hilite_none : "");
+        format.ostr << (format.hilite ? IAST::hilite_keyword : "") << " ALL DATABASES EXCEPT SYSTEM"
+                    << (format.hilite ? IAST::hilite_none : "");
     }
     else
     {
-        formatDatabaseInfos(databases, format);
+        formatInfos(format, tables, dictionaries, databases);
+    }
 
-        if (!tables.empty())
-        {
-            if (!databases.empty())
-                format.ostr << ",";
-            formatTableInfos(tables, format);
-        }
+    if (kind == Kind::BACKUP)
+    {
+        if (!base_backup_name.empty())
+            format.ostr << (format.hilite ? hilite_keyword : "") << " WITH BASE " << (format.hilite ? hilite_none : "") << " " << quoteString(base_backup_name);
+    }
+    else
+    {
+        assert(kind == Kind::RESTORE);
+        if (replace_database_if_exists)
+            format.ostr << (format.hilite ? IAST::hilite_keyword : "") << " WITH REPLACE IF DATABASE EXISTS" << (format.hilite ? IAST::hilite_none : "");
+        else if (replace_table_if_exists)
+            format.ostr << (format.hilite ? IAST::hilite_keyword : "") << " WITH REPLACE IF TABLE EXISTS" << (format.hilite ? IAST::hilite_none : "");
     }
 
     format.ostr << (format.hilite ? hilite_keyword : "") << ((kind == Kind::BACKUP) ? " TO" : " FROM") << (format.hilite ? hilite_none : "");
     format.ostr << " " << quoteString(backup_name);
-
-    if ((kind == Kind::RESTORE) && (restore_mode != RestoreMode::FROM_SCRATCH))
-        formatRestoreMode(restore_mode, format);
 }
 
 }

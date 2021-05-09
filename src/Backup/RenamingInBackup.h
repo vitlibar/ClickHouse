@@ -11,13 +11,13 @@ using DatabaseAndTableName = std::pair<String, String>;
 
 /// Keeps information about renamings of databases and tables that is processed
 /// while we're making a backup or while we're restoring from a backup.
-class RenamingInBackup
+class BackupRenaming
 {
 public:
-    RenamingInBackup();
-    ~RenamingInBackup();
-    RenamingInBackup(RenamingInBackup && src);
-    RenamingInBackup & operator =(RenamingInBackup && src);
+    BackupRenaming();
+    ~BackupRenaming();
+    BackupRenaming(BackupRenaming && src);
+    BackupRenaming & operator =(BackupRenaming && src);
 
     void add(const String & old_database_name, const String & new_database_name);
     void add(const DatabaseAndTableName & old_table_name, const DatabaseAndTableName & new_table_name);

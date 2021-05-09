@@ -28,13 +28,16 @@ public:
     /// Returns the checksum of the data.
     /// The default implementation first calls tryGetChecksumFast(), then calculates
     /// the checksum from the buffer returned by getReadBuffer().
-    virtual UInt128 getChecksum() const;
+    virtual UInt128 getChecksum() const = 0;
 
-    /// Returns the checksum of the data only if it's precalculated.
-    virtual std::optional<UInt128> tryGetChecksumFast() const { return {}; }
+    /// Returns the checksum of the data only if it's already calculated.
+    virtual std::optional<UInt128> tryGetChecksumFast() const = 0;
+
+protected:
+    static UInt128 calculateChecksum(std::unique_ptr<ReadBuffer> read_buffer);
 
 private:
-    String path_in_backup;
+    const String path_in_backup;
 };
 
 using BackupEntries = std::vector<std::unique_ptr<IBackupEntry>>;

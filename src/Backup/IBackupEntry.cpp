@@ -5,12 +5,8 @@
 namespace DB
 {
 
-UInt128 IBackupEntry::getChecksum() const
+UInt128 IBackupEntry::calculateChecksum(std::unique_ptr<ReadBuffer> read_buffer)
 {
-    auto maybe_checksum = tryGetChecksumFast();
-    if (maybe_checksum)
-        return *maybe_checksum;
-    auto read_buffer = getReadBuffer();
     HashingReadBuffer hashing_in{*read_buffer};
     hashing_in.ignoreAll();
     auto u128 = hashing_in.getHash();

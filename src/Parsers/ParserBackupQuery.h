@@ -6,17 +6,18 @@
 namespace DB
 {
 /** Parses queries like
-  * BACKUP [DIFFERENCES SINCE 'base_backup_name' IN]
-  *        {ALL DATABASES |
-  *         DATABASE database_name |
-  *         TABLE [db.]table_name [PARTITION partition_expr [,...]]} [,...]
+  * BACKUP {TABLE [db.]table_name [AS db.new_table_name] [PARTITION partition_expr [,...]] |
+  *         DICTIONARY [db.]dictionary_name |
+  *         DATABASE database_name [AS new_database_name] |
+  *         ALL DATABASES EXCEPT SYSTEM } [,...]
+  *        [WITH BASE 'base_backup_name']
   *        TO 'backup_name'
   *
-  * RESTORE [{EVERYTHING |
-  *           DATABASE database_name [AS new_database_name] |
-  *           TABLE [db.]table_name [AS db.new_table_name] [PARTITION partition_expr [,...]]} [,...]]
+  * RESTORE [{TABLE [db.]table_name [AS db.new_table_name] [PARTITION partition_expr [,...] |
+  *           DICTIONARY [db.]dictionary_name [AS db.new_dictionary_name] |
+  *           DATABASE database_name [AS new_database_name] } [,...]
+  *         [WITH REPLACE IF {TABLE|DATABASE} EXISTS]
   *         FROM 'backup_name'
-  *         [FROM SCRATCH | REPLACE OLD DATA | KEEP OLD DATA]
   */
 class ParserBackupQuery : public IParserBase
 {

@@ -7,10 +7,9 @@ namespace DB
 {
 class IBackup;
 class IBackupEntry;
-using BackupEntries = std::vector<std::unique_ptr<IBackupEntry>>;
+using BackupEntries = std::map<String, std::unique_ptr<IBackupEntry>>;
 class RenamingInBackup;
 using RenamingInBackupPtr = std::shared_ptr<const RenamingInBackup>;
-enum class RestoreMode;
 class Context;
 class IDatabase;
 using DatabasePtr = std::shared_ptr<IDatabase>;
@@ -31,7 +30,7 @@ std::shared_ptr<const IBackup> readBackup(const String & backup_name, const Cont
 UInt64 estimateBackupSize(const BackupEntries & backup_entries, const std::shared_ptr<const IBackup> & base_backup);
 
 /// Prepares entries to make a backup of all the database except the system one.
-void backupAllDatabases(BackupEntries & out_backup_entries, const Context & context, const RenamingInBackupPtr & renaming);
+void backupEverything(BackupEntries & out_backup_entries, const Context & context, const RenamingInBackupPtr & renaming);
 
 /// Prepares entries to make a backup of the specified database.
 void backupDatabase(
@@ -51,19 +50,25 @@ void backupTable(
     StoragePtr table = nullptr,
     const Strings & partition_ids = {});
 
+/// Prepares entries to make a backup of the specified dictionary.
+void backupDictionary(
+    BackupEntries & out_backup_entries,
+    const Context & context,
+    const RenamingInBackupPtr & renaming,
+    const DatabaseAndTableName & database_and_dictionary_name,
+    DatabasePtr database = nullptr);
+
 /// Restores everything from the backup.
 void restoreEverythingFromBackup(
     Context & context,
     const IBackup & backup,
-    const RenamingInBackup & renaming,
-    RestoreMode restore_mode);
+    const RenamingInBackup & renaming);
 
 /// Restores a database from the backup.
 void restoreDatabaseFromBackup(
     Context & context,
     const IBackup & backup,
     const RenamingInBackup & renaming,
-    RestoreMode restore_mode,
     const String & database_name,
     DatabasePtr database = nullptr);
 
@@ -72,10 +77,17 @@ void restoreTableFromBackup(
     Context & context,
     const IBackup & backup,
     const RenamingInBackup & renaming,
-    RestoreMode restore_mode,
     const DatabaseAndTableName & database_and_table_name,
     DatabasePtr database = nullptr,
     StoragePtr table = nullptr,
     const Strings & partition_ids = {});
+
+/// Restores a dictionary from the backup.
+void restoreDictionaryFromBackup(
+    Context & context,
+    const IBackup & backup,
+    const RenamingInBackup & renaming,
+    const DatabaseAndTableName & database_and_dictionary_name,
+    DatabasePtr database = nullptr);
 
 }

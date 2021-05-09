@@ -20,18 +20,21 @@ namespace ErrorCodes
 
 namespace
 {
-    /// It's the maximum size of the file to store it in RAM.
+    /// Directory for temporary backup files relative to the temp directory.
+    constexpr char TEMP_BACKUPS_DIRECTORY[] = "backups/";
+
+    /// It's the maximum size of the file to keep it in RAM.
     /// If the file is larger than this value a disk copy will be made.
-    constexpr size_t MAX_SIZE_TO_STORE_MUTABLE_IN_MEMORY = 1024;
+    constexpr size_t MAX_SIZE_FOR_PRELOADING = 1024;
 }
 
 
 BackupEntryFromLocalFile::BackupEntryFromLocalFile(
     const String & path_in_backup_,
     const String & file_path_,
+    Flags flags_,
     const std::optional<UInt64> & file_size_,
     const std::optional<UInt128> & checksum_,
-    Flags flags_,
     const VolumePtr & temporary_volume_)
     : IBackupEntry(path_in_backup_)
     , file_path(file_path_)
@@ -47,16 +50,16 @@ BackupEntryFromLocalFile::BackupEntryFromLocalFile(
     const String & path_in_backup_,
     const std::shared_ptr<DiskLocal> & disk_,
     const String & file_path_,
+    Flags flags_,
     const std::optional<UInt64> & file_size_,
     const std::optional<UInt128> & checksum_,
-    Flags flags_,
     const VolumePtr & temporary_volume_,
     const String & temp_directory_on_disk_)
     : IBackupEntry(path_in_backup_)
     , file_path(fullPath(disk_, file_path_))
     , flags(flags_)
     , temporary_volume(temporary_volume_)
-    , temp_directory(temp_directory_on_disk_.empty() ? "" : fullPath(disk_, temp_directory_on_disk_) + "backups/")
+    , temp_directory(temp_directory_on_disk_.empty() ? "" : fullPath(disk_, temp_directory_on_disk_))
     , file_size(file_size_)
     , checksum(checksum_)
 {
@@ -81,7 +84,7 @@ void BackupEntryFromLocalFile::init()
     {
         if (!file_size)
             file_size = Poco::File(file_path).getSize();
-        if (*file_size <= MAX_SIZE_TO_STORE_MUTABLE_IN_MEMORY)
+        if (*file_size <= MAX_SIZE_FOR_PRELOADING)
         {
             data.emplace();
             data->resize(*file_size);
@@ -135,10 +138,19 @@ void BackupEntryFromLocalFile::createTemporaryFile(const std::optional<dev_t> & 
 {
     if (!device_id)
     {
-        const String & temp_disk_path = temporary_volume->getDisk()->getPath();
-        String backups_temp_dir = temp_disk_path + "backups/";
-        temporary_file = ::DB::createTemporaryFile(backups_temp_dir);
-        return;
+        if (temporary_volume)
+        {
+            temporary_file = ::DB::createTemporaryFile(temporary_volume->getDisk()->getPath() + TEMP_BACKUPS_DIRECTORY);
+            return;
+        }
+
+        if (!temp_directory.empty())
+        {
+            temporary_file = ::DB::createTemporaryFile(temp_directory + TEMP_BACKUPS_DIRECTORY);
+            return;
+        }
+
+        throw Exception("Cannot find a temp directory", ErrorCodes::NO_TEMP_DIRECTORY);
     }
 
     static LRUCache<dev_t, String> cache{32};
@@ -147,10 +159,10 @@ void BackupEntryFromLocalFile::createTemporaryFile(const std::optional<dev_t> & 
     {
         try
         {
-            const String & backup_temp_dir = *cache_element;
-            if (getStat(backup_temp_dir).st_dev == device_id)
+            const String & temp_dir = *cache_element;
+            if (getStat(temp_dir).st_dev == device_id)
             {
-                temporary_file = ::DB::createTemporaryFile(backup_temp_dir);
+                temporary_file = ::DB::createTemporaryFile(temp_dir + TEMP_BACKUPS_DIRECTORY);
                 return;
             }
         }
@@ -176,9 +188,8 @@ void BackupEntryFromLocalFile::createTemporaryFile(const std::optional<dev_t> & 
             const String & temp_disk_path = temp_disk->getPath();
             if (get_device_id(temp_disk_path) == *device_id)
             {
-                String backups_temp_dir = temp_disk_path + "backups/";
-                temporary_file = ::DB::createTemporaryFile(backups_temp_dir);
-                cache.set(*device_id, std::make_shared<String>(backups_temp_dir));
+                cache.set(*device_id, std::make_shared<String>(temp_disk_path));
+                temporary_file = ::DB::createTemporaryFile(temp_disk_path + TEMP_BACKUPS_DIRECTORY);
                 return;
             }
         }
@@ -186,9 +197,8 @@ void BackupEntryFromLocalFile::createTemporaryFile(const std::optional<dev_t> & 
 
     if (!temp_directory.empty() && (get_device_id(temp_directory) == *device_id))
     {
-        String backups_temp_dir = temp_directory + "backups/";
-        temporary_file = ::DB::createTemporaryFile(backups_temp_dir);
-        cache.set(*device_id, std::make_shared<String>(backups_temp_dir));
+        cache.set(*device_id, std::make_shared<String>(temp_directory));
+        temporary_file = ::DB::createTemporaryFile(temp_directory + TEMP_BACKUPS_DIRECTORY);
         return;
     }
 
@@ -232,13 +242,8 @@ UInt64 BackupEntryFromLocalFile::getDataSize() const
 UInt128 BackupEntryFromLocalFile::getChecksum() const
 {
     if (!checksum)
-        checksum = IBackupEntry::getChecksum();
+        checksum = calculateChecksum(getReadBuffer());
     return *checksum;
-}
-
-std::optional<UInt128> BackupEntryFromLocalFile::tryGetChecksumFast() const
-{
-    return checksum;
 }
 
 }

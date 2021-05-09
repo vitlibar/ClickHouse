@@ -22,7 +22,6 @@ public:
     std::unique_ptr<ReadBuffer> getReadBuffer() const override;
     UInt64 getDataSize() const override;
     UInt128 getChecksum() const override;
-    std::optional<UInt128> tryGetChecksumFast() const override;
 
 private:
     void prepareData() const;
@@ -32,7 +31,6 @@ private:
     const String path_to_file_with_attach_query;
     const BackupRenamingPtr renaming;
     mutable std::optional<String> data;
-    mutable std::optional<UInt128> checksum;
 };
 
 }

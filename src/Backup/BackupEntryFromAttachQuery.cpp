@@ -74,11 +74,6 @@ UInt128 BackupEntryFromAttachQuery::getChecksum() const
     return *checksum;
 }
 
-std::optional<UInt128> BackupEntryFromAttachQuery::tryGetChecksumFast() const
-{
-    return getChecksum();
-}
-
 void BackupEntryFromAttachQuery::prepareData() const
 {
     if (data)

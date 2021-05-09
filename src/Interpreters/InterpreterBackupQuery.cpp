@@ -33,8 +33,8 @@ BlockIO InterpreterBackupQuery::execute()
     if (query.kind == ASTBackupQuery::Kind::BACKUP)
     {
         BackupEntries entries;
-        if (query.all_databases)
-            backupAllDatabases(entries, context, renaming);
+        if (query.everything)
+            backupEverything(entries, context, renaming);
         else
         {
             for (const auto & database : query.databases)

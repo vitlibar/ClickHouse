@@ -20,24 +20,11 @@ std::unique_ptr<ReadBuffer> BackupEntryFromMemory::getReadBuffer() const
     return std::make_unique<ReadBufferFromString>(data);
 }
 
-UInt64 BackupEntryFromMemory::getDataSize() const
-{
-    return data.size();
-}
-
 UInt128 BackupEntryFromMemory::getChecksum() const
 {
     if (!checksum)
-    {
-        auto u128 = CityHash_v1_0_2::CityHash128WithSeed(data.data(), data.size(), {0, 0});
-        checksum = UInt128{u128.first, u128.second};
-    }
+        checksum = calculateChecksum(getReadBuffer());
     return *checksum;
-}
-
-std::optional<UInt128> BackupEntryFromMemory::tryGetChecksumFast() const
-{
-    return checksum;
 }
 
 }

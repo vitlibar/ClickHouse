@@ -62,7 +62,6 @@ using NameDependencies = std::unordered_map<String, std::vector<String>>;
 class IBackup;
 class IBackupEntry;
 using BackupEntries = std::vector<std::unique_ptr<IBackupEntry>>;
-enum class RestoreMode;
 
 struct ColumnSize
 {
@@ -188,8 +187,8 @@ public:
     virtual void backupPartitions(BackupEntries & out_backup_entries, const Context & context, const String & path_in_backup, const Strings & partition_ids) const;
 
     /// Restores the data of the storage from a backup.
-    virtual void restoreFromBackup(const Context & context, const IBackup & backup, const String & path_in_backup, RestoreMode restore_mode);
-    virtual void restorePartitionsFromBackup(const Context & context, const IBackup & backup, const String & path_in_backup, RestoreMode restore_mode, const Strings & partition_ids);
+    virtual void restoreFromBackup(const Context & context, const IBackup & backup, const String & path_in_backup);
+    virtual void restorePartitionsFromBackup(const Context & context, const IBackup & backup, const String & path_in_backup, const Strings & partition_ids, bool replace_partitions);
 
 protected:
     /// Returns whether the column is virtual - by default all columns are real.

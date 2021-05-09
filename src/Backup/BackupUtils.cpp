@@ -3,6 +3,7 @@
 #include <Backup/BackupOnDisk.h>
 #include <Backup/IBackupEntry.h>
 #include <Backup/RenamingInBackup.h>
+#include <Backup/RestoreMode.h>
 #include <Common/escapeForFileName.h>
 #include <Databases/IDatabase.h>
 #include <Disks/IVolume.h>
@@ -14,7 +15,6 @@
 #include <Parsers/parseQuery.h>
 #include <Storages/IStorage.h>
 #include <boost/range/algorithm/copy.hpp>
-#include <boost/range/algorithm_ext/push_back.hpp>
 #include <filesystem>
 
 
@@ -24,7 +24,7 @@ namespace ErrorCodes
 {
     extern const int LOGICAL_ERROR;
     extern const int NOT_ENOUGH_SPACE;
-    extern const int UNKNOWN_DATABASE;
+    extern const int UNKNOWN_TABLE;
 }
 
 namespace
@@ -245,7 +245,7 @@ void restoreDatabaseFromBackup(
         if (metadata_element.ends_with(".sql"))
         {
             String table_name = unescapeForFileName(std::filesystem::path(metadata_element).stem());
-            restoreTableFromBackup(context, backup, renaming, restore_mode, DatabaseAndTableName{database_name, table_name}, database, {});
+            restoreTableFromBackup(context, backup, renaming, restore_mode, DatabaseAndTableName{database_name, table_name}, database);
         }
     }
 }
@@ -277,6 +277,13 @@ void restoreTableFromBackup(
     if (!table)
     {
         table = database->tryGetTable(new_name.second, context);
+        if (table && !checkStorage(table, context, backup, database_and_table_name))
+        {
+            if (restore_mode == RestoreMode::REMOVE_OLD_DATA)
+                executeDropQuery(database->getDatabaseName(), context);
+            else
+                throw Exception()
+        }
         if (!table)
         {
             executeCreateQuery(context, backup, database_name, table_name, renaming);

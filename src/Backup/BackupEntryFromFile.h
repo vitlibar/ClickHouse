@@ -47,11 +47,11 @@ public:
         const String & path_in_backup_,
         const DiskPtr & disk_,
         const String & file_path_,
-        const std::optional<UInt64> & file_size_,
-        const std::optional<UInt128> & checksum_,
         Flags flags_,
-        const VolumePtr & temporary_volume_,
-        const String & temp_directory_on_disk_);
+        const std::optional<UInt64> & file_size_ = {},
+        const std::optional<UInt128> & checksum_ = {},
+        const VolumePtr & temporary_volume_ = nullptr,
+        const String & temp_directory_on_disk_ = "");
 
     ~BackupEntryFromFile() override;
 
