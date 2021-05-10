@@ -15,16 +15,9 @@ BackupEntryFromMemory::BackupEntryFromMemory(const String & path_in_backup_, Str
 {
 }
 
-std::unique_ptr<ReadBuffer> BackupEntryFromMemory::getReadBuffer() const
+std::unique_ptr<ReadBuffer> BackupEntryFromMemory::getReadBuffer()
 {
     return std::make_unique<ReadBufferFromString>(data);
-}
-
-UInt128 BackupEntryFromMemory::getChecksum() const
-{
-    if (!checksum)
-        checksum = calculateChecksum(getReadBuffer());
-    return *checksum;
 }
 
 }

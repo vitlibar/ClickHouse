@@ -4,7 +4,8 @@
 #include <Common/LRUCache.h>
 #include <Disks/DiskLocal.h>
 #include <Disks/IVolume.h>
-#include <IO/LimitReadBuffer.h>
+#include <IO/HashingReadBuffer.h>
+#include <IO/LimitSeekableReadBuffer.h>
 #include <IO/ReadBufferFromString.h>
 #include <IO/createReadBufferFromFileBase.h>
 #include <Poco/Path.h>
@@ -206,26 +207,7 @@ void BackupEntryFromLocalFile::createTemporaryFile(const std::optional<dev_t> & 
         "Cannot find a temp directory in the file system mounted at " + getMountPoint(file_path).string(), ErrorCodes::NO_TEMP_DIRECTORY);
 }
 
-std::unique_ptr<ReadBuffer> BackupEntryFromLocalFile::getReadBuffer() const
-{
-    if (data)
-        return std::make_unique<ReadBufferFromString>(*data);
-
-    if (temporary_file)
-    {
-        if (flags & Flags::APPEND_ONLY)
-            return std::make_unique<LimitReadBuffer>(createReadBufferFromFileBase(temporary_file->path(), 0, 0, 0), *file_size, false);
-        else
-            return createReadBufferFromFileBase(temporary_file->path(), 0, 0, 0);
-    }
-
-    if (flags & Flags::APPEND_ONLY)
-        return std::make_unique<LimitReadBuffer>(createReadBufferFromFileBase(file_path, 0, 0, 0), *file_size, false);
-    else
-        return createReadBufferFromFileBase(file_path, 0, 0, 0);
-}
-
-UInt64 BackupEntryFromLocalFile::getDataSize() const
+UInt64 BackupEntryFromLocalFile::getSize()
 {
     if (!file_size)
     {
@@ -239,11 +221,21 @@ UInt64 BackupEntryFromLocalFile::getDataSize() const
     return *file_size;
 }
 
-UInt128 BackupEntryFromLocalFile::getChecksum() const
+std::unique_ptr<ReadBuffer> BackupEntryFromLocalFile::getReadBuffer()
 {
-    if (!checksum)
-        checksum = calculateChecksum(getReadBuffer());
-    return *checksum;
+    if (data)
+        return std::make_unique<ReadBufferFromString>(*data);
+
+    std::unique_ptr<SeekableReadBuffer> read_buffer;
+    if (temporary_file)
+        read_buffer = createReadBufferFromFileBase(temporary_file->path(), 0, 0, 0);
+    else
+        read_buffer = createReadBufferFromFileBase(file_path, 0, 0, 0);
+
+    if (flags & Flags::APPEND_ONLY)
+        read_buffer = std::make_unique<LimitSeekableReadBuffer>(std::move(read_buffer), getSize());
+
+    return read_buffer;
 }
 
 }

@@ -55,10 +55,9 @@ public:
 
     ~BackupEntryFromFile() override;
 
-    std::unique_ptr<ReadBuffer> getReadBuffer() const override;
-    UInt64 getDataSize() const override;
-    UInt128 getChecksum() const override;
-    std::optional<UInt128> tryGetChecksumFast() const override;
+    UInt64 getSize() override;
+    std::optional<UInt128> getChecksum() override;
+    std::unique_ptr<ReadBuffer> getReadBuffer() override;
 
 private:
     std::unique_ptr<IBackupEntry> impl;

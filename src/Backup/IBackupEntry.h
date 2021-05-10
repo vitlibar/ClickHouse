@@ -19,22 +19,15 @@ public:
 
     const String & getPathInBackup() const { return path_in_backup; }
 
-    /// Returns the data.
-    virtual std::unique_ptr<ReadBuffer> getReadBuffer() const = 0;
-
     /// Returns the size of the data.
-    virtual UInt64 getDataSize() const = 0;
+    virtual UInt64 getSize() = 0;
 
-    /// Returns the checksum of the data.
-    /// The default implementation first calls tryGetChecksumFast(), then calculates
-    /// the checksum from the buffer returned by getReadBuffer().
-    virtual UInt128 getChecksum() const = 0;
+    /// Returns the checksum for the data.
+    /// Can return nullopt which means the checksum should be calculated from the read buffer.
+    virtual std::optional<UInt128> getChecksum() { return {}; }
 
-    /// Returns the checksum of the data only if it's already calculated.
-    virtual std::optional<UInt128> tryGetChecksumFast() const = 0;
-
-protected:
-    static UInt128 calculateChecksum(std::unique_ptr<ReadBuffer> read_buffer);
+    /// Returns a read buffer for reading the data.
+    virtual std::unique_ptr<ReadBuffer> getReadBuffer() = 0;
 
 private:
     const String path_in_backup;

@@ -17,15 +17,15 @@ public:
         std::unique_ptr<IBackupEntry> second_source_,
         const std::optional<UInt128> & checksum_ = {});
 
-    std::unique_ptr<ReadBuffer> getReadBuffer() const override;
-    UInt64 getDataSize() const override;
-    UInt128 getChecksum() const override;
-    std::optional<UInt128> tryGetChecksumFast() const override { return checksum; }
+    UInt64 getSize() override;
+    std::optional<UInt128> getChecksum() override { return checksum; }
+    std::unique_ptr<ReadBuffer> getReadBuffer() override;
 
 private:
     std::unique_ptr<IBackupEntry> first_source;
     std::unique_ptr<IBackupEntry> second_source;
-    mutable std::optional<UInt128> checksum;
+    std::optional<UInt64> size;
+    std::optional<UInt128> checksum;
 };
 
 }

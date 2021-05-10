@@ -11,9 +11,13 @@ using DiskPtr = std::shared_ptr<IDisk>;
 class DiskSelector;
 
 /// Represents a backup stored on a disk.
-/// A backup is stored as a directory, each entry is stored as a file in that directory,
-/// and also the ".header" file is stored which contains list of the files with their sizes and checksums.
-/// While BackupOnDisk is writing a backup it creates the ".write_lock" file and removes it afterwards.
+/// A backup is stored as a directory, each entry is stored as a file in that directory.
+/// Also three system files are stored:
+/// 1) ".base" is an XML file with information about the base backup.
+/// 2) ".contents" is a binary file containg a list of all entries along with their sizes
+/// and checksums and information whether the base backup should be used for each entry
+/// 3) ".write_lock" is a temporary empty file which is created before writing of a backup
+/// and deleted after finishing that writing.
 class BackupOnDisk : public IBackup
 {
 public:
@@ -27,7 +31,7 @@ public:
     String getPath() const override;
     Strings list(const String & prefix) const override;
     bool exists(const String & path_in_backup) const override;
-    size_t getDataSize(const String & path_in_backup) const override;
+    size_t getSize(const String & path_in_backup) const override;
     UInt128 getChecksum(const String & path_in_backup) const override;
     std::unique_ptr<IBackupEntry> read(const String & path_in_backup) const override;
     void write(std::unique_ptr<IBackupEntry> entry) override;
@@ -45,11 +49,11 @@ private:
 
     struct EntryInfo
     {
-        UInt64 data_size = 0;
+        UInt64 size = 0;
         UInt128 checksum{0, 0};
 
         /// for incremental backups
-        UInt64 base_data_size = 0;
+        UInt64 base_size = 0;
         UInt128 base_checksum{0, 0};
     };
 

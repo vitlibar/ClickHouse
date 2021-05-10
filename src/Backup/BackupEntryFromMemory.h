@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Backup/IBackupEntry.h>
+#include <IO/ReadBufferFromString.h>
 
 
 namespace DB
@@ -14,14 +15,13 @@ public:
     BackupEntryFromMemory(const String & path_in_backup_, const void * data_, size_t size_, const std::optional<UInt128> & checksum_ = {});
     BackupEntryFromMemory(const String & path_in_backup_, String data_, const std::optional<UInt128> & checksum_ = {});
 
-    std::unique_ptr<ReadBuffer> getReadBuffer() const override;
-    UInt64 getDataSize() const override { return data.size(); }
-    UInt128 getChecksum() const override;
-    std::optional<UInt128> tryGetChecksumFast() const override { return checksum; }
+    UInt64 getSize() override { return data.size(); }
+    std::optional<UInt128> getChecksum() override { return checksum; }
+    std::unique_ptr<ReadBuffer> getReadBuffer() override;
 
 private:
     const String data;
-    mutable std::optional<UInt128> checksum;
+    std::optional<UInt128> checksum;
 };
 
 }

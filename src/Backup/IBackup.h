@@ -38,7 +38,7 @@ public:
     virtual bool exists(const String & path_in_backup) const = 0;
 
     /// Get the size of the entry's data.
-    virtual size_t getDataSize(const String & path_in_backup) const = 0;
+    virtual size_t getSize(const String & path_in_backup) const = 0;
 
     /// Get the checksum of the entry's data.
     virtual UInt128 getChecksum(const String & path_in_backup) const = 0;

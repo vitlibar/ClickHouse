@@ -39,24 +39,19 @@ BackupEntryFromFile::BackupEntryFromFile(
 
 BackupEntryFromFile::~BackupEntryFromFile() = default;
 
-std::unique_ptr<ReadBuffer> BackupEntryFromFile::getReadBuffer() const
+UInt64 BackupEntryFromFile::getSize()
 {
-    return impl->getReadBuffer();
+    return impl->getSize();
 }
 
-UInt64 BackupEntryFromFile::getDataSize() const
-{
-    return impl->getDataSize();
-}
-
-UInt128 BackupEntryFromFile::getChecksum() const
+std::optional<UInt128> BackupEntryFromFile::getChecksum()
 {
     return impl->getChecksum();
 }
 
-std::optional<UInt128> BackupEntryFromFile::tryGetChecksumFast() const
+std::unique_ptr<ReadBuffer> BackupEntryFromFile::getReadBuffer()
 {
-    return impl->tryGetChecksumFast();
+    return impl->getReadBuffer();
 }
 
 }

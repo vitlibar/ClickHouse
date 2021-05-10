@@ -7,6 +7,7 @@ namespace Poco { class TemporaryFile; }
 namespace DB
 {
 class DiskLocal;
+class SeekableReadBuffer;
 using TemporaryFile = Poco::TemporaryFile;
 
 
@@ -38,10 +39,9 @@ public:
 
     ~BackupEntryFromLocalFile() override;
 
-    std::unique_ptr<ReadBuffer> getReadBuffer() const override;
-    UInt64 getDataSize() const override;
-    UInt128 getChecksum() const override;
-    std::optional<UInt128> tryGetChecksumFast() const override { return checksum; }
+    UInt64 getSize() override;
+    std::optional<UInt128> getChecksum() override { return checksum; }
+    std::unique_ptr<ReadBuffer> getReadBuffer() override;
 
 protected:
     void init();
@@ -53,8 +53,8 @@ protected:
     const String temp_directory;
     std::optional<String> data;
     std::unique_ptr<TemporaryFile> temporary_file;
-    mutable std::optional<UInt64> file_size;
-    mutable std::optional<UInt128> checksum;
+    std::optional<UInt64> file_size;
+    std::optional<UInt128> checksum;
 };
 
 }

@@ -8,7 +8,6 @@
 #include <Disks/DiskSelector.h>
 #include <Disks/IDisk.h>
 #include <IO/HashingReadBuffer.h>
-#include <IO/LimitReadBuffer.h>
 #include <IO/ReadBufferFromFileBase.h>
 #include <IO/ReadHelpers.h>
 #include <IO/SeekableReadBuffer.h>
@@ -34,7 +33,8 @@ namespace ErrorCodes
 
 namespace
 {
-    extern const UInt64 BACKUP_CONTENTS_VERSION = 1;
+    const UInt64 BACKUP_CONTENTS_VERSION = 1;
+    const UInt128 CHECKSUM_OF_EMPTY_DATA{0, 0};
 }
 
 
@@ -158,11 +158,14 @@ void BackupOnDisk::writeContents()
     for (const auto & [path_in_backup, info] : infos)
     {
         writeBinary(path_in_backup, *out);
-        writeVarUInt(info.data_size, *out);
-        writeBinary(info.checksum, *out);
-        writeVarUInt(info.base_data_size, *out);
-        if (info.base_data_size && (info.base_data_size != info.data_size))
-            writeBinary(info.base_checksum, *out);
+        writeVarUInt(info.size, *out);
+        if (info.size)
+        {
+            writeBinary(info.checksum, *out);
+            writeVarUInt(info.base_size, *out);
+            if (info.base_size && (info.base_size != info.size))
+                writeBinary(info.base_checksum, *out);
+        }
     }
 }
 
@@ -183,13 +186,20 @@ void BackupOnDisk::readContents()
         String path_in_backup;
         readBinary(path_in_backup, *in);
         EntryInfo info;
-        readVarUInt(info.data_size, *in);
-        readBinary(info.checksum, *in);
-        readVarUInt(info.base_data_size, *in);
-        if (info.base_data_size && (info.base_data_size != info.data_size))
-            readBinary(info.base_checksum, *in);
-        if (info.base_data_size && (info.base_data_size == info.data_size))
-            info.base_checksum = info.checksum;
+        readVarUInt(info.size, *in);
+        if (info.size)
+        {
+            readBinary(info.checksum, *in);
+            readVarUInt(info.base_size, *in);
+            if (info.base_size && (info.base_size != info.size))
+                readBinary(info.base_checksum, *in);
+            else if (info.base_size)
+                info.base_checksum = info.checksum;
+        }
+        else
+        {
+            info.checksum = CHECKSUM_OF_EMPTY_DATA;
+        }
         infos.emplace(path_in_backup, info);
     }
 }
@@ -236,13 +246,13 @@ bool BackupOnDisk::exists(const String & path_in_backup) const
     return infos.count(path_in_backup) != 0;
 }
 
-size_t BackupOnDisk::getDataSize(const String & path_in_backup) const
+size_t BackupOnDisk::getSize(const String & path_in_backup) const
 {
     std::lock_guard lock{mutex};
     auto it = infos.find(path_in_backup);
     if (it == infos.end())
         throw Exception("Entry " + quoteString(path_in_backup) + " not found in the backup", ErrorCodes::BACKUP_ENTRY_NOT_EXISTS);
-    return it->second.data_size;
+    return it->second.size;
 }
 
 UInt128 BackupOnDisk::getChecksum(const String & path_in_backup) const
@@ -263,13 +273,17 @@ std::unique_ptr<IBackupEntry> BackupOnDisk::read(const String & path_in_backup) 
         throw Exception("Entry " + quoteString(path_in_backup) + " not found in the backup", ErrorCodes::BACKUP_ENTRY_NOT_EXISTS);
 
     const auto & info = it->second;
-    if (info.data_size == 0)
-        return std::make_unique<BackupEntryFromMemory>(path_in_backup, nullptr, 0, info.checksum);
-
-    if (info.base_data_size == 0)
+    if (!info.size)
     {
+        /// Entry's data is empty.
+        return std::make_unique<BackupEntryFromMemory>(path_in_backup, nullptr, 0, CHECKSUM_OF_EMPTY_DATA);
+    }
+
+    if (!info.base_size)
+    {
+        /// Data goes completely from this backup, the base backup isn't used.
         return std::make_unique<BackupEntryFromFile>(
-            path_in_backup, disk, directory + path_in_backup, BackupEntryFromFile::ALWAYS_EXISTS_IMMUTABLE, info.data_size, info.checksum);
+            path_in_backup, disk, directory + path_in_backup, BackupEntryFromFile::ALWAYS_EXISTS_IMMUTABLE, info.size, info.checksum);
     }
 
     if (!base_backup)
@@ -279,30 +293,37 @@ std::unique_ptr<IBackupEntry> BackupOnDisk::read(const String & path_in_backup) 
     }
 
     auto base_entry = base_backup->read(path_in_backup);
-    if (base_entry->getDataSize() != info.base_data_size)
+    auto base_size = base_entry->getSize();
+    if (base_size != info.base_size)
     {
         throw Exception(
-            "Entry " + quoteString(path_in_backup) + " has unexpected size in the base backup (" + toString(base_entry->getDataSize())
-                + " != " + toString(info.base_data_size) + ")",
+            "Entry " + quoteString(path_in_backup) + " has unexpected size in the base backup (" + toString(base_size)
+                + " != " + toString(info.base_size) + ")",
             ErrorCodes::BACKUP_DAMAGED);
     }
 
-    if (base_entry->getChecksum() != info.base_checksum)
+    auto base_checksum = base_entry->getChecksum();
+    if (base_checksum && (*base_checksum != info.base_checksum))
     {
         throw Exception("Entry " + quoteString(path_in_backup) + " has unexpected checksum in the base backup", ErrorCodes::BACKUP_DAMAGED);
     }
 
-    if (info.data_size == info.base_data_size)
+    if (info.size == info.base_size)
+    {
+        /// Data goes completely from the base backup (nothing goes from this backup).
         return base_entry;
+    }
 
-    if (info.data_size < info.base_data_size)
+    if (info.size < info.base_size)
     {
         throw Exception(
-            "Entry " + quoteString(path_in_backup) + " has its data size less than the one in the base backup (" + toString(info.data_size)
-                + " < " + toString(info.base_data_size) + ")",
+            "Entry " + quoteString(path_in_backup) + " has its data size less than the one in the base backup (" + toString(info.size)
+                + " < " + toString(info.base_size) + ")",
             ErrorCodes::BACKUP_DAMAGED);
     }
 
+    /// The beginning of the data goes from the base backup,
+    /// and the ending goes from this backup.
     return std::make_unique<BackupEntryFromConcat>(
         path_in_backup,
         std::move(base_entry),
@@ -311,147 +332,170 @@ std::unique_ptr<IBackupEntry> BackupOnDisk::read(const String & path_in_backup) 
             disk,
             directory + path_in_backup,
             BackupEntryFromFile::ALWAYS_EXISTS_IMMUTABLE,
-            info.data_size - info.base_data_size),
+            info.size - info.base_size),
         info.checksum);
 }
 
 
 void BackupOnDisk::write(std::unique_ptr<IBackupEntry> entry)
 {
+    std::unique_ptr<ReadBuffer> read_buffer;
+    std::optional<HashingReadBuffer> hashing_buffer;
+
+    /// Lazily gets a read buffer for reading the entry's data.
+    auto get_read_buffer = [&]() -> ReadBuffer *
+    {
+        if (!read_buffer)
+            read_buffer = entry->getReadBuffer();
+        return read_buffer.get();
+    };
+
+    /// Restarts reading the entry's data from the beginning.
+    auto seek_set = [&]()
+    {
+        hashing_buffer.reset();
+        auto * seekable_buffer = typeid_cast<SeekableReadBuffer *>(get_read_buffer());
+        if (seekable_buffer)
+            seekable_buffer->seek(0, SEEK_SET);
+        else if (read_buffer->count())
+            read_buffer = entry->getReadBuffer();
+    };
+
+    std::optional<UInt128> calculated_checksum = entry->getChecksum();
+
+    /// Calculates the checksum for the entry's data if it wasn't calculated before.
+    auto calculate_checksum = [&]() -> UInt128
+    {
+        if (!calculated_checksum)
+        {
+            hashing_buffer.emplace(*get_read_buffer());
+            hashing_buffer->ignoreAll();
+            auto u128 = hashing_buffer->getHash();
+            get_read_buffer()->position() = hashing_buffer->position();
+            calculated_checksum = UInt128{u128.first, u128.second};
+        }
+        return *calculated_checksum;
+    };
+
+    /// Calculates the checksum for some part of the entry's data.
+    auto calculate_partial_checksum = [&](UInt64 limit) -> UInt128
+    {
+        if (limit >= entry->getSize())
+            return calculate_checksum();
+        hashing_buffer.emplace(*get_read_buffer());
+        hashing_buffer->ignore(limit);
+        auto u128 = hashing_buffer->getHash();
+        get_read_buffer()->position() = hashing_buffer->position();
+        return UInt128{u128.first, u128.second};
+    };
+
     std::lock_guard lock{mutex};
     const String & path_in_backup = entry->getPathInBackup();
     auto it = infos.find(path_in_backup);
     if (it != infos.end())
         throw Exception("Entry " + quoteString(path_in_backup) + " already exists in the backup", ErrorCodes::BACKUP_ENTRY_EXISTS);
 
-    EntryInfo info;
-    info.data_size = entry->getDataSize();
-
-    std::unique_ptr<ReadBuffer> read_buffer_in_use;
-    auto get_read_buffer = [&]() -> ReadBuffer *
+    UInt64 size = entry->getSize();
+    if (!size)
     {
-        if (!read_buffer_in_use)
-            read_buffer_in_use = entry->getReadBuffer();
-        return read_buffer_in_use.get();
-    };
-
-    auto seek = [&](UInt64 offset)
-    {
-        ReadBuffer * read_buffer = get_read_buffer();
-        SeekableReadBuffer * seekable = typeid_cast<SeekableReadBuffer *>(read_buffer);
-        if (seekable)
-            seekable->seek(offset, SEEK_SET);
-        else
-        {
-            if (read_buffer->count() > offset)
-            {
-                read_buffer_in_use = entry->getReadBuffer();
-                read_buffer = get_read_buffer();
-            }
-            if (read_buffer->count() < offset)
-                read_buffer->ignore(offset - read_buffer->count());
-        }
-    };
-
-    bool checksum_calculated = false;
-    auto calculate_checksum = [&]() -> UInt128
-    {
-        if (!checksum_calculated)
-        {
-            auto checksum = entry->tryGetChecksumFast();
-            if (checksum)
-                info.checksum = *checksum;
-            else
-            {
-                HashingReadBuffer hashing_buffer{*get_read_buffer()};
-                hashing_buffer.ignoreAll();
-                auto u128 = hashing_buffer.getHash();
-                info.checksum = UInt128{CityHash_v1_0_2::Uint128Low64(u128), CityHash_v1_0_2::Uint128High64(u128)};
-            }
-            checksum_calculated = true;
-        }
-        return info.checksum;
-    };
-
-    auto calculate_partial_checksum = [&](UInt64 limit) -> UInt128
-    {
-        LimitReadBuffer limit_buffer{*get_read_buffer(), limit, true};
-        HashingReadBuffer hashing_buffer{*get_read_buffer()};
-        hashing_buffer.ignoreAll();
-        auto u128 = hashing_buffer.getHash();
-        return UInt128{CityHash_v1_0_2::Uint128Low64(u128), CityHash_v1_0_2::Uint128High64(u128)};
-    };
-
-    if (!info.data_size)
-    {
-        info.checksum = entry->getChecksum();
+        /// Entry's data is empty.
+        EntryInfo info;
+        info.size = 0;
+        info.checksum = CHECKSUM_OF_EMPTY_DATA;
         infos.emplace(path_in_backup, info);
         return;
     }
 
+    /// Check if the entry's data can be received from the base backup,
+    /// completely or just the beginning.
+    UInt64 base_size = 0;
+    UInt128 base_checksum{0, 0};
     if (base_backup && base_backup->exists(path_in_backup))
     {
-        size_t base_data_size = base_backup->getDataSize(path_in_backup);
-        if (info.data_size == base_data_size)
+        UInt64 maybe_base_size = base_backup->getSize(path_in_backup);
+        if ((size >= maybe_base_size) && maybe_base_size)
         {
-            UInt128 base_checksum = base_backup->getChecksum(path_in_backup);
-            if (calculate_checksum() == base_checksum)
+            auto maybe_base_checksum = base_backup->getChecksum(path_in_backup);
+            if (calculate_partial_checksum(base_size) == maybe_base_checksum)
             {
-                info.base_data_size = info.data_size;
-                info.base_checksum = info.checksum;
-                infos.emplace(path_in_backup, info);
-                return;
+                /// Checksum matches, so we can store only the data after `base_size`
+                /// in this backup. The current position in the read buffer is already
+                /// at `base_size` (after calculating the partial checksum),
+                /// so we don't have to move it.
+                base_size = maybe_base_size;
+                base_checksum = maybe_base_checksum;
             }
-        }
-        else if (info.data_size > base_data_size)
-        {
-            UInt128 base_checksum = base_backup->getChecksum(path_in_backup);
-            if (calculate_partial_checksum(base_data_size) == base_checksum)
+            else if (hashing_buffer)
             {
-                info.base_data_size = base_data_size;
-                info.base_checksum = base_checksum;
-                seek(base_data_size);
+                /// Checksum doesn't match, but we moved the current position in
+                /// the read buffer while we were calculating the checksum. So we need to
+                /// move that position back to the beginning of the read buffer.
+                seek_set();
             }
         }
     }
 
-    UInt64 data_size = entry->getDataSize();
-    std::optional<UInt128> checksum = entry->tryGetChecksumFast();
-    auto read_buffer = entry->getReadBuffer();
-    ReadBuffer * in = read_buffer.get();
-    std::optional<HashingReadBuffer> hashing_in;
-    if (!checksum.has_value())
-        in  = &hashing_in.emplace(*in);
+    if (size == base_size)
+    {
+        /// The entry's data goes completely from the base backup
+        /// (nothing goes from this backup).
+        EntryInfo info;
+        info.size = base_size;
+        info.checksum = base_checksum;
+        info.base_size = base_size;
+        info.base_checksum = base_checksum;
+        infos.emplace(path_in_backup, info);
+        return;
+    }
 
+    /// Initialize a read buffer for copying the entry's data.
+    ReadBuffer * input_for_copying = get_read_buffer();
+    if (calculated_checksum)
+    {
+        /// The checksum is already known, we don't need the hashing buffer anymore.
+        hashing_buffer.reset();
+    }
+    else
+    {
+        /// The checksum wasn't calculated yet, so we have to calculate it now.
+        if (!hashing_buffer)
+            hashing_buffer.emplace(*input_for_copying);
+        input_for_copying = &hashing_buffer.value();
+    }
+
+    /// Copy the entry's data after `base_size`.
     String out_file_path = directory + path_in_backup;
     disk->createDirectories(directoryPath(out_file_path));
     try
     {
         auto out = disk->writeFile(out_file_path);
-        copyData(*in, *out);
-        if (out->count() != entry->getDataSize())
+        copyData(*input_for_copying, *out);
+        if (out->count() != entry->getSize())
         {
             throw Exception(
-                std::to_string(out->count()) + " bytes were written to " + quoteString(out_file_path) + " is not equal to the expected number "
-                    + std::to_string(entry->getDataSize()),
+                std::to_string(out->count()) + " bytes were written to " + quoteString(out_file_path)
+                    + " is not equal to the expected number " + std::to_string(entry->getSize()),
                 ErrorCodes::LOGICAL_ERROR);
         }
     }
     catch(...)
     {
-        disk->removeFile(out_file_path);
+        disk->removeFileIfExists(out_file_path);
         throw;
     }
 
-    if (!checksum.has_value())
+    if (!calculated_checksum)
     {
-        auto u128 = hashing_in->getHash();
-        checksum = UInt128{CityHash_v1_0_2::Uint128Low64(u128), CityHash_v1_0_2::Uint128High64(u128)};
+        auto u128 = hashing_buffer->getHash();
+        calculated_checksum = UInt128{u128.first, u128.second};
     }
 
+    /// Done!
     EntryInfo info;
-    info.data_size = data_size;
-    info.checksum = *checksum;
+    info.size = size;
+    info.checksum = *calculated_checksum;
+    info.base_size = base_size;
+    info.base_checksum = base_checksum;
     infos.emplace(path_in_backup, info);
 }
 

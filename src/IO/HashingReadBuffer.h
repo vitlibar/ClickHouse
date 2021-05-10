@@ -19,28 +19,37 @@ public:
         working_buffer = in.buffer();
         pos = in.position();
 
-        /// calculate hash from the data already read
-        if (!working_buffer.empty())
-        {
-            calculateHash(pos, working_buffer.end() - pos);
-        }
+        /// We ignore the data which already read from the buffer.
+        hash_start = pos;
+    }
+
+    uint128 getHash()
+    {
+        calculateHash(hash_start, pos - hash_start);
+        hash_start = pos;
+        return IHashingBuffer<ReadBuffer>::getHash();
     }
 
 private:
     bool nextImpl() override
     {
+        calculateHash(hash_start, pos - hash_start);
+
         in.position() = pos;
         bool res = in.next();
         working_buffer = in.buffer();
-        pos = in.position();
 
         // `pos` may be different from working_buffer.begin() when using AIO.
-        calculateHash(pos, working_buffer.end() - pos);
+        pos = in.position();
+        hash_start = pos;
 
         return res;
     }
 
     ReadBuffer & in;
+
+    /// Start position for the hash calculation.
+    Position hash_start;
 };
 
 }
