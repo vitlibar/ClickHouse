@@ -8,7 +8,7 @@ namespace DB
 {
 class IDisk;
 using DiskPtr = std::shared_ptr<IDisk>;
-class DiskSelector;
+class Context;
 
 /// Represents a backup stored on a disk.
 /// A backup is stored as a directory, each entry is stored as a file in that directory.
@@ -21,20 +21,19 @@ class DiskSelector;
 class BackupOnDisk : public IBackup
 {
 public:
-    BackupOnDisk(OpenMode open_mode_, const DiskPtr & disk_, const String & directory_);
+    BackupOnDisk(OpenMode open_mode_, const DiskPtr & disk_, const String & directory_, const Context & context_);
     BackupOnDisk(OpenMode open_mode_, const DiskPtr & disk_, const String & directory_, const std::shared_ptr<const IBackup> & base_backup_);
-    BackupOnDisk(OpenMode open_mode_, const String & disk_name_, const String & directory_, const DiskSelector & disk_selector_);
     ~BackupOnDisk() override;
 
     OpenMode getOpenMode() const override;
     String getDisk() const override;
     String getPath() const override;
-    Strings list(const String & prefix) const override;
-    bool exists(const String & path_in_backup) const override;
-    size_t getSize(const String & path_in_backup) const override;
-    UInt128 getChecksum(const String & path_in_backup) const override;
-    std::unique_ptr<IBackupEntry> read(const String & path_in_backup) const override;
-    void write(std::unique_ptr<IBackupEntry> entry) override;
+    Strings list(const String & prefix, const String & terminator) const override;
+    bool exists(const String & name) const override;
+    size_t getSize(const String & name) const override;
+    UInt128 getChecksum(const String & name) const override;
+    BackupEntryPtr read(const String & name) const override;
+    void write(const String & name, BackupEntryPtr entry) override;
     void finishWriting() override;
 
 private:
@@ -59,8 +58,8 @@ private:
 
     const OpenMode open_mode;
     const DiskPtr disk;
-    const DiskSelector * disk_selector = nullptr;
     const String directory;
+    const Context * context = nullptr;
     std::shared_ptr<const IBackup> base_backup;
     std::map<String, EntryInfo> infos;
     String lock_file_path;

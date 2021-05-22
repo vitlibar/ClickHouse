@@ -20,7 +20,6 @@ public:
     /// The constructor is allowed to not set `file_size_` or `checksum_`,
     /// in that case they will be calculated from the data.
     BackupEntryFromLocalFile(
-        const String & path_in_backup_,
         const String & file_path_,
         Flags flags_,
         const std::optional<UInt64> & file_size_,
@@ -28,7 +27,6 @@ public:
         const VolumePtr & temporary_volume_);
 
     BackupEntryFromLocalFile(
-        const String & path_in_backup_,
         const std::shared_ptr<DiskLocal> & disk_,
         const String & file_path_,
         Flags flags_,
@@ -39,9 +37,9 @@ public:
 
     ~BackupEntryFromLocalFile() override;
 
-    UInt64 getSize() override;
-    std::optional<UInt128> getChecksum() override { return checksum; }
-    std::unique_ptr<ReadBuffer> getReadBuffer() override;
+    UInt64 getSize() const override;
+    std::optional<UInt128> getChecksum() const override { return checksum; }
+    std::unique_ptr<ReadBuffer> getReadBuffer() const override;
 
 protected:
     void init();
@@ -53,7 +51,7 @@ protected:
     const String temp_directory;
     std::optional<String> data;
     std::unique_ptr<TemporaryFile> temporary_file;
-    std::optional<UInt64> file_size;
+    mutable std::optional<UInt64> file_size;
     std::optional<UInt128> checksum;
 };
 

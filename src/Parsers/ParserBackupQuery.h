@@ -9,13 +9,20 @@ namespace DB
   * BACKUP {TABLE [db.]table_name [AS db.new_table_name] [PARTITION partition_expr [,...]] |
   *         DICTIONARY [db.]dictionary_name |
   *         DATABASE database_name [AS new_database_name] |
-  *         ALL DATABASES EXCEPT SYSTEM } [,...]
+  *         ALL DATABASES |
+  *         TEMPORARY TABLE table_name [AS new_table_name] |
+  *         ALL TEMPORARY TABLES |
+  *         EVERYTHING} [,...]
   *        [WITH BASE 'base_backup_name']
   *        TO 'backup_name'
   *
   * RESTORE [{TABLE [db.]table_name [AS db.new_table_name] [PARTITION partition_expr [,...] |
   *           DICTIONARY [db.]dictionary_name [AS db.new_dictionary_name] |
-  *           DATABASE database_name [AS new_database_name] } [,...]
+  *           DATABASE database_name [AS new_database_name] |
+  *           ALL DATABASES |
+  *           TEMPORARY TABLE table_name [AS new_table_name] |
+  *           ALL TEMPORARY TABLES |
+  *           EVERYTHING} [,...]
   *         [WITH REPLACE IF {TABLE|DATABASE} EXISTS]
   *         FROM 'backup_name'
   */

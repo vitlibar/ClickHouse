@@ -37,20 +37,16 @@ namespace
     const UInt128 CHECKSUM_OF_EMPTY_DATA{0, 0};
 }
 
+std::shared_ptr<const IBackup> readBackup(const Context & context, const String & backup_name);
 
-BackupOnDisk::BackupOnDisk(OpenMode open_mode_, const DiskPtr & disk_, const String & directory_)
-    : BackupOnDisk(open_mode_, disk_, directory_, std::shared_ptr<const IBackup>{})
-{
-}
-
-BackupOnDisk::BackupOnDisk(OpenMode open_mode_, const DiskPtr & disk_, const String & directory_, const std::shared_ptr<const IBackup> & base_backup_)
-    : open_mode(open_mode_), disk(disk_), directory(directory_), base_backup(base_backup_)
+BackupOnDisk::BackupOnDisk(OpenMode open_mode_, const DiskPtr & disk_, const String & directory_, const Context & context_)
+    : open_mode(open_mode_), disk(disk_), directory(directory_), context(&context_)
 {
     open();
 }
 
-BackupOnDisk::BackupOnDisk(OpenMode open_mode_, const String & disk_name_, const String & directory_, const DiskSelector & disk_selector_)
-    : open_mode(open_mode_), disk(disk_selector_.get(disk_name_)), disk_selector(&disk_selector_), directory(directory_)
+BackupOnDisk::BackupOnDisk(OpenMode open_mode_, const DiskPtr & disk_, const String & directory_, const std::shared_ptr<const IBackup> & base_backup_)
+    : open_mode(open_mode_), disk(disk_), directory(directory_), base_backup(base_backup_)
 {
     open();
 }
@@ -99,16 +95,15 @@ void BackupOnDisk::writeLockFile()
 {
     if (open_mode == OpenMode::CREATE)
     {
-        String path_to_lock_file = directory + ".write_lock";
-        disk->createFile(path_to_lock_file);
-        lock_file_path = path_to_lock_file;
+        lock_file_path = directory + ".write_lock";
+        disk->createFile(lock_file_path);
     }
 }
 
 void BackupOnDisk::removeLockFile()
 {
     if (!lock_file_path.empty())
-        disk->removeFile(directory + ".write_lock");
+        disk->removeFileIfExists(lock_file_path);
 }
 
 void BackupOnDisk::writeBaseBackupInfo()
@@ -122,7 +117,6 @@ void BackupOnDisk::writeBaseBackupInfo()
         return;
     }
     Poco::AutoPtr<Poco::Util::XMLConfiguration> config{new Poco::Util::XMLConfiguration};
-    config->setString("disk", base_backup->getDisk());
     config->setString("path", base_backup->getPath());
     std::stringstream ss;
     config->save(ss);
@@ -132,7 +126,8 @@ void BackupOnDisk::writeBaseBackupInfo()
 
 void BackupOnDisk::readBaseBackupInfo()
 {
-    base_backup = nullptr;
+    if (base_backup)
+        return;
     String file_path = directory + ".base";
     if (!disk->exists(file_path))
         return;
@@ -143,10 +138,12 @@ void BackupOnDisk::readBaseBackupInfo()
     std::stringstream ss{str};
     Poco::AutoPtr<Poco::Util::XMLConfiguration> config{new Poco::Util::XMLConfiguration};
     config->load(ss);
-    String base_backup_disk_name = config->getString("disk", "");
     String base_backup_path = config->getString("path", "");
-    if (!base_backup_disk_name.empty())
-        base_backup = std::make_shared<BackupOnDisk>(OpenMode::READ, base_backup_disk_name, base_backup_path, disk_selector);
+    if (base_backup_path.empty())
+        return;
+    if (!context)
+        throw Exception("Cannot get base buckup without context", ErrorCodes::LOGICAL_ERROR);
+    base_backup = readBackup(*context, base_backup_path);
 }
 
 void BackupOnDisk::writeContents()
@@ -219,7 +216,7 @@ String BackupOnDisk::getPath() const
     return directory;
 }
 
-Strings BackupOnDisk::list(const String & prefix) const
+Strings BackupOnDisk::list(const String & prefix, const String & terminator) const
 {
     if (!prefix.ends_with('/') && !prefix.empty())
         throw Exception("prefix should end with '/'", ErrorCodes::BAD_ARGUMENTS);
@@ -227,12 +224,14 @@ Strings BackupOnDisk::list(const String & prefix) const
     Strings elements;
     for (auto it = infos.lower_bound(prefix); it != infos.end(); ++it)
     {
-        const String & path = it->first;
-        if (!path.starts_with(prefix))
+        const String & name = it->first;
+        if (!name.starts_with(prefix))
             break;
         size_t start_pos = prefix.length();
-        size_t end_pos = path.find('/', start_pos);
-        std::string_view new_element = std::string_view{path}.substr(start_pos, end_pos - start_pos);
+        size_t end_pos = String::npos;
+        if (!terminator.empty())
+            end_pos = name.find(terminator, start_pos);
+        std::string_view new_element = std::string_view{name}.substr(start_pos, end_pos - start_pos);
         if (!elements.empty() && (elements.back() == new_element))
             continue;
         elements.push_back(String{new_element});
@@ -240,50 +239,50 @@ Strings BackupOnDisk::list(const String & prefix) const
     return elements;
 }
 
-bool BackupOnDisk::exists(const String & path_in_backup) const
+bool BackupOnDisk::exists(const String & name) const
 {
     std::lock_guard lock{mutex};
-    return infos.count(path_in_backup) != 0;
+    return infos.count(name) != 0;
 }
 
-size_t BackupOnDisk::getSize(const String & path_in_backup) const
+size_t BackupOnDisk::getSize(const String & name) const
 {
     std::lock_guard lock{mutex};
-    auto it = infos.find(path_in_backup);
+    auto it = infos.find(name);
     if (it == infos.end())
-        throw Exception("Entry " + quoteString(path_in_backup) + " not found in the backup", ErrorCodes::BACKUP_ENTRY_NOT_EXISTS);
+        throw Exception("Entry " + quoteString(name) + " not found in the backup", ErrorCodes::BACKUP_ENTRY_NOT_EXISTS);
     return it->second.size;
 }
 
-UInt128 BackupOnDisk::getChecksum(const String & path_in_backup) const
+UInt128 BackupOnDisk::getChecksum(const String & name) const
 {
     std::lock_guard lock{mutex};
-    auto it = infos.find(path_in_backup);
+    auto it = infos.find(name);
     if (it == infos.end())
-        throw Exception("Entry " + quoteString(path_in_backup) + " not found in the backup", ErrorCodes::BACKUP_ENTRY_NOT_EXISTS);
+        throw Exception("Entry " + quoteString(name) + " not found in the backup", ErrorCodes::BACKUP_ENTRY_NOT_EXISTS);
     return it->second.checksum;
 }
 
 
-std::unique_ptr<IBackupEntry> BackupOnDisk::read(const String & path_in_backup) const
+BackupEntryPtr BackupOnDisk::read(const String & name) const
 {
     std::lock_guard lock{mutex};
-    auto it = infos.find(path_in_backup);
+    auto it = infos.find(name);
     if (it == infos.end())
-        throw Exception("Entry " + quoteString(path_in_backup) + " not found in the backup", ErrorCodes::BACKUP_ENTRY_NOT_EXISTS);
+        throw Exception("Entry " + quoteString(name) + " not found in the backup", ErrorCodes::BACKUP_ENTRY_NOT_EXISTS);
 
     const auto & info = it->second;
     if (!info.size)
     {
         /// Entry's data is empty.
-        return std::make_unique<BackupEntryFromMemory>(path_in_backup, nullptr, 0, CHECKSUM_OF_EMPTY_DATA);
+        return std::make_shared<BackupEntryFromMemory>(nullptr, 0, CHECKSUM_OF_EMPTY_DATA);
     }
 
     if (!info.base_size)
     {
         /// Data goes completely from this backup, the base backup isn't used.
-        return std::make_unique<BackupEntryFromFile>(
-            path_in_backup, disk, directory + path_in_backup, BackupEntryFromFile::ALWAYS_EXISTS_IMMUTABLE, info.size, info.checksum);
+        return std::make_shared<BackupEntryFromFile>(
+            disk, directory + name, BackupEntryFromFile::ALWAYS_EXISTS_IMMUTABLE, info.size, info.checksum);
     }
 
     if (!base_backup)
@@ -292,12 +291,12 @@ std::unique_ptr<IBackupEntry> BackupOnDisk::read(const String & path_in_backup) 
             "Entry is marked as to be read from a base backup, but the base backup is not available", ErrorCodes::BACKUP_DAMAGED);
     }
 
-    auto base_entry = base_backup->read(path_in_backup);
+    auto base_entry = base_backup->read(name);
     auto base_size = base_entry->getSize();
     if (base_size != info.base_size)
     {
         throw Exception(
-            "Entry " + quoteString(path_in_backup) + " has unexpected size in the base backup (" + toString(base_size)
+            "Entry " + quoteString(name) + " has unexpected size in the base backup (" + toString(base_size)
                 + " != " + toString(info.base_size) + ")",
             ErrorCodes::BACKUP_DAMAGED);
     }
@@ -305,7 +304,7 @@ std::unique_ptr<IBackupEntry> BackupOnDisk::read(const String & path_in_backup) 
     auto base_checksum = base_entry->getChecksum();
     if (base_checksum && (*base_checksum != info.base_checksum))
     {
-        throw Exception("Entry " + quoteString(path_in_backup) + " has unexpected checksum in the base backup", ErrorCodes::BACKUP_DAMAGED);
+        throw Exception("Entry " + quoteString(name) + " has unexpected checksum in the base backup", ErrorCodes::BACKUP_DAMAGED);
     }
 
     if (info.size == info.base_size)
@@ -317,27 +316,25 @@ std::unique_ptr<IBackupEntry> BackupOnDisk::read(const String & path_in_backup) 
     if (info.size < info.base_size)
     {
         throw Exception(
-            "Entry " + quoteString(path_in_backup) + " has its data size less than the one in the base backup (" + toString(info.size)
+            "Entry " + quoteString(name) + " has its data size less than the one in the base backup (" + toString(info.size)
                 + " < " + toString(info.base_size) + ")",
             ErrorCodes::BACKUP_DAMAGED);
     }
 
     /// The beginning of the data goes from the base backup,
     /// and the ending goes from this backup.
-    return std::make_unique<BackupEntryFromConcat>(
-        path_in_backup,
+    return std::make_shared<BackupEntryFromConcat>(
         std::move(base_entry),
-        std::make_unique<BackupEntryFromFile>(
-            path_in_backup,
+        std::make_shared<BackupEntryFromFile>(
             disk,
-            directory + path_in_backup,
+            directory + name,
             BackupEntryFromFile::ALWAYS_EXISTS_IMMUTABLE,
             info.size - info.base_size),
         info.checksum);
 }
 
 
-void BackupOnDisk::write(std::unique_ptr<IBackupEntry> entry)
+void BackupOnDisk::write(const String & name, BackupEntryPtr entry)
 {
     std::unique_ptr<ReadBuffer> read_buffer;
     std::optional<HashingReadBuffer> hashing_buffer;
@@ -390,10 +387,9 @@ void BackupOnDisk::write(std::unique_ptr<IBackupEntry> entry)
     };
 
     std::lock_guard lock{mutex};
-    const String & path_in_backup = entry->getPathInBackup();
-    auto it = infos.find(path_in_backup);
+    auto it = infos.find(name);
     if (it != infos.end())
-        throw Exception("Entry " + quoteString(path_in_backup) + " already exists in the backup", ErrorCodes::BACKUP_ENTRY_EXISTS);
+        throw Exception("Entry " + quoteString(name) + " already exists in the backup", ErrorCodes::BACKUP_ENTRY_EXISTS);
 
     UInt64 size = entry->getSize();
     if (!size)
@@ -402,7 +398,7 @@ void BackupOnDisk::write(std::unique_ptr<IBackupEntry> entry)
         EntryInfo info;
         info.size = 0;
         info.checksum = CHECKSUM_OF_EMPTY_DATA;
-        infos.emplace(path_in_backup, info);
+        infos.emplace(name, info);
         return;
     }
 
@@ -410,12 +406,12 @@ void BackupOnDisk::write(std::unique_ptr<IBackupEntry> entry)
     /// completely or just the beginning.
     UInt64 base_size = 0;
     UInt128 base_checksum{0, 0};
-    if (base_backup && base_backup->exists(path_in_backup))
+    if (base_backup && base_backup->exists(name))
     {
-        UInt64 maybe_base_size = base_backup->getSize(path_in_backup);
+        UInt64 maybe_base_size = base_backup->getSize(name);
         if ((size >= maybe_base_size) && maybe_base_size)
         {
-            auto maybe_base_checksum = base_backup->getChecksum(path_in_backup);
+            auto maybe_base_checksum = base_backup->getChecksum(name);
             if (calculate_partial_checksum(base_size) == maybe_base_checksum)
             {
                 /// Checksum matches, so we can store only the data after `base_size`
@@ -444,7 +440,7 @@ void BackupOnDisk::write(std::unique_ptr<IBackupEntry> entry)
         info.checksum = base_checksum;
         info.base_size = base_size;
         info.base_checksum = base_checksum;
-        infos.emplace(path_in_backup, info);
+        infos.emplace(name, info);
         return;
     }
 
@@ -464,7 +460,7 @@ void BackupOnDisk::write(std::unique_ptr<IBackupEntry> entry)
     }
 
     /// Copy the entry's data after `base_size`.
-    String out_file_path = directory + path_in_backup;
+    String out_file_path = directory + name;
     disk->createDirectories(directoryPath(out_file_path));
     try
     {
@@ -496,7 +492,7 @@ void BackupOnDisk::write(std::unique_ptr<IBackupEntry> entry)
     info.checksum = *calculated_checksum;
     info.base_size = base_size;
     info.base_checksum = base_checksum;
-    infos.emplace(path_in_backup, info);
+    infos.emplace(name, info);
 }
 
 void BackupOnDisk::finishWriting()

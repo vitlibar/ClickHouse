@@ -58,10 +58,12 @@ class EnabledQuota;
 struct SelectQueryInfo;
 
 using NameDependencies = std::unordered_map<String, std::vector<String>>;
+using DatabaseAndTableName = std::pair<String, String>;
 
 class IBackup;
 class IBackupEntry;
-using BackupEntries = std::vector<std::unique_ptr<IBackupEntry>>;
+using BackupEntries = std::vector<std::pair<String, std::unique_ptr<IBackupEntry>>>;
+using RestoreTasks = std::vector<std::function<void()>>;
 
 struct ColumnSize
 {
@@ -183,12 +185,12 @@ public:
     NameDependencies getDependentViewsByColumn(const Context & context) const;
 
     /// Prepares entries to backup all the data of the storage.
-    virtual void backup(BackupEntries & out_backup_entries, const Context & context, const String & path_in_backup) const;
-    virtual void backupPartitions(BackupEntries & out_backup_entries, const Context & context, const String & path_in_backup, const Strings & partition_ids) const;
+    virtual BackupEntries backup(const Context & context, const DatabaseAndTableName & name_in_backup) const;
+    virtual BackupEntries backupPartitions(const Strings & partitions, const Context & context, const DatabaseAndTableName & name_in_backup) const;
 
     /// Restores the data of the storage from a backup.
-    virtual void restoreFromBackup(const Context & context, const IBackup & backup, const String & path_in_backup);
-    virtual void restorePartitionsFromBackup(const Context & context, const IBackup & backup, const String & path_in_backup, const Strings & partition_ids, bool replace_partitions);
+    virtual RestoreTasks restoreFromBackup(const Context & context, const IBackup & backup, const DatabaseAndTableName & name_in_backup);
+    virtual RestoreTasks restorePartitionsFromBackup(const Strings & partitions, const Context & context, const IBackup & backup, const DatabaseAndTableName & name_in_backup);
 
 protected:
     /// Returns whether the column is virtual - by default all columns are real.

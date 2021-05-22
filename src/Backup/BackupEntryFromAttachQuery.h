@@ -15,13 +15,14 @@ using BackupRenamingPtr = std::shared_ptr<const BackupRenaming>;
 class BackupEntryFromAttachQuery : public IBackupEntry
 {
 public:
-    BackupEntryFromAttachQuery(const String & path_in_backup_, const ASTPtr & attach_query_, const BackupRenamingPtr & renaming_);
-    BackupEntryFromAttachQuery(const String & path_in_backup_, const String & path_to_file_with_attach_query_, const BackupRenamingPtr & renaming_);
+    BackupEntryFromAttachQuery(const ASTPtr & attach_query_, const String & db_name_in_backup_);
+    BackupEntryFromAttachQuery(const ASTPtr & attach_query_, const DatabaseAndTableName & name_in_backup_);
+    BackupEntryFromAttachQuery(const String & path_to_file_with_attach_query_, const String & db_name_in_backup_);
+    BackupEntryFromAttachQuery(const String & path_to_file_with_attach_query_, const DatabaseAndTableName & name_in_backup_);
     ~BackupEntryFromAttachQuery() override;
 
     std::unique_ptr<ReadBuffer> getReadBuffer() const override;
     UInt64 getDataSize() const override;
-    UInt128 getChecksum() const override;
 
 private:
     void prepareData() const;

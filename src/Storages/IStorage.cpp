@@ -200,24 +200,24 @@ NameDependencies IStorage::getDependentViewsByColumn(const Context & context) co
     return name_deps;
 }
 
-BackupEntries IStorage::backup(const Context &) const
+BackupEntries IStorage::backup(const Context &, const DatabaseAndTableName &) const
 {
     throw Exception("Table engine " + getName() + " doesn't support backups", ErrorCodes::NOT_IMPLEMENTED);
 }
 
-BackupEntries IStorage::backupPartitions(const std::set<String> &, const Context &) const
+BackupEntries IStorage::backupPartitions(const Strings &, const Context &, const DatabaseAndTableName &) const
 {
-    throw Exception("Table engine " + getName() + " doesn't support backups for partitions", ErrorCodes::NOT_IMPLEMENTED);
+    throw Exception("Table engine " + getName() + " doesn't support backups of partitions", ErrorCodes::NOT_IMPLEMENTED);
 }
 
-void IStorage::restoreFromBackup(const IBackup &, const String &, RestoreMode, const Context &)
+RestoreTasks IStorage::restoreFromBackup(const Context &, const IBackup &, const DatabaseAndTableName &)
 {
-    throw Exception("Table engine " + getName() + " doesn't support backups", ErrorCodes::NOT_IMPLEMENTED);
+    throw Exception("Table engine " + getName() + " doesn't support restoring", ErrorCodes::NOT_IMPLEMENTED);
 }
 
-void IStorage::restorePartitionsFromBackup(const std::set<String> &, const IBackup &, const String &, RestoreMode, const Context &)
+RestoreTasks IStorage::restorePartitionsFromBackup(const Strings &, const Context &, const IBackup &, const DatabaseAndTableName &)
 {
-    throw Exception("Table engine " + getName() + " doesn't support backups for partitions", ErrorCodes::NOT_IMPLEMENTED);
+    throw Exception("Table engine " + getName() + " doesn't support restoring of partitions", ErrorCodes::NOT_IMPLEMENTED);
 }
 
 std::string PrewhereDAGInfo::dump() const

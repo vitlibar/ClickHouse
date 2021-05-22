@@ -44,7 +44,6 @@ public:
     /// The constructor is allowed to not set `file_size_` or `checksum_`,
     /// in this case they will calculated from the data.
     BackupEntryFromFile(
-        const String & path_in_backup_,
         const DiskPtr & disk_,
         const String & file_path_,
         Flags flags_,
@@ -55,9 +54,9 @@ public:
 
     ~BackupEntryFromFile() override;
 
-    UInt64 getSize() override;
-    std::optional<UInt128> getChecksum() override;
-    std::unique_ptr<ReadBuffer> getReadBuffer() override;
+    UInt64 getSize() const override;
+    std::optional<UInt128> getChecksum() const override;
+    std::unique_ptr<ReadBuffer> getReadBuffer() const override;
 
 private:
     std::unique_ptr<IBackupEntry> impl;

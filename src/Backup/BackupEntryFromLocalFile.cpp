@@ -31,14 +31,12 @@ namespace
 
 
 BackupEntryFromLocalFile::BackupEntryFromLocalFile(
-    const String & path_in_backup_,
     const String & file_path_,
     Flags flags_,
     const std::optional<UInt64> & file_size_,
     const std::optional<UInt128> & checksum_,
     const VolumePtr & temporary_volume_)
-    : IBackupEntry(path_in_backup_)
-    , file_path(file_path_)
+    : file_path(file_path_)
     , flags(flags_)
     , temporary_volume(temporary_volume_)
     , file_size(file_size_)
@@ -48,7 +46,6 @@ BackupEntryFromLocalFile::BackupEntryFromLocalFile(
 }
 
 BackupEntryFromLocalFile::BackupEntryFromLocalFile(
-    const String & path_in_backup_,
     const std::shared_ptr<DiskLocal> & disk_,
     const String & file_path_,
     Flags flags_,
@@ -56,8 +53,7 @@ BackupEntryFromLocalFile::BackupEntryFromLocalFile(
     const std::optional<UInt128> & checksum_,
     const VolumePtr & temporary_volume_,
     const String & temp_directory_on_disk_)
-    : IBackupEntry(path_in_backup_)
-    , file_path(fullPath(disk_, file_path_))
+    : file_path(fullPath(disk_, file_path_))
     , flags(flags_)
     , temporary_volume(temporary_volume_)
     , temp_directory(temp_directory_on_disk_.empty() ? "" : fullPath(disk_, temp_directory_on_disk_))
@@ -207,7 +203,7 @@ void BackupEntryFromLocalFile::createTemporaryFile(const std::optional<dev_t> & 
         "Cannot find a temp directory in the file system mounted at " + getMountPoint(file_path).string(), ErrorCodes::NO_TEMP_DIRECTORY);
 }
 
-UInt64 BackupEntryFromLocalFile::getSize()
+UInt64 BackupEntryFromLocalFile::getSize() const
 {
     if (!file_size)
     {
@@ -221,7 +217,7 @@ UInt64 BackupEntryFromLocalFile::getSize()
     return *file_size;
 }
 
-std::unique_ptr<ReadBuffer> BackupEntryFromLocalFile::getReadBuffer()
+std::unique_ptr<ReadBuffer> BackupEntryFromLocalFile::getReadBuffer() const
 {
     if (data)
         return std::make_unique<ReadBufferFromString>(*data);
