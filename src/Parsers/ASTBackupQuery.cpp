@@ -9,92 +9,89 @@ namespace DB
 namespace
 {
     using Kind = ASTBackupQuery::Kind;
-    using Entry = ASTBackupQuery::Entry;
-    using EntryType = ASTBackupQuery::EntryType;
+    using Element = ASTBackupQuery::Element;
+    using ElementType = ASTBackupQuery::ElementType;
 
-    void formatEntry(const Entry & entry, Kind kind, const IAST::FormatSettings & format)
+    void formatName(const DatabaseAndTableName & name, ElementType type, const IAST::FormatSettings & format)
     {
-        format.ostr << (format.hilite ? IAST::hilite_keyword : "") << " ";
-        switch (entry.type)
+        switch (type)
         {
-            case EntryType::TABLE: format.ostr << "TABLE"; break;
-            case EntryType::DICTIONARY: format.ostr << "DICTIONARY"; break;
-            case EntryType::DATABASE: format.ostr << "DATABASE"; break;
-            case EntryType::ALL_DATABASES: format.ostr << "ALL DATABASES"; break;
-            case EntryType::TEMPORARY_TABLE: format.ostr << "TEMPORARY TABLE"; break;
-            case EntryType::ALL_TEMPORARY_TABLES: format.ostr << "ALL TEMPORARY TABLES"; break;
-            case EntryType::EVERYTHING: format.ostr << "EVERYTHING"; break;
-        }
-        format.ostr << (format.hilite ? IAST::hilite_none : "");
-
-        bool need_table_name = (entry.type == EntryType::TABLE) || (entry.type == EntryType::DICTIONARY) || (entry.type == EntryType::TEMPORARY_TABLE);
-        bool need_db_name = (entry.type == EntryType::DATABASE);
-        bool allow_db_name = need_db_name || (entry.type == EntryType::TABLE) || (entry.type == EntryType::DICTIONARY);
-
-        if (need_table_name && allow_db_name)
-        {
-            const auto & name = entry.name;
-            const auto & new_name = entry.new_name;
-            if (!name.first.empty())
-                format.ostr << backQuoteIfNeed(name.first) << ".";
-            format.ostr << backQuoteIfNeed(name.second);
-            if (!new_name.second.empty() && (new_name != name))
+            case ElementType::TABLE: [[fallthrough]];
+            case ElementType::DICTIONARY:
             {
-                format.ostr << (format.hilite ? IAST::hilite_keyword : "") << " AS " << (format.hilite ? IAST::hilite_none : "");
-                if (!new_name.first.empty())
-                    format.ostr << backQuoteIfNeed(new_name.first) << ".";
-                format.ostr << backQuoteIfNeed(new_name.second);
+                format.ostr << " ";
+                if (!name.first.empty())
+                    format.ostr << backQuoteIfNeed(name.first) << ".";
+                format.ostr << backQuoteIfNeed(name.second);
+                break;
             }
-        }
-        else if (need_table_name || need_db_name)
-        {
-            assert(!need_table_name || !need_db_name);
-            const auto & name = need_db_name ? entry.name.first : entry.name.second;
-            const auto & new_name = need_db_name ? entry.new_name.first : entry.new_name.second;
-            format.ostr << backQuoteIfNeed(name);
-            if (!new_name.empty() && (new_name != name))
+            case ElementType::DATABASE:
             {
-                format.ostr << (format.hilite ? IAST::hilite_keyword : "") << " AS " << (format.hilite ? IAST::hilite_none : "");
-                format.ostr << backQuoteIfNeed(new_name);
+                format.ostr << " " << backQuoteIfNeed(name.first);
+                break;
             }
-        }
-
-        if (!entry.partitions.empty())
-        {
-            format.ostr << (format.hilite ? IAST::hilite_keyword : "") << " PARTITION " << (format.hilite ? IAST::hilite_none : "");
-            for (size_t j : ext::range(entry.partitions.size()))
+            case ElementType::TEMPORARY_TABLE:
             {
-                const auto & partition = entry.partitions[j];
-                if (j != 0)
-                    format.ostr << ",";
-                format.ostr << " " << quoteString(partition);
+                format.ostr << " " << backQuoteIfNeed(name.second);
+                break;
             }
+            default:
+                break;
         }
     }
 
-    void formatEntries(
-        const std::vector<Entry> & entries,
-        Kind kind,
-        const IAST::FormatSettings & format)
+    void formatPartitions(const std::set<String> & partitions, const IAST::FormatSettings & format)
     {
+        if (partitions.empty())
+            return;
+        format.ostr << (format.hilite ? IAST::hilite_keyword : "") << " PARTITION " << (format.hilite ? IAST::hilite_none : "");
         bool need_comma = false;
-        for (const auto & entry : entries)
+        for (const auto & partition : partitions)
         {
             if (std::exchange(need_comma, true))
                 format.ostr << ",";
-            formatEntry(entry, kind, format);
+            format.ostr << " " << quoteString(partition);
         }
     }
 
-    void formatReplaceMode(const RestoreWithReplaceMode & replace_mode,
-                           const IAST::FormatSettings & format)
+    void formatElement(const Element & element, const IAST::FormatSettings & format)
     {
-        if (replace_mode.replace_table_if_exists && replace_mode.replace_database_if_exists)
-            format.ostr << (format.hilite ? IAST::hilite_keyword : "") << " WITH REPLACE IF TABLE OR DATABASE EXISTS" << (format.hilite ? IAST::hilite_none : "");
-        else if (replace_mode.replace_table_if_exists)
-            format.ostr << (format.hilite ? IAST::hilite_keyword : "") << " WITH REPLACE IF TABLE EXISTS" << (format.hilite ? IAST::hilite_none : "");
-        else if (replace_mode.replace_database_if_exists)
-            format.ostr << (format.hilite ? IAST::hilite_keyword : "") << " WITH REPLACE IF DATABASE EXISTS" << (format.hilite ? IAST::hilite_none : "");
+        format.ostr << (format.hilite ? IAST::hilite_keyword : "") << " ";
+        switch (element.type)
+        {
+            case ElementType::TABLE: format.ostr << "TABLE"; break;
+            case ElementType::DICTIONARY: format.ostr << "DICTIONARY"; break;
+            case ElementType::DATABASE: format.ostr << "DATABASE"; break;
+            case ElementType::ALL_DATABASES: format.ostr << "ALL DATABASES"; break;
+            case ElementType::TEMPORARY_TABLE: format.ostr << "TEMPORARY TABLE"; break;
+            case ElementType::ALL_TEMPORARY_TABLES: format.ostr << "ALL TEMPORARY TABLES"; break;
+            case ElementType::EVERYTHING: format.ostr << "EVERYTHING"; break;
+        }
+        format.ostr << (format.hilite ? IAST::hilite_none : "");
+
+        const auto & name = element.name;
+        formatName(name, element.type, format);
+
+        const auto & name_in_backup = element.name_in_backup;
+        bool name_in_backup_empty = (name_in_backup.first.empty() && name_in_backup.second.empty());
+        if (!name_in_backup_empty && (name_in_backup != name))
+        {
+            format.ostr << (format.hilite ? IAST::hilite_keyword : "") << " USING NAME" << (format.hilite ? IAST::hilite_none : "");
+            formatName(name_in_backup, element.type, format);
+        }
+
+        formatPartitions(element.partitions, format);
+    }
+
+    void formatElements(const std::vector<Element> & elements, const IAST::FormatSettings & format)
+    {
+        bool need_comma = false;
+        for (const auto & element : elements)
+        {
+            if (std::exchange(need_comma, true))
+                format.ostr << ",";
+            formatElement(element, format);
+        }
     }
 }
 
@@ -115,18 +112,10 @@ void ASTBackupQuery::formatImpl(const FormatSettings & format, FormatState &, Fo
     format.ostr << (format.hilite ? hilite_keyword : "") << ((kind == Kind::BACKUP) ? "BACKUP" : "RESTORE")
                 << (format.hilite ? hilite_none : "");
 
-    formatEntries(entries, kind, format);
-\
-    if (kind == Kind::BACKUP)
-    {
-        if (!base_backup_name.empty())
-            format.ostr << (format.hilite ? hilite_keyword : "") << " WITH BASE " << (format.hilite ? hilite_none : "") << " " << quoteString(base_backup_name);
-    }
-    else
-    {
-        assert(kind == Kind::RESTORE);
-        formatReplaceMode(replace_mode, format);
-    }
+    formatElements(elements, format);
+
+    if ((kind == Kind::BACKUP) && !base_backup_name.empty())
+        format.ostr << (format.hilite ? hilite_keyword : "") << " WITH BASE " << (format.hilite ? hilite_none : "") << " " << quoteString(base_backup_name);
 
     format.ostr << (format.hilite ? hilite_keyword : "") << ((kind == Kind::BACKUP) ? " TO" : " FROM") << (format.hilite ? hilite_none : "");
     format.ostr << " " << quoteString(backup_name);

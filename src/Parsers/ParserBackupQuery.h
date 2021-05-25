@@ -6,24 +6,23 @@
 namespace DB
 {
 /** Parses queries like
-  * BACKUP {TABLE [db.]table_name [AS db.new_table_name] [PARTITION partition_expr [,...]] |
-  *         DICTIONARY [db.]dictionary_name |
-  *         DATABASE database_name [AS new_database_name] |
-  *         ALL DATABASES |
-  *         TEMPORARY TABLE table_name [AS new_table_name] |
-  *         ALL TEMPORARY TABLES |
-  *         EVERYTHING} [,...]
+  * BACKUP { TABLE [db.]table_name [USING NAME [db.]table_name_in_backup] [PARTITION partition_expr [,...]] |
+  *          DICTIONARY [db.]dictionary_name [USING NAME [db.]dictionary_name_in_backup] |
+  *          DATABASE database_name [USING NAME database_name_in_backup] |
+  *          ALL DATABASES |
+  *          TEMPORARY TABLE table_name [USING NAME table_name_in_backup]
+  *          ALL TEMPORARY TABLES |
+  *          EVERYTHING } [,...]
   *        [WITH BASE 'base_backup_name']
   *        TO 'backup_name'
   *
-  * RESTORE [{TABLE [db.]table_name [AS db.new_table_name] [PARTITION partition_expr [,...] |
-  *           DICTIONARY [db.]dictionary_name [AS db.new_dictionary_name] |
-  *           DATABASE database_name [AS new_database_name] |
+  * RESTORE { TABLE [db.]table_name [USING NAME [db.]table_name_in_backup] [PARTITION partition_expr [,...]] |
+  *           DICTIONARY [db.]dictionary_name [USING NAME [db.]dictionary_name_in_backup] |
+  *           DATABASE database_name [USING NAME database_name_in_backup] |
   *           ALL DATABASES |
-  *           TEMPORARY TABLE table_name [AS new_table_name] |
+  *           TEMPORARY TABLE table_name [USING NAME table_name_in_backup] |
   *           ALL TEMPORARY TABLES |
-  *           EVERYTHING} [,...]
-  *         [WITH REPLACE IF {TABLE|DATABASE} EXISTS]
+  *           EVERYTHING } [,...]
   *         FROM 'backup_name'
   */
 class ParserBackupQuery : public IParserBase

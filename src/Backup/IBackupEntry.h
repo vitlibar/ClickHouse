@@ -29,6 +29,6 @@ public:
 };
 
 using BackupEntryPtr = std::unique_ptr<IBackupEntry>;
-using BackupEntries = std::unordered_map<String, BackupEntryPtr>;
+using BackupEntries = std::vector<std::pair<String, BackupEntryPtr>>;
 
 }

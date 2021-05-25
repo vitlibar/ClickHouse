@@ -18,112 +18,128 @@ namespace ErrorCodes
 namespace
 {
     using Kind = ASTBackupQuery::Kind;
-    using Entry = ASTBackupQuery::Entry;
-    using EntryType = ASTBackupQuery::EntryType;
+    using Element = ASTBackupQuery::Element;
+    using ElementType = ASTBackupQuery::ElementType;
 
-    bool parseEntry(IParser::Pos & pos, Expected & expected, Kind kind, Entry & entry)
+    bool parseName(IParser::Pos & pos, Expected & expected, ElementType type, DatabaseAndTableName & name)
     {
-        return IParserBase::wrapParseImpl(pos, [&]
+        switch (type)
         {
-            EntryType type;
-            if (ParserKeyword{"TABLE"}.ignore(pos, expected))
-                type = EntryType::TABLE;
-            else if (ParserKeyword{"DICTIONARY"}.ignore(pos, expected))
-                type = EntryType::DICTIONARY;
-            else if (ParserKeyword{"DATABASE"}.ignore(pos, expected))
-                type = EntryType::DATABASE;
-            else if (ParserKeyword{"ALL DATABASES"}.ignore(pos, expected))
-                type = EntryType::ALL_DATABASES;
-            else if (ParserKeyword{"TEMPORARY TABLE"}.ignore(pos, expected))
-                type = EntryType::TEMPORARY_TABLE;
-            else if (ParserKeyword{"ALL TEMPORARY TABLES"}.ignore(pos, expected))
-                type = EntryType::ALL_TEMPORARY_TABLES;
-            else if (ParserKeyword{"EVERYTHING"}.ignore(pos, expected))
-                type = EntryType::EVERYTHING;
-            else
-                return false;
-
-            DatabaseAndTableName name, new_name;
-            bool need_table_name = (type == EntryType::TABLE) || (type == EntryType::DICTIONARY) || (type == EntryType::TEMPORARY_TABLE);
-            bool need_db_name = (type == EntryType::DATABASE);
-            bool allow_db_name = need_db_name || (type == EntryType::TABLE) || (type == EntryType::DICTIONARY);
-
-            if (need_table_name && allow_db_name)
+            case ElementType::TABLE: [[fallthrough]];
+            case ElementType::DICTIONARY:
             {
-                if (!parseDatabaseAndTableName(pos, expected, name.first, name.second))
-                    return false;
-                if (ParserKeyword{"AS"}.ignore(pos, expected))
-                {
-                    if (!parseDatabaseAndTableName(pos, expected, new_name.first, new_name.second))
-                        return false;
-                }
-                else
-                {
-                    new_name = name;
-                }
-                return true;
+                return parseDatabaseAndTableName(pos, expected, name.first, name.second);
             }
-            else if (need_table_name || need_db_name)
-            {
-                assert(!need_table_name || !need_db_name);
-                String & name1 = need_db_name ? name.first : name.second;
-                String & new_name1 = need_db_name ? new_name.first : new_name.second;
 
+            case ElementType::DATABASE:
+            {
                 ASTPtr ast;
                 if (!ParserIdentifier{}.parse(pos, ast, expected))
                     return false;
-                name1 = getIdentifierName(ast);
-
-                if (ParserKeyword{"AS"}.ignore(pos, expected))
-                {
-                    if (!ParserIdentifier{}.parse(pos, ast, expected))
-                        return false;
-                    new_name1 = getIdentifierName(ast);
-                }
-                else
-                    new_name1 = name1;
+                name.first = getIdentifierName(ast);
+                name.second.clear();
+                return true;
             }
 
-            Strings partitions;
-            bool allow_partitions = (type == EntryType::TABLE);
-            if (allow_partitions && ParserKeyword{"PARTITION"}.ignore(pos, expected))
+            case ElementType::TEMPORARY_TABLE:
             {
-                auto parse_element = [&]
-                {
-                    ASTPtr ast;
-                    if (!ParserStringLiteral{}.parse(pos, ast, expected))
-                        return false;
-                    partitions.emplace_back(ast->as<ASTLiteral &>().value.safeGet<String>());
-                    return true;
-                };
-                if (!ParserList::parseUtil(pos, expected, parse_element, false))
+                ASTPtr ast;
+                if (!ParserIdentifier{}.parse(pos, ast, expected))
+                    return false;
+                name.second = getIdentifierName(ast);
+                name.first.clear();
+                return true;
+            }
+
+            default:
+                return true;
+        }
+    }
+
+    bool parsePartitions(IParser::Pos & pos, Expected & expected, std::set<String> & partitions)
+    {
+        if (!ParserKeyword{"PARTITION"}.ignore(pos, expected))
+            return false;
+
+        std::set<String> result;
+        auto parse_list_element = [&]
+        {
+            ASTPtr ast;
+            if (!ParserStringLiteral{}.parse(pos, ast, expected))
+                return false;
+            result.emplace(ast->as<ASTLiteral &>().value.safeGet<String>());
+            return true;
+        };
+        if (!ParserList::parseUtil(pos, expected, parse_list_element, false))
+            return false;
+
+        partitions = std::move(result);
+        return true;
+    }
+
+    bool parseElement(IParser::Pos & pos, Expected & expected, Element & entry)
+    {
+        return IParserBase::wrapParseImpl(pos, [&]
+        {
+            ElementType type;
+            if (ParserKeyword{"TABLE"}.ignore(pos, expected))
+                type = ElementType::TABLE;
+            else if (ParserKeyword{"DICTIONARY"}.ignore(pos, expected))
+                type = ElementType::DICTIONARY;
+            else if (ParserKeyword{"DATABASE"}.ignore(pos, expected))
+                type = ElementType::DATABASE;
+            else if (ParserKeyword{"ALL DATABASES"}.ignore(pos, expected))
+                type = ElementType::ALL_DATABASES;
+            else if (ParserKeyword{"TEMPORARY TABLE"}.ignore(pos, expected))
+                type = ElementType::TEMPORARY_TABLE;
+            else if (ParserKeyword{"ALL TEMPORARY TABLES"}.ignore(pos, expected))
+                type = ElementType::ALL_TEMPORARY_TABLES;
+            else if (ParserKeyword{"EVERYTHING"}.ignore(pos, expected))
+                type = ElementType::EVERYTHING;
+            else
+                return false;
+
+            DatabaseAndTableName name;
+            if (!parseName(pos, expected, type, name))
+                return false;
+
+            std::set<String> partitions;
+            if (type == ElementType::TABLE)
+                parsePartitions(pos, expected, partitions);
+
+            DatabaseAndTableName name_in_backup;
+            if (ParserKeyword{"USING NAME"}.ignore(pos, expected))
+            {
+                if (!parseName(pos, expected, type, name_in_backup))
                     return false;
             }
 
+            if ((type == ElementType::TABLE) && partitions.empty())
+                parsePartitions(pos, expected, partitions);
+
             entry.type = type;
             entry.name = std::move(name);
-            entry.new_name = std::move(new_name);
+            entry.name_in_backup = std::move(name_in_backup);
             entry.partitions = std::move(partitions);
             return true;
         });
     }
 
-    bool parseEntries(
+    bool parseElements(
         IParser::Pos & pos,
         Expected & expected,
-        Kind kind,
-        std::vector<Entry> & out_entries)
+        std::vector<Element> & elements)
     {
         return IParserBase::wrapParseImpl(pos, [&]
         {
-            std::vector<Entry> entries;
+            std::vector<Element> result;
 
             auto parse_element = [&]
             {
-                Entry entry;
-                if (parseEntry(pos, expected, kind, entry))
+                Element element;
+                if (parseElement(pos, expected, element))
                 {
-                    entries.emplace_back(std::move(entry));
+                    result.emplace_back(std::move(element));
                     return true;
                 }
                 return false;
@@ -132,33 +148,9 @@ namespace
             if (!ParserList::parseUtil(pos, expected, parse_element, false))
                 return false;
 
-            out_entries = std::move(entries);
+            elements = std::move(result);
             return true;
         });
-    }
-
-    bool parseReplaceMode(IParser::Pos & pos, Expected & expected, RestoreWithReplaceMode & replace_mode)
-    {
-        RestoreWithReplaceMode rm;
-        if (ParserKeyword{"WITH REPLACE IF TABLE EXISTS"}.ignore(pos, expected))
-        {
-            rm.replace_table_if_exists = true;
-        }
-        else if (ParserKeyword{"WITH REPLACE IF DATABASE EXISTS"}.ignore(pos, expected))
-        {
-            rm.replace_database_if_exists = true;
-        }
-        else if (ParserKeyword{"WITH REPLACE IF TABLE OR DATABASE EXISTS"}.ignore(pos, expected) ||
-                 ParserKeyword{"WITH REPLACE IF DATABASE OR TABLE EXISTS"}.ignore(pos, expected))
-        {
-            rm.replace_table_if_exists = true;
-            rm.replace_database_if_exists = true;
-        }
-        else
-            return false;
-
-        replace_mode = std::move(rm);
-        return true;
     }
 }
 
@@ -173,21 +165,11 @@ bool ParserBackupQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
     else
         return false;
 
-    std::vector<Entry> entries;
-    if (!parseEntries(pos, expected, kind, entries))
-    {
-        if (kind == Kind::BACKUP)
-            throw Exception("Objects to backup are not specified", ErrorCodes::SYNTAX_ERROR);
-        else
-        {
-            assert(kind == Kind::RESTORE);
-            entries.clear();
-            entries.emplace_back().type = EntryType::EVERYTHING;
-        }
-    }
+    std::vector<Element> elements;
+    if (!parseElements(pos, expected, elements))
+        return false;
 
     String base_backup_name;
-    RestoreWithReplaceMode replace_mode;
     if (kind == Kind::BACKUP)
     {
         if (ParserKeyword{"WITH BASE"}.ignore(pos, expected))
@@ -197,11 +179,6 @@ bool ParserBackupQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
                 return false;
             base_backup_name = ast->as<ASTLiteral &>().value.safeGet<String>();
         }
-    }
-    else
-    {
-        assert(kind == Kind::RESTORE);
-        parseReplaceMode(pos, expected, replace_mode);
     }
 
     if (!ParserKeyword{(kind == Kind::BACKUP) ? "TO" : "FROM"}.ignore(pos, expected))
@@ -215,10 +192,9 @@ bool ParserBackupQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
     node = query;
 
     query->kind = kind;
-    query->entries = std::move(entries);
+    query->elements = std::move(elements);
     query->backup_name = std::move(backup_name);
     query->base_backup_name = std::move(base_backup_name);
-    query->replace_mode = std::move(replace_mode);
 
     return true;
 }

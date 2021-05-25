@@ -1,49 +1,46 @@
 #pragma once
 
 #include <Parsers/IAST.h>
-#include <Backup/RestoreWithReplaceMode.h>
 
 
 namespace DB
 {
 using Strings = std::vector<String>;
 using DatabaseAndTableName = std::pair<String, String>;
-using DatabaseAndDictionaryName = std::pair<String, String>;
 
 
-/** BACKUP {TABLE [db.]table_name [AS db.new_table_name] [PARTITION partition_expr [,...]] |
-  *         DICTIONARY [db.]dictionary_name |
-  *         DATABASE database_name [AS new_database_name] |
-  *         ALL DATABASES |
-  *         TEMPORARY TABLE table_name [AS new_table_name] |
-  *         ALL TEMPORARY TABLES |
-  *         EVERYTHING} [,...]
+/** BACKUP { TABLE [db.]table_name [USING NAME [db.]table_name_in_backup] [PARTITION partition_expr [,...]] |
+  *          DICTIONARY [db.]dictionary_name [USING NAME [db.]dictionary_name_in_backup] |
+  *          DATABASE database_name [USING NAME database_name_in_backup] |
+  *          ALL DATABASES |
+  *          TEMPORARY TABLE table_name [USING NAME table_name_in_backup]
+  *          ALL TEMPORARY TABLES |
+  *          EVERYTHING } [,...]
   *        [WITH BASE 'base_backup_name']
   *        TO 'backup_name'
   *
-  * RESTORE [{TABLE [db.]table_name [AS db.new_table_name] [PARTITION partition_expr [,...] |
-  *           DICTIONARY [db.]dictionary_name [AS db.new_dictionary_name] |
-  *           DATABASE database_name [AS new_database_name] |
+  * RESTORE { TABLE [db.]table_name [USING NAME [db.]table_name_in_backup] [PARTITION partition_expr [,...]] |
+  *           DICTIONARY [db.]dictionary_name [USING NAME [db.]dictionary_name_in_backup] |
+  *           DATABASE database_name [USING NAME database_name_in_backup] |
   *           ALL DATABASES |
-  *           TEMPORARY TABLE table_name [AS new_table_name] |
-  *           ALL TEMPORARY TABLES
-  *           EVERYTHING} [,...]
-  *         [WITH REPLACE IF {TABLE|DATABASE} EXISTS]
+  *           TEMPORARY TABLE table_name [USING NAME table_name_in_backup] |
+  *           ALL TEMPORARY TABLES |
+  *           EVERYTHING } [,...]
   *         FROM 'backup_name'
   *
   * Notes:
-  * "WITH BASE" allows to specify the base backup, only differences made after
-  * the base backup will be included in a newly created backup.
+  * RESTORE doesn't drop any data, it either creates a table or appends an existing table with restored data.
+  * This behaviour can cause data duplication.
+  * If appending isn't possible because the existing table has incompatible format then RESTORE will throw an exception.
   *
-  * "RESTORE" without specifying objects to restore works exactly as "RESTORE EVERYTHING", i.e. it restores
-  * all the contents of the backup.
+  * The "USING NAME" clause allows to set another the name in the backup for an object while executing BACKUP or RESTORE.
+  * Those clauses are useful to backup or restore under another name.
   *
-  * If some of restored tables exists then "RESTORE" will only add restored data
-  * into those tables.
-  * "WITH REPLACE IF TABLE EXISTS" allows to specify that restored tables should
-  * completely replace the tables which currently exist.
-  * "WITH REPLACE IF DATABASE EXISTS" allows to specify that restored databases should
-  * completely replace the databases which currently exist.
+  * "ALL DATABASES" means all databases except the system database and the internal database containing temporary tables.
+  * "EVERYTHING" works exactly as "ALL DATABASES, ALL TEMPORARY TABLES"
+  *
+  * The "WITH BASE" clause allows to set a base backup. Only differences made after the base backup will be
+  * included in a newly created backup, so this option allows to make an incremental backup.
   */
 class ASTBackupQuery : public IAST
 {
@@ -55,7 +52,7 @@ public:
     };
     Kind kind = Kind::BACKUP;
 
-    enum EntryType
+    enum ElementType
     {
         TABLE,
         DICTIONARY,
@@ -66,20 +63,20 @@ public:
         EVERYTHING,
     };
 
-    struct Entry
+    struct Element
     {
-        EntryType type;
+        ElementType type;
         DatabaseAndTableName name;
-        DatabaseAndTableName new_name;
-        Strings partitions;
+        DatabaseAndTableName name_in_backup;
+        std::set<String> partitions;
+        std::set<String> except_list;
     };
 
-    std::vector<Entry> entries;
+    using Elements = std::vector<Element>;
+    Elements elements;
 
     String backup_name;
     String base_backup_name;
-
-    RestoreWithReplaceMode replace_mode;
 
     String getID(char) const override;
     ASTPtr clone() const override;

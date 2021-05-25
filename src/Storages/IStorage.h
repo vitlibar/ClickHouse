@@ -186,11 +186,11 @@ public:
 
     /// Prepares entries to backup all the data of the storage.
     virtual BackupEntries backup(const Context & context, const DatabaseAndTableName & name_in_backup) const;
-    virtual BackupEntries backupPartitions(const Strings & partitions, const Context & context, const DatabaseAndTableName & name_in_backup) const;
+    virtual BackupEntries backupPartitions(const Context & context, const DatabaseAndTableName & name_in_backup, const Strings & partitions) const;
 
     /// Restores the data of the storage from a backup.
     virtual RestoreTasks restoreFromBackup(const Context & context, const IBackup & backup, const DatabaseAndTableName & name_in_backup);
-    virtual RestoreTasks restorePartitionsFromBackup(const Strings & partitions, const Context & context, const IBackup & backup, const DatabaseAndTableName & name_in_backup);
+    virtual RestoreTasks restorePartitionsFromBackup(const Context & context, const IBackup & backup, const DatabaseAndTableName & name_in_backup, const Strings & partitions);
 
 protected:
     /// Returns whether the column is virtual - by default all columns are real.
