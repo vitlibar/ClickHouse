@@ -10,6 +10,8 @@ namespace DB
 {
 class ASTBackupQuery;
 using DatabaseAndTableName = std::pair<String, String>;
+class IAST;
+using ASTPtr = std::shared_ptr<IAST>;
 
 
 /// Keeps information about renamings of databases and tables that is processed
@@ -17,20 +19,19 @@ using DatabaseAndTableName = std::pair<String, String>;
 class RenamingInBackup
 {
 public:
+    /// Initializes renaming from a backup query.
     RenamingInBackup(const ASTBackupQuery & query);
 
+    /// Changes names according to the renaming.
     DatabaseAndTableName getNewTableName(const DatabaseAndTableName & table_name) const;
     const String & getNewDatabaseName(const String & database_name) const;
     const String & getNewTemporaryTableName(const String & temporary_table_name) const;
-
-    /// Applies
-    ASTPtr applyToCreateQuery(const ASTPtr & create_query) const;
+    ASTPtr getNewCreateQuery(const ASTPtr & create_query) const;
 
 private:
-    std::map<DatabaseAndTableName, DatabaseAndTableName> table_names;
-    std::unordered_map<String, String> database_names;
-    std::unordered_map<String, String> temporary_table_names;
+    std::map<DatabaseAndTableName, DatabaseAndTableName> old_to_new_table_names;
+    std::unordered_map<String, String> old_to_new_database_names;
+    std::unordered_map<String, String> old_to_new_temporary_table_names;
 };
-
 
 }

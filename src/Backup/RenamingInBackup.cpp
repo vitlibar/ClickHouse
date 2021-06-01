@@ -1,6 +1,6 @@
 #include <Backup/RenamingInBackup.h>
 #include <Parsers/ASTBackupQuery.h>
-#include <Common/quoteString.h>
+#include <Parsers/ASTCreateQuery.h>
 
 
 namespace DB
@@ -11,56 +11,41 @@ namespace ErrorCodes
     extern const int BAD_ARGUMENTS;
 }
 
+using Kind = ASTBackupQuery::Kind;
+using ElementType = ASTBackupQuery::ElementType;
+
 
 RenamingInBackup::RenamingInBackup(const ASTBackupQuery & query)
 {
-    for (const auto & entry : query.entries)
+    for (const auto & element : query.elements)
     {
-        switch (entry.type)
+        switch (element.type)
         {
-            case ASTBackupQuery::TABLE: [[fallthrough]];
-            case ASTBackupQuery::DICTIONARY:
+            case ElementType::TABLE: [[fallthrough]];
+            case ElementType::DICTIONARY:
             {
-                const auto & name = entry.name;
-                const auto & new_name = entry.new_name;
-                if (name.first.empty() || name.second.empty() || new_name.first.empty() || new_name.second.empty())
-                    throw Exception("Invalid backup query", ErrorCodes::LOGICAL_ERROR);
-                if (new_table_names.count(name))
-                    throw Exception(
-                        "Same table " + backQuote(name.first) + "." + backQuote(name.second) + " was specified twice",
-                        ErrorCodes::BAD_ARGUMENTS);
-                new_table_names[name] = new_name;
-                table_names[name.first].insert(name.second);
+                if (query.kind == Kind::BACKUP)
+                    old_to_new_table_names[element.name] = element.name_in_backup;
+                else
+                    old_to_new_table_names[element.name_in_backup] = element.name;
                 break;
             }
 
             case ASTBackupQuery::DATABASE:
             {
-                const auto & name = entry.name.first;
-                const auto & new_name = entry.new_name.first;
-                if (name.empty() || new_name.empty() || !entry.name.second.empty() || !entry.new_name.second.empty())
-                    throw Exception("Invalid backup query", ErrorCodes::LOGICAL_ERROR);
-                if (new_database_names.count(name))
-                    throw Exception(
-                        "Same database " + backQuote(name) + " was specified twice",
-                        ErrorCodes::BAD_ARGUMENTS);
-                new_database_names[name] = new_name;
-                database_names.insert(name);
+                if (query.kind == Kind::BACKUP)
+                    old_to_new_database_names[element.name.first] = element.name_in_backup.first;
+                else
+                    old_to_new_database_names[element.name_in_backup.first] = element.name.first;
                 break;
             }
 
             case ASTBackupQuery::TEMPORARY_TABLE:
             {
-                const auto & name = entry.name.second;
-                const auto & new_name = entry.new_name.second;
-                if (name.empty() || new_name.empty() || !entry.name.first.empty() || !entry.new_name.first.empty())
-                    throw Exception("Invalid backup query", ErrorCodes::LOGICAL_ERROR);
-                if (new_temporary_table_names.count(name))
-                    throw Exception(
-                        "Same temporary table " + backQuote(name) + " was specified twice",
-                        ErrorCodes::BAD_ARGUMENTS);
-                new_temporary_table_names[name] = new_name;
-                temporary_table_names.insert(name);
+                if (query.kind == Kind::BACKUP)
+                    old_to_new_database_names[element.name.second] = element.name_in_backup.second;
+                else
+                    old_to_new_database_names[element.name_in_backup.second] = element.name.second;
                 break;
             }
 
@@ -72,47 +57,55 @@ RenamingInBackup::RenamingInBackup(const ASTBackupQuery & query)
 }
 
 
-const std::unordered_set<String> & RenamingInBackup::getTableNames(const String & database_name) const
-{
-    auto it = table_names.find(database_name);
-    if (it != table_names.end())
-        return it->second;
-    static const std::unordered_set<String> empty_set;
-    return empty_set;
-}
-
 DatabaseAndTableName RenamingInBackup::getNewTableName(const DatabaseAndTableName & table_name) const
 {
-    auto it = new_table_names.find(table_name);
-    if (it != new_table_names.end())
+    auto it = old_to_new_table_names.find(table_name);
+    if (it != old_to_new_table_names.end())
         return it->second;
     return {getNewDatabaseName(table_name.first), table_name.second};
 }
 
-const std::unordered_set<String> & RenamingInBackup::getDatabaseNames() const
-{
-    return database_names;
-}
-
 const String & RenamingInBackup::getNewDatabaseName(const String & database_name) const
 {
-    auto it = new_database_names.find(database_name);
-    if (it != new_database_names.end())
+    auto it = old_to_new_database_names.find(database_name);
+    if (it != old_to_new_database_names.end())
         return it->second;
     return database_name;
 }
 
-const std::unordered_set<String> & RenamingInBackup::getTemporaryTableNames() const
-{
-    return temporary_table_names;
-}
-
 const String & RenamingInBackup::getNewTemporaryTableName(const String & temporary_table_name) const
 {
-    auto it = new_temporary_table_names.find(temporary_table_name);
-    if (it != new_temporary_table_names.end())
+    auto it = old_to_new_temporary_table_names.find(temporary_table_name);
+    if (it != old_to_new_temporary_table_names.end())
         return it->second;
     return temporary_table_name;
+}
+
+ASTPtr RenamingInBackup::getNewCreateQuery(const ASTPtr & create_query) const
+{
+    const auto & src = typeid_cast<const ASTCreateQuery &>(*create_query);
+    auto dst = typeid_cast<std::shared_ptr<ASTCreateQuery>>(src.clone());
+
+    if (dst->table.empty())
+        dst->database = getNewDatabaseName(dst->database);
+    else if (dst->temporary)
+        dst->table = getNewTemporaryTableName(dst->table);
+    else
+        std::tie(dst->database, dst->table) = getNewTableName({dst->database, dst->table});
+
+    if (!dst->as_table.empty())
+        std::tie(dst->as_database, dst->as_table) = getNewTableName({dst->as_database, dst->as_table});
+
+    // TODO(table functions):
+    //if (dst->as_table_function)
+
+    // TODO(dictionary with a source from clickhouse)
+    if (dst->dictionary && dst->dictionary->source && dictionary->source->name == "clickhouse")
+    {
+
+    }
+
+    return dst;
 }
 
 }
