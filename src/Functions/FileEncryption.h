@@ -267,7 +267,7 @@ private:
             reinterpret_cast<unsigned char*>(ciphertext_ref), &final_output_len) != 1)
             throw DB::Exception("Failed to fetch ciphertext", DB::ErrorCodes::DATA_ENCRYPTION_ERROR);
 
-        if (output_len < 0 || final_output_len < 0 || static_cast<size_t>(output_len + final_output_len) != bytes)
+        if (output_len < 0 || final_output_len < 0 || static_cast<size_t>(output_len) + static_cast<size_t>(final_output_len) != bytes)
             throw DB::Exception("Only part of the data was encrypted", DB::ErrorCodes::DATA_ENCRYPTION_ERROR);
 
         return ciphertext;
@@ -348,7 +348,7 @@ private:
             reinterpret_cast<unsigned char*>(to), &final_output_len) != 1)
             throw DB::Exception("Failed to fetch plaintext", DB::ErrorCodes::DATA_ENCRYPTION_ERROR);
 
-        if (output_len < 0 || final_output_len < 0 || static_cast<size_t>(output_len + final_output_len) != bytes)
+        if (output_len < 0 || final_output_len < 0 || static_cast<size_t>(output_len) + static_cast<size_t>(final_output_len) != bytes)
             throw DB::Exception("Only part of the data was decrypted", DB::ErrorCodes::DATA_ENCRYPTION_ERROR);
     }
 };
