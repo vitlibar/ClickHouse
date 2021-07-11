@@ -4,18 +4,21 @@
 namespace DB
 {
 
+using InitVector = FileEncryption::InitVector;
+
 WriteBufferFromFileEncrypted::WriteBufferFromFileEncrypted(
-    size_t buf_size_,
+    size_t buffer_size_,
     std::unique_ptr<WriteBufferFromFileBase> out_,
-    const String & init_vector_,
-    const FileEncryption::EncryptionKey & key_,
-    const size_t & file_size)
-    : WriteBufferFromFileBase(buf_size_, nullptr, 0)
+    const String & key_,
+    const InitVector & init_vector_,
+    size_t old_file_size)
+    : WriteBufferFromFileBase(buffer_size_, nullptr, 0)
     , out(std::move(out_))
-    , flush_iv(!file_size)
     , iv(init_vector_)
-    , encryptor(FileEncryption::Encryptor(init_vector_, key_, file_size))
+    , flush_iv(!old_file_size)
+    , encryptor(key_, init_vector_)
 {
+    encryptor.setOffset(old_file_size);
 }
 
 WriteBufferFromFileEncrypted::~WriteBufferFromFileEncrypted()
@@ -47,10 +50,10 @@ void WriteBufferFromFileEncrypted::nextImpl()
         return;
     if (flush_iv)
     {
-        FileEncryption::writeIV(iv, *out);
+        iv.write(*out);
         flush_iv = false;
     }
 
-    encryptor.encrypt(working_buffer.begin(), *out, offset());
+    encryptor.encrypt(working_buffer.begin(), offset(), *out);
 }
 }

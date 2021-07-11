@@ -14,6 +14,9 @@ namespace DB
 class ReadBufferFromFileBase;
 class WriteBufferFromFileBase;
 
+/// Encrypted disk ciphers all written files on the fly and writes the encrypted files to an underlying (normal) disk.
+/// And when we read files from an encrypted disk it decipher them automatically,
+/// so we can work with a encrypted disk like it's a normal disk.
 class DiskEncrypted : public DiskDecorator
 {
 public:

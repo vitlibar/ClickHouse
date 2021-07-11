@@ -8,30 +8,22 @@
 #include <IO/FileEncryptionCommon.h>
 
 
-using namespace FileEncryption;
 using namespace DB;
+using namespace DB::FileEncryption;
 
 struct InitVectorTestParam
 {
     const std::string_view comment;
     const String init;
-    UInt128 adder;
-    UInt128 setter;
     const String after_inc;
+    UInt64 adder;
     const String after_add;
-    const String after_set;
+    UInt64 adder2;
+    const String after_add2;
 };
 
 
 class InitVectorTest : public ::testing::TestWithParam<InitVectorTestParam> {};
-
-
-String string_ends_with(size_t size, String str)
-{
-    String res(size, 0);
-    res.replace(size - str.size(), str.size(), str);
-    return res;
-}
 
 
 static std::ostream & operator << (std::ostream & ostr, const InitVectorTestParam & param)
@@ -44,20 +36,17 @@ TEST_P(InitVectorTest, InitVector)
 {
     const auto & param = GetParam();
 
-    auto iv = InitVector(param.init);
-    ASSERT_EQ(param.init, iv.c_str());
+    auto iv = InitVector::fromBigEndian(param.init);
+    ASSERT_EQ(param.init, iv.toBigEndian());
 
-    iv.inc();
-    ASSERT_EQ(param.after_inc, iv.c_str());
+    ++iv;
+    ASSERT_EQ(param.after_inc, iv.toBigEndian());
 
-    iv.inc(param.adder);
-    ASSERT_EQ(param.after_add, iv.c_str());
+    iv += param.adder;
+    ASSERT_EQ(param.after_add, iv.toBigEndian());
 
-    iv.set(param.setter);
-    ASSERT_EQ(param.after_set, iv.c_str());
-
-    iv.set(0);
-    ASSERT_EQ(param.init, iv.c_str());
+    iv += param.adder2;
+    ASSERT_EQ(param.after_add2, iv.toBigEndian());
 }
 
 
@@ -65,31 +54,31 @@ INSTANTIATE_TEST_SUITE_P(InitVectorInputs,
                          InitVectorTest,
                          ::testing::ValuesIn(std::initializer_list<InitVectorTestParam>{
         {
-            "Basic init vector test. Get zero-string, add 0, set 0",
+            "Basic init vector test. Get zero-string, add 1, add 0, add 0",
             String(16, 0),
+            String("\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01", 16),
             0,
+            String("\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01", 16),
             0,
-            string_ends_with(16, "\x1"),
-            string_ends_with(16, "\x1"),
-            String(16, 0),
+            String("\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01", 16)
         },
         {
-            "Init vector test. Get zero-string, add 85, set 1024",
+            "Init vector test. Get zero-string, add 1, add 85, add 1024",
             String(16, 0),
+            String("\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01", 16),
             85,
+            String("\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x56", 16),
             1024,
-            string_ends_with(16, "\x1"),
-            string_ends_with(16, "\x56"),
-            string_ends_with(16, "\x4\0"),
+            String("\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x04\x56", 16)
         },
         {
             "Long init vector test",
-            "\xa8\x65\x9c\x73\xf8\x5d\x83\xb4\x5c\xa6\x8c\x19\xf4\x77\x80\xe1",
-            UInt128(3349249125638641) * 1815701,
+            String("\xa8\x65\x9c\x73\xf8\x5d\x83\xb4\x5c\xa6\x8c\x19\xf4\x77\x80\xe1", 16),
+            String("\xa8\x65\x9c\x73\xf8\x5d\x83\xb4\x5c\xa6\x8c\x19\xf4\x77\x80\xe2", 16),
+            1815701,
+            String("\xa8\x65\x9c\x73\xf8\x5d\x83\xb4\x5c\xa6\x8c\x19\xf4\x93\x35\x77", 16),
             1698923461902341,
-            "\xa8\x65\x9c\x73\xf8\x5d\x83\xb4\x5c\xa6\x8c\x19\xf4\x77\x80\xe2",
-            "\xa8\x65\x9c\x73\xf8\x5d\x84\xfe\x06\xbd\x44\xb7\x0b\x0c\x76\x27",
-            "\xa8\x65\x9c\x73\xf8\x5d\x83\xb4\x5c\xac\x95\x43\x65\xea\x00\xe6",
+            String("\xa8\x65\x9c\x73\xf8\x5d\x83\xb4\x5c\xac\x95\x43\x66\x05\xb5\x7c", 16)
         },
     })
 );
@@ -97,53 +86,71 @@ INSTANTIATE_TEST_SUITE_P(InitVectorInputs,
 
 TEST(FileEncryption, Encryption)
 {
-    String iv(16, 0);
-    EncryptionKey key("1234567812345678");
-    String input = "abcd1234efgh5678ijkl";
-    String expected = "\xfb\x8a\x9e\x66\x82\x72\x1b\xbe\x6b\x1d\xd8\x98\xc5\x8c\x63\xee\xcd\x36\x4a\x50";
+    String key = "1234567812345678";
+    InitVector iv;
+    Encryptor encryptor{key, iv};
 
-    String result(expected.size(), 0);
+    std::string_view input = "abcd1234efgh5678ijkl";
+    std::string_view expected = "\xfb\x8a\x9e\x66\x82\x72\x1b\xbe\x6b\x1d\xd8\x98\xc5\x8c\x63\xee\xcd\x36\x4a\x50";
+
+    for (size_t i = 0; i < expected.size(); ++i)
+    {
+        WriteBufferFromOwnString buf;
+        encryptor.encrypt(&input[i], 1, buf);
+        ASSERT_EQ(expected.substr(i, 1), buf.str());
+    }
+
     for (size_t i = 0; i <= expected.size(); ++i)
     {
-        auto buf = WriteBufferFromString(result);
-        auto encryptor = Encryptor(iv, key, 0);
-        encryptor.encrypt(input.data(), buf, i);
-        ASSERT_EQ(expected.substr(0, i), result.substr(0, i));
+        WriteBufferFromOwnString buf;
+        encryptor.setOffset(0);
+        encryptor.encrypt(input.data(), i, buf);
+        ASSERT_EQ(expected.substr(0, i), buf.str());
     }
 
     size_t offset = 25;
-    String offset_expected = "\x6c\x67\xe4\xf5\x8f\x86\xb0\x19\xe5\xcd\x53\x59\xe0\xc6\x01\x5e\xc1\xfd\x60\x9d";
+    std::string_view offset_expected = "\x6c\x67\xe4\xf5\x8f\x86\xb0\x19\xe5\xcd\x53\x59\xe0\xc6\x01\x5e\xc1\xfd\x60\x9d";
     for (size_t i = 0; i <= expected.size(); ++i)
     {
-        auto buf = WriteBufferFromString(result);
-        auto encryptor = Encryptor(iv, key, offset);
-        encryptor.encrypt(input.data(), buf, i);
-        ASSERT_EQ(offset_expected.substr(0, i), result.substr(0, i));
+        WriteBufferFromOwnString buf;
+        encryptor.setOffset(offset);
+        encryptor.encrypt(input.data(), i, buf);
+        ASSERT_EQ(offset_expected.substr(0, i), buf.str());
     }
 }
 
 
 TEST(FileEncryption, Decryption)
 {
-    String iv(16, 0);
-    EncryptionKey key("1234567812345678");
-    String expected = "abcd1234efgh5678ijkl";
-    String input = "\xfb\x8a\x9e\x66\x82\x72\x1b\xbe\x6b\x1d\xd8\x98\xc5\x8c\x63\xee\xcd\x36\x4a\x50";
-    auto decryptor = Decryptor(iv, key);
-    String result(expected.size(), 0);
+    String key("1234567812345678");
+    InitVector iv;
+    Encryptor encryptor{key, iv};
 
+    std::string_view input = "\xfb\x8a\x9e\x66\x82\x72\x1b\xbe\x6b\x1d\xd8\x98\xc5\x8c\x63\xee\xcd\x36\x4a\x50";
+    std::string_view expected = "abcd1234efgh5678ijkl";
+
+    for (size_t i = 0; i < expected.size(); ++i)
+    {
+        char c;
+        encryptor.decrypt(&input[i], 1, &c);
+        ASSERT_EQ(expected[i], c);
+    }
+
+    String buf(expected.size(), 0);
     for (size_t i = 0; i <= expected.size(); ++i)
     {
-        decryptor.decrypt(input.data(), result.data(), i, 0);
-        ASSERT_EQ(expected.substr(0, i), result.substr(0, i));
+        encryptor.setOffset(0);
+        encryptor.decrypt(input.data(), i, buf.data());
+        ASSERT_EQ(expected.substr(0, i), buf.substr(0, i));
     }
 
     size_t offset = 25;
     String offset_input = "\x6c\x67\xe4\xf5\x8f\x86\xb0\x19\xe5\xcd\x53\x59\xe0\xc6\x01\x5e\xc1\xfd\x60\x9d";
     for (size_t i = 0; i <= expected.size(); ++i)
     {
-        decryptor.decrypt(offset_input.data(), result.data(), i, offset);
-        ASSERT_EQ(expected.substr(0, i), result.substr(0, i));
+        encryptor.setOffset(offset);
+        encryptor.decrypt(offset_input.data(), i, buf.data());
+        ASSERT_EQ(expected.substr(0, i), buf.substr(0, i));
     }
 }
 

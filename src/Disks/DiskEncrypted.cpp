@@ -88,37 +88,29 @@ std::unique_ptr<ReadBufferFromFileBase> DiskEncrypted::readFile(
     auto wrapped_path = wrappedPath(path);
     auto buffer = delegate->readFile(wrapped_path, buf_size, estimated_size, aio_threshold, mmap_threshold, mmap_cache);
 
-    String iv;
-    size_t offset = 0;
+    InitVector iv;
+    iv.read(*buffer);
 
-    if (exists(path) && getFileSize(path))
-    {
-        iv = readIV(kIVSize, *buffer);
-        offset = kIVSize;
-    }
-    else
-        iv = randomString(kIVSize);
-
-    return std::make_unique<ReadBufferFromFileEncrypted>(buf_size, std::move(buffer), iv, key, offset);
+    return std::make_unique<ReadBufferFromFileEncrypted>(buf_size, std::move(buffer), key, iv);
 }
 
 std::unique_ptr<WriteBufferFromFileBase> DiskEncrypted::writeFile(const String & path, size_t buf_size, WriteMode mode)
 {
-    String iv;
-    size_t start_offset = 0;
+    InitVector iv;
+    UInt64 old_file_size = 0;
     auto wrapped_path = wrappedPath(path);
 
     if (mode == WriteMode::Append && exists(path) && getFileSize(path))
     {
-        auto read_buffer = delegate->readFile(wrapped_path, kIVSize);
-        iv = readIV(kIVSize, *read_buffer);
-        start_offset = getFileSize(path);
+        auto read_buffer = delegate->readFile(wrapped_path, InitVector::kSize);
+        iv.read(*read_buffer);
+        old_file_size = getFileSize(path);
     }
     else
-        iv = randomString(kIVSize);
+        iv = InitVector::random();
 
     auto buffer = delegate->writeFile(wrapped_path, buf_size, mode);
-    return std::make_unique<WriteBufferFromFileEncrypted>(buf_size, std::move(buffer), iv, key, start_offset);
+    return std::make_unique<WriteBufferFromFileEncrypted>(buf_size, std::move(buffer), key, iv, old_file_size);
 }
 
 
@@ -126,13 +118,13 @@ size_t DiskEncrypted::getFileSize(const String & path) const
 {
     auto wrapped_path = wrappedPath(path);
     size_t size = delegate->getFileSize(wrapped_path);
-    return size > kIVSize ? (size - kIVSize) : 0;
+    return size > InitVector::kSize ? (size - InitVector::kSize) : 0;
 }
 
 void DiskEncrypted::truncateFile(const String & path, size_t size)
 {
     auto wrapped_path = wrappedPath(path);
-    delegate->truncateFile(wrapped_path, size ? (size + kIVSize) : 0);
+    delegate->truncateFile(wrapped_path, size ? (size + InitVector::kSize) : 0);
 }
 
 SyncGuardPtr DiskEncrypted::getDirectorySyncGuard(const String & path) const
@@ -182,9 +174,7 @@ void registerDiskEncrypted(DiskFactory & factory)
         String key = config.getString(config_prefix + ".key", "");
         if (key.empty())
             throw Exception("Encrypted disk key can not be empty. Disk " + name, ErrorCodes::UNKNOWN_ELEMENT_IN_CONFIG);
-        if (key.size() != cipherKeyLength(defaultCipher()))
-            throw Exception("Expected key with size " + std::to_string(cipherKeyLength(defaultCipher())) + ", got key with size " + std::to_string(key.size()),
-                            ErrorCodes::UNKNOWN_ELEMENT_IN_CONFIG);
+        FileEncryption::Encryptor::checkKeyLengthIsSupported(key.size());
 
         auto wrapped_disk = map.find(wrapped_disk_name);
         if (wrapped_disk == map.end())
