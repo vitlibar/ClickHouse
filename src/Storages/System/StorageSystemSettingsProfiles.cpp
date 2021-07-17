@@ -9,7 +9,7 @@
 #include <Interpreters/Context.h>
 #include <Parsers/ASTRolesOrUsersSet.h>
 #include <Access/AccessControlManager.h>
-#include <Access/VisibleAccessEntities.h>
+#include <Access/AccessEntitiesVisibility.h>
 #include <Access/SettingsProfile.h>
 #include <Access/AccessFlags.h>
 
@@ -34,7 +34,7 @@ NamesAndTypesList StorageSystemSettingsProfiles::getNamesAndTypes()
 void StorageSystemSettingsProfiles::fillData(MutableColumns & res_columns, const Context & context, const SelectQueryInfo &) const
 {
     const auto & access_control = context.getAccessControlManager();
-    VisibleAccessEntities visible_entities{context.getAccess()};
+    AccessEntitiesVisibility visible_entities{context.getAccess()};
     std::vector<UUID> ids = visible_entities.findAll<SettingsProfile>();
 
     size_t column_index = 0;

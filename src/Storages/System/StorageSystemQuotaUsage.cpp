@@ -97,7 +97,7 @@ void StorageSystemQuotaUsage::fillDataImpl(
     bool add_column_is_current,
     const std::vector<QuotaUsage> & quotas_usage)
 {
-    VisibleAccessEntities visible_entries{context.getAccess()};
+    AccessEntitiesVisibility visible_entries{context.getAccess()};
 
     size_t column_index = 0;
     auto & column_quota_name = assert_cast<ColumnString &>(*res_columns[column_index++]);

@@ -7,7 +7,7 @@
 #include <Columns/ColumnNullable.h>
 #include <Columns/ColumnsNumber.h>
 #include <Access/AccessControlManager.h>
-#include <Access/VisibleAccessEntities.h>
+#include <Access/AccessEntitiesVisibility.h>
 #include <Access/Role.h>
 #include <Access/User.h>
 #include <Interpreters/Context.h>
@@ -35,7 +35,7 @@ NamesAndTypesList StorageSystemRoleGrants::getNamesAndTypes()
 void StorageSystemRoleGrants::fillData(MutableColumns & res_columns, const Context & context, const SelectQueryInfo &) const
 {
     const auto & access_control = context.getAccessControlManager();
-    VisibleAccessEntities visible_entities{context.getAccess()};
+    AccessEntitiesVisibility visible_entities{context.getAccess()};
     std::vector<UUID> ids = visible_entities.findAll<User>();
     boost::range::push_back(ids, visible_entities.findAll<Role>());
 

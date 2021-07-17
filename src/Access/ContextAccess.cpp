@@ -306,6 +306,7 @@ namespace
 ContextAccess::ContextAccess(const AccessControlManager & manager_, const Params & params_)
     : manager(manager_)
     , params(params_)
+    , visibility(*this)
 {
     subscription_for_user_change = manager.subscribeForChanges(
         *params.user_id, [this](const UUID &, const AccessEntityPtr & entity)
@@ -322,7 +323,8 @@ ContextAccess::ContextAccess(const AccessControlManager & manager_, const Params
 ContextAccess::ContextAccess(const AccessControlManager & manager_, FullAccessTag)
     : manager(manager_),
       access(std::make_shared<AccessRights>(AccessRights::getFullAccess())),
-      enabled_quota(EnabledQuota::getUnlimitedQuota())
+      enabled_quota(EnabledQuota::getUnlimitedQuota()),
+      visibility(*this)
 {
 }
 

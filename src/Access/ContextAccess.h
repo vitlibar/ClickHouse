@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Access/AccessEntitiesVisibility.h>
 #include <Access/AccessRights.h>
 #include <Access/RowPolicy.h>
 #include <Interpreters/ClientInfo.h>
@@ -142,7 +143,8 @@ public:
     void checkAdminOption(const std::vector<UUID> & role_ids, const Strings & names_of_roles) const;
     void checkAdminOption(const std::vector<UUID> & role_ids, const std::unordered_map<UUID, String> & names_of_roles) const;
 
-    const AccessControlManager & getAccessControlManager() const { return manager; }
+    const AccessEntitiesVisibility & getVisibility() const { return visibility; }
+    const AccessControlManager & getManager() const { return manager; }
 
 private:
     friend class AccessControlManager;
@@ -205,6 +207,7 @@ private:
     mutable std::shared_ptr<const AccessRights> access_with_allow_ddl;
     mutable std::shared_ptr<const AccessRights> access_with_allow_introspection;
     mutable std::shared_ptr<const AccessRights> access_from_user_and_roles;
+    const AccessEntitiesVisibility visibility;
     mutable std::mutex mutex;
 };
 

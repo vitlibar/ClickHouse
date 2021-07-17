@@ -11,7 +11,7 @@
 #include <Interpreters/Context.h>
 #include <Parsers/ASTRolesOrUsersSet.h>
 #include <Access/AccessControlManager.h>
-#include <Access/VisibleAccessEntities.h>
+#include <Access/AccessEntitiesVisibility.h>
 #include <Access/ContextAccess.h>
 #include <Access/RowPolicy.h>
 #include <Access/AccessFlags.h>
@@ -58,7 +58,7 @@ void StorageSystemRowPolicies::fillData(MutableColumns & res_columns, const Cont
 {
     auto access = context.getAccess();
     const auto & access_control = context.getAccessControlManager();
-    VisibleAccessEntities visible_entities{access};
+    AccessEntitiesVisibility visible_entities{access};
     std::vector<UUID> ids = visible_entities.findAll<RowPolicy>();
 
     size_t column_index = 0;

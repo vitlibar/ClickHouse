@@ -1,6 +1,6 @@
 #include <Access/RolesOrUsersSet.h>
 #include <Access/AccessControlManager.h>
-#include <Access/VisibleAccessEntities.h>
+#include <Access/AccessEntitiesVisibility.h>
 #include <Access/ContextAccess.h>
 #include <Access/User.h>
 #include <Access/Role.h>
@@ -29,7 +29,7 @@ namespace
     }
 
 
-    std::shared_ptr<ASTRolesOrUsersSet> toASTWithNamesImpl(const RolesOrUsersSet & set, const AccessControlManager & manager, const VisibleAccessEntities * visible_entities)
+    std::shared_ptr<ASTRolesOrUsersSet> toASTWithNamesImpl(const RolesOrUsersSet & set, const AccessControlManager & manager, const AccessEntitiesVisibility * visible_entities)
     {
         auto ast = std::make_shared<ASTRolesOrUsersSet>();
         ast->all = set.all;
@@ -90,7 +90,7 @@ namespace
     }
 
 
-    std::vector<UUID> getMatchingIDsImpl(const RolesOrUsersSet & set, const AccessControlManager & manager, const VisibleAccessEntities * visible_entities)
+    std::vector<UUID> getMatchingIDsImpl(const RolesOrUsersSet & set, const AccessControlManager & manager, const AccessEntitiesVisibility * visible_entities)
     {
         std::vector<UUID> res;
         if (!set.all)
@@ -167,12 +167,12 @@ RolesOrUsersSet::RolesOrUsersSet(
     init(ast, &manager, nullptr, current_user_id);
 }
 
-RolesOrUsersSet::RolesOrUsersSet(const ASTRolesOrUsersSet & ast, const VisibleAccessEntities & visible_entities)
+RolesOrUsersSet::RolesOrUsersSet(const ASTRolesOrUsersSet & ast, const AccessEntitiesVisibility & visible_entities)
 {
     init(ast, &visible_entities.getAccessControlManager(), &visible_entities, visible_entities.getAccess()->getUserID());
 }
 
-void RolesOrUsersSet::init(const ASTRolesOrUsersSet & ast, const AccessControlManager * manager, const VisibleAccessEntities * visible_entities, const std::optional<UUID> & current_user_id)
+void RolesOrUsersSet::init(const ASTRolesOrUsersSet & ast, const AccessControlManager * manager, const AccessEntitiesVisibility * visible_entities, const std::optional<UUID> & current_user_id)
 {
     all = ast.all;
 
@@ -277,7 +277,7 @@ std::shared_ptr<ASTRolesOrUsersSet> RolesOrUsersSet::toASTWithNames(const Access
     return toASTWithNamesImpl(*this, manager, nullptr);
 }
 
-std::shared_ptr<ASTRolesOrUsersSet> RolesOrUsersSet::toASTWithNames(const VisibleAccessEntities & visible_entities) const
+std::shared_ptr<ASTRolesOrUsersSet> RolesOrUsersSet::toASTWithNames(const AccessEntitiesVisibility & visible_entities) const
 {
     return toASTWithNamesImpl(*this, visible_entities.getAccessControlManager(), &visible_entities);
 }
@@ -296,7 +296,7 @@ String RolesOrUsersSet::toStringWithNames(const AccessControlManager & manager) 
     return serializeAST(*ast);
 }
 
-String RolesOrUsersSet::toStringWithNames(const VisibleAccessEntities & visible_entities) const
+String RolesOrUsersSet::toStringWithNames(const AccessEntitiesVisibility & visible_entities) const
 {
     auto ast = toASTWithNames(visible_entities);
     return serializeAST(*ast);
@@ -309,7 +309,7 @@ Strings RolesOrUsersSet::toStringsWithNames(const AccessControlManager & manager
     return ASTToStrings(std::move(*ast));
 }
 
-Strings RolesOrUsersSet::toStringsWithNames(const VisibleAccessEntities & visible_entities) const
+Strings RolesOrUsersSet::toStringsWithNames(const AccessEntitiesVisibility & visible_entities) const
 {
     auto ast = toASTWithNames(visible_entities);
     return ASTToStrings(std::move(*ast));
@@ -383,7 +383,7 @@ std::vector<UUID> RolesOrUsersSet::getMatchingIDs(const AccessControlManager & m
     return getMatchingIDsImpl(*this, manager, nullptr);
 }
 
-std::vector<UUID> RolesOrUsersSet::getMatchingIDs(const VisibleAccessEntities & visible_entities) const
+std::vector<UUID> RolesOrUsersSet::getMatchingIDs(const AccessEntitiesVisibility & visible_entities) const
 {
     return getMatchingIDsImpl(*this, visible_entities.getAccessControlManager(), &visible_entities);
 }

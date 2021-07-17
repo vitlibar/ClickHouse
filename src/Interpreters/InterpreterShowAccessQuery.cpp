@@ -9,7 +9,7 @@
 #include <DataTypes/DataTypeString.h>
 #include <Access/AccessFlags.h>
 #include <Access/AccessControlManager.h>
-#include <Access/VisibleAccessEntities.h>
+#include <Access/AccessEntitiesVisibility.h>
 #include <ext/range.h>
 #include <boost/range/algorithm/sort.hpp>
 #include <boost/range/algorithm_ext/push_back.hpp>
@@ -51,7 +51,7 @@ BlockInputStreamPtr InterpreterShowAccessQuery::executeImpl() const
 std::vector<AccessEntityPtr> InterpreterShowAccessQuery::getEntities() const
 {
     const auto & access_control = context.getAccessControlManager();
-    VisibleAccessEntities visible_entities{context.getAccess()};
+    AccessEntitiesVisibility visible_entities{context.getAccess()};
 
     std::vector<AccessEntityPtr> entities;
     for (auto type : ext::range(EntityType::MAX))

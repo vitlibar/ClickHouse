@@ -9,6 +9,7 @@ CFLAGS(-g0)
 
 SRCS(
     AccessControlManager.cpp
+    AccessControlVisibility.cpp
     AccessRights.cpp
     AccessRightsElement.cpp
     AllowedClientHosts.cpp
@@ -41,7 +42,6 @@ SRCS(
     SettingsProfilesCache.cpp
     User.cpp
     UsersConfigAccessStorage.cpp
-    VisibleAccessEntities.cpp
 )
 
 END()

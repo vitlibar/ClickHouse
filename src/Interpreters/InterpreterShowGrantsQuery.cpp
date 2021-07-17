@@ -8,7 +8,7 @@
 #include <DataStreams/OneBlockInputStream.h>
 #include <DataTypes/DataTypeString.h>
 #include <Access/AccessControlManager.h>
-#include <Access/VisibleAccessEntities.h>
+#include <Access/AccessEntitiesVisibility.h>
 #include <Access/User.h>
 #include <Access/Role.h>
 #include <Access/RolesOrUsersSet.h>
@@ -28,7 +28,7 @@ namespace
     template <typename T>
     ASTs getGrantQueriesImpl(
         const T & grantee,
-        const VisibleAccessEntities * visible_entities /* not used if attach_mode == true */,
+        const AccessEntitiesVisibility * visible_entities /* not used if attach_mode == true */,
         bool attach_mode = false)
     {
         ASTs res;
@@ -91,7 +91,7 @@ namespace
 
     ASTs getGrantQueriesImpl(
         const IAccessEntity & entity,
-        const VisibleAccessEntities * visible_entities /* not used if attach_mode == true */,
+        const AccessEntitiesVisibility * visible_entities /* not used if attach_mode == true */,
         bool attach_mode = false)
     {
         if (const User * user = typeid_cast<const User *>(&entity))
@@ -144,7 +144,7 @@ std::vector<AccessEntityPtr> InterpreterShowGrantsQuery::getEntities() const
 {
     const auto & show_query = query_ptr->as<ASTShowGrantsQuery &>();
     const auto & access_control = context.getAccessControlManager();
-    VisibleAccessEntities visible_entities{context.getAccess()};
+    AccessEntitiesVisibility visible_entities{context.getAccess()};
     auto ids = RolesOrUsersSet{*show_query.for_roles, visible_entities}.getMatchingIDs(visible_entities);
 
     std::vector<AccessEntityPtr> entities;
@@ -163,7 +163,7 @@ std::vector<AccessEntityPtr> InterpreterShowGrantsQuery::getEntities() const
 ASTs InterpreterShowGrantsQuery::getGrantQueries() const
 {
     auto entities = getEntities();
-    VisibleAccessEntities visible_entities{context.getAccess()};
+    AccessEntitiesVisibility visible_entities{context.getAccess()};
 
     ASTs grant_queries;
     for (const auto & entity : entities)
@@ -175,7 +175,7 @@ ASTs InterpreterShowGrantsQuery::getGrantQueries() const
 
 ASTs InterpreterShowGrantsQuery::getGrantQueries(const IAccessEntity & user_or_role, const Context & context)
 {
-    VisibleAccessEntities visible_entities{context.getAccess()};
+    AccessEntitiesVisibility visible_entities{context.getAccess()};
     return getGrantQueriesImpl(user_or_role, &visible_entities, false);
 }
 
