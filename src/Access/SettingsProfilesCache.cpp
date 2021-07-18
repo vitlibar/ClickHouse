@@ -1,6 +1,8 @@
 #include <Access/SettingsProfilesCache.h>
 #include <Access/AccessControlManager.h>
 #include <Access/SettingsProfile.h>
+#include <Access/SettingsConstraints.h>
+#include <Access/SettingsProfilesInfo.h>
 #include <Core/Settings.h>
 #include <Common/SettingsChanges.h>
 #include <Common/quoteString.h>
@@ -67,7 +69,7 @@ void SettingsProfilesCache::profileAddedOrChanged(const UUID & profile_id, const
             profiles_by_name.erase(old_profile->getName());
         profiles_by_name[new_profile->getName()] = profile_id;
     }
-    settings_for_profiles.clear();
+    profile_infos_cache.clear();
     mergeSettingsAndConstraints();
 }
 
@@ -80,7 +82,7 @@ void SettingsProfilesCache::profileRemoved(const UUID & profile_id)
         return;
     profiles_by_name.erase(it->second->getName());
     all_profiles.erase(it);
-    settings_for_profiles.clear();
+    profile_infos_cache.clear();
     mergeSettingsAndConstraints();
 }
 
@@ -142,46 +144,59 @@ void SettingsProfilesCache::mergeSettingsAndConstraintsFor(EnabledSettings & ena
     merged_settings.merge(enabled.params.settings_from_enabled_roles);
     merged_settings.merge(enabled.params.settings_from_user);
 
-    substituteProfiles(merged_settings);
-
-    auto settings = merged_settings.toSettings();
+    auto profiles = enabled.params.settings_from_user.toProfileIDs();
+    std::vector<UUID> profiles_including_implicit;
+    std::unordered_map<UUID, String> names_of_profiles;
+    substituteProfiles(merged_settings, profiles_including_implicit, names_of_profiles);
+    auto settings = merged_settings.toSettingsChanges();
     auto constraints = merged_settings.toSettingsConstraints(manager);
-    enabled.setSettingsAndConstraints(
-        std::make_shared<Settings>(std::move(settings)), std::make_shared<SettingsConstraints>(std::move(constraints)));
+
+    auto info = std::make_shared<SettingsProfilesInfo>(
+        std::move(settings),
+        std::move(constraints),
+        std::move(profiles),
+        std::move(profiles_including_implicit),
+        std::move(names_of_profiles));
+
+    enabled.setInfo(std::move(info));
 }
 
 
-void SettingsProfilesCache::substituteProfiles(SettingsProfileElements & elements) const
+void SettingsProfilesCache::substituteProfiles(
+    SettingsProfileElements & elements,
+    std::vector<UUID> & substituted_profiles,
+    std::unordered_map<UUID, String> & names_of_substituted_profiles) const
 {
-    boost::container::flat_set<UUID> already_substituted;
-    for (size_t i = 0; i != elements.size();)
+    LOG_INFO(&Poco::Logger::get("!!!"), "substituteProfiles-begin");
+    substituted_profiles.clear();
+    boost::container::flat_set<UUID> substituted_profiles_set;
+    names_of_substituted_profiles.clear();
+    size_t i = elements.size();
+    while (i != 0)
     {
-        auto & element = elements[i];
+        auto & element = elements[--i];
         if (!element.parent_profile)
-        {
-            ++i;
             continue;
-        }
 
-        auto parent_profile_id = *element.parent_profile;
+        auto profile_id = *element.parent_profile;
         element.parent_profile.reset();
-        if (already_substituted.count(parent_profile_id))
-        {
-            ++i;
+        if (substituted_profiles_set.count(profile_id))
             continue;
-        }
 
-        already_substituted.insert(parent_profile_id);
-        auto parent_profile = all_profiles.find(parent_profile_id);
-        if (parent_profile == all_profiles.end())
-        {
-            ++i;
+        auto profile_it = all_profiles.find(profile_id);
+        if (profile_it == all_profiles.end())
             continue;
-        }
 
-        const auto & parent_profile_elements = parent_profile->second->elements;
-        elements.insert(elements.begin() + i, parent_profile_elements.begin(), parent_profile_elements.end());
+        const auto & profile = profile_it->second;
+        const auto & profile_elements = profile->elements;
+        elements.insert(elements.begin() + i, profile_elements.begin(), profile_elements.end());
+        i += profile_elements.size();
+        substituted_profiles.push_back(profile_id);
+        substituted_profiles_set.insert(profile_id);
+        names_of_substituted_profiles.emplace(profile_id, profile->getName());
     }
+    std::reverse(substituted_profiles.begin(), substituted_profiles.end());
+    LOG_INFO(&Poco::Logger::get("!!!"), "substituteProfiles-end");
 }
 
 
@@ -216,26 +231,51 @@ std::shared_ptr<const EnabledSettings> SettingsProfilesCache::getEnabledSettings
 }
 
 
-std::shared_ptr<const SettingsChanges> SettingsProfilesCache::getProfileSettings(const String & profile_name)
+std::shared_ptr<const SettingsProfilesInfo> SettingsProfilesCache::getSettingsProfileInfo(const UUID & profile_id)
+{
+    std::lock_guard lock{mutex};
+    return getSettingsProfileInfoNoLock(profile_id);
+}
+
+
+std::shared_ptr<const SettingsProfilesInfo> SettingsProfilesCache::getSettingsProfileInfo(const String & profile_name)
+{
+    std::lock_guard lock{mutex};
+    ensureAllProfilesRead();
+    auto it = profiles_by_name.find(profile_name);
+    if (it == profiles_by_name.end())
+        throw Exception("Settings profile " + backQuote(profile_name) + " not found", ErrorCodes::THERE_IS_NO_PROFILE);
+    return getSettingsProfileInfoNoLock(it->second);
+}
+
+
+std::shared_ptr<const SettingsProfilesInfo> SettingsProfilesCache::getSettingsProfileInfoNoLock(const UUID & profile_id)
 {
     std::lock_guard lock{mutex};
     ensureAllProfilesRead();
 
-    auto it = profiles_by_name.find(profile_name);
-    if (it == profiles_by_name.end())
-        throw Exception("Settings profile " + backQuote(profile_name) + " not found", ErrorCodes::THERE_IS_NO_PROFILE);
-    const UUID profile_id = it->second;
-
-    auto it2 = settings_for_profiles.find(profile_id);
-    if (it2 != settings_for_profiles.end())
+    auto it2 = profile_infos_cache.find(profile_id);
+    if (it2 != profile_infos_cache.end())
         return it2->second;
 
     SettingsProfileElements elements = all_profiles[profile_id]->elements;
-    substituteProfiles(elements);
-    auto res = std::make_shared<const SettingsChanges>(elements.toSettingsChanges());
-    settings_for_profiles.emplace(profile_id, res);
-    return res;
-}
 
+    std::vector<UUID> profiles{profile_id};
+    std::vector<UUID> profiles_including_implicit;
+    std::unordered_map<UUID, String> names_of_profiles;
+    substituteProfiles(elements, profiles_including_implicit, names_of_profiles);
+    auto settings = elements.toSettingsChanges();
+    auto constraints = elements.toSettingsConstraints(manager);
+
+    auto info = std::make_shared<SettingsProfilesInfo>(
+        std::move(settings),
+        std::move(constraints),
+        std::move(profiles),
+        std::move(profiles_including_implicit),
+        std::move(names_of_profiles));
+
+    profile_infos_cache.emplace(profile_id, info);
+    return info;
+}
 
 }

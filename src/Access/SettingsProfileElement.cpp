@@ -2,6 +2,7 @@
 #include <Access/SettingsConstraints.h>
 #include <Access/AccessControlManager.h>
 #include <Access/SettingsProfile.h>
+#include <Access/removeDuplicatesFromProfileIDs.h>
 #include <Parsers/ASTSettingsProfileElement.h>
 #include <Core/Settings.h>
 #include <Common/SettingsChanges.h>
@@ -171,5 +172,18 @@ SettingsConstraints SettingsProfileElements::toSettingsConstraints(const AccessC
     }
     return res;
 }
+
+std::vector<UUID> SettingsProfileElements::toProfileIDs() const
+{
+    std::vector<UUID> res;
+    for (const auto & elem : *this)
+    {
+        if (elem.parent_profile)
+            res.push_back(*elem.parent_profile);
+    }
+    removeDuplicatesFromProfileIDs(res);
+    return res;
+}
+
 
 }
