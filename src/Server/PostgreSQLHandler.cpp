@@ -3,7 +3,6 @@
 #include <IO/ReadBufferFromString.h>
 #include <IO/WriteBufferFromPocoSocket.h>
 #include <Interpreters/executeQuery.h>
-#include <Interpreters/Session.h>
 #include "PostgreSQLHandler.h"
 #include <Parsers/parseQuery.h>
 #include <Common/setThreadName.h>

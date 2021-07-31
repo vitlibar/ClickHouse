@@ -581,6 +581,24 @@ ConfigurationPtr Context::getUsersConfig()
 }
 
 
+void Context::setUser(const String & name, const String & password, const Poco::Net::SocketAddress & address)
+{
+    setUser(BasicCredentials(name, password), address);
+}
+
+void Context::setUser(const Credentials & credentials, const Poco::Net::SocketAddress & address)
+{
+    setUser(getAccessControlManager().login(credentials, address.host()));
+
+    client_info.current_address = address;
+
+#if defined(ARCADIA_BUILD)
+    /// This is harmful field that is used only in foreign "Arcadia" build.
+    if (const auto * basic_credentials = dynamic_cast<const BasicCredentials *>(&credentials))
+        client_info.current_password = basic_credentials->getPassword();
+#endif
+}
+
 void Context::setUser(const UUID & user_id_)
 {
     auto lock = getLock();
@@ -603,44 +621,9 @@ void Context::setUser(const UUID & user_id_)
         setCurrentDatabase(user->default_database);
 }
 
-#if 0
-void Context::setUser(const Credentials & credentials, const Poco::Net::SocketAddress & address)
-{
-    /*
-    // move to somewhere
-#if defined(ARCADIA_BUILD)
-    /// This is harmful field that is used only in foreign "Arcadia" build.
-    client_info.current_password.clear();
-    if (const auto * basic_credentials = dynamic_cast<const BasicCredentials *>(&credentials))
-        client_info.current_password = basic_credentials->getPassword();
-#endif
-    */
-
-    /// Find a user with such name and check the credentials.
-    auto new_user_id = getAccessControlManager().login(credentials, address.host());
-    setUser(new_user_id);
-}
-
-void Context::setUser(const String & name, const String & password, const Poco::Net::SocketAddress & address)
-{
-    setUser(BasicCredentials(name, password), address);
-}
-
-void Context::setUserWithoutCheckingPassword(const String & name, const Poco::Net::SocketAddress & address)
-{
-    setUser(AlwaysAllowCredentials(name), address);
-}
-#endif
-
 std::shared_ptr<const User> Context::getUser() const
 {
     return getAccess()->getUser();
-}
-
-void Context::setQuotaKey(String quota_key_)
-{
-    auto lock = getLock();
-    client_info.quota_key = std::move(quota_key_);
 }
 
 String Context::getUserName() const
@@ -652,6 +635,13 @@ std::optional<UUID> Context::getUserID() const
 {
     auto lock = getLock();
     return user_id;
+}
+
+
+void Context::setQuotaKey(String quota_key_)
+{
+    auto lock = getLock();
+    client_info.quota_key = std::move(quota_key_);
 }
 
 

@@ -9,7 +9,6 @@
 #include <Databases/DatabaseMemory.h>
 #include <Storages/System/attachSystemTables.h>
 #include <Interpreters/ProcessList.h>
-#include <Interpreters/Session.h>
 #include <Interpreters/executeQuery.h>
 #include <Interpreters/loadMetadata.h>
 #include <Interpreters/DatabaseCatalog.h>
@@ -377,10 +376,14 @@ void LocalServer::processQueries()
 
     /// we can't mutate global global_context (can lead to races, as it was already passed to some background threads)
     /// so we can't reuse it safely as a query context and need a copy here
-    Session session(global_context, ClientInfo::Interface::TCP);
-    session.setUser("default", "", Poco::Net::SocketAddress{});
+    /// we can't mutate global global_context (can lead to races, as it was already passed to some background threads)
+    /// so we can't reuse it safely as a query context and need a copy here
+    auto context = Context::createCopy(global_context);
 
-    auto context = session.makeQueryContext("");
+    context->makeSessionContext();
+    context->makeQueryContext();
+
+    context->setUser("default", "", Poco::Net::SocketAddress{});
 
     applyCmdSettings(context);
 

@@ -24,13 +24,13 @@
 #include <Interpreters/executeQuery.h>
 #include <Interpreters/TablesStatus.h>
 #include <Interpreters/InternalTextLogsQueue.h>
-#include <Interpreters/Session.h>
 #include <Interpreters/OpenTelemetrySpanLog.h>
 #include <Storages/StorageReplicatedMergeTree.h>
 #include <Storages/MergeTree/MergeTreeDataPartUUID.h>
 #include <Storages/StorageS3Cluster.h>
 #include <Core/ExternalTable.h>
 #include <Access/Credentials.h>
+#include <Server/Session.h>
 #include <Storages/ColumnDefault.h>
 #include <DataTypes/DataTypeLowCardinality.h>
 #include <Compression/CompressionFactory.h>
@@ -237,7 +237,7 @@ void TCPHandler::runImpl()
                     throw Exception("Unexpected context in external tables initializer", ErrorCodes::LOGICAL_ERROR);
 
                 /// Get blocks of temporary tables
-                readData(connection_settings);
+                readData();
 
                 /// Reset the input stream, as we received an empty block while receiving external table data.
                 /// So, the stream has been marked as cancelled and we can't read from it anymore.
@@ -275,7 +275,7 @@ void TCPHandler::runImpl()
 
                 size_t poll_interval_ms;
                 int receive_timeout;
-                std::tie(poll_interval_ms, receive_timeout) = getReadTimeouts(connection_settings);
+                std::tie(poll_interval_ms, receive_timeout) = getReadTimeouts();
                 if (!readDataNext(poll_interval_ms, receive_timeout))
                 {
                     state.block_in.reset();
@@ -307,7 +307,7 @@ void TCPHandler::runImpl()
             if (state.io.out)
             {
                 state.need_receive_data_for_insert = true;
-                processInsertQuery(connection_settings);
+                processInsertQuery();
             }
             else if (state.need_receive_data_for_input) // It implies pipeline execution
             {
@@ -506,7 +506,7 @@ bool TCPHandler::readDataNext(size_t poll_interval, time_t receive_timeout)
 }
 
 
-std::tuple<size_t, int> TCPHandler::getReadTimeouts(const Settings & connection_settings)
+std::tuple<size_t, int> TCPHandler::getReadTimeouts()
 {
     const auto receive_timeout = query_context->getSettingsRef().receive_timeout.value;
 
@@ -520,9 +520,9 @@ std::tuple<size_t, int> TCPHandler::getReadTimeouts(const Settings & connection_
 }
 
 
-void TCPHandler::readData(const Settings & connection_settings)
+void TCPHandler::readData()
 {
-    auto [poll_interval, receive_timeout] = getReadTimeouts(connection_settings);
+    auto [poll_interval, receive_timeout] = getReadTimeouts();
     sendLogs();
 
     while (readDataNext(poll_interval, receive_timeout))
@@ -530,7 +530,7 @@ void TCPHandler::readData(const Settings & connection_settings)
 }
 
 
-void TCPHandler::processInsertQuery(const Settings & connection_settings)
+void TCPHandler::processInsertQuery()
 {
     /** Made above the rest of the lines, so that in case of `writePrefix` function throws an exception,
       *  client receive exception before sending data.
@@ -556,7 +556,7 @@ void TCPHandler::processInsertQuery(const Settings & connection_settings)
 
     try
     {
-        readData(connection_settings);
+        readData();
     }
     catch (...)
     {
@@ -954,7 +954,7 @@ void TCPHandler::receiveHello()
     client_info.client_version_patch = client_version_patch;
     client_info.client_tcp_protocol_version = client_tcp_protocol_version;
 
-    performLoginActions(*session, [&](bool &) { session->setUser(user, password, socket().peerAddress()); });
+    session->setUser(user, password, socket().peerAddress());
 }
 
 

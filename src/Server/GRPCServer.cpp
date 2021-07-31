@@ -10,7 +10,6 @@
 #include <DataStreams/PushingToSinkBlockOutputStream.h>
 #include <DataTypes/DataTypeFactory.h>
 #include <Interpreters/Context.h>
-#include <Interpreters/Session.h>
 #include <Interpreters/InternalTextLogsQueue.h>
 #include <Interpreters/executeQuery.h>
 #include <IO/ConcatReadBuffer.h>
@@ -27,6 +26,7 @@
 #include <Processors/QueryPipeline.h>
 #include <Formats/FormatFactory.h>
 #include <Server/IServer.h>
+#include <Server/Session.h>
 #include <Storages/IStorage.h>
 #include <Poco/FileStream.h>
 #include <Poco/StreamCopier.h>

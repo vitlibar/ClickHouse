@@ -179,9 +179,9 @@ private:
     String receiveReadTaskResponseAssumeLocked();
     bool receiveData(bool scalar);
     bool readDataNext(size_t poll_interval, time_t receive_timeout);
-    void readData(const Settings & connection_settings);
+    void readData();
     void receiveClusterNameAndSalt();
-    std::tuple<size_t, int> getReadTimeouts(const Settings & connection_settings);
+    std::tuple<size_t, int> getReadTimeouts();
 
     [[noreturn]] void receiveUnexpectedData();
     [[noreturn]] void receiveUnexpectedQuery();
@@ -189,7 +189,7 @@ private:
     [[noreturn]] void receiveUnexpectedTablesStatusRequest();
 
     /// Process INSERT query
-    void processInsertQuery(const Settings & connection_settings);
+    void processInsertQuery();
 
     /// Process a request that does not require the receiving of data blocks from the client
     void processOrdinaryQuery();

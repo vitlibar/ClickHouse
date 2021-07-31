@@ -5,13 +5,11 @@
 #include <Columns/ColumnVector.h>
 #include <Common/NetException.h>
 #include <Common/OpenSSLHelpers.h>
-#include <Core/MySQL/Authentication.h>
 #include <Core/MySQL/PacketsGeneric.h>
 #include <Core/MySQL/PacketsConnection.h>
 #include <Core/MySQL/PacketsProtocolText.h>
 #include <Core/NamesAndTypes.h>
 #include <DataStreams/copyData.h>
-#include <Interpreters/Session.h>
 #include <Interpreters/executeQuery.h>
 #include <IO/copyData.h>
 #include <IO/LimitReadBuffer.h>
@@ -26,6 +24,8 @@
 #include <Access/User.h>
 #include <Access/AccessControlManager.h>
 #include <Common/setThreadName.h>
+#include <Server/MySQL/Authentication.h>
+#include <Server/Session.h>
 
 #if !defined(ARCADIA_BUILD)
 #    include <Common/config_version.h>

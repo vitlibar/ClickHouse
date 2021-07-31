@@ -3,7 +3,7 @@
 #include <Access/AccessControlManager.h>
 #include <Access/User.h>
 #include <functional>
-#include <Interpreters/Session.h>
+#include <Server/Session.h>
 #include <Interpreters/Context.h>
 #include <IO/ReadBuffer.h>
 #include <IO/ReadHelpers.h>

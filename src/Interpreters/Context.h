@@ -356,25 +356,17 @@ public:
     ConfigurationPtr getUsersConfig();
 
     /// Sets the current user, checks the credentials and that the specified host is allowed.
-    /// Must be called before getClientInfo() can be called.
-    void setUser(const UUID & user_id_);
-
-#if 0
-    void setUser(const Credentials & credentials, const Poco::Net::SocketAddress & address);
     void setUser(const String & name, const String & password, const Poco::Net::SocketAddress & address);
+    void setUser(const Credentials & credentials, const Poco::Net::SocketAddress & address);
 
-    /// Sets the current user, *does not check the password/credentials and that the specified host is allowed*.
-    /// Must be called before getClientInfo.
-    ///
-    /// (Used only internally in cluster, if the secret matches)
-    void setUserWithoutCheckingPassword(const String & name, const Poco::Net::SocketAddress & address);
-#endif
-
-    void setQuotaKey(String quota_key_);
+    /// Sets the current user without checking credentials.
+    void setUser(const UUID & user_id_);
 
     UserPtr getUser() const;
     String getUserName() const;
     std::optional<UUID> getUserID() const;
+
+    void setQuotaKey(String quota_key_);
 
     void setCurrentRoles(const std::vector<UUID> & current_roles_);
     void setCurrentRolesDefault();
