@@ -30,6 +30,22 @@ namespace ErrorCodes
     extern const int NOT_IMPLEMENTED;
 }
 
+namespace
+{
+    void adjustClientInfoIfInitialQuery(ClientInfo & client_info)
+    {
+        if (client_info.query_kind == ClientInfo::QueryKind::NO_QUERY)
+            client_info.query_kind = ClientInfo::QueryKind::INITIAL_QUERY;
+
+        if (client_info.query_kind == ClientInfo::QueryKind::INITIAL_QUERY)
+        {
+            client_info.initial_user = client_info.current_user;
+            client_info.initial_address = client_info.current_address;
+            client_info.initial_query_id = client_info.current_query_id;
+        }
+    }
+}
+
 class NamedSessionsStorage;
 
 /// User name and session identifier. Named sessions are local to users.
@@ -229,78 +245,107 @@ void NamedSessionData::release()
 
 std::optional<NamedSessionsStorage> Session::named_sessions = std::nullopt;
 
-void Session::enableNamedSessions()
+void Session::startupNamedSessions()
 {
     named_sessions.emplace();
 }
 
-Session::Session(const ContextPtr & context_to_copy, ClientInfo::Interface interface, std::optional<String> default_format)
-    : session_context(Context::createCopy(context_to_copy)),
-      initial_session_context(session_context)
+Session::Session(const ContextPtr & global_context_, ClientInfo::Interface interface_)
+    : global_context(global_context_)
 {
-    session_context->makeSessionContext();
-    session_context->getClientInfo().interface = interface;
-
-    if (default_format)
-        session_context->setDefaultFormat(*default_format);
+    client_info.interface = interface_;
 }
 
 Session::Session(Session &&) = default;
 
 Session::~Session()
 {
+    session_context.reset();
     releaseNamedSession();
+}
 
-    if (access)
+void Session::setUser(const Credentials & credentials_, const Poco::Net::SocketAddress & address_)
+{
+    if (session_context)
+        throw Exception("Must not be called after making session context", ErrorCodes::LOGICAL_ERROR);
+
+    client_info.current_user = credentials_.getUserName();
+    client_info.current_address = address_;
+
+#if defined(ARCADIA_BUILD)
+    /// This is harmful field that is used only in foreign "Arcadia" build.
+    if (const auto * basic_credentials = dynamic_cast<const BasicCredentials *>(&credentials_))
+        client_info.current_password = basic_credentials->getPassword();
+#endif
+
+    user_id = global_context->getAccessControlManager().login(credentials_, client_info.current_address.host());
+}
+
+void Session::setUser(const String & user_name_, const String & password_, const Poco::Net::SocketAddress & address_)
+{
+    setUser(BasicCredentials(user_name_, password_), address_);
+}
+
+Authentication Session::getUserAuthentication(const String & user_name_) const
+{
+    return global_context->getAccessControlManager().read<User>(user_name_)->authentication;
+}
+
+ContextMutablePtr Session::makeSessionContext()
+{
+    if (session_context)
+        throw Exception("Session context already exists", ErrorCodes::LOGICAL_ERROR);
+
+    session_context = Context::createCopy(global_context);
+    session_context->makeSessionContext();
+    session_context->getClientInfo() = client_info;
+
+    if (user_id)
     {
-        auto user = access->getUser();
-        if (user)
-            onLogOut();
+        session_context->setUser(*user_id);
+        user = session_context->getUser();
     }
+
+    adjustClientInfoIfInitialQuery(session_context->getClientInfo());
+
+    return session_context;
 }
 
-Authentication Session::getUserAuthentication(const String & user_name) const
+ContextMutablePtr Session::makeSessionContext(const String & session_id, std::chrono::steady_clock::duration timeout, bool session_check)
 {
-    return session_context->getAccessControlManager().read<User>(user_name)->authentication;
+    if (session_context)
+        return session_context;
+    // TODO: Fix excessive copying of context and calling setUser() for a session context which will be replaced.
+    makeSessionContext();
+    promoteToNamedSession(session_id, timeout, session_check);
+    return session_context;
 }
 
-void Session::setUser(const Credentials & credentials, const Poco::Net::SocketAddress & address)
+ContextMutablePtr Session::makeQueryContext() const
 {
-    try
+    ContextMutablePtr query_context = Context::createCopy(session_context ? session_context : global_context);
+    query_context->makeQueryContext();
+    auto & query_client_info = query_context->getClientInfo();
+
+    if (session_context)
     {
-        session_context->setUser(credentials, address);
-
-        // Caching access just in case if context is going to be replaced later (e.g. with context of NamedSessionData)
-        access = session_context->getAccess();
-
-        // Check if this is a not an intercluster session, but the real one.
-        if (access && access->getUser() && dynamic_cast<const BasicCredentials *>(&credentials))
+        query_client_info.client_trace_context = client_info.client_trace_context;
+    }
+    else
+    {
+        query_client_info = client_info;
+        if (user_id)
         {
-            onLogInSuccess();
+            query_context->setUser(*user_id);
+            user = query_context->getUser();
         }
     }
-    catch (const std::exception & e)
-    {
-        onLogInFailure(credentials.getUserName(), e);
-        throw;
-    }
-}
 
-void Session::setUser(const String & name, const String & password, const Poco::Net::SocketAddress & address)
-{
-    setUser(BasicCredentials(name, password), address);
-}
+    query_context->setCurrentQueryId(client_info.current_query_id);
 
-void Session::onLogInSuccess()
-{
-}
+    adjustClientInfoIfInitialQuery(query_context->getClientInfo());
 
-void Session::onLogInFailure(const String & /* user_name */, const std::exception & /* failure_reason */)
-{
-}
-
-void Session::onLogOut()
-{
+    return query_context;
 }
 
 void Session::promoteToNamedSession(const String & session_id, std::chrono::steady_clock::duration timeout, bool session_check)
@@ -329,64 +374,6 @@ void Session::releaseNamedSession()
         named_session->release();
         named_session.reset();
     }
-
-    session_context = initial_session_context;
-}
-
-ContextMutablePtr Session::makeQueryContext(const String & query_id) const
-{
-    ContextMutablePtr new_query_context = Context::createCopy(session_context);
-
-    new_query_context->setCurrentQueryId(query_id);
-    new_query_context->setSessionContext(session_context);
-    new_query_context->makeQueryContext();
-
-    ClientInfo & client_info = new_query_context->getClientInfo();
-    client_info.initial_user = client_info.current_user;
-    client_info.initial_query_id = client_info.current_query_id;
-    client_info.initial_address = client_info.current_address;
-
-    return new_query_context;
-}
-
-ContextPtr Session::sessionContext() const
-{
-    return session_context;
-}
-
-ContextMutablePtr Session::mutableSessionContext()
-{
-    return session_context;
-}
-
-ClientInfo & Session::getClientInfo()
-{
-    return session_context->getClientInfo();
-}
-
-const ClientInfo & Session::getClientInfo() const
-{
-    return session_context->getClientInfo();
-}
-
-const Settings & Session::getSettings() const
-{
-    return session_context->getSettingsRef();
-}
-
-void Session::setQuotaKey(const String & quota_key)
-{
-    session_context->setQuotaKey(quota_key);
-}
-
-String Session::getCurrentDatabase() const
-{
-    return session_context->getCurrentDatabase();
-}
-
-void Session::setCurrentDatabase(const String & name)
-{
-    session_context->setCurrentDatabase(name);
 }
 
 }

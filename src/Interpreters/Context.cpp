@@ -1,4 +1,4 @@
-#include <map>
+﻿#include <map>
 #include <set>
 #include <optional>
 #include <memory>
@@ -581,38 +581,44 @@ ConfigurationPtr Context::getUsersConfig()
 }
 
 
-void Context::setUser(const Credentials & credentials, const Poco::Net::SocketAddress & address)
+void Context::setUser(const UUID & user_id_)
 {
     auto lock = getLock();
 
-    client_info.current_user = credentials.getUserName();
-    client_info.current_address = address;
+    user_id = user_id_;
 
+    access = getAccessControlManager().getContextAccess(
+        user_id_, /* current_roles = */ {}, /* use_default_roles = */ true, settings, current_database, client_info);
+
+    auto user = access->getUser();
+    client_info.current_user = user->getName();
+
+    current_roles = std::make_shared<std::vector<UUID>>(user->granted_roles.findGranted(user->default_roles));
+
+    auto default_profile_info = access->getDefaultProfileInfo();
+    settings_constraints_and_current_profiles = default_profile_info->getConstraintsAndProfileIDs();
+    applySettingsChanges(default_profile_info->settings);
+
+    if (!user->default_database.empty())
+        setCurrentDatabase(user->default_database);
+}
+
+#if 0
+void Context::setUser(const Credentials & credentials, const Poco::Net::SocketAddress & address)
+{
+    /*
+    // move to somewhere
 #if defined(ARCADIA_BUILD)
     /// This is harmful field that is used only in foreign "Arcadia" build.
     client_info.current_password.clear();
     if (const auto * basic_credentials = dynamic_cast<const BasicCredentials *>(&credentials))
         client_info.current_password = basic_credentials->getPassword();
 #endif
+    */
 
     /// Find a user with such name and check the credentials.
     auto new_user_id = getAccessControlManager().login(credentials, address.host());
-    auto new_access = getAccessControlManager().getContextAccess(
-        new_user_id, /* current_roles = */ {}, /* use_default_roles = */ true,
-        settings, current_database, client_info);
-
-    user_id = new_user_id;
-    access = std::move(new_access);
-
-    auto user = access->getUser();
-    current_roles = std::make_shared<std::vector<UUID>>(user->granted_roles.findGranted(user->default_roles));
-
-    if (!user->default_database.empty())
-        setCurrentDatabase(user->default_database);
-
-    auto default_profile_info = access->getDefaultProfileInfo();
-    settings_constraints_and_current_profiles = default_profile_info->getConstraintsAndProfileIDs();
-    applySettingsChanges(default_profile_info->settings);
+    setUser(new_user_id);
 }
 
 void Context::setUser(const String & name, const String & password, const Poco::Net::SocketAddress & address)
@@ -624,6 +630,7 @@ void Context::setUserWithoutCheckingPassword(const String & name, const Poco::Ne
 {
     setUser(AlwaysAllowCredentials(name), address);
 }
+#endif
 
 std::shared_ptr<const User> Context::getUser() const
 {

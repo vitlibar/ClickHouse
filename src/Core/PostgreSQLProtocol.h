@@ -808,7 +808,8 @@ protected:
         Messaging::MessageTransport & mt,
         const Poco::Net::SocketAddress & address)
     {
-        try {
+        try
+        {
             session.setUser(user_name, password, address);
         }
         catch (const Exception &)
@@ -902,16 +903,7 @@ public:
         Messaging::MessageTransport & mt,
         const Poco::Net::SocketAddress & address)
     {
-        Authentication::Type user_auth_type;
-        try
-        {
-            user_auth_type = session.getUserAuthentication(user_name).getType();
-        }
-        catch (const std::exception & e)
-        {
-            session.onLogInFailure(user_name, e);
-            throw;
-        }
+        Authentication::Type user_auth_type = session.getUserAuthentication(user_name).getType();
 
         if (type_to_method.find(user_auth_type) != type_to_method.end())
         {

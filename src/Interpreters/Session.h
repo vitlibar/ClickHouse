@@ -1,8 +1,9 @@
 #pragma once
 
-#include <common/types.h>
-#include <Interpreters/Context_fwd.h>
+#include <Common/CurrentThread.h>
+#include <Common/SettingsChanges.h>
 #include <Interpreters/ClientInfo.h>
+#include <Interpreters/Context_fwd.h>
 
 #include <chrono>
 #include <memory>
@@ -13,11 +14,11 @@ namespace Poco::Net { class SocketAddress; }
 namespace DB
 {
 class Credentials;
-class ContextAccess;
-struct Settings;
 class Authentication;
 struct NamedSessionData;
 class NamedSessionsStorage;
+class User;
+using UserPtr = std::shared_ptr<const User>;
 
 /** Represents user-session from the server perspective,
  *  basically it is just a smaller subset of Context API, simplifies Context management.
@@ -32,57 +33,57 @@ class Session
 public:
     /// Allow to use named sessions. The thread will be run to cleanup sessions after timeout has expired.
     /// The method must be called at the server startup.
-    static void enableNamedSessions();
+    static void startupNamedSessions();
 
-//    static Session makeSessionFromCopyOfContext(const ContextPtr & _context_to_copy);
-    Session(const ContextPtr & context_to_copy, ClientInfo::Interface interface, std::optional<String> default_format = std::nullopt);
-    virtual ~Session();
+    Session(const ContextPtr & global_context_, ClientInfo::Interface interface_);
+    Session(Session &&);
+    ~Session();
 
     Session(const Session &) = delete;
     Session& operator=(const Session &) = delete;
 
-    Session(Session &&);
-//    Session& operator=(Session &&);
+    void setUser(const Credentials & credentials_, const Poco::Net::SocketAddress & address_);
+    void setUser(const String & user_name_, const String & password_, const Poco::Net::SocketAddress & address_);
+    Authentication getUserAuthentication(const String & user_name_) const;
 
-    Authentication getUserAuthentication(const String & user_name) const;
-    void setUser(const Credentials & credentials, const Poco::Net::SocketAddress & address);
-    void setUser(const String & name, const String & password, const Poco::Net::SocketAddress & address);
+    ClientInfo & getClientInfo() { return client_info; }
 
-    /// Handle login and logout events.
-    void onLogInSuccess();
-    void onLogInFailure(const String & user_name, const std::exception & /* failure_reason */);
+    ContextMutablePtr makeSessionContext();
+    ContextMutablePtr makeSessionContext(const String & session_id_, std::chrono::steady_clock::duration timeout_, bool session_check_);
+    ContextMutablePtr sessionContext() { return session_context; }
+    ContextPtr sessionContext() const { return session_context; }
+
+    ContextMutablePtr makeQueryContext() const;
+
+private:
+    friend void performLoginActions(Session & session, std::function<void(bool &)> func);
+
     void onLogOut();
 
-    /** Propmotes current session to a named session.
+    void initContextWithUserInfo(ContextMutablePtr context) const;
+
+    /** Promotes current session to a named session.
      *
      *  that is: re-uses or creates NamedSession and then piggybacks on it's context,
      *  retaining ClientInfo of current session_context.
      *  Acquired named_session is then released in the destructor.
      */
     void promoteToNamedSession(const String & session_id, std::chrono::steady_clock::duration timeout, bool session_check);
+
     /// Early release a NamedSession.
     void releaseNamedSession();
 
-    ContextMutablePtr makeQueryContext(const String & query_id) const;
+    const ContextPtr global_context;
 
-    ContextPtr sessionContext() const;
-    ContextMutablePtr mutableSessionContext();
+    /// interface, current_user, current_password, quota_key, current_address, forwarded_for, http_method,
+    /// current_query_id, client_trace_context
+    ClientInfo client_info;
 
-    ClientInfo & getClientInfo();
-    const ClientInfo & getClientInfo() const;
+    mutable UserPtr user;
+    std::optional<UUID> user_id;
 
-    const Settings & getSettings() const;
-
-    void setQuotaKey(const String & quota_key);
-
-    String getCurrentDatabase() const;
-    void setCurrentDatabase(const String & name);
-
-private:
+    String session_id;
     ContextMutablePtr session_context;
-    // So that Session can be used after forced release of named_session.
-    const ContextMutablePtr initial_session_context;
-    std::shared_ptr<const ContextAccess> access;
     std::shared_ptr<NamedSessionData> named_session;
 };
 

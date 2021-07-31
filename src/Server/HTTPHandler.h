@@ -72,9 +72,12 @@ private:
 
     CurrentMetrics::Increment metric_increment{CurrentMetrics::HTTPConnection};
 
-    // The request_session and the request_credentials instances may outlive a single request/response loop.
+    /// Reset at the end of each request and response.
+    std::unique_ptr<Session> session;
+    std::optional<CurrentThread::QueryScope> query_scope;
+
+    // The request_credential instance may outlive a single request/response loop.
     // This happens only when the authentication mechanism requires more than a single request/response exchange (e.g., SPNEGO).
-    std::shared_ptr<Session> request_session;
     std::unique_ptr<Credentials> request_credentials;
 
     // Returns true when the user successfully authenticated,
@@ -92,8 +95,7 @@ private:
         HTTPServerRequest & request,
         HTMLForm & params,
         HTTPServerResponse & response,
-        Output & used_output,
-        std::optional<CurrentThread::QueryScope> & query_scope);
+        Output & used_output);
 
     void trySendExceptionToClient(
         const std::string & s,

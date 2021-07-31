@@ -7,6 +7,7 @@
 #include <Common/Stopwatch.h>
 #include <Core/Protocol.h>
 #include <Core/QueryProcessingStage.h>
+#include <Core/Settings.h>
 #include <IO/Progress.h>
 #include <IO/TimeoutSetter.h>
 #include <DataStreams/BlockIO.h>
@@ -133,8 +134,10 @@ private:
     UInt64 client_version_patch = 0;
     UInt64 client_tcp_protocol_version = 0;
 
+    Settings connection_settings;
     std::unique_ptr<Session> session;
     ContextMutablePtr query_context;
+    bool is_interserver_mode = false;
 
     size_t unknown_packet_in_send_data = 0;
 

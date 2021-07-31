@@ -357,6 +357,9 @@ public:
 
     /// Sets the current user, checks the credentials and that the specified host is allowed.
     /// Must be called before getClientInfo() can be called.
+    void setUser(const UUID & user_id_);
+
+#if 0
     void setUser(const Credentials & credentials, const Poco::Net::SocketAddress & address);
     void setUser(const String & name, const String & password, const Poco::Net::SocketAddress & address);
 
@@ -365,6 +368,7 @@ public:
     ///
     /// (Used only internally in cluster, if the secret matches)
     void setUserWithoutCheckingPassword(const String & name, const Poco::Net::SocketAddress & address);
+#endif
 
     void setQuotaKey(String quota_key_);
 

@@ -526,7 +526,7 @@ namespace
         IServer & iserver;
         Poco::Logger * log = nullptr;
 
-        std::shared_ptr<Session> session;
+        std::optional<Session> session;
         ContextMutablePtr query_context;
         std::optional<CurrentThread::QueryScope> query_scope;
         String query_text;
@@ -657,32 +657,22 @@ namespace
             password = "";
         }
 
-        /// Create context.
-        session = std::make_shared<Session>(iserver.context(), ClientInfo::Interface::GRPC);
         /// Authentication.
+        session.emplace(iserver.context(), ClientInfo::Interface::GRPC);
         session->setUser(user, password, user_address);
-        if (!quota_key.empty())
-            session->setQuotaKey(quota_key);
+        session->getClientInfo().quota_key = quota_key;
 
         /// The user could specify session identifier and session timeout.
         /// It allows to modify settings, create temporary tables and reuse them in subsequent requests.
         if (!query_info.session_id().empty())
         {
-            session->promoteToNamedSession(
-                query_info.session_id(),
-                getSessionTimeout(query_info, iserver.config()),
-                query_info.session_check());
+            session->makeSessionContext(
+                query_info.session_id(), getSessionTimeout(query_info, iserver.config()), query_info.session_check());
         }
 
-        query_context = session->makeQueryContext(query_info.query_id());
+        session->getClientInfo().current_query_id = query_info.query_id();
+        query_context = session->makeQueryContext();
         query_scope.emplace(query_context);
-
-        /// Set client info.
-        ClientInfo & client_info = query_context->getClientInfo();
-        client_info.query_kind = ClientInfo::QueryKind::INITIAL_QUERY;
-        client_info.initial_user = client_info.current_user;
-        client_info.initial_query_id = client_info.current_query_id;
-        client_info.initial_address = client_info.current_address;
 
         /// Prepare settings.
         SettingsChanges settings_changes;
@@ -692,11 +682,11 @@ namespace
         }
         query_context->checkSettingsConstraints(settings_changes);
         query_context->applySettingsChanges(settings_changes);
-        const Settings & settings = query_context->getSettingsRef();
 
         /// Prepare for sending exceptions and logs.
-        send_exception_with_stacktrace = query_context->getSettingsRef().calculate_text_stack_trace;
-        const auto client_logs_level = query_context->getSettingsRef().send_logs_level;
+        const Settings & settings = query_context->getSettingsRef();
+        send_exception_with_stacktrace = settings.calculate_text_stack_trace;
+        const auto client_logs_level = settings.send_logs_level;
         if (client_logs_level != LogsLevel::none)
         {
             logs_queue = std::make_shared<InternalTextLogsQueue>();
@@ -707,14 +697,10 @@ namespace
 
         /// Set the current database if specified.
         if (!query_info.database().empty())
-        {
-            if (!DatabaseCatalog::instance().isDatabaseExist(query_info.database()))
-                throw Exception("Database " + query_info.database() + " doesn't exist", ErrorCodes::UNKNOWN_DATABASE);
             query_context->setCurrentDatabase(query_info.database());
-        }
 
         /// The interactive delay will be used to show progress.
-        interactive_delay = query_context->getSettingsRef().interactive_delay;
+        interactive_delay = settings.interactive_delay;
         query_context->setProgressCallback([this](const Progress & value) { return progress.incrementPiecewiseAtomically(value); });
 
         /// Parse the query.
