@@ -206,7 +206,7 @@ DictionaryPtr createSSDCacheDictionaryLayout(
     const Poco::Util::AbstractConfiguration & config,
     const std::string & config_prefix,
     DictionarySourcePtr source_ptr,
-    ContextPtr context,
+    ContextPtr global_context,
     bool created_from_ddl)
 {
     static_assert(dictionary_key_type != DictionaryKeyType::range, "Range key type is not supported by CacheDictionary");
@@ -244,8 +244,8 @@ DictionaryPtr createSSDCacheDictionaryLayout(
 
     auto storage_configuration = parseSSDCacheStorageConfiguration(full_name, config, layout_prefix, dict_lifetime, dictionary_key_type);
 
-    if (created_from_ddl && !pathStartsWith(storage_configuration.file_path, context->getUserFilesPath()))
-        throw Exception(ErrorCodes::PATH_ACCESS_DENIED, "File path {} is not inside {}", storage_configuration.file_path, context->getUserFilesPath());
+    if (created_from_ddl && !pathStartsWith(storage_configuration.file_path, global_context->getUserFilesPath()))
+        throw Exception(ErrorCodes::PATH_ACCESS_DENIED, "File path {} is not inside {}", storage_configuration.file_path, global_context->getUserFilesPath());
 
 
     auto storage = std::make_shared<SSDCacheDictionaryStorage<dictionary_key_type>>(storage_configuration);
@@ -265,7 +265,7 @@ void registerDictionaryCache(DictionaryFactory & factory)
                                           const Poco::Util::AbstractConfiguration & config,
                                           const std::string & config_prefix,
                                           DictionarySourcePtr source_ptr,
-                                          ContextPtr /* context */,
+                                          ContextPtr /* global_context */,
                                           bool /* created_from_ddl */) -> DictionaryPtr
     {
         return createCacheDictionaryLayout<DictionaryKeyType::simple>(full_name, dict_struct, config, config_prefix, std::move(source_ptr));
@@ -278,7 +278,7 @@ void registerDictionaryCache(DictionaryFactory & factory)
                                                const Poco::Util::AbstractConfiguration & config,
                                                const std::string & config_prefix,
                                                DictionarySourcePtr source_ptr,
-                                               ContextPtr /* context */,
+                                               ContextPtr /* global_context */,
                                                bool /* created_from_ddl */) -> DictionaryPtr
     {
         return createCacheDictionaryLayout<DictionaryKeyType::complex>(full_name, dict_struct, config, config_prefix, std::move(source_ptr));
@@ -293,10 +293,10 @@ void registerDictionaryCache(DictionaryFactory & factory)
                                               const Poco::Util::AbstractConfiguration & config,
                                               const std::string & config_prefix,
                                               DictionarySourcePtr source_ptr,
-                                              ContextPtr context,
+                                              ContextPtr global_context,
                                               bool created_from_ddl) -> DictionaryPtr
     {
-        return createSSDCacheDictionaryLayout<DictionaryKeyType::simple>(full_name, dict_struct, config, config_prefix, std::move(source_ptr), context, created_from_ddl);
+        return createSSDCacheDictionaryLayout<DictionaryKeyType::simple>(full_name, dict_struct, config, config_prefix, std::move(source_ptr), global_context, created_from_ddl);
     };
 
     factory.registerLayout("ssd_cache", create_simple_ssd_cache_layout, false);
@@ -306,9 +306,9 @@ void registerDictionaryCache(DictionaryFactory & factory)
                                                    const Poco::Util::AbstractConfiguration & config,
                                                    const std::string & config_prefix,
                                                    DictionarySourcePtr source_ptr,
-                                                   ContextPtr context,
+                                                   ContextPtr global_context,
                                                    bool created_from_ddl) -> DictionaryPtr {
-        return createSSDCacheDictionaryLayout<DictionaryKeyType::complex>(full_name, dict_struct, config, config_prefix, std::move(source_ptr), context, created_from_ddl);
+        return createSSDCacheDictionaryLayout<DictionaryKeyType::complex>(full_name, dict_struct, config, config_prefix, std::move(source_ptr), global_context, created_from_ddl);
     };
 
     factory.registerLayout("complex_key_ssd_cache", create_complex_key_ssd_cache_layout, true);

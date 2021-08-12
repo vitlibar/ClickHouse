@@ -28,6 +28,8 @@ public:
         GRPC = 3,
         MYSQL = 4,
         POSTGRESQL = 5,
+        TCP_INTERSERVER = 6,
+        LOCAL = 7,
     };
 
     enum class HTTPMethod : uint8_t

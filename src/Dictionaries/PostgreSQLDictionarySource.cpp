@@ -183,7 +183,7 @@ void registerDictionarySourcePostgreSQL(DictionarySourceFactory & factory)
                                  const Poco::Util::AbstractConfiguration & config,
                                  const std::string & config_prefix,
                                  Block & sample_block,
-                                 ContextPtr context,
+                                 ContextPtr global_context,
                                  const std::string & /* default_database */,
                                  bool /* created_from_ddl */) -> DictionarySourcePtr
     {
@@ -191,8 +191,8 @@ void registerDictionarySourcePostgreSQL(DictionarySourceFactory & factory)
         const auto settings_config_prefix = config_prefix + ".postgresql";
         auto pool = std::make_shared<postgres::PoolWithFailover>(
                     config, settings_config_prefix,
-                    context->getSettingsRef().postgresql_connection_pool_size,
-                    context->getSettingsRef().postgresql_connection_pool_wait_timeout);
+                    global_context->getSettingsRef().postgresql_connection_pool_size,
+                    global_context->getSettingsRef().postgresql_connection_pool_wait_timeout);
 
         PostgreSQLDictionarySource::Configuration configuration
         {

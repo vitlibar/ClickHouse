@@ -268,12 +268,12 @@ void registerDictionarySourceXDBC(DictionarySourceFactory & factory)
                                    const Poco::Util::AbstractConfiguration & config,
                                    const std::string & config_prefix,
                                    Block & sample_block,
-                                   ContextPtr context,
+                                   ContextPtr global_context,
                                    const std::string & /* default_database */,
                                    bool /* check_config */) -> DictionarySourcePtr {
 #if USE_ODBC
         BridgeHelperPtr bridge = std::make_shared<XDBCBridgeHelper<ODBCBridgeMixin>>(
-            context, context->getSettings().http_receive_timeout, config.getString(config_prefix + ".odbc.connection_string"));
+            global_context, global_context->getSettings().http_receive_timeout, config.getString(config_prefix + ".odbc.connection_string"));
 
         std::string settings_config_prefix = config_prefix + ".odbc";
 
@@ -288,7 +288,7 @@ void registerDictionarySourceXDBC(DictionarySourceFactory & factory)
             .update_lag = config.getUInt64(settings_config_prefix + ".update_lag", 1)
         };
 
-        return std::make_unique<XDBCDictionarySource>(dict_struct, configuration, sample_block, context, bridge);
+        return std::make_unique<XDBCDictionarySource>(dict_struct, configuration, sample_block, global_context, bridge);
 #else
         (void)dict_struct;
         (void)config;
@@ -309,7 +309,7 @@ void registerDictionarySourceJDBC(DictionarySourceFactory & factory)
                                  const Poco::Util::AbstractConfiguration & /* config */,
                                  const std::string & /* config_prefix */,
                                  Block & /* sample_block */,
-                                 ContextPtr /* context */,
+                                 ContextPtr /* global_context */,
                                  const std::string & /* default_database */,
                                  bool /* created_from_ddl */) -> DictionarySourcePtr {
         throw Exception(ErrorCodes::SUPPORT_IS_DISABLED,

@@ -960,6 +960,7 @@ void TCPHandler::receiveHello()
     if (is_interserver_mode)
     {
         receiveClusterNameAndSalt();
+        session->getClientInfo().interface = ClientInfo::Interface::TCP_INTERSERVER;
         return;
     }
 
