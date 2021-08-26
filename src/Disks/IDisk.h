@@ -216,6 +216,10 @@ public:
     /// Overrode in remote fs disks.
     virtual bool supportZeroCopyReplication() const = 0;
 
+    /// Whether this disk supports writing to the end of currently existing file natively.
+    /// Returns false if the appending is just simulated with some metadata tricks.
+    virtual bool supportsAppendNatively() const = 0;
+
     /// Invoked when Global Context is shutdown.
     virtual void shutdown() {}
 

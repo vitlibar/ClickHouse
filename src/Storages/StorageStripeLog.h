@@ -7,12 +7,16 @@
 
 #include <Core/Defines.h>
 #include <Storages/IStorage.h>
+#include <DataStreams/IndexForNativeFormat.h>
 #include <Common/FileChecker.h>
 #include <Common/escapeForFileName.h>
 
 
 namespace DB
 {
+struct IndexForNativeFormat;
+
+
 /** Implements a table engine that is suitable for small chunks of the log.
   * In doing so, stores all the columns in a single Native file, with a nearby index.
   */
@@ -23,6 +27,8 @@ class StorageStripeLog final : public shared_ptr_helper<StorageStripeLog>, publi
     friend struct shared_ptr_helper<StorageStripeLog>;
 
 public:
+    ~StorageStripeLog() override;
+
     String getName() const override { return "StripeLog"; }
 
     Pipe read(
@@ -57,18 +63,33 @@ protected:
         size_t max_compress_block_size_);
 
 private:
-    struct ColumnData
-    {
-        String data_file_path;
-    };
-    using Files = std::map<String, ColumnData>; /// file name -> column data
+    using ReadLock = std::shared_lock<std::shared_timed_mutex>;
+    using WriteLock = std::unique_lock<std::shared_timed_mutex>;
 
-    DiskPtr disk;
+    /// Reads the index file if it hasn't read yet.
+    /// It is done lazily, so that with a large number of tables, the server starts quickly.
+    void loadIndex(std::chrono::seconds lock_timeout);
+    void loadIndex(const WriteLock &);
+
+    /// Saves the index file.
+    void saveIndex(const WriteLock &);
+
+    /// Saves the sizes of the data and index files.
+    void saveFileSizes(const WriteLock &);
+
+    const DiskPtr disk;
     String table_path;
 
-    size_t max_compress_block_size;
-
+    String data_file_path;
+    String index_file_path;
     FileChecker file_checker;
+
+    const size_t max_compress_block_size;
+
+    IndexForNativeFormat index;
+    std::atomic<bool> index_loaded = false;
+    size_t num_indices_for_blocks_saved = 0;
+
     std::shared_timed_mutex rwlock;
 
     Poco::Logger * log;

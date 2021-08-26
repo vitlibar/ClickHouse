@@ -9,7 +9,7 @@ namespace DB
 
 class WriteBuffer;
 class CompressedWriteBuffer;
-
+struct IndexForNativeFormat;
 
 /** Serializes the stream of blocks in their native binary format (with names and column types).
   * Designed for communication between servers.
@@ -23,8 +23,15 @@ public:
     /** If non-zero client_revision is specified, additional block information can be written.
       */
     NativeBlockOutputStream(
-        WriteBuffer & ostr_, UInt64 client_revision_, const Block & header_, bool remove_low_cardinality_ = false,
-        WriteBuffer * index_ostr_ = nullptr, size_t initial_size_of_file_ = 0);
+        WriteBuffer & ostr_, UInt64 client_revision_, const Block & header_, bool remove_low_cardinality_ = false);
+
+    NativeBlockOutputStream(
+        WriteBuffer & ostr_, UInt64 client_revision_, const Block & header_, bool remove_low_cardinality_,
+        WriteBuffer & index_ostr_, size_t initial_size_of_file_ = 0);
+
+    NativeBlockOutputStream(
+        WriteBuffer & ostr_, UInt64 client_revision_, const Block & header_, bool remove_low_cardinality_,
+        IndexForNativeFormat & index_, size_t initial_size_of_file_ = 0);
 
     Block getHeader() const override { return header; }
     void write(const Block & block) override;
@@ -33,11 +40,15 @@ public:
     String getContentType() const override { return "application/octet-stream"; }
 
 private:
+    void init();
+
     WriteBuffer & ostr;
     UInt64 client_revision;
     Block header;
-    WriteBuffer * index_ostr;
-    size_t initial_size_of_file;    /// The initial size of the data file, if `append` done. Used for the index.
+    bool should_write_index = false;
+    WriteBuffer * index_ostr = nullptr;
+    IndexForNativeFormat * index = nullptr;
+    size_t initial_size_of_file = 0;    /// The initial size of the data file, if `append` done. Used for the index.
     /// If you need to write index, then `ostr` must be a CompressedWriteBuffer.
     CompressedWriteBuffer * ostr_concrete = nullptr;
 

@@ -66,6 +66,7 @@ public:
     bool checkUniqueId(const String & id) const override { return delegate->checkUniqueId(id); }
     DiskType::Type getType() const override { return delegate->getType(); }
     bool supportZeroCopyReplication() const override { return delegate->supportZeroCopyReplication(); }
+    bool supportsAppendNatively() const override { return delegate->supportsAppendNatively(); }
     void onFreeze(const String & path) override;
     SyncGuardPtr getDirectorySyncGuard(const String & path) const override;
     void shutdown() override;

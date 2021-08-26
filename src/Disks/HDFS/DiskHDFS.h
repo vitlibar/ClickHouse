@@ -46,6 +46,9 @@ public:
 
     bool supportZeroCopyReplication() const override { return true; }
 
+    /// TODO: Actually HDFS supports appending, but it's not implemented yet.
+    bool supportsAppendNatively() const override { return false; }
+
     std::unique_ptr<ReadBufferFromFileBase> readFile(
         const String & path,
         size_t buf_size,

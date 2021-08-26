@@ -101,6 +101,9 @@ public:
 
     bool supportZeroCopyReplication() const override { return true; }
 
+    /// S3 doesn't support appending.
+    bool supportsAppendNatively() const override { return false; }
+
     void shutdown() override;
 
     void startup() override;
