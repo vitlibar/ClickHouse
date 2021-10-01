@@ -97,6 +97,9 @@ StorageRabbitMQ::StorageRabbitMQ(
         , milliseconds_to_wait(RESCHEDULE_MS)
         , is_attach(is_attach_)
 {
+    LOG_INFO(&Poco::Logger::get("!!!"), "exchange_name={}", exchange_name);
+    LOG_INFO(&Poco::Logger::get("!!!"), "format_name={}", format_name);
+
     auto parsed_address = parseAddress(getContext()->getMacros()->expand(rabbitmq_settings->rabbitmq_host_port), 5672);
     configuration =
     {
@@ -108,6 +111,9 @@ StorageRabbitMQ::StorageRabbitMQ(
         .secure = rabbitmq_settings->rabbitmq_secure.value,
         .connection_string = getContext()->getMacros()->expand(rabbitmq_settings->rabbitmq_address)
     };
+
+    LOG_INFO(&Poco::Logger::get("!!!"), "configuration.host={}", configuration.host);
+    LOG_INFO(&Poco::Logger::get("!!!"), "configuration.port={}", configuration.port);
 
     if (configuration.secure)
         SSL_library_init();
