@@ -1,6 +1,7 @@
 #include <Access/IAccessStorage.h>
 #include <Access/User.h>
 #include <Access/Credentials.h>
+#include <Access/areCredentialsValid.h>
 #include <Common/Exception.h>
 #include <Common/quoteString.h>
 #include <IO/WriteHelpers.h>
@@ -495,7 +496,7 @@ bool IAccessStorage::areCredentialsValidImpl(
     if (credentials.getUserName() != user.getName())
         return false;
 
-    return user.authentication.areCredentialsValid(credentials, external_authenticators);
+    return areCredentialsValid(credentials, user.authentication, external_authenticators);
 }
 
 
