@@ -80,7 +80,7 @@ public:
 
     /// Returns the row policy filter for a specified table.
     /// The function returns nullptr if there is no filter to apply.
-    ASTPtr getRowPolicyCondition(const String & database, const String & table_name, RowPolicy::ConditionType index, const ASTPtr & extra_condition = nullptr) const;
+    ASTPtr getRowPolicyCondition(const String & database, const String & table_name, RowPolicyConditionType index, const ASTPtr & extra_condition = nullptr) const;
 
     /// Returns the quota to track resource consumption.
     std::shared_ptr<const EnabledQuota> getQuota() const;

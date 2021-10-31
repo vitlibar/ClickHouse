@@ -5,6 +5,7 @@
 #include <Common/quoteString.h>
 #include <IO/Operators.h>
 #include <base/range.h>
+#include <boost/container/flat_set.hpp>
 #include <boost/range/algorithm/transform.hpp>
 
 
@@ -12,8 +13,8 @@ namespace DB
 {
 namespace
 {
-    using ConditionType = RowPolicy::ConditionType;
-    using ConditionTypeInfo = RowPolicy::ConditionTypeInfo;
+    using ConditionType = RowPolicyConditionType;
+    using ConditionTypeInfo = RowPolicyConditionTypeInfo;
 
 
     void formatRenameTo(const String & new_short_name, const IAST::FormatSettings & settings)

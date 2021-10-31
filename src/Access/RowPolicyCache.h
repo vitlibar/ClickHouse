@@ -29,7 +29,7 @@ private:
         RowPolicyPtr policy;
         const RolesOrUsersSet * roles = nullptr;
         std::shared_ptr<const std::pair<String, String>> database_and_table_name;
-        ASTPtr parsed_conditions[RowPolicy::MAX_CONDITION_TYPE];
+        ASTPtr parsed_conditions[static_cast<size_t>(RowPolicyConditionType::MAX)];
     };
 
     void ensureAllRowPoliciesRead();

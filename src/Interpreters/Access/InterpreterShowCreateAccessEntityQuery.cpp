@@ -182,15 +182,15 @@ namespace
     {
         auto query = std::make_shared<ASTCreateRowPolicyQuery>();
         query->names = std::make_shared<ASTRowPolicyNames>();
-        query->names->name_parts.emplace_back(policy.getNameParts());
+        query->names->names.emplace_back(policy.getName());
         query->attach = attach_mode;
 
         if (policy.isRestrictive())
             query->is_restrictive = policy.isRestrictive();
 
-        for (auto type : collections::range(RowPolicy::MAX_CONDITION_TYPE))
+        for (auto type : collections::range(RowPolicyConditionType::MAX))
         {
-            const auto & condition = policy.conditions[static_cast<size_t>(type)];
+            const auto & condition = policy.getCondition(type);
             if (!condition.empty())
             {
                 ParserExpression parser;

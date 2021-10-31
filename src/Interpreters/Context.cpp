@@ -796,7 +796,7 @@ std::shared_ptr<const ContextAccess> Context::getAccess() const
     return access ? access : ContextAccess::getFullAccess();
 }
 
-ASTPtr Context::getRowPolicyCondition(const String & database, const String & table_name, RowPolicy::ConditionType type) const
+ASTPtr Context::getRowPolicyCondition(const String & database, const String & table_name, RowPolicyConditionType type) const
 {
     auto lock = getLock();
     auto initial_condition = initial_row_policy ? initial_row_policy->getCondition(database, table_name, type) : nullptr;

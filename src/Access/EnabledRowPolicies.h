@@ -35,7 +35,7 @@ public:
     EnabledRowPolicies();
     ~EnabledRowPolicies();
 
-    using ConditionType = RowPolicy::ConditionType;
+    using ConditionType = RowPolicyConditionType;
 
     /// Returns prepared filter for a specific table and operations.
     /// The function can return nullptr, that means there is no filters applied.

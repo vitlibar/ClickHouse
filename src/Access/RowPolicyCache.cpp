@@ -16,8 +16,6 @@ namespace DB
 namespace
 {
     using ConditionType = RowPolicy::ConditionType;
-    constexpr auto MAX_CONDITION_TYPE = RowPolicy::MAX_CONDITION_TYPE;
-
 
     /// Accumulates conditions from multiple row policies and joins them using the AND logical operation.
     class ConditionsMixer
@@ -59,34 +57,41 @@ void RowPolicyCache::PolicyInfo::setPolicy(const RowPolicyPtr & policy_)
     roles = &policy->to_roles;
     database_and_table_name = std::make_shared<std::pair<String, String>>(policy->getDatabase(), policy->getTableName());
 
-    for (auto type : collections::range(0, MAX_CONDITION_TYPE))
+    for (auto type : collections::range(0, ConditionType::MAX))
     {
-        parsed_conditions[type] = nullptr;
-        const String & condition = policy->conditions[type];
+        const String & condition = policy->getCondition(type);
+        auto type_n = static_cast<size_t>(type);
+        parsed_conditions[type_n] = nullptr;
         if (condition.empty())
             continue;
 
-        auto previous_range = std::pair(std::begin(policy->conditions), std::begin(policy->conditions) + type);
-        const auto * previous_it = std::find(previous_range.first, previous_range.second, condition);
-        if (previous_it != previous_range.second)
+        bool already_parsed = false;
+        for (auto parsed_type : collections::range(0, type))
         {
-            /// The condition is already parsed before.
-            parsed_conditions[type] = parsed_conditions[previous_it - previous_range.first];
-            continue;
+            if (condition == policy->getCondition(parsed_type))
+            {
+                /// The condition is already parsed before.
+                parsed_conditions[type_n] = parsed_conditions[static_cast<size_t>(parsed_type)];
+                already_parsed = true;
+                break;
+            }
         }
+
+        if (already_parsed)
+            continue;
 
         /// Try to parse the condition.
         try
         {
             ParserExpression parser;
-            parsed_conditions[type] = parseQuery(parser, condition, 0, DBMS_DEFAULT_MAX_PARSER_DEPTH);
+            parsed_conditions[type_n] = parseQuery(parser, condition, 0, DBMS_DEFAULT_MAX_PARSER_DEPTH);
         }
         catch (...)
         {
             tryLogCurrentException(
                 &Poco::Logger::get("RowPolicy"),
                 String("Could not parse the condition ") + toString(type) + " of row policy "
-                    + backQuote(policy->getName()));
+                    + backQuote(policy->getName().toString()));
         }
     }
 }
@@ -217,15 +222,16 @@ void RowPolicyCache::mixConditionsFor(EnabledRowPolicies & enabled)
         MixedConditionKey key;
         key.database = info.database_and_table_name->first;
         key.table_name = info.database_and_table_name->second;
-        for (auto type : collections::range(0, MAX_CONDITION_TYPE))
+        for (auto type : collections::range(0, ConditionType::MAX))
         {
-            if (info.parsed_conditions[type])
+            auto type_n = static_cast<size_t>(type);
+            if (info.parsed_conditions[type_n])
             {
                 key.condition_type = type;
                 auto & mixer = map_of_mixers[key];
                 mixer.database_and_table_name = info.database_and_table_name;
                 if (match)
-                    mixer.mixer.add(info.parsed_conditions[type], policy.isRestrictive());
+                    mixer.mixer.add(info.parsed_conditions[type_n], policy.isRestrictive());
             }
         }
     }

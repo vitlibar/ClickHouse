@@ -12,9 +12,9 @@ namespace ErrorCodes
 
 void ASTRowPolicyName::formatImpl(const FormatSettings & settings, FormatState &, FormatStateStacked) const
 {
-    const String & database = name_parts.database;
-    const String & table_name = name_parts.table_name;
-    const String & short_name = name_parts.short_name;
+    const String & database = name.database;
+    const String & table_name = name.table_name;
+    const String & short_name = name.short_name;
     settings.ostr << backQuoteIfNeed(short_name) << (settings.hilite ? hilite_keyword : "") << " ON "
                   << (settings.hilite ? hilite_none : "") << (database.empty() ? String{} : backQuoteIfNeed(database) + ".")
                   << backQuoteIfNeed(table_name);
@@ -25,21 +25,21 @@ void ASTRowPolicyName::formatImpl(const FormatSettings & settings, FormatState &
 
 void ASTRowPolicyName::replaceEmptyDatabase(const String & current_database)
 {
-    if (name_parts.database.empty())
-        name_parts.database = current_database;
+    if (name.database.empty())
+        name.database = current_database;
 }
 
 
 void ASTRowPolicyNames::formatImpl(const FormatSettings & settings, FormatState &, FormatStateStacked) const
 {
-    if (name_parts.empty())
+    if (names.empty())
         throw Exception("No names of row policies in AST", ErrorCodes::LOGICAL_ERROR);
 
     bool same_short_name = true;
-    if (name_parts.size() > 1)
+    if (names.size() > 1)
     {
-        for (size_t i = 1; i != name_parts.size(); ++i)
-            if (name_parts[i].short_name != name_parts[0].short_name)
+        for (size_t i = 1; i != names.size(); ++i)
+            if (names[i].short_name != names[0].short_name)
             {
                 same_short_name = false;
                 break;
@@ -47,10 +47,10 @@ void ASTRowPolicyNames::formatImpl(const FormatSettings & settings, FormatState 
     }
 
     bool same_db_and_table_name = true;
-    if (name_parts.size() > 1)
+    if (names.size() > 1)
     {
-        for (size_t i = 1; i != name_parts.size(); ++i)
-            if ((name_parts[i].database != name_parts[0].database) || (name_parts[i].table_name != name_parts[0].table_name))
+        for (size_t i = 1; i != names.size(); ++i)
+            if ((names[i].database != names[0].database) || (names[i].table_name != names[0].table_name))
             {
                 same_db_and_table_name = false;
                 break;
@@ -59,12 +59,12 @@ void ASTRowPolicyNames::formatImpl(const FormatSettings & settings, FormatState 
 
     if (same_short_name)
     {
-        const String & short_name = name_parts[0].short_name;
+        const String & short_name = names[0].short_name;
         settings.ostr << backQuoteIfNeed(short_name) << (settings.hilite ? hilite_keyword : "") << " ON "
                       << (settings.hilite ? hilite_none : "");
 
         bool need_comma = false;
-        for (const auto & np : name_parts)
+        for (const auto & np : names)
         {
             if (std::exchange(need_comma, true))
                 settings.ostr << ", ";
@@ -78,7 +78,7 @@ void ASTRowPolicyNames::formatImpl(const FormatSettings & settings, FormatState 
     else if (same_db_and_table_name)
     {
         bool need_comma = false;
-        for (const auto & np : name_parts)
+        for (const auto & np : names)
         {
             if (std::exchange(need_comma, true))
                 settings.ostr << ", ";
@@ -86,8 +86,8 @@ void ASTRowPolicyNames::formatImpl(const FormatSettings & settings, FormatState 
             settings.ostr << backQuoteIfNeed(short_name);
         }
 
-        const String & database = name_parts[0].database;
-        const String & table_name = name_parts[0].table_name;
+        const String & database = names[0].database;
+        const String & table_name = names[0].table_name;
         settings.ostr << (settings.hilite ? hilite_keyword : "") << " ON " << (settings.hilite ? hilite_none : "");
         if (!database.empty())
             settings.ostr << backQuoteIfNeed(database) + ".";
@@ -96,7 +96,7 @@ void ASTRowPolicyNames::formatImpl(const FormatSettings & settings, FormatState 
     else
     {
         bool need_comma = false;
-        for (const auto & np : name_parts)
+        for (const auto & np : names)
         {
             if (std::exchange(need_comma, true))
                 settings.ostr << ", ";
@@ -118,8 +118,8 @@ void ASTRowPolicyNames::formatImpl(const FormatSettings & settings, FormatState 
 Strings ASTRowPolicyNames::toStrings() const
 {
     Strings res;
-    res.reserve(name_parts.size());
-    for (const auto & np : name_parts)
+    res.reserve(names.size());
+    for (const auto & np : names)
         res.emplace_back(np.toString());
     return res;
 }
@@ -127,7 +127,7 @@ Strings ASTRowPolicyNames::toStrings() const
 
 void ASTRowPolicyNames::replaceEmptyDatabase(const String & current_database)
 {
-    for (auto & np : name_parts)
+    for (auto & np : names)
         if (np.database.empty())
             np.database = current_database;
 }

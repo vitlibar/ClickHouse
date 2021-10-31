@@ -13,34 +13,34 @@ namespace ErrorCodes
 
 void RowPolicy::setDatabase(const String & database)
 {
-    name_parts.database = database;
-    IAccessEntity::setName(name_parts.getName());
+    row_policy_name.database = database;
+    IAccessEntity::setName(row_policy_name.toString());
 }
 
 void RowPolicy::setTableName(const String & table_name)
 {
-    name_parts.table_name = table_name;
-    IAccessEntity::setName(name_parts.getName());
+    row_policy_name.table_name = table_name;
+    IAccessEntity::setName(row_policy_name.toString());
 }
 
 void RowPolicy::setShortName(const String & short_name)
 {
-    name_parts.short_name = short_name;
-    IAccessEntity::setName(name_parts.getName());
+    row_policy_name.short_name = short_name;
+    IAccessEntity::setName(row_policy_name.toString());
 }
 
-void RowPolicy::setNameParts(const String & short_name, const String & database, const String & table_name)
+void RowPolicy::setName(const String & short_name, const String & database, const String & table_name)
 {
-    name_parts.short_name = short_name;
-    name_parts.database = database;
-    name_parts.table_name = table_name;
-    IAccessEntity::setName(name_parts.getName());
+    row_policy_name.short_name = short_name;
+    row_policy_name.database = database;
+    row_policy_name.table_name = table_name;
+    IAccessEntity::setName(row_policy_name.toString());
 }
 
-void RowPolicy::setNameParts(const NameParts & name_parts_)
+void RowPolicy::setName(const RowPolicyName & name_)
 {
-    name_parts = name_parts_;
-    IAccessEntity::setName(name_parts.getName());
+    row_policy_name = name_;
+    IAccessEntity::setName(row_policy_name.toString());
 }
 
 void RowPolicy::setName(const String &)
@@ -54,7 +54,7 @@ bool RowPolicy::equal(const IAccessEntity & other) const
     if (!IAccessEntity::equal(other))
         return false;
     const auto & other_policy = typeid_cast<const RowPolicy &>(other);
-    return (name_parts == other_policy.name_parts) && boost::range::equal(conditions, other_policy.conditions)
+    return (row_policy_name == other_policy.row_policy_name) && boost::range::equal(conditions, other_policy.conditions)
         && restrictive == other_policy.restrictive && (to_roles == other_policy.to_roles);
 }
 

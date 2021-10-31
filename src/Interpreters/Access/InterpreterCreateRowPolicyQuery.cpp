@@ -17,21 +17,21 @@ namespace
     void updateRowPolicyFromQueryImpl(
         RowPolicy & policy,
         const ASTCreateRowPolicyQuery & query,
-        const RowPolicy::NameParts & override_name,
+        const RowPolicyName & override_name,
         const std::optional<RolesOrUsersSet> & override_to_roles)
     {
         if (!override_name.empty())
-            policy.setNameParts(override_name);
+            policy.setName(override_name);
         else if (!query.new_short_name.empty())
             policy.setShortName(query.new_short_name);
-        else if (query.names->name_parts.size() == 1)
-            policy.setNameParts(query.names->name_parts.front());
+        else if (query.names->names.size() == 1)
+            policy.setName(query.names->names.front());
 
         if (query.is_restrictive)
             policy.setRestrictive(*query.is_restrictive);
 
         for (const auto & [condition_type, condition] : query.conditions)
-            policy.conditions[condition_type] = condition ? serializeAST(*condition) : String{};
+            policy.setCondition(condition_type, condition ? serializeAST(*condition) : String{});
 
         if (override_to_roles)
             policy.to_roles = *override_to_roles;
@@ -80,10 +80,10 @@ BlockIO InterpreterCreateRowPolicyQuery::execute()
     else
     {
         std::vector<AccessEntityPtr> new_policies;
-        for (const auto & name_parts : query.names->name_parts)
+        for (const auto & name : query.names->names)
         {
             auto new_policy = std::make_shared<RowPolicy>();
-            updateRowPolicyFromQueryImpl(*new_policy, query, name_parts, roles_from_query);
+            updateRowPolicyFromQueryImpl(*new_policy, query, name, roles_from_query);
             new_policies.emplace_back(std::move(new_policy));
         }
 

@@ -9,8 +9,9 @@
 #include <Parsers/ExpressionElementParsers.h>
 #include <Parsers/parseDatabaseAndTableName.h>
 #include <Parsers/parseIdentifierOrStringLiteral.h>
-#include <Access/RowPolicy.h>
+#include <Access/Common/RowPolicyTypes.h>
 #include <base/range.h>
+#include <boost/container/flat_set.hpp>
 #include <boost/range/algorithm_ext/push_back.hpp>
 
 
@@ -18,10 +19,8 @@ namespace DB
 {
 namespace
 {
-    using ConditionType = RowPolicy::ConditionType;
-    using ConditionTypeInfo = RowPolicy::ConditionTypeInfo;
-    constexpr auto MAX_CONDITION_TYPE = RowPolicy::MAX_CONDITION_TYPE;
-
+    using ConditionType = RowPolicyConditionType;
+    using ConditionTypeInfo = RowPolicyConditionTypeInfo;
 
     bool parseRenameTo(IParserBase::Pos & pos, Expected & expected, String & new_short_name)
     {
@@ -78,7 +77,7 @@ namespace
 
     void addAllCommands(boost::container::flat_set<std::string_view> & commands)
     {
-        for (auto condition_type : collections::range(MAX_CONDITION_TYPE))
+        for (auto condition_type : collections::range(ConditionType::MAX))
         {
             const std::string_view & command = ConditionTypeInfo::get(condition_type).command;
             commands.emplace(command);
@@ -99,7 +98,7 @@ namespace
                 return true;
             }
 
-            for (auto condition_type : collections::range(MAX_CONDITION_TYPE))
+            for (auto condition_type : collections::range(ConditionType::MAX))
             {
                 const std::string_view & command = ConditionTypeInfo::get(condition_type).command;
                 if (ParserKeyword{command.data()}.ignore(pos, expected))
@@ -156,7 +155,7 @@ namespace
             if (!check && !alter)
                 check = filter;
 
-            for (auto condition_type : collections::range(MAX_CONDITION_TYPE))
+            for (auto condition_type : collections::range(ConditionType::MAX))
             {
                 const auto & type_info = ConditionTypeInfo::get(condition_type);
                 if (commands.count(type_info.command))
@@ -253,7 +252,7 @@ bool ParserCreateRowPolicyQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & 
 
     while (true)
     {
-        if (alter && new_short_name.empty() && (names->name_parts.size() == 1) && parseRenameTo(pos, expected, new_short_name))
+        if (alter && new_short_name.empty() && (names->names.size() == 1) && parseRenameTo(pos, expected, new_short_name))
             continue;
 
         if (!is_restrictive)
