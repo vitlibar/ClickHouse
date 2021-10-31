@@ -1,9 +1,9 @@
 #pragma once
 
-#include <base/types.h>
 #include <Common/Exception.h>
 #include <Common/OpenSSLHelpers.h>
 #include <Poco/SHA1Engine.h>
+#include <base/types.h>
 #include <boost/algorithm/hex.hpp>
 #include <boost/algorithm/string/case_conv.hpp>
 
@@ -18,62 +18,52 @@ namespace ErrorCodes
     extern const int NOT_IMPLEMENTED;
 }
 
-/// Authentication type and encrypted password for checking when a user logins.
-class Authentication
+
+enum class AuthenticationType
+{
+    /// User doesn't have to enter password.
+    NO_PASSWORD,
+
+    /// Password is stored as is.
+    PLAINTEXT_PASSWORD,
+
+    /// Password is encrypted in SHA256 hash.
+    SHA256_PASSWORD,
+
+    /// SHA1(SHA1(password)).
+    /// This kind of hash is used by the `mysql_native_password` authentication plugin.
+    DOUBLE_SHA1_PASSWORD,
+
+    /// Password is checked by a [remote] LDAP server. Connection will be made at each authentication attempt.
+    LDAP,
+
+    /// Kerberos authentication performed through GSS-API negotiation loop.
+    KERBEROS,
+
+    MAX_TYPE,
+};
+
+struct AuthenticationTypeInfo
+{
+    const char * const raw_name;
+    const String name; /// Lowercased with underscores, e.g. "sha256_password".
+    static const AuthenticationTypeInfo & get(AuthenticationType type_);
+};
+
+
+/// Stores data for checking password when a user logins.
+class AuthenticationData
 {
 public:
-    enum Type
-    {
-        /// User doesn't have to enter password.
-        NO_PASSWORD,
-
-        /// Password is stored as is.
-        PLAINTEXT_PASSWORD,
-
-        /// Password is encrypted in SHA256 hash.
-        SHA256_PASSWORD,
-
-        /// SHA1(SHA1(password)).
-        /// This kind of hash is used by the `mysql_native_password` authentication plugin.
-        DOUBLE_SHA1_PASSWORD,
-
-        /// Password is checked by a [remote] LDAP server. Connection will be made at each authentication attempt.
-        LDAP,
-
-        /// Kerberos authentication performed through GSS-API negotiation loop.
-        KERBEROS,
-
-        MAX_TYPE,
-    };
-
-    struct TypeInfo
-    {
-        const char * const raw_name;
-        const String name; /// Lowercased with underscores, e.g. "sha256_password".
-        static const TypeInfo & get(Type type_);
-    };
-
-    // A signaling class used to communicate requirements for credentials.
-    template <typename CredentialsType>
-    class Require : public Exception
-    {
-    public:
-        explicit Require(const String & realm_);
-        const String & getRealm() const;
-
-    private:
-        const String realm;
-    };
-
     using Digest = std::vector<uint8_t>;
 
-    Authentication(Authentication::Type type_ = NO_PASSWORD) : type(type_) {}
-    Authentication(const Authentication & src) = default;
-    Authentication & operator =(const Authentication & src) = default;
-    Authentication(Authentication && src) = default;
-    Authentication & operator =(Authentication && src) = default;
+    AuthenticationData(AuthenticationType type_ = AuthenticationType::NO_PASSWORD) : type(type_) {}
+    AuthenticationData(const AuthenticationData & src) = default;
+    AuthenticationData & operator =(const AuthenticationData & src) = default;
+    AuthenticationData(AuthenticationData && src) = default;
+    AuthenticationData & operator =(AuthenticationData && src) = default;
 
-    Type getType() const { return type; }
+    AuthenticationType getType() const { return type; }
 
     /// Sets the password and encrypt it using the authentication type set in the constructor.
     void setPassword(const String & password_);
@@ -97,8 +87,8 @@ public:
     const String & getKerberosRealm() const;
     void setKerberosRealm(const String & realm);
 
-    friend bool operator ==(const Authentication & lhs, const Authentication & rhs) { return (lhs.type == rhs.type) && (lhs.password_hash == rhs.password_hash); }
-    friend bool operator !=(const Authentication & lhs, const Authentication & rhs) { return !(lhs == rhs); }
+    friend bool operator ==(const AuthenticationData & lhs, const AuthenticationData & rhs) { return (lhs.type == rhs.type) && (lhs.password_hash == rhs.password_hash); }
+    friend bool operator !=(const AuthenticationData & lhs, const AuthenticationData & rhs) { return !(lhs == rhs); }
 
     struct Util
     {
@@ -111,80 +101,67 @@ public:
     };
 
 private:
-    Type type = Type::NO_PASSWORD;
+    AuthenticationType type = AuthenticationType::NO_PASSWORD;
     Digest password_hash;
     String ldap_server_name;
     String kerberos_realm;
 };
 
 
-inline const Authentication::TypeInfo & Authentication::TypeInfo::get(Type type_)
+inline const AuthenticationTypeInfo & AuthenticationTypeInfo::get(AuthenticationType type_)
 {
     static constexpr auto make_info = [](const char * raw_name_)
     {
         String init_name = raw_name_;
         boost::to_lower(init_name);
-        return TypeInfo{raw_name_, std::move(init_name)};
+        return AuthenticationTypeInfo{raw_name_, std::move(init_name)};
     };
 
     switch (type_)
     {
-        case NO_PASSWORD:
+        case AuthenticationType::NO_PASSWORD:
         {
             static const auto info = make_info("NO_PASSWORD");
             return info;
         }
-        case PLAINTEXT_PASSWORD:
+        case AuthenticationType::PLAINTEXT_PASSWORD:
         {
             static const auto info = make_info("PLAINTEXT_PASSWORD");
             return info;
         }
-        case SHA256_PASSWORD:
+        case AuthenticationType::SHA256_PASSWORD:
         {
             static const auto info = make_info("SHA256_PASSWORD");
             return info;
         }
-        case DOUBLE_SHA1_PASSWORD:
+        case AuthenticationType::DOUBLE_SHA1_PASSWORD:
         {
             static const auto info = make_info("DOUBLE_SHA1_PASSWORD");
             return info;
         }
-        case LDAP:
+        case AuthenticationType::LDAP:
         {
             static const auto info = make_info("LDAP");
             return info;
         }
-        case KERBEROS:
+        case AuthenticationType::KERBEROS:
         {
             static const auto info = make_info("KERBEROS");
             return info;
         }
-        case MAX_TYPE:
+        case AuthenticationType::MAX_TYPE:
             break;
     }
     throw Exception("Unknown authentication type: " + std::to_string(static_cast<int>(type_)), ErrorCodes::LOGICAL_ERROR);
 }
 
-template <typename CredentialsType>
-Authentication::Require<CredentialsType>::Require(const String & realm_)
-    : Exception("Credentials required", ErrorCodes::BAD_ARGUMENTS)
-    , realm(realm_)
+inline String toString(AuthenticationType type_)
 {
-}
-
-template <typename CredentialsType>
-const String & Authentication::Require<CredentialsType>::getRealm() const
-{
-    return realm;
-}
-
-inline String toString(Authentication::Type type_)
-{
-    return Authentication::TypeInfo::get(type_).raw_name;
+    return AuthenticationTypeInfo::get(type_).raw_name;
 }
 
 
-inline Authentication::Digest Authentication::Util::encodeSHA256(const std::string_view & text [[maybe_unused]])
+inline AuthenticationData::Digest AuthenticationData::Util::encodeSHA256(const std::string_view & text [[maybe_unused]])
 {
 #if USE_SSL
     Digest hash;
@@ -198,7 +175,7 @@ inline Authentication::Digest Authentication::Util::encodeSHA256(const std::stri
 #endif
 }
 
-inline Authentication::Digest Authentication::Util::encodeSHA1(const std::string_view & text)
+inline AuthenticationData::Digest AuthenticationData::Util::encodeSHA1(const std::string_view & text)
 {
     Poco::SHA1Engine engine;
     engine.update(text.data(), text.size());
@@ -206,40 +183,40 @@ inline Authentication::Digest Authentication::Util::encodeSHA1(const std::string
 }
 
 
-inline void Authentication::setPassword(const String & password_)
+inline void AuthenticationData::setPassword(const String & password_)
 {
     switch (type)
     {
-        case PLAINTEXT_PASSWORD:
+        case AuthenticationType::PLAINTEXT_PASSWORD:
             return setPasswordHashBinary(Util::encodePlainText(password_));
 
-        case SHA256_PASSWORD:
+        case AuthenticationType::SHA256_PASSWORD:
             return setPasswordHashBinary(Util::encodeSHA256(password_));
 
-        case DOUBLE_SHA1_PASSWORD:
+        case AuthenticationType::DOUBLE_SHA1_PASSWORD:
             return setPasswordHashBinary(Util::encodeDoubleSHA1(password_));
 
-        case NO_PASSWORD:
-        case LDAP:
-        case KERBEROS:
+        case AuthenticationType::NO_PASSWORD:
+        case AuthenticationType::LDAP:
+        case AuthenticationType::KERBEROS:
             throw Exception("Cannot specify password for authentication type " + toString(type), ErrorCodes::LOGICAL_ERROR);
 
-        case MAX_TYPE:
+        case AuthenticationType::MAX_TYPE:
             break;
     }
     throw Exception("setPassword(): authentication type " + toString(type) + " not supported", ErrorCodes::NOT_IMPLEMENTED);
 }
 
 
-inline String Authentication::getPassword() const
+inline String AuthenticationData::getPassword() const
 {
-    if (type != PLAINTEXT_PASSWORD)
+    if (type != AuthenticationType::PLAINTEXT_PASSWORD)
         throw Exception("Cannot decode the password", ErrorCodes::LOGICAL_ERROR);
     return String(password_hash.data(), password_hash.data() + password_hash.size());
 }
 
 
-inline void Authentication::setPasswordHashHex(const String & hash)
+inline void AuthenticationData::setPasswordHashHex(const String & hash)
 {
     Digest digest;
     digest.resize(hash.size() / 2);
@@ -247,9 +224,9 @@ inline void Authentication::setPasswordHashHex(const String & hash)
     setPasswordHashBinary(digest);
 }
 
-inline String Authentication::getPasswordHashHex() const
+inline String AuthenticationData::getPasswordHashHex() const
 {
-    if (type == LDAP || type == KERBEROS)
+    if (type == AuthenticationType::LDAP || type == AuthenticationType::KERBEROS)
         throw Exception("Cannot get password hex hash for authentication type " + toString(type), ErrorCodes::LOGICAL_ERROR);
 
     String hex;
@@ -259,17 +236,17 @@ inline String Authentication::getPasswordHashHex() const
 }
 
 
-inline void Authentication::setPasswordHashBinary(const Digest & hash)
+inline void AuthenticationData::setPasswordHashBinary(const Digest & hash)
 {
     switch (type)
     {
-        case PLAINTEXT_PASSWORD:
+        case AuthenticationType::PLAINTEXT_PASSWORD:
         {
             password_hash = hash;
             return;
         }
 
-        case SHA256_PASSWORD:
+        case AuthenticationType::SHA256_PASSWORD:
         {
             if (hash.size() != 32)
                 throw Exception(
@@ -280,7 +257,7 @@ inline void Authentication::setPasswordHashBinary(const Digest & hash)
             return;
         }
 
-        case DOUBLE_SHA1_PASSWORD:
+        case AuthenticationType::DOUBLE_SHA1_PASSWORD:
         {
             if (hash.size() != 20)
                 throw Exception(
@@ -291,33 +268,33 @@ inline void Authentication::setPasswordHashBinary(const Digest & hash)
             return;
         }
 
-        case NO_PASSWORD:
-        case LDAP:
-        case KERBEROS:
+        case AuthenticationType::NO_PASSWORD:
+        case AuthenticationType::LDAP:
+        case AuthenticationType::KERBEROS:
             throw Exception("Cannot specify password binary hash for authentication type " + toString(type), ErrorCodes::LOGICAL_ERROR);
 
-        case MAX_TYPE:
+        case AuthenticationType::MAX_TYPE:
             break;
     }
     throw Exception("setPasswordHashBinary(): authentication type " + toString(type) + " not supported", ErrorCodes::NOT_IMPLEMENTED);
 }
 
-inline const String & Authentication::getLDAPServerName() const
+inline const String & AuthenticationData::getLDAPServerName() const
 {
     return ldap_server_name;
 }
 
-inline void Authentication::setLDAPServerName(const String & name)
+inline void AuthenticationData::setLDAPServerName(const String & name)
 {
     ldap_server_name = name;
 }
 
-inline const String & Authentication::getKerberosRealm() const
+inline const String & AuthenticationData::getKerberosRealm() const
 {
     return kerberos_realm;
 }
 
-inline void Authentication::setKerberosRealm(const String & realm)
+inline void AuthenticationData::setKerberosRealm(const String & realm)
 {
     kerberos_realm = realm;
 }
