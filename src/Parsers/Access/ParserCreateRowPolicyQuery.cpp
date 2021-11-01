@@ -19,8 +19,8 @@ namespace DB
 {
 namespace
 {
-    using ConditionType = RowPolicyConditionType;
-    using ConditionTypeInfo = RowPolicyConditionTypeInfo;
+    using FilterType = RowPolicyFilterType;
+    using FilterTypeInfo = RowPolicyFilterTypeInfo;
 
     bool parseRenameTo(IParserBase::Pos & pos, Expected & expected, String & new_short_name)
     {
@@ -77,9 +77,9 @@ namespace
 
     void addAllCommands(boost::container::flat_set<std::string_view> & commands)
     {
-        for (auto condition_type : collections::range(ConditionType::MAX))
+        for (auto filter_type : collections::range(FilterType::MAX))
         {
-            const std::string_view & command = ConditionTypeInfo::get(condition_type).command;
+            const std::string_view & command = FilterTypeInfo::get(filter_type).command;
             commands.emplace(command);
         }
     }
@@ -98,9 +98,9 @@ namespace
                 return true;
             }
 
-            for (auto condition_type : collections::range(ConditionType::MAX))
+            for (auto filter_type : collections::range(FilterType::MAX))
             {
-                const std::string_view & command = ConditionTypeInfo::get(condition_type).command;
+                const std::string_view & command = FilterTypeInfo::get(filter_type).command;
                 if (ParserKeyword{command.data()}.ignore(pos, expected))
                 {
                     res_commands.emplace(command);
@@ -120,9 +120,9 @@ namespace
 
 
     bool
-    parseForClauses(IParserBase::Pos & pos, Expected & expected, bool alter, std::vector<std::pair<ConditionType, ASTPtr>> & conditions)
+    parseForClauses(IParserBase::Pos & pos, Expected & expected, bool alter, std::vector<std::pair<FilterType, ASTPtr>> & conditions)
     {
-        std::vector<std::pair<ConditionType, ASTPtr>> res_conditions;
+        std::vector<std::pair<FilterType, ASTPtr>> res_conditions;
 
         auto parse_for_clause = [&]
         {
@@ -155,15 +155,15 @@ namespace
             if (!check && !alter)
                 check = filter;
 
-            for (auto condition_type : collections::range(ConditionType::MAX))
+            for (auto filter_type : collections::range(FilterType::MAX))
             {
-                const auto & type_info = ConditionTypeInfo::get(condition_type);
+                const auto & type_info = FilterTypeInfo::get(filter_type);
                 if (commands.count(type_info.command))
                 {
                     if (type_info.is_check && check)
-                        res_conditions.emplace_back(condition_type, *check);
+                        res_conditions.emplace_back(filter_type, *check);
                     else if (filter)
-                        res_conditions.emplace_back(condition_type, *filter);
+                        res_conditions.emplace_back(filter_type, *filter);
                 }
             }
 
@@ -248,7 +248,7 @@ bool ParserCreateRowPolicyQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & 
 
     String new_short_name;
     std::optional<bool> is_restrictive;
-    std::vector<std::pair<ConditionType, ASTPtr>> conditions;
+    std::vector<std::pair<FilterType, ASTPtr>> conditions;
 
     while (true)
     {
@@ -265,7 +265,7 @@ bool ParserCreateRowPolicyQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & 
             }
         }
 
-        std::vector<std::pair<ConditionType, ASTPtr>> new_conditions;
+        std::vector<std::pair<FilterType, ASTPtr>> new_conditions;
         if (parseForClauses(pos, expected, alter, new_conditions))
         {
             boost::range::push_back(conditions, std::move(new_conditions));

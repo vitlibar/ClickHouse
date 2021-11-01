@@ -14,7 +14,7 @@ class IAST;
 using ASTPtr = std::shared_ptr<IAST>;
 
 
-/// Provides fast access to row policies' conditions for a specific user and tables.
+/// Provides fast access to row policies' filters for a specific user and tables.
 class EnabledRowPolicies
 {
 public:
@@ -35,43 +35,43 @@ public:
     EnabledRowPolicies();
     ~EnabledRowPolicies();
 
-    using ConditionType = RowPolicyConditionType;
+    using FilterType = RowPolicyFilterType;
 
     /// Returns prepared filter for a specific table and operations.
     /// The function can return nullptr, that means there is no filters applied.
     /// The returned filter can be a combination of the filters defined by multiple row policies.
-    ASTPtr getCondition(const String & database, const String & table_name, ConditionType type) const;
-    ASTPtr getCondition(const String & database, const String & table_name, ConditionType type, const ASTPtr & extra_condition) const;
+    ASTPtr getFilter(const String & database, const String & table_name, FilterType type) const;
+    ASTPtr getFilter(const String & database, const String & table_name, FilterType type, const ASTPtr & combine_with_filter) const;
 
 private:
     friend class RowPolicyCache;
     EnabledRowPolicies(const Params & params_);
 
-    struct MixedConditionKey
+    struct MixedFilterKey
     {
         std::string_view database;
         std::string_view table_name;
-        ConditionType condition_type;
+        FilterType filter_type;
 
-        auto toTuple() const { return std::tie(database, table_name, condition_type); }
-        friend bool operator==(const MixedConditionKey & left, const MixedConditionKey & right) { return left.toTuple() == right.toTuple(); }
-        friend bool operator!=(const MixedConditionKey & left, const MixedConditionKey & right) { return left.toTuple() != right.toTuple(); }
+        auto toTuple() const { return std::tie(database, table_name, filter_type); }
+        friend bool operator==(const MixedFilterKey & left, const MixedFilterKey & right) { return left.toTuple() == right.toTuple(); }
+        friend bool operator!=(const MixedFilterKey & left, const MixedFilterKey & right) { return left.toTuple() != right.toTuple(); }
     };
 
     struct Hash
     {
-        size_t operator()(const MixedConditionKey & key) const;
+        size_t operator()(const MixedFilterKey & key) const;
     };
 
-    struct MixedCondition
+    struct MixedFilter
     {
         ASTPtr ast;
         std::shared_ptr<const std::pair<String, String>> database_and_table_name;
     };
-    using MapOfMixedConditions = std::unordered_map<MixedConditionKey, MixedCondition, Hash>;
+    using MapOfMixedFilters = std::unordered_map<MixedFilterKey, MixedFilter, Hash>;
 
     const Params params;
-    mutable boost::atomic_shared_ptr<const MapOfMixedConditions> map_of_mixed_conditions;
+    mutable boost::atomic_shared_ptr<const MapOfMixedFilters> map_of_mixed_filters;
 };
 
 }

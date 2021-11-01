@@ -13,8 +13,8 @@ namespace DB
 {
 namespace
 {
-    using ConditionType = RowPolicyConditionType;
-    using ConditionTypeInfo = RowPolicyConditionTypeInfo;
+    using FilterType = RowPolicyFilterType;
+    using FilterTypeInfo = RowPolicyFilterTypeInfo;
 
 
     void formatRenameTo(const String & new_short_name, const IAST::FormatSettings & settings)
@@ -60,15 +60,15 @@ namespace
     }
 
 
-    void formatForClauses(const std::vector<std::pair<ConditionType, ASTPtr>> & conditions, bool alter, const IAST::FormatSettings & settings)
+    void formatForClauses(const std::vector<std::pair<FilterType, ASTPtr>> & conditions, bool alter, const IAST::FormatSettings & settings)
     {
-        std::vector<std::pair<ConditionType, String>> conditions_as_strings;
+        std::vector<std::pair<FilterType, String>> conditions_as_strings;
         WriteBufferFromOwnString temp_buf;
         IAST::FormatSettings temp_settings(temp_buf, settings);
-        for (const auto & [condition_type, condition] : conditions)
+        for (const auto & [filter_type, condition] : conditions)
         {
             formatConditionalExpression(condition, temp_settings);
-            conditions_as_strings.emplace_back(condition_type, temp_buf.str());
+            conditions_as_strings.emplace_back(filter_type, temp_buf.str());
             temp_buf.restart();
         }
 
@@ -82,11 +82,11 @@ namespace
             check.clear();
 
             /// Collect commands using the same filter and check conditions.
-            for (auto & [condition_type, condition] : conditions_as_strings)
+            for (auto & [filter_type, condition] : conditions_as_strings)
             {
                 if (condition.empty())
                     continue;
-                const auto & type_info = ConditionTypeInfo::get(condition_type);
+                const auto & type_info = FilterTypeInfo::get(filter_type);
                 if (type_info.is_check)
                 {
                     if (check.empty())

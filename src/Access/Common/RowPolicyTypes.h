@@ -26,7 +26,7 @@ struct RowPolicyName
     friend bool operator !=(const RowPolicyName & left, const RowPolicyName & right) { return left.toTuple() != right.toTuple(); }
 };
 
-enum class RowPolicyConditionType
+enum class RowPolicyFilterType
 {
     SELECT_FILTER,
 
@@ -40,13 +40,13 @@ enum class RowPolicyConditionType
     MAX
 };
 
-struct RowPolicyConditionTypeInfo
+struct RowPolicyFilterTypeInfo
 {
     const char * const raw_name;
     const String name;    /// Lowercased with underscores, e.g. "select_filter".
     const String command; /// Uppercased without last word, e.g. "SELECT".
     const bool is_check;  /// E.g. false for SELECT_FILTER.
-    static const RowPolicyConditionTypeInfo & get(RowPolicyConditionType type);
+    static const RowPolicyFilterTypeInfo & get(RowPolicyFilterType type);
 };
 
 inline String RowPolicyName::toString() const
@@ -64,7 +64,7 @@ inline String RowPolicyName::toString() const
     return name;
 }
 
-inline const RowPolicyConditionTypeInfo & RowPolicyConditionTypeInfo::get(RowPolicyConditionType type_)
+inline const RowPolicyFilterTypeInfo & RowPolicyFilterTypeInfo::get(RowPolicyFilterType type_)
 {
     static constexpr auto make_info = [](const char * raw_name_)
     {
@@ -74,46 +74,46 @@ inline const RowPolicyConditionTypeInfo & RowPolicyConditionTypeInfo::get(RowPol
         String init_command = init_name.substr(0, underscore_pos);
         boost::to_upper(init_command);
         bool init_is_check = (std::string_view{init_name}.substr(underscore_pos + 1) == "check");
-        return RowPolicyConditionTypeInfo{raw_name_, std::move(init_name), std::move(init_command), init_is_check};
+        return RowPolicyFilterTypeInfo{raw_name_, std::move(init_name), std::move(init_command), init_is_check};
     };
 
     switch (type_)
     {
-        case RowPolicyConditionType::SELECT_FILTER:
+        case RowPolicyFilterType::SELECT_FILTER:
         {
             static const auto info = make_info("SELECT_FILTER");
             return info;
         }
 #if 0 /// Row-level security for INSERT, UPDATE, DELETE is not implemented yet.
-        case RowPolicyConditionType::INSERT_CHECK:
+        case RowPolicyFilterType::INSERT_CHECK:
         {
             static const auto info = make_info("INSERT_CHECK");
             return info;
         }
-        case RowPolicyConditionType::UPDATE_FILTER:
+        case RowPolicyFilterType::UPDATE_FILTER:
         {
             static const auto info = make_info("UPDATE_FILTER");
             return info;
         }
-        case RowPolicyConditionType::UPDATE_CHECK:
+        case RowPolicyFilterType::UPDATE_CHECK:
         {
             static const auto info = make_info("UPDATE_CHECK");
             return info;
         }
-        case RowPolicyConditionType::DELETE_FILTER:
+        case RowPolicyFilterType::DELETE_FILTER:
         {
             static const auto info = make_info("DELETE_FILTER");
             return info;
         }
 #endif
-        case RowPolicyConditionType::MAX: break;
+        case RowPolicyFilterType::MAX: break;
     }
     throw Exception("Unknown type: " + std::to_string(static_cast<size_t>(type_)), ErrorCodes::LOGICAL_ERROR);
 }
 
-inline String toString(RowPolicyConditionType type)
+inline String toString(RowPolicyFilterType type)
 {
-    return RowPolicyConditionTypeInfo::get(type).raw_name;
+    return RowPolicyFilterTypeInfo::get(type).raw_name;
 }
 
 }

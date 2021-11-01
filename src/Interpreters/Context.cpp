@@ -796,11 +796,11 @@ std::shared_ptr<const ContextAccess> Context::getAccess() const
     return access ? access : ContextAccess::getFullAccess();
 }
 
-ASTPtr Context::getRowPolicyCondition(const String & database, const String & table_name, RowPolicyConditionType type) const
+ASTPtr Context::getRowPolicyFilter(const String & database, const String & table_name, RowPolicyFilterType type) const
 {
     auto lock = getLock();
-    auto initial_condition = initial_row_policy ? initial_row_policy->getCondition(database, table_name, type) : nullptr;
-    return getAccess()->getRowPolicyCondition(database, table_name, type, initial_condition);
+    auto filter_from_initial_user = initial_row_policy ? initial_row_policy->getFilter(database, table_name, type) : nullptr;
+    return getAccess()->getRowPolicyFilter(database, table_name, type, filter_from_initial_user);
 }
 
 void Context::setInitialRowPolicy()

@@ -14,10 +14,10 @@ namespace DB
   */
 struct RowPolicy : public IAccessEntity
 {
-    using ConditionType = RowPolicyConditionType;
-    using ConditionTypeInfo = RowPolicyConditionTypeInfo;
-    using Conditions = std::array<String, static_cast<size_t>(ConditionType::MAX)>;
-    static constexpr auto SELECT_FILTER = ConditionType::SELECT_FILTER;
+    using FilterType = RowPolicyFilterType;
+    using FilterTypeInfo = RowPolicyFilterTypeInfo;
+    using Filters = std::array<String, static_cast<size_t>(FilterType::MAX)>;
+    static constexpr auto SELECT_FILTER = FilterType::SELECT_FILTER;
 
     void setShortName(const String & short_name);
     void setDatabase(const String & database);
@@ -36,9 +36,9 @@ struct RowPolicy : public IAccessEntity
     /// Check is a SQL condition expression used to check whether a row can be written into
     /// the table. If the expression returns NULL or false an exception is thrown.
     /// If a conditional expression here is empty it means no filtering is applied.
-    void setCondition(ConditionType condition_type, const String & condition) { conditions[static_cast<size_t>(condition_type)] = condition; }
-    const String & getCondition(ConditionType condition_type) const { return conditions[static_cast<size_t>(condition_type)]; }
-    const Conditions & getConditions() const { return conditions; }
+    void setFilter(FilterType filter_type, const String & filter) { filters[static_cast<size_t>(filter_type)] = filter; }
+    const String & getFilter(FilterType filter_type) const { return filters[static_cast<size_t>(filter_type)]; }
+    const Filters & getFilters() const { return filters; }
 
     /// Sets that the policy is permissive.
     /// A row is only accessible if at least one of the permissive policies passes,
@@ -64,7 +64,7 @@ private:
     void setName(const String &) override; /// Must not be called!
 
     RowPolicyName row_policy_name;
-    Conditions conditions;
+    Filters filters;
     bool restrictive = false;
 };
 

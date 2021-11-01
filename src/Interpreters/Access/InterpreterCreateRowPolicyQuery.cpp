@@ -30,8 +30,8 @@ namespace
         if (query.is_restrictive)
             policy.setRestrictive(*query.is_restrictive);
 
-        for (const auto & [condition_type, condition] : query.conditions)
-            policy.setCondition(condition_type, condition ? serializeAST(*condition) : String{});
+        for (const auto & [filter_type, condition] : query.conditions)
+            policy.setFilter(filter_type, condition ? serializeAST(*condition) : String{});
 
         if (override_to_roles)
             policy.to_roles = *override_to_roles;

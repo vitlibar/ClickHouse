@@ -352,7 +352,7 @@ namespace
 
                 auto policy = std::make_shared<RowPolicy>();
                 policy->setName(user_name, database, table_name);
-                policy->setCondition(RowPolicy::SELECT_FILTER, filter);
+                policy->setFilter(RowPolicy::SELECT_FILTER, filter);
                 policy->to_roles.add(generateID(EntityType::USER, user_name));
                 policies.push_back(policy);
             }

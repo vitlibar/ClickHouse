@@ -29,14 +29,14 @@ private:
         RowPolicyPtr policy;
         const RolesOrUsersSet * roles = nullptr;
         std::shared_ptr<const std::pair<String, String>> database_and_table_name;
-        ASTPtr parsed_conditions[static_cast<size_t>(RowPolicyConditionType::MAX)];
+        ASTPtr parsed_filters[static_cast<size_t>(RowPolicyFilterType::MAX)];
     };
 
     void ensureAllRowPoliciesRead();
     void rowPolicyAddedOrChanged(const UUID & policy_id, const RowPolicyPtr & new_policy);
     void rowPolicyRemoved(const UUID & policy_id);
-    void mixConditions();
-    void mixConditionsFor(EnabledRowPolicies & enabled);
+    void mixFilters();
+    void mixFiltersFor(EnabledRowPolicies & enabled);
 
     const AccessControlManager & access_control_manager;
     std::unordered_map<UUID, PolicyInfo> all_policies;

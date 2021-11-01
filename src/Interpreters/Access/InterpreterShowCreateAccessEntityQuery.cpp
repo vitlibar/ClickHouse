@@ -188,9 +188,9 @@ namespace
         if (policy.isRestrictive())
             query->is_restrictive = policy.isRestrictive();
 
-        for (auto type : collections::range(RowPolicyConditionType::MAX))
+        for (auto type : collections::range(RowPolicyFilterType::MAX))
         {
-            const auto & condition = policy.getCondition(type);
+            const auto & condition = policy.getFilter(type);
             if (!condition.empty())
             {
                 ParserExpression parser;

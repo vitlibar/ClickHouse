@@ -420,7 +420,7 @@ public:
 
     std::shared_ptr<const ContextAccess> getAccess() const;
 
-    ASTPtr getRowPolicyCondition(const String & database, const String & table_name, RowPolicyConditionType type) const;
+    ASTPtr getRowPolicyFilter(const String & database, const String & table_name, RowPolicyFilterType type) const;
 
     /// Sets an extra row policy based on `client_info.initial_user`, if it exists.
     /// TODO: we need a better solution here. It seems we should pass the initial row policy

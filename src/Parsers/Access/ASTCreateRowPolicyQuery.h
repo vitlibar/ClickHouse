@@ -40,7 +40,7 @@ public:
     String new_short_name;
 
     std::optional<bool> is_restrictive;
-    std::vector<std::pair<RowPolicyConditionType, ASTPtr>> conditions; /// `nullptr` means set to NONE.
+    std::vector<std::pair<RowPolicyFilterType, ASTPtr>> conditions; /// `nullptr` means set to NONE.
 
     std::shared_ptr<ASTRolesOrUsersSet> roles;
 
