@@ -680,6 +680,23 @@ ConfigurationPtr Context::getUsersConfig()
     return shared->users_config;
 }
 
+void Context::setUser(const String & user_name_, const String & password_, ClientInfo::Interface interface_, const Poco::Net::SocketAddress & address_)
+{
+    setUser(BasicCredentials{user_name_, password_}, interface_, address_);
+}
+
+void Context::setUser(const BasicCredentials & credentials_, ClientInfo::Interface interface_, Poco::Net::SocketAddress address_)
+{
+    if ((address_ == Poco::Net::SocketAddress{}) && (prepared_client_info->interface == ClientInfo::Interface::LOCAL))
+        address_ = Poco::Net::SocketAddress{"127.0.0.1", 0};
+
+    UUID user_id = getAccessControl().login(credentials_, address_.host());
+    client_info.interface = interface_;
+    client_info.current_user = credentials_.getUserName();
+    client_info.current_address = address_;
+    setUser(user_id);
+}
+
 void Context::setUser(const UUID & user_id_)
 {
     auto lock = getLock();
