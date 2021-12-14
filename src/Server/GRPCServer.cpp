@@ -826,8 +826,8 @@ namespace
             output_format = query_context->getDefaultFormat();
 
         /// Choose compression.
-        output_compression = chooseCompressionMethod("", query_info.output_compression());
-        output_compression_level = query_info.output_compression_level();
+        output_compression = chooseCompressionMethod("", query_info.compression());
+        output_compression_level = query_info.compression_level();
 
         /// Set callback to create and fill external tables
         query_context->setExternalTablesInitializer([this] (ContextPtr context)

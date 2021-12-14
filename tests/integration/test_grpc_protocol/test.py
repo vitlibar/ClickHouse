@@ -370,13 +370,13 @@ def test_result_compression():
 import logging
 
 def test_compressed_output():
-    query_info = clickhouse_grpc_pb2.QueryInfo(query="SELECT 0 FROM numbers(1000)", output_compression="lz4")
+    query_info = clickhouse_grpc_pb2.QueryInfo(query="SELECT 0 FROM numbers(1000)", compression="lz4")
     stub = clickhouse_grpc_pb2_grpc.ClickHouseStub(main_channel)
     result = stub.ExecuteQuery(query_info)
     assert lz4.frame.decompress(result.output) == (b'0\n')*1000
 
 def test_compressed_output_streaming():
-    query_info = clickhouse_grpc_pb2.QueryInfo(query="SELECT 0 FROM numbers(100000)", output_compression="lz4")
+    query_info = clickhouse_grpc_pb2.QueryInfo(query="SELECT 0 FROM numbers(100000)", compression="lz4")
     stub = clickhouse_grpc_pb2_grpc.ClickHouseStub(main_channel)
     d_context = lz4.frame.create_decompression_context()
     data = b''
@@ -391,10 +391,10 @@ def test_compressed_totals_and_extremes():
 
     stub = clickhouse_grpc_pb2_grpc.ClickHouseStub(main_channel)
 
-    query_info = clickhouse_grpc_pb2.QueryInfo(query="SELECT sum(x), y FROM t GROUP BY y WITH TOTALS", output_compression="lz4")
+    query_info = clickhouse_grpc_pb2.QueryInfo(query="SELECT sum(x), y FROM t GROUP BY y WITH TOTALS", compression="lz4")
     result = stub.ExecuteQuery(query_info)
     assert lz4.frame.decompress(result.totals) == b'12\t0\n'
 
-    query_info = clickhouse_grpc_pb2.QueryInfo(query="SELECT x, y FROM t", settings={"extremes": "1"}, output_compression="lz4")
+    query_info = clickhouse_grpc_pb2.QueryInfo(query="SELECT x, y FROM t", settings={"extremes": "1"}, compression="lz4")
     result = stub.ExecuteQuery(query_info)
     assert lz4.frame.decompress(result.extremes) == b'1\t2\n3\t4\n'
