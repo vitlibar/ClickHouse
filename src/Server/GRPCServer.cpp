@@ -1113,7 +1113,7 @@ namespace
             header = io.pipeline.getHeader();
 
         if (output_compression != CompressionMethod::None)
-            output.resize(DBMS_DEFAULT_BUFFER_SIZE);
+            output.resize(DBMS_DEFAULT_BUFFER_SIZE); /// Must have enough space for compressed data.
         write_buffer = std::make_unique<WriteBufferFromVector<PODArray<char>>>(output);
         nested_write_buffer = static_cast<WriteBufferFromVector<PODArray<char>> *>(write_buffer.get());
         if (output_compression != CompressionMethod::None)
@@ -1413,7 +1413,7 @@ namespace
 
         PODArray<char> memory;
         if (output_compression != CompressionMethod::None)
-            memory.resize(DBMS_DEFAULT_BUFFER_SIZE);
+            memory.resize(DBMS_DEFAULT_BUFFER_SIZE); /// Must have enough space for compressed data.
         std::unique_ptr<WriteBuffer> buf = std::make_unique<WriteBufferFromVector<PODArray<char>>>(memory);
         buf = wrapWriteBufferWithCompressionMethod(std::move(buf), output_compression, output_compression_level);
         auto format = query_context->getOutputFormat(output_format, *buf, totals);
@@ -1431,7 +1431,7 @@ namespace
 
         PODArray<char> memory;
         if (output_compression != CompressionMethod::None)
-            memory.resize(DBMS_DEFAULT_BUFFER_SIZE);
+            memory.resize(DBMS_DEFAULT_BUFFER_SIZE); /// Must have enough space for compressed data.
         std::unique_ptr<WriteBuffer> buf = std::make_unique<WriteBufferFromVector<PODArray<char>>>(memory);
         buf = wrapWriteBufferWithCompressionMethod(std::move(buf), output_compression, output_compression_level);
         auto format = query_context->getOutputFormat(output_format, *buf, extremes);
