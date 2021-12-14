@@ -5,6 +5,7 @@ import time
 import grpc
 from helpers.cluster import ClickHouseCluster, run_and_check
 from threading import Thread
+import lz4.frame
 
 GRPC_PORT = 9100
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
@@ -365,3 +366,21 @@ def test_result_compression():
     stub = clickhouse_grpc_pb2_grpc.ClickHouseStub(main_channel)
     result = stub.ExecuteQuery(query_info)
     assert result.output == (b'0\n')*1000000
+
+import logging
+
+def test_compressed_output():
+    query_info = clickhouse_grpc_pb2.QueryInfo(query="SELECT 0 FROM numbers(1000)", output_compression="lz4")
+    stub = clickhouse_grpc_pb2_grpc.ClickHouseStub(main_channel)
+    result = stub.ExecuteQuery(query_info)
+    assert lz4.frame.decompress(result.output) == (b'0\n')*1000
+
+def test_compressed_output_streaming():
+    query_info = clickhouse_grpc_pb2.QueryInfo(query="SELECT 0 FROM numbers(1000000)", output_compression="lz4")
+    stub = clickhouse_grpc_pb2_grpc.ClickHouseStub(main_channel)
+    d_context = lz4.frame.create_decompression_context()
+    data = b''
+    for result in stub.ExecuteQueryWithStreamOutput(query_info):
+        d1, _, _ = lz4.frame.decompress_chunk(d_context, result.output)
+        data += d1
+    assert data == (b'0\n')*1000000

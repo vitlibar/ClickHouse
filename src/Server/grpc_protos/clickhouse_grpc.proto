@@ -101,6 +101,11 @@ message QueryInfo {
    /// Controls how a ClickHouse server will compress query execution results before sending back to the client.
    /// If not set the compression settings from the configuration file will be used.
    Compression result_compression = 17;
+
+   // Compression for output data.
+   // Supported values: none, gzip(gz), deflate, brotli(br), lzma(xz), zstd(zst), lz4, bz2
+   string output_compression = 18;
+   int32 output_compression_level = 19;
 }
 
 enum LogsLevel {
