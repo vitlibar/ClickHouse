@@ -1279,6 +1279,8 @@ namespace
         /// immediately after it receives our final result, and it's prohibited to have
         /// two queries executed at the same time with the same query ID or session ID.
         io.process_list_entry.reset();
+        if (query_context)
+            query_context->setProcessListElement(nullptr);
         if (session)
             session->releaseSessionID();
     }

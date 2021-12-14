@@ -87,7 +87,8 @@ void Lz4DeflatingWriteBuffer::nextImpl()
         do
         {
             /// Ensure that there is enough space for compressed block of minimal size
-            if (out_capacity < LZ4F_compressBound(1, &kPrefs))
+            size_t min_compressed_block_size = LZ4F_compressBound(1, &kPrefs);
+            if (out_capacity < min_compressed_block_size)
             {
                 out->next();
                 out_capacity = out->buffer().end() - out->position();

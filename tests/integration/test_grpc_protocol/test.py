@@ -384,3 +384,17 @@ def test_compressed_output_streaming():
         d1, _, _ = lz4.frame.decompress_chunk(d_context, result.output)
         data += d1
     assert data == (b'0\n')*100000
+
+def test_compressed_totals_and_extremes():
+    query("CREATE TABLE t (x UInt8, y UInt8) ENGINE = Memory")
+    query("INSERT INTO t VALUES (1, 2), (2, 4), (3, 2), (3, 3), (3, 4)")
+
+    stub = clickhouse_grpc_pb2_grpc.ClickHouseStub(main_channel)
+
+    query_info = clickhouse_grpc_pb2.QueryInfo(query="SELECT sum(x), y FROM t GROUP BY y WITH TOTALS", output_compression="lz4")
+    result = stub.ExecuteQuery(query_info)
+    assert lz4.frame.decompress(result.totals) == b'12\t0\n'
+
+    query_info = clickhouse_grpc_pb2.QueryInfo(query="SELECT x, y FROM t", settings={"extremes": "1"}, output_compression="lz4")
+    result = stub.ExecuteQuery(query_info)
+    assert lz4.frame.decompress(result.extremes) == b'1\t2\n3\t4\n'
