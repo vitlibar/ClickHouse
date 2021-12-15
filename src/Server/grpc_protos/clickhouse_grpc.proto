@@ -37,8 +37,8 @@ message ExternalTable {
    // Format of the data to insert to the external table.
    string format = 4;
 
-   // Specify that input data is compressed.
-   // Supported values: none(empty), gzip(gz), deflate, brotli(br), lzma(xz), zstd(zst), lz4, bz2.
+   // Compression type used to compress `data`.
+   // Supported values: none, gzip(gz), deflate, brotli(br), lzma(xz), zstd(zst), lz4, bz2.
    string compression_type = 6;
 
    // Settings for executing that insertion, applied after QueryInfo.settings.
@@ -106,16 +106,12 @@ message QueryInfo {
    /// If not set the compression settings from the configuration file will be used.
    Compression result_compression = 17;
 
-   // Allows to compress output data, totals and extremes.
-   // Client is responsible to decompress data.
-   bool compress_output = 18;
-
-   // Specifies that input data is compressed, so the server will decompress it.
-   bool decompress_input = 19;
-
-   // Type and level of compression. Supported values: none, gzip(gz), deflate, brotli(br), lzma(xz), zstd(zst), lz4, bz2.
-   string compression_type = 20;
-   int32 compression_level = 21;
+   // Compression type for `input_data`, `output_data`, `totals` and `extremes`.
+   // Supported compression types: none, gzip(gz), deflate, brotli(br), lzma(xz), zstd(zst), lz4, bz2.
+   // When used for `input_data` the client is responsible to compress data before putting it into `input_data`.
+   // When used for `output_data` or `totals` or `extremes` the client receives compressed data and should decompress it by itself.
+   string compression_type = 18;
+   int32 compression_level = 19;
 }
 
 enum LogsLevel {
