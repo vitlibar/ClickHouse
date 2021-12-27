@@ -3585,6 +3585,7 @@ RestoreDataTasks MergeTreeData::restoreDataPartsFromBackup(const BackupPtr & bac
     RestoreDataTasks restore_tasks;
 
     Strings part_names = backup->listFiles(data_path_in_backup);
+    Int64 max_block = -1;
     for (const String & part_name : part_names)
     {
         const auto part_info = MergeTreePartInfo::tryParsePartName(part_name, format_version);
@@ -3597,6 +3598,22 @@ RestoreDataTasks MergeTreeData::restoreDataPartsFromBackup(const BackupPtr & bac
 
         if (getActiveContainingPart(*part_info))
             continue; /// We already have this part.
+
+        auto existing_parts = getDataPartsVectorInPartition(part_info->partition_id);
+        if (!existing_parts.empty())
+        {
+            /// We don't have this part but the partition is not empty.
+            for (const auto & existing_part : existing_parts)
+                if (!part_info->isDisjoint(existing_part.info))
+                    throw Exception(
+                        ErrorCodes::CANNOT_RESTORE_TABLE,
+                        "Cannot restore table {} because part {} intersects with existing part {}",
+                        getStorageID().getFullTableName(),
+                        part_info->getName(),
+                        existing_part.info->getName());
+        }
+
+        max_block = std::max(max_block, part_info->max_block);
 
         UInt64 total_size_of_part = 0;
         Strings filenames = backup->listFiles(data_path_in_backup + part_name + "/", "");
@@ -3611,8 +3628,7 @@ RestoreDataTasks MergeTreeData::restoreDataPartsFromBackup(const BackupPtr & bac
                              part_name,
                              part_info = std::move(part_info),
                              filenames = std::move(filenames),
-                             reservation,
-                             increment]()
+                             reservation]()
         {
             auto disk = reservation->getDisk();
 
@@ -3634,10 +3650,17 @@ RestoreDataTasks MergeTreeData::restoreDataPartsFromBackup(const BackupPtr & bac
             auto single_disk_volume = std::make_shared<SingleDiskVolume>(disk->getName(), disk, 0);
             auto part = createPart(part_name, *part_info, single_disk_volume, relative_temp_part_dir);
             part->loadColumnsChecksumsIndexes(false, true);
-            renameTempPartAndAdd(part, increment);
+            renameTempPartAndAdd(part);
         };
 
         restore_tasks.emplace_back(std::move(restore_task));
+    }
+
+    if (increment)
+    {
+        auto lock = lockParts();
+        if (increment->value < max_block)
+            increment->set(max_block);
     }
 
     return restore_tasks;
