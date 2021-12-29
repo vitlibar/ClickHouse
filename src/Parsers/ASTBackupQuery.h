@@ -60,8 +60,6 @@ public:
         DICTIONARY,
         DATABASE,
         ALL_DATABASES,
-        TEMPORARY_TABLE,
-        ALL_TEMPORARY_TABLES,
         EVERYTHING,
     };
 
@@ -70,6 +68,8 @@ public:
         ElementType type;
         DatabaseAndTableName name;
         DatabaseAndTableName new_name;
+        bool is_temporary_db;
+        bool new_is_temporary_db;
         ASTs partitions;
         std::set<String> except_list;
     };

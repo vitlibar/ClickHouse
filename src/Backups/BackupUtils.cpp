@@ -2,6 +2,7 @@
 #include <Backups/BackupEntryFromMemory.h>
 #include <Backups/BackupRenamingConfig.h>
 #include <Backups/IBackup.h>
+#include <Backups/IRestoreFromBackupTask.h>
 #include <Backups/hasCompatibleDataToRestoreTable.h>
 #include <Backups/renameInCreateQuery.h>
 #include <Common/escapeForFileName.h>
@@ -245,14 +246,14 @@ namespace
             for (auto & [database_name, database] : databases)
             {
                 elements[index_all_databases].except_list.emplace(database_name);
-                if (database.index == static_cast<size_t>(-1))
+                /*if (database.index == static_cast<size_t>(-1))
                 {
                     auto & new_element = elements.emplace_back();
                     new_element.type = ElementType::DATABASE;
                     new_element.name.first = database_name;
                     new_element.new_name = new_element.name;
                     database.index = elements.size() - 1;
-                }
+                }*/
             }
         }
 
@@ -265,7 +266,7 @@ namespace
         }
 
         /// Reorder the elements: databases should be before tables and dictionaries they contain.
-        for (auto & [database_name, database] : databases)
+        /*for (auto & [database_name, database] : databases)
         {
             if (database.index == static_cast<size_t>(-1))
                 continue;
@@ -284,7 +285,7 @@ namespace
                 std::swap(elements[database.index], elements[min_index]);
                 std::swap(database.index, min_index_it->second);
             }
-        }
+        }*/
 
         for (auto skip_index : skip_indices | boost::adaptors::reversed)
             elements.erase(elements.begin() + skip_index);
@@ -412,177 +413,309 @@ namespace
         }
     }
 
-    void makeDatabaseIfNotExists(const String & database_name, ContextMutablePtr context)
+
+    class RestoreDatabaseFromBackupTask : public IRestoreFromBackupTask
     {
-        if (DatabaseCatalog::instance().isDatabaseExist(database_name))
-            return;
-
-        /// We create and execute `create` query for the database name.
-        auto create_query = std::make_shared<ASTCreateQuery>();
-        create_query->setDatabase(database_name);
-        create_query->if_not_exists = true;
-        InterpreterCreateQuery create_interpreter{create_query, context};
-        create_interpreter.execute();
-    }
-
-    ASTPtr readCreateQueryFromBackup(const DatabaseAndTableName & table_name, const BackupPtr & backup)
-    {
-        String create_query_path = getMetadataPathInBackup(table_name);
-        auto read_buffer = backup->readFile(create_query_path)->getReadBuffer();
-        String create_query_str;
-        readStringUntilEOF(create_query_str, *read_buffer);
-        read_buffer.reset();
-        ParserCreateQuery create_parser;
-        return parseQuery(create_parser, create_query_str, 0, DBMS_DEFAULT_MAX_PARSER_DEPTH);
-    }
-
-    ASTPtr readCreateQueryFromBackup(const String & database_name, const BackupPtr & backup)
-    {
-        String create_query_path = getMetadataPathInBackup(database_name);
-        auto read_buffer = backup->readFile(create_query_path)->getReadBuffer();
-        String create_query_str;
-        readStringUntilEOF(create_query_str, *read_buffer);
-        read_buffer.reset();
-        ParserCreateQuery create_parser;
-        return parseQuery(create_parser, create_query_str, 0, DBMS_DEFAULT_MAX_PARSER_DEPTH);
-    }
-
-    void restoreTable(
-        const DatabaseAndTableName & table_name,
-        const ASTs & partitions,
-        ContextMutablePtr context,
-        const BackupPtr & backup,
-        const BackupRenamingConfigPtr & renaming_config,
-        RestoreObjectsTasks & restore_tasks)
-    {
-        ASTPtr create_query = readCreateQueryFromBackup(table_name, backup);
-        auto new_create_query = typeid_cast<std::shared_ptr<ASTCreateQuery>>(renameInCreateQuery(create_query, renaming_config, context));
-
-        restore_tasks.emplace_back([table_name, new_create_query, partitions, context, backup]() -> RestoreDataTasks
+    public:
+        RestoreDatabaseFromBackupTask(ContextMutablePtr context_, const ASTPtr & create_query_, bool throw_if_exists_)
+            : context(context_), create_query(typeid_cast<std::shared_ptr<ASTCreateQuery>>(create_query_))
         {
+            if (create_query->if_not_exists == !throw_if_exists)
+            {
+                create_query = typeid_cast<std::shared_ptr<ASTCreateQuery>>(create_query->clone());
+                create_query->if_not_exists = !throw_if_exists;
+            }
+        }
+
+        RestoreDatabasesFromBackupTask(ContextMutablePtr context_, const String & new_database_name_, bool throw_if_exists_)
+            : context(context_)
+        {
+            create_query = std::make_shared<ASTCreateQuery>();
+            create_query->setDatabase(new_database_name_);
+            create_query->if_not_exists = !throw_if_exists;
+        }
+
+        RestoreFromBackupTasks run() override
+        {
+            createDatabase();
+            return {};
+        }
+
+        bool isSequential() const override { return true; }
+
+    private:
+        void createDatabase()
+        {
+            InterpreterCreateQuery create_interpreter{create_query, context};
+            create_interpreter.execute();
+        }
+
+        ContextMutablePtr context;
+        std::shared_ptr<ASTCreateQuery> create_query;
+    };
+
+
+    class RestoreTableFromBackupTask : public IRestoreFromBackupTask
+    {
+    public:
+        RestoreTableFromBackupTask(
+            ContextMutablePtr context_,
+            const ASTPtr & create_query_,
+            bool throw_if_exists_,
+            const ASTs & partitions_,
+            const BackupPtr & backup_,
+            const DatabaseAndTableName & table_name_in_backup_)
+            : context(context_), create_query(typeid_cast<std::shared_ptr<ASTCreateQuery>>(create_query_)),
+              partitions(partitions_), backup(backup_), table_name_in_backup(table_name_in_backup_)
+        {
+            if (create_query->if_not_exists == !throw_if_exists)
+            {
+                create_query = typeid_cast<std::shared_ptr<ASTCreateQuery>>(create_query->clone());
+                create_query->if_not_exists = !throw_if_exists;
+            }
+
+            table_name = DatabaseAndTableName{create_query->getDatabase(), create_query->getTable()};
+            if (create_query->temporary)
+                table_name.first = DatabaseCatalog::TEMPORARY_DATABASE;
+        }
+
+        RestoreFromBackupTasks run() override
+        {
+            auto storage = getOrCreateStorage();
+            RestoreFromBackupTasks tasks;
+            if (auto task = insertDataIntoStorage())
+                tasks.push_back(insertDataIntoStorage());
+            return tasks;
+        }
+
+        bool isSequential() const override { return true; }
+
+    private:
+        void createStorage()
+        {
+            InterpreterCreateQuery create_interpreter{create_query, context};
+            create_interpreter.execute();
+        }
+
+        StoragePtr getStorage()
+        {
+            if (!DatabaseCatalog::instance().isTableExist({table_name.first, table_name.second}, context))
+                return nullptr;
+
+            DatabasePtr existing_database;
+            StoragePtr existing_storage;
+            std::tie(existing_database, existing_storage) = DatabaseCatalog::instance().tryGetDatabaseAndTable({new_table_name.first, new_table_name.second}, context);
+            if (!existing_storage)
+                return nullptr;
+
+            auto existing_table_create_query = existing_database->tryGetCreateTableQuery(new_table_name.second, context);
+            if (!existing_table_create_query)
+                return nullptr;
+
+            if (!hasCompatibleDataToRestoreTable(*create_query, existing_table_create_query->as<ASTCreateQuery &>()))
+            {
+                String error_message = (table_name.first == DatabaseCatalog::TEMPORARY_DATABASE)
+                    ? ("Temporary table " + backQuoteIfNeed(table_name.second) + " already exists")
+                    : ("Table " + backQuoteIfNeed(table_name.first) + "." + backQuoteIfNeed(table_name.second)
+                       + " already exists");
+                throw Exception(error_message, ErrorCodes::CANNOT_RESTORE_TABLE);
+            }
+
+            return existing_storage;
+        }
+
+        StoragePtr getOrCreateStorage()
+        {
+            createStorage();
+            if (auto storage = getStorage())
+                return storage;
+
+            String error_message = (table_name.first == DatabaseCatalog::TEMPORARY_DATABASE)
+                ? ("Could not create temporary table " + backQuoteIfNeed(table_name.second) + " for restoring")
+                : ("Could not create table " + backQuoteIfNeed(table_name.first) + "." + backQuoteIfNeed(table_name.second)
+                   + " for restoring");
+            throw Exception(error_message, ErrorCodes::CANNOT_RESTORE_TABLE);
+        }
+
+        RestoreFromBackupTaskPtr insertDataIntoStorage(StoragePtr storage)
+        {
+            context->checkAccess(AccessType::INSERT, table_name.first, table_name.second);
+            String data_path_in_backup = getDataPathInBackup(table_name_in_backup);
+            return storage->restoreFromBackup(backup, data_path_in_backup, partitions, context);
+        }
+
+        ContextMutablePtr context;
+        ASTPtr create_query;
+        DatabaseAndTableName table_name;
+        ASTs partitions;
+        BackupPtr backup;
+        DatabaseAndTableName table_name_in_backup;
+    };
+
+
+    class RestoreTasksBuilder
+    {
+    public:
+        RestoreTasksBuilder(ContextMutablePtr context_, const BackupPtr & backup_)
+            : context(context_), backup(backup_) {}
+
+        void makeTasks(const ASTBackupQuery::Elements & elements)
+        {
+            auto elements2 = adjustElements(elements, context->getCurrentDatabase());
+
+            auto new_renaming_config = std::make_shared<BackupRenamingConfig>();
+            new_renaming_config->setFromBackupQueryElements(elements2);
+            renaming_config = new_renaming_config;
+
+            for (const auto & element : elements2)
+            {
+                switch (element.type)
+                {
+                    case ElementType::TABLE:
+                    {
+                        const String & database_name = element.name.first;
+                        const String & table_name = element.name.second;
+                        prepareTasksToRestoreTable(DatabaseAndTableName{database_name, table_name}, element.partitions);
+                        break;
+                    }
+
+                    case ElementType::DATABASE:
+                    {
+                        const String & database_name = element.name.first;
+                        prepareTasksToRestoreDatabase(database_name, element.except_list);
+                        break;
+                    }
+
+                    case ElementType::ALL_DATABASES:
+                    {
+                        prepareTasksToRestoreAllDatabases(element.except_list);
+                        break;
+                    }
+
+                    default:
+                        throw Exception("Unexpected element type", ErrorCodes::LOGICAL_ERROR); /// other element types have been removed in deduplicateElements()
+                }
+            }
+        }
+
+        RestoreFromBackupTasks getTasks()
+        {
+            for (const auto & db_and_table_name : tasks_to_restore_tables | boost::adaptors::map_keys)
+            {
+                const String & database_name = db_and_table_name.first;
+                if (tasks_to_restore_databases.contains(database_name))
+                    continue;
+                tasks_to_restore_databases[database_name] =
+                        std::make_unique<RestoreDatabaseFromBackupTask>(context, database_name, /* throw_if_exists = */ false);
+            }
+
+            RestoreFromBackupTasks res;
+            for (auto & task : tasks_to_restore_databases | boost::adaptors::map_values)
+                res.push_back(std::move(task));
+
+            for (auto & task : tasks_to_restore_tables | boost::adaptors::map_values)
+                res.push_back(std::move(task));
+
+            return res;
+        }
+
+    private:
+        void prepareTasksToRestoreTable(const DatabaseAndTableName & table_name_, const ASTs & partitions_)
+        {
+            ASTPtr create_query = readCreateQueryFromBackup(table_name, backup);
+            auto new_create_query = typeid_cast<std::shared_ptr<ASTCreateQuery>>(renameInCreateQuery(create_query, renaming_config, context));
+
             DatabaseAndTableName new_table_name{new_create_query->getDatabase(), new_create_query->getTable()};
             if (new_create_query->temporary)
                 new_table_name.first = DatabaseCatalog::TEMPORARY_DATABASE;
 
-            context->checkAccess(AccessType::INSERT, new_table_name.first, new_table_name.second);
-
-            StoragePtr storage;
-            for (size_t try_index = 0; try_index != 10; ++try_index)
+            auto task = std::make_unique<RestoreTableFromBackup>(context, new_create_query, false, partitions_, backup, table_name_);
+            if (tasks_to_restore_tables.contains(new_table_name))
             {
-                if (DatabaseCatalog::instance().isTableExist({new_table_name.first, new_table_name.second}, context))
-                {
-                    DatabasePtr existing_database;
-                    StoragePtr existing_storage;
-                    std::tie(existing_database, existing_storage) = DatabaseCatalog::instance().tryGetDatabaseAndTable({new_table_name.first, new_table_name.second}, context);
-                    if (existing_storage)
-                    {
-                        if (auto existing_table_create_query = existing_database->tryGetCreateTableQuery(new_table_name.second, context))
-                        {
-                            if (hasCompatibleDataToRestoreTable(*new_create_query, existing_table_create_query->as<ASTCreateQuery &>()))
-                            {
-                                storage = existing_storage;
-                                break;
-                            }
-                            else
-                            {
-                                String error_message = (new_table_name.first == DatabaseCatalog::TEMPORARY_DATABASE)
-                                    ? ("Temporary table " + backQuoteIfNeed(new_table_name.second) + " already exists")
-                                    : ("Table " + backQuoteIfNeed(new_table_name.first) + "." + backQuoteIfNeed(new_table_name.second)
-                                       + " already exists");
-                                throw Exception(error_message, ErrorCodes::CANNOT_RESTORE_TABLE);
-                            }
-                        }
-                    }
-                }
-
-                makeDatabaseIfNotExists(new_table_name.first, context);
-
-                try
-                {
-                    InterpreterCreateQuery create_interpreter{new_create_query, context};
-                    create_interpreter.execute();
-                }
-                catch (Exception & e)
-                {
-                    if (e.code() != ErrorCodes::TABLE_ALREADY_EXISTS)
-                        throw;
-                }
+                throw Exception(ErrorCodes::CANNOT_RESTORE_TABLE, "Table cannot be restored twice");
             }
+            tasks_to_restore_tables[new_table_name] = std::move(task);
+        }
 
-            if (!storage)
-            {
-                String error_message = (new_table_name.first == DatabaseCatalog::TEMPORARY_DATABASE)
-                    ? ("Could not create temporary table " + backQuoteIfNeed(new_table_name.second) + " for restoring")
-                    : ("Could not create table " + backQuoteIfNeed(new_table_name.first) + "." + backQuoteIfNeed(new_table_name.second)
-                       + " for restoring");
-                throw Exception(error_message, ErrorCodes::CANNOT_RESTORE_TABLE);
-            }
-
-            String data_path_in_backup = getDataPathInBackup(table_name);
-            RestoreDataTasks restore_data_tasks = storage->restoreFromBackup(backup, data_path_in_backup, partitions, context);
-
-            /// Keep `storage` alive while we're executing `restore_data_tasks`.
-            for (auto & restore_data_task : restore_data_tasks)
-                restore_data_task = [restore_data_task, storage]() { restore_data_task(); };
-
-            return restore_data_tasks;
-        });
-    }
-
-    void restoreDatabase(const String & database_name, const std::set<String> & except_list, ContextMutablePtr context, const BackupPtr & backup, const BackupRenamingConfigPtr & renaming_config, RestoreObjectsTasks & restore_tasks)
-    {
-        ASTPtr create_query = readCreateQueryFromBackup(database_name, backup);
-        auto new_create_query = typeid_cast<std::shared_ptr<ASTCreateQuery>>(renameInCreateQuery(create_query, renaming_config, context));
-
-        restore_tasks.emplace_back([database_name, new_create_query, except_list, context, backup, renaming_config]() -> RestoreDataTasks
+        void prepareTasksToRestoreDatabase(const String & database_name_,
+                                           const std::set<String> & except_list_)
         {
+            ASTPtr create_query = readCreateQueryFromBackup(database_name_, backup);
+            auto new_create_query = typeid_cast<std::shared_ptr<ASTCreateQuery>>(renameInCreateQuery(create_query, renaming_config, context));
+
             const String & new_database_name = new_create_query->getDatabase();
-            context->checkAccess(AccessType::SHOW_TABLES, new_database_name);
+            if (tasks_to_restore_databases.contains(new_database_name))
+                throw Exception(ErrorCodes::CANNOT_RESTORE_TABLE, "Database {} cannot be restored twice", backQuote(new_database_name));
+            auto task = std::make_unique<RestoreDatabaseFromBackup>(context, new_create_query, false);
+            tasks_to_restore_databases[new_database_name] = std::move(task);
 
-            if (!DatabaseCatalog::instance().isDatabaseExist(new_database_name))
-            {
-                /// We create and execute `create` query for the database name.
-                new_create_query->if_not_exists = true;
-                InterpreterCreateQuery create_interpreter{new_create_query, context};
-                create_interpreter.execute();
-            }
-
-            RestoreObjectsTasks restore_objects_tasks;
-            Strings table_metadata_filenames = backup->listFiles("metadata/" + escapeForFileName(database_name) + "/", "/");
+            Strings table_metadata_filenames = backup->listFiles("metadata/" escapeForFileName(database_name) + "/", "/");
             for (const String & table_metadata_filename : table_metadata_filenames)
             {
                 String table_name = unescapeForFileName(fs::path{table_metadata_filename}.stem());
                 if (except_list.contains(table_name))
                     continue;
-                restoreTable({database_name, table_name}, {}, context, backup, renaming_config, restore_objects_tasks);
+                prepareTasksToRestoreTable(DatabaseAndTableName{database_name, table_name}, ASTs{});
             }
 
-            RestoreDataTasks restore_data_tasks;
-            for (auto & restore_object_task : restore_objects_tasks)
-                insertAtEnd(restore_data_tasks, std::move(restore_object_task)());
-            return restore_data_tasks;
-        });
-    }
+            return restore_tables_tasks;
+        }
 
-    void restoreAllDatabases(const std::set<String> & except_list, ContextMutablePtr context, const BackupPtr & backup, const BackupRenamingConfigPtr & renaming_config, RestoreObjectsTasks & restore_tasks)
-    {
-        restore_tasks.emplace_back([except_list, context, backup, renaming_config]() -> RestoreDataTasks
+        void prepareTasksToRestoreAllDatabases()
         {
-            RestoreObjectsTasks restore_objects_tasks;
             Strings database_metadata_filenames = backup->listFiles("metadata/", "/");
             for (const String & database_metadata_filename : database_metadata_filenames)
             {
                 String database_name = unescapeForFileName(fs::path{database_metadata_filename}.stem());
                 if (except_list.contains(database_name))
                     continue;
-                restoreDatabase(database_name, {}, context, backup, renaming_config, restore_objects_tasks);
+                prepareTaskToRestoreDatabase(database_name, std::set<String>{});
             }
+        }
 
-            RestoreDataTasks restore_data_tasks;
-            for (auto & restore_object_task : restore_objects_tasks)
-                insertAtEnd(restore_data_tasks, std::move(restore_object_task)());
-            return restore_data_tasks;
-        });
+        ASTPtr readCreateQueryFromBackup(const DatabaseAndTableName & table_name, const BackupPtr & backup)
+        {
+            String create_query_path = getMetadataPathInBackup(table_name);
+            auto read_buffer = backup->readFile(create_query_path)->getReadBuffer();
+            String create_query_str;
+            readStringUntilEOF(create_query_str, *read_buffer);
+            read_buffer.reset();
+            ParserCreateQuery create_parser;
+            return parseQuery(create_parser, create_query_str, 0, DBMS_DEFAULT_MAX_PARSER_DEPTH);
+        }
+
+        ASTPtr readCreateQueryFromBackup(const String & database_name, const BackupPtr & backup)
+        {
+            String create_query_path = getMetadataPathInBackup(database_name);
+            auto read_buffer = backup->readFile(create_query_path)->getReadBuffer();
+            String create_query_str;
+            readStringUntilEOF(create_query_str, *read_buffer);
+            read_buffer.reset();
+            ParserCreateQuery create_parser;
+            return parseQuery(create_parser, create_query_str, 0, DBMS_DEFAULT_MAX_PARSER_DEPTH);
+        }
+
+        ContextMutablePtr context;
+        BackupPtr backup;
+        BackupRenamingConfigPtr renaming_config;
+        std::map<String, RestoreFromBackupTaskPtr> tasks_to_restore_databases;
+        std::map<DatabaseAndTableName, RestoreFromBackupTaskPtr> tasks_to_restore_tables;
+    };
+
+
+    void rollbackRestoreTasks(RestoreFromBackupTasks && restore_tasks)
+    {
+        for (auto it = restore_tasks.rbegin(); it != restore_tasks.rend(); ++it)
+        {
+            try
+            {
+                (*it)->rollback();
+            }
+            catch (...)
+            {
+                tryLogCurrentException("Restore", "Couldn't rollback changes after failed RESTORE");
+            }
+        }
     }
 }
 
@@ -728,93 +861,124 @@ void writeBackupEntries(BackupMutablePtr backup, BackupEntries && backup_entries
 }
 
 
-RestoreObjectsTasks makeRestoreTasks(const Elements & elements, ContextMutablePtr context, const BackupPtr & backup)
+RestoreFromBackupTasks makeRestoreTasks(const Elements & elements, ContextMutablePtr context, const BackupPtr & backup)
 {
-    RestoreObjectsTasks restore_tasks;
-
-    auto elements2 = adjustElements(elements, context->getCurrentDatabase());
-    auto renaming_config = std::make_shared<BackupRenamingConfig>();
-    renaming_config->setFromBackupQueryElements(elements2);
-
-    for (const auto & element : elements2)
-    {
-        switch (element.type)
-        {
-            case ElementType::TABLE:
-            {
-                const String & database_name = element.name.first;
-                const String & table_name = element.name.second;
-                restoreTable({database_name, table_name}, element.partitions, context, backup, renaming_config, restore_tasks);
-                break;
-            }
-
-            case ElementType::DATABASE:
-            {
-                const String & database_name = element.name.first;
-                restoreDatabase(database_name, element.except_list, context, backup, renaming_config, restore_tasks);
-                break;
-            }
-
-            case ElementType::ALL_DATABASES:
-            {
-                restoreAllDatabases(element.except_list, context, backup, renaming_config, restore_tasks);
-                break;
-            }
-
-            default:
-                throw Exception("Unexpected element type", ErrorCodes::LOGICAL_ERROR); /// other element types have been removed in deduplicateElements()
-        }
-    }
-
-    return restore_tasks;
+    RestoreTasksBuilder builder{context, backup};
+    builder.makeTasks(elements);
+    return builder.getTasks();
 }
 
 
-void executeRestoreTasks(RestoreObjectsTasks && restore_tasks, size_t num_threads)
+void executeRestoreTasks(RestoreFromBackupTasks && restore_tasks, size_t num_threads)
 {
     if (!num_threads)
         num_threads = 1;
 
-    RestoreDataTasks restore_data_tasks;
-    for (auto & restore_object_task : restore_tasks)
-        insertAtEnd(restore_data_tasks, std::move(restore_object_task)());
-    restore_tasks.clear();
+    RestoreFromBackupTasks completed_tasks;
+    bool need_rollback_completed_tasks = true;
 
+    SCOPE_EXIT({
+        if (need_rollback_completed_tasks)
+            rollbackRestoreTasks(std::move(completed_tasks));
+    });
+
+    std::deque<std::unique_ptr<IRestoreFromBackupTask>> sequential_tasks;
+    std::deque<std::unique_ptr<IRestoreFromBackupTask>> enqueued_tasks;
+
+    /// There are two kinds of restore tasks: sequential and non-sequential ones.
+    /// Sequential tasks are executed first and always in one thread.
+    for (auto & task : restore_tasks)
+    {
+        if (task->isSequential())
+            sequential_tasks.push_back(std::move(task));
+        else
+            enqueued_tasks.push_back(std::move(task));
+    }
+
+    /// Sequential tasks.
+    while (!sequential_tasks.empty())
+    {
+        auto current_task = std::move(sequential_tasks.front());
+        sequential_tasks.pop_front();
+
+        RestoreFromBackupTasks new_tasks = current_task->run();
+
+        completed_tasks.push_back(std::move(current_task));
+        for (auto & task : new_tasks)
+        {
+            if (task->isSequential())
+                sequential_tasks.push_back(std::move(task));
+            else
+                enqueued_tasks.push_back(std::move(task));
+        }
+    }
+
+    /// Non-sequential tasks.
+    std::unordered_map<IRestoreFromBackupTask *, std::unique_ptr<IRestoreFromBackupTask>> running_tasks;
     std::vector<ThreadFromGlobalPool> threads;
-    size_t num_active_threads = 0;
     std::mutex mutex;
     std::condition_variable cond;
     std::exception_ptr exception;
 
-    for (auto & restore_data_task : restore_data_tasks)
+    while (true)
     {
+        IRestoreFromBackupTask * current_task = nullptr;
         {
             std::unique_lock lock{mutex};
-            if (exception)
+            cond.wait(lock, [&]
+            {
+                if (exception)
+                    return true;
+                if (enqueued_tasks.empty())
+                    return running_tasks.empty();
+                return (running_tasks.size() < num_threads);
+            });
+
+            if (exception || enqueued_tasks.empty())
                 break;
-            cond.wait(lock, [&] { return num_active_threads < num_threads; });
-            if (exception)
-                break;
-            ++num_active_threads;
+
+            auto current_task_ptr = std::move(enqueued_tasks.front());
+            current_task = current_task_ptr.get();
+            enqueued_tasks.pop_front();
+            running_tasks[current_task] = std::move(current_task_ptr);
         }
 
-        threads.emplace_back([&restore_data_task, &mutex, &cond, &num_active_threads, &exception]() mutable
+        assert(current_task);
+        threads.emplace_back([current_task, &mutex, &cond, &enqueued_tasks, &running_tasks, &completed_tasks, &exception]() mutable
         {
+            {
+                std::lock_guard lock{mutex};
+                if (exception)
+                    return;
+            }
+
+            RestoreFromBackupTasks new_tasks;
+            std::exception_ptr new_exception;
             try
             {
-                restore_data_task();
-                restore_data_task = {};
+                new_tasks = current_task->run();
             }
             catch (...)
             {
-                std::lock_guard lock{mutex};
-                if (!exception)
-                    exception = std::current_exception();
+                new_exception = std::current_exception();
             }
 
             {
                 std::lock_guard lock{mutex};
-                --num_active_threads;
+                auto current_task_it = running_tasks.find(current_task);
+                auto current_task_ptr = std::move(current_task_it->second);
+                running_tasks.erase(current_task_it);
+
+                if (!new_exception)
+                {
+                    completed_tasks.push_back(std::move(current_task_ptr));
+                    enqueued_tasks.insert(
+                        enqueued_tasks.end(), std::make_move_iterator(new_tasks.begin()), std::make_move_iterator(new_tasks.end()));
+                }
+
+                if (!exception)
+                    exception = new_exception;
+
                 cond.notify_all();
             }
         });
@@ -823,10 +987,10 @@ void executeRestoreTasks(RestoreObjectsTasks && restore_tasks, size_t num_thread
     for (auto & thread : threads)
         thread.join();
 
-    restore_data_tasks.clear();
-
     if (exception)
         std::rethrow_exception(exception);
+    else
+        need_rollback_completed_tasks = false;
 }
 
 }
