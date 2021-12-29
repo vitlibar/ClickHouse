@@ -4,6 +4,7 @@
 #include <Backups/BackupUtils.h>
 #include <Backups/IBackup.h>
 #include <Backups/IBackupEntry.h>
+#include <Backups/IRestoreFromBackupTask.h>
 #include <Parsers/ASTSetQuery.h>
 #include <Interpreters/Context.h>
 

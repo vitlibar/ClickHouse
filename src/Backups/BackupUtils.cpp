@@ -2,6 +2,7 @@
 #include <Backups/BackupEntryFromMemory.h>
 #include <Backups/BackupRenamingConfig.h>
 #include <Backups/IBackup.h>
+#include <Backups/IRestoreFromBackupTask.h>
 #include <Backups/hasCompatibleDataToRestoreTable.h>
 #include <Backups/renameInCreateQuery.h>
 #include <Common/escapeForFileName.h>
@@ -447,19 +448,24 @@ namespace
         return parseQuery(create_parser, create_query_str, 0, DBMS_DEFAULT_MAX_PARSER_DEPTH);
     }
 
-    void restoreTable(
-        const DatabaseAndTableName & table_name,
-        const ASTs & partitions,
-        ContextMutablePtr context,
-        const BackupPtr & backup,
-        const BackupRenamingConfigPtr & renaming_config,
-        RestoreObjectsTasks & restore_tasks)
+    class RestoreTableFromBackupTask : public IRestoreFromBackupTask
     {
-        ASTPtr create_query = readCreateQueryFromBackup(table_name, backup);
-        auto new_create_query = typeid_cast<std::shared_ptr<ASTCreateQuery>>(renameInCreateQuery(create_query, renaming_config, context));
-
-        restore_tasks.emplace_back([table_name, new_create_query, partitions, context, backup]() -> RestoreDataTasks
+    public:
+        RestoreTableFromBackupTask(
+            const DatabaseAndTableName & table_name_,
+            const ASTs & partitions_,
+            ContextMutablePtr context_,
+            const BackupPtr & backup_,
+            const BackupRenamingConfigPtr & renaming_config_)
+            : table_name(table_name_), partitions(partitions_), context(context_), backup(backup_), renaming_config(renaming_config_)
         {
+        }
+
+        RestoreFromBackupTasks run() override
+        {
+            ASTPtr create_query = readCreateQueryFromBackup(table_name, backup);
+            auto new_create_query = typeid_cast<std::shared_ptr<ASTCreateQuery>>(renameInCreateQuery(create_query, renaming_config, context));
+
             DatabaseAndTableName new_table_name{new_create_query->getDatabase(), new_create_query->getTable()};
             if (new_create_query->temporary)
                 new_table_name.first = DatabaseCatalog::TEMPORARY_DATABASE;
@@ -519,23 +525,43 @@ namespace
             }
 
             String data_path_in_backup = getDataPathInBackup(table_name);
-            RestoreDataTasks restore_data_tasks = storage->restoreFromBackup(backup, data_path_in_backup, partitions, context);
-
-            /// Keep `storage` alive while we're executing `restore_data_tasks`.
-            for (auto & restore_data_task : restore_data_tasks)
-                restore_data_task = [restore_data_task, storage]() { restore_data_task(); };
-
+            auto restore_data_task = storage->restoreFromBackup(backup, data_path_in_backup, partitions, context);
+            RestoreFromBackupTasks restore_data_tasks;
+            if (restore_data_task)
+                restore_data_tasks.push_back(std::move(restore_data_task));
             return restore_data_tasks;
-        });
-    }
+        }
 
-    void restoreDatabase(const String & database_name, const std::set<String> & except_list, ContextMutablePtr context, const BackupPtr & backup, const BackupRenamingConfigPtr & renaming_config, RestoreObjectsTasks & restore_tasks)
+    private:
+        DatabaseAndTableName table_name;
+        ASTs partitions;
+        ContextMutablePtr context;
+        BackupPtr backup;
+        BackupRenamingConfigPtr renaming_config;
+    };
+
+    class RestoreDatabaseFromBackupTask : public IRestoreFromBackupTask
     {
-        ASTPtr create_query = readCreateQueryFromBackup(database_name, backup);
-        auto new_create_query = typeid_cast<std::shared_ptr<ASTCreateQuery>>(renameInCreateQuery(create_query, renaming_config, context));
-
-        restore_tasks.emplace_back([database_name, new_create_query, except_list, context, backup, renaming_config]() -> RestoreDataTasks
+    public:
+        RestoreDatabaseFromBackupTask(
+            const String & database_name_,
+            const std::set<String> & except_list_,
+            ContextMutablePtr context_,
+            const BackupPtr & backup_,
+            const BackupRenamingConfigPtr & renaming_config_)
+            : database_name(database_name_)
+            , except_list(except_list_)
+            , context(context_)
+            , backup(backup_)
+            , renaming_config(renaming_config_)
         {
+        }
+
+        RestoreFromBackupTasks run() override
+        {
+            ASTPtr create_query = readCreateQueryFromBackup(database_name, backup);
+            auto new_create_query = typeid_cast<std::shared_ptr<ASTCreateQuery>>(renameInCreateQuery(create_query, renaming_config, context));
+
             const String & new_database_name = new_create_query->getDatabase();
             context->checkAccess(AccessType::SHOW_TABLES, new_database_name);
 
@@ -547,43 +573,57 @@ namespace
                 create_interpreter.execute();
             }
 
-            RestoreObjectsTasks restore_objects_tasks;
+            RestoreFromBackupTasks restore_tables_tasks;
             Strings table_metadata_filenames = backup->listFiles("metadata/" + escapeForFileName(database_name) + "/", "/");
             for (const String & table_metadata_filename : table_metadata_filenames)
             {
                 String table_name = unescapeForFileName(fs::path{table_metadata_filename}.stem());
                 if (except_list.contains(table_name))
                     continue;
-                restoreTable({database_name, table_name}, {}, context, backup, renaming_config, restore_objects_tasks);
+                restore_tables_tasks.push_back(std::make_unique<RestoreTableFromBackupTask>(DatabaseAndTableName{database_name, table_name}, ASTs{}, context, backup, renaming_config));
             }
 
-            RestoreDataTasks restore_data_tasks;
-            for (auto & restore_object_task : restore_objects_tasks)
-                insertAtEnd(restore_data_tasks, std::move(restore_object_task)());
-            return restore_data_tasks;
-        });
-    }
+            return restore_tables_tasks;
+        }
 
-    void restoreAllDatabases(const std::set<String> & except_list, ContextMutablePtr context, const BackupPtr & backup, const BackupRenamingConfigPtr & renaming_config, RestoreObjectsTasks & restore_tasks)
+    private:
+        String database_name;
+        std::set<String> except_list;
+        ContextMutablePtr context;
+        BackupPtr backup;
+        BackupRenamingConfigPtr renaming_config;
+    };
+
+    class RestoreAllDatabasesFromBackupTask : public IRestoreFromBackupTask
     {
-        restore_tasks.emplace_back([except_list, context, backup, renaming_config]() -> RestoreDataTasks
+    public:
+        RestoreAllDatabasesFromBackupTask(const std::set<String> & except_list_, ContextMutablePtr context_, const BackupPtr & backup_, const BackupRenamingConfigPtr & renaming_config_)
+            : except_list(except_list_),
+              context(context_),
+              backup(backup_),
+              renaming_config(renaming_config_)
+        {}
+
+        RestoreFromBackupTasks run() override
         {
-            RestoreObjectsTasks restore_objects_tasks;
+            RestoreFromBackupTasks restore_db_tasks;
             Strings database_metadata_filenames = backup->listFiles("metadata/", "/");
             for (const String & database_metadata_filename : database_metadata_filenames)
             {
                 String database_name = unescapeForFileName(fs::path{database_metadata_filename}.stem());
                 if (except_list.contains(database_name))
                     continue;
-                restoreDatabase(database_name, {}, context, backup, renaming_config, restore_objects_tasks);
+                restore_db_tasks.push_back(std::make_unique<RestoreDatabaseFromBackupTask>(database_name, std::set<String>{}, context, backup, renaming_config));
             }
+            return restore_db_tasks;
+        }
 
-            RestoreDataTasks restore_data_tasks;
-            for (auto & restore_object_task : restore_objects_tasks)
-                insertAtEnd(restore_data_tasks, std::move(restore_object_task)());
-            return restore_data_tasks;
-        });
-    }
+    private:
+        std::set<String> except_list;
+        ContextMutablePtr context;
+        BackupPtr backup;
+        BackupRenamingConfigPtr renaming_config;
+    };
 }
 
 
@@ -728,9 +768,9 @@ void writeBackupEntries(BackupMutablePtr backup, BackupEntries && backup_entries
 }
 
 
-RestoreObjectsTasks makeRestoreTasks(const Elements & elements, ContextMutablePtr context, const BackupPtr & backup)
+RestoreFromBackupTasks makeRestoreTasks(const Elements & elements, ContextMutablePtr context, const BackupPtr & backup)
 {
-    RestoreObjectsTasks restore_tasks;
+    RestoreFromBackupTasks restore_tasks;
 
     auto elements2 = adjustElements(elements, context->getCurrentDatabase());
     auto renaming_config = std::make_shared<BackupRenamingConfig>();
@@ -744,20 +784,20 @@ RestoreObjectsTasks makeRestoreTasks(const Elements & elements, ContextMutablePt
             {
                 const String & database_name = element.name.first;
                 const String & table_name = element.name.second;
-                restoreTable({database_name, table_name}, element.partitions, context, backup, renaming_config, restore_tasks);
+                restore_tasks.push_back(std::make_unique<RestoreTableFromBackupTask>(DatabaseAndTableName{database_name, table_name}, element.partitions, context, backup, renaming_config));
                 break;
             }
 
             case ElementType::DATABASE:
             {
                 const String & database_name = element.name.first;
-                restoreDatabase(database_name, element.except_list, context, backup, renaming_config, restore_tasks);
+                restore_tasks.push_back(std::make_unique<RestoreDatabaseFromBackupTask>(database_name, element.except_list, context, backup, renaming_config));
                 break;
             }
 
             case ElementType::ALL_DATABASES:
             {
-                restoreAllDatabases(element.except_list, context, backup, renaming_config, restore_tasks);
+                restore_tasks.push_back(std::make_unique<RestoreAllDatabasesFromBackupTask>(element.except_list, context, backup, renaming_config));
                 break;
             }
 
@@ -770,51 +810,84 @@ RestoreObjectsTasks makeRestoreTasks(const Elements & elements, ContextMutablePt
 }
 
 
-void executeRestoreTasks(RestoreObjectsTasks && restore_tasks, size_t num_threads)
+void executeRestoreTasks(RestoreFromBackupTasks && restore_tasks, size_t num_threads)
 {
     if (!num_threads)
         num_threads = 1;
 
-    RestoreDataTasks restore_data_tasks;
-    for (auto & restore_object_task : restore_tasks)
-        insertAtEnd(restore_data_tasks, std::move(restore_object_task)());
-    restore_tasks.clear();
+    std::deque<std::unique_ptr<IRestoreFromBackupTask>> enqueued_tasks(std::make_move_iterator(restore_tasks.begin()), std::make_move_iterator(restore_tasks.end()));
+    std::unordered_map<IRestoreFromBackupTask *, std::unique_ptr<IRestoreFromBackupTask>> running_tasks;
+    RestoreFromBackupTasks completed_tasks;
 
     std::vector<ThreadFromGlobalPool> threads;
-    size_t num_active_threads = 0;
     std::mutex mutex;
     std::condition_variable cond;
     std::exception_ptr exception;
 
-    for (auto & restore_data_task : restore_data_tasks)
+    while (true)
     {
+        IRestoreFromBackupTask * task_to_start = nullptr;
         {
             std::unique_lock lock{mutex};
-            if (exception)
+            cond.wait(lock, [&]
+            {
+                if (enqueued_tasks.empty())
+                    return running_tasks.empty();
+                return (running_tasks.size() < num_threads) && !exception;
+            });
+
+            if (enqueued_tasks.empty())
+            {
+                assert(running_tasks.empty());
                 break;
-            cond.wait(lock, [&] { return num_active_threads < num_threads; });
-            if (exception)
-                break;
-            ++num_active_threads;
+            }
+
+            auto task_to_start_owned = std::move(enqueued_tasks.front());
+            task_to_start = task_to_start_owned.get();
+            enqueued_tasks.pop_front();
+            running_tasks[task_to_start] = std::move(task_to_start_owned);
         }
 
-        threads.emplace_back([&restore_data_task, &mutex, &cond, &num_active_threads, &exception]() mutable
+        assert(task_to_start);
+        threads.emplace_back([current_task = task_to_start, &mutex, &cond, &enqueued_tasks, &running_tasks, &completed_tasks, &exception]() mutable
         {
+            {
+                std::lock_guard lock{mutex};
+                if (exception)
+                {
+                    running_tasks.erase(current_task);
+                    cond.notify_all();
+                    return;
+                }
+            }
+
+            RestoreFromBackupTasks new_tasks;
+            std::exception_ptr new_exception;
             try
             {
-                restore_data_task();
-                restore_data_task = {};
+                new_tasks = current_task->run();
             }
             catch (...)
             {
-                std::lock_guard lock{mutex};
-                if (!exception)
-                    exception = std::current_exception();
+                new_exception = std::current_exception();
             }
 
             {
                 std::lock_guard lock{mutex};
-                --num_active_threads;
+                if (!exception)
+                    exception = new_exception;
+
+                auto completed_task_it = running_tasks.find(current_task);
+                auto completed_task_owned = std::move(completed_task_it->second);
+                running_tasks.erase(completed_task_it);
+                if (!new_exception)
+                    completed_tasks.push_back(std::move(completed_task_owned));
+
+                if (exception)
+                    enqueued_tasks.clear();
+                else
+                    enqueued_tasks.insert(enqueued_tasks.end(), std::make_move_iterator(new_tasks.begin()), std::make_move_iterator(new_tasks.end()));
+
                 cond.notify_all();
             }
         });
@@ -823,10 +896,22 @@ void executeRestoreTasks(RestoreObjectsTasks && restore_tasks, size_t num_thread
     for (auto & thread : threads)
         thread.join();
 
-    restore_data_tasks.clear();
-
     if (exception)
+    {
+        for (auto it = completed_tasks.rbegin(); it != completed_tasks.rend(); ++it)
+        {
+            try
+            {
+                (*it)->rollback();
+            }
+            catch (...)
+            {
+                tryLogCurrentException("Restore", "Couldn't revert changes after failed RESTORE");
+            }
+        }
+
         std::rethrow_exception(exception);
+    }
 }
 
 }
