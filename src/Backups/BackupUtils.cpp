@@ -296,7 +296,7 @@ namespace
 }
 
 
-BackupEntries makeBackupEntries(const Elements & elements, const ContextPtr & context)
+BackupEntries makeBackupEntries(const ContextPtr & context, const Elements & elements)
 {
     BackupEntriesBuilder builder{context};
     builder.prepare(elements);

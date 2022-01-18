@@ -13,9 +13,14 @@ using RestoreFromBackupTaskPtr = std::unique_ptr<IRestoreFromBackupTask>;
 using RestoreFromBackupTasks = std::vector<RestoreFromBackupTaskPtr>;
 class Context;
 using ContextMutablePtr = std::shared_ptr<Context>;
+struct RestoreFromBackupSettings;
 
 /// Prepares restore tasks.
-RestoreFromBackupTasks makeRestoreTasks(ContextMutablePtr context, const BackupPtr & backup, const ASTBackupQuery::Elements & elements);
+RestoreFromBackupTasks makeRestoreTasks(
+    ContextMutablePtr context,
+    const BackupPtr & backup,
+    const ASTBackupQuery::Elements & elements,
+    const RestoreFromBackupSettings & settings);
 
 /// Executes restore tasks.
 void executeRestoreTasks(RestoreFromBackupTasks && tasks, size_t num_threads);

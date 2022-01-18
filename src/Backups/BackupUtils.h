@@ -14,7 +14,7 @@ class Context;
 using ContextPtr = std::shared_ptr<const Context>;
 
 /// Prepares backup entries.
-BackupEntries makeBackupEntries(const ASTBackupQuery::Elements & elements, const ContextPtr & context);
+BackupEntries makeBackupEntries(const ContextPtr & context, const ASTBackupQuery::Elements & elements);
 
 /// Write backup entries to an opened backup.
 void writeBackupEntries(BackupMutablePtr backup, BackupEntries && backup_entries, size_t num_threads);

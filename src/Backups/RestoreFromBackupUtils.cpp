@@ -3,6 +3,7 @@
 #include <Backups/IBackup.h>
 #include <Backups/IBackupEntry.h>
 #include <Backups/IRestoreFromBackupTask.h>
+#include <Backups/RestoreFromBackupSettings.h>
 #include <Backups/hasCompatibleDataToRestoreTable.h>
 #include <Common/escapeForFileName.h>
 #include <Databases/IDatabase.h>
@@ -168,8 +169,8 @@ namespace
     class RestoreTasksBuilder
     {
     public:
-        RestoreTasksBuilder(ContextMutablePtr context_, const BackupPtr & backup_)
-            : context(context_), backup(backup_) {}
+        RestoreTasksBuilder(ContextMutablePtr context_, const BackupPtr & backup_, const RestoreFromBackupSettings & restore_settings_)
+            : context(context_), backup(backup_), restore_settings(restore_settings_) {}
 
         /// Prepares internal structures for making tasks for restoring.
         void prepare(const ASTBackupQuery::Elements & elements)
@@ -439,6 +440,7 @@ namespace
 
         ContextMutablePtr context;
         BackupPtr backup;
+        RestoreFromBackupSettings restore_settings;
         DDLRenamingSettings renaming_settings;
         std::map<String, CreateDatabaseInfo> databases;
         std::map<DatabaseAndTableName, CreateTableInfo> tables;
@@ -463,9 +465,9 @@ namespace
 }
 
 
-RestoreFromBackupTasks makeRestoreTasks(ContextMutablePtr context, const BackupPtr & backup, const Elements & elements)
+RestoreFromBackupTasks makeRestoreTasks(ContextMutablePtr context, const BackupPtr & backup, const Elements & elements, const RestoreFromBackupSettings & settings)
 {
-    RestoreTasksBuilder builder{context, backup};
+    RestoreTasksBuilder builder{context, backup, settings};
     builder.prepare(elements);
     return builder.makeTasks();
 }
