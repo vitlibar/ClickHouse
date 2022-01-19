@@ -91,7 +91,7 @@ namespace
                 res.push_back(makeBackupEntryForMetadata(*info.create_query));
                 if (info.has_data)
                 {
-                    auto data_backup = info.storage->backup(info.partitions, context);
+                    auto data_backup = info.storage->backup(context, info.partitions);
                     if (!data_backup.empty())
                     {
                         String data_path = getDataPathInBackup(*info.create_query);

@@ -3527,7 +3527,7 @@ Pipe MergeTreeData::alterPartition(
 }
 
 
-BackupEntries MergeTreeData::backup(const ASTs & partitions, ContextPtr local_context)
+BackupEntries MergeTreeData::backup(ContextPtr local_context, const ASTs & partitions)
 {
     DataPartsVector data_parts;
     if (partitions.empty())
@@ -3687,8 +3687,8 @@ private:
 };
 
 
-RestoreFromBackupTaskPtr MergeTreeData::restoreDataPartsFromBackup(const BackupPtr & backup, const String & data_path_in_backup,
-                                                                   const std::unordered_set<String> & partition_ids,
+RestoreFromBackupTaskPtr MergeTreeData::restoreDataPartsFromBackup(const std::unordered_set<String> & partition_ids,
+                                                                   const BackupPtr & backup, const String & data_path_in_backup,
                                                                    SimpleIncrement * increment)
 {
     return std::make_unique<MergeTreeDataRestoreTask>(

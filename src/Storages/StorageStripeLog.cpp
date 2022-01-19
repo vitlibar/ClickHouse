@@ -492,7 +492,7 @@ void StorageStripeLog::saveFileSizes(const WriteLock & /* already locked for wri
 }
 
 
-BackupEntries StorageStripeLog::backup(const ASTs & partitions, ContextPtr context)
+BackupEntries StorageStripeLog::backup(ContextPtr context, const ASTs & partitions)
 {
     if (!partitions.empty())
         throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Table engine {} doesn't support partitions", getName());
@@ -561,10 +561,10 @@ class StripeLogRestoreTask : public IRestoreFromBackupTask
 public:
     StripeLogRestoreTask(
         const std::shared_ptr<StorageStripeLog> storage_,
+        ContextMutablePtr context_,
         const BackupPtr & backup_,
-        const String & data_path_in_backup_,
-        ContextMutablePtr context_)
-        : storage(storage_), backup(backup_), data_path_in_backup(data_path_in_backup_), context(context_)
+        const String & data_path_in_backup_)
+        : storage(storage_), context(context_), backup(backup_), data_path_in_backup(data_path_in_backup_)
     {
     }
 
@@ -632,19 +632,20 @@ public:
 
 private:
     std::shared_ptr<StorageStripeLog> storage;
+    ContextMutablePtr context;
     BackupPtr backup;
     String data_path_in_backup;
-    ContextMutablePtr context;
 };
 
 
-RestoreFromBackupTaskPtr StorageStripeLog::restoreFromBackup(const BackupPtr & backup, const String & data_path_in_backup, const ASTs & partitions, ContextMutablePtr context)
+RestoreFromBackupTaskPtr StorageStripeLog::restoreFromBackup(ContextMutablePtr context, const ASTs & partitions, const BackupPtr & backup, const String & data_path_in_backup, const RestoreFromBackupSettings & restore_settings)
 {
+    UNUSED(restore_settings);
     if (!partitions.empty())
         throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Table engine {} doesn't support partitions", getName());
 
     return std::make_unique<StripeLogRestoreTask>(
-        typeid_cast<std::shared_ptr<StorageStripeLog>>(shared_from_this()), backup, data_path_in_backup, context);
+        typeid_cast<std::shared_ptr<StorageStripeLog>>(shared_from_this()), context, backup, data_path_in_backup);
 }
 
 

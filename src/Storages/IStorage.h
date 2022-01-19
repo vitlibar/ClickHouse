@@ -73,6 +73,7 @@ class IBackupEntry;
 using BackupEntries = std::vector<std::pair<String, std::unique_ptr<IBackupEntry>>>;
 class IRestoreFromBackupTask;
 using RestoreFromBackupTaskPtr = std::unique_ptr<IRestoreFromBackupTask>;
+struct RestoreFromBackupSettings;
 
 struct ColumnSize
 {
@@ -213,10 +214,10 @@ public:
     virtual bool hasHollowBackup() const { return false; }
 
     /// Prepares entries to backup data of the storage.
-    virtual BackupEntries backup(const ASTs & partitions, ContextPtr context);
+    virtual BackupEntries backup(ContextPtr context, const ASTs & partitions);
 
     /// Extract data from the backup and put it to the storage.
-    virtual RestoreFromBackupTaskPtr restoreFromBackup(const BackupPtr & backup, const String & data_path_in_backup, const ASTs & partitions, ContextMutablePtr context);
+    virtual RestoreFromBackupTaskPtr restoreFromBackup(ContextMutablePtr context, const ASTs & partitions, const BackupPtr & backup, const String & data_path_in_backup, const RestoreFromBackupSettings & settings);
 
 protected:
     /// Returns whether the column is virtual - by default all columns are real.

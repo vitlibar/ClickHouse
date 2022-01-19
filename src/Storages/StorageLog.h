@@ -52,8 +52,8 @@ public:
     bool supportsSubcolumns() const override { return true; }
     ColumnSizeByName getColumnSizes() const override;
 
-    BackupEntries backup(const ASTs & partitions, ContextPtr context) override;
-    RestoreFromBackupTaskPtr restoreFromBackup(const BackupPtr & backup, const String & data_path_in_backup, const ASTs & partitions, ContextMutablePtr context) override;
+    BackupEntries backup(ContextPtr context, const ASTs & partitions) override;
+    RestoreFromBackupTaskPtr restoreFromBackup(ContextMutablePtr context, const ASTs & partitions, const BackupPtr & backup, const String & data_path_in_backup, const RestoreFromBackupSettings & restore_settings) override;
 
 protected:
     /** Attach the table with the appropriate name, along the appropriate path (with / at the end),

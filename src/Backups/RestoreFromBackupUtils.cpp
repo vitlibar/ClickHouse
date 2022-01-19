@@ -75,9 +75,11 @@ namespace
             const ASTPtr & create_query_,
             const ASTs & partitions_,
             const BackupPtr & backup_,
-            const DatabaseAndTableName & table_name_in_backup_)
+            const DatabaseAndTableName & table_name_in_backup_,
+            const RestoreFromBackupSettings & restore_settings_)
             : context(context_), create_query(typeid_cast<std::shared_ptr<ASTCreateQuery>>(create_query_)),
-              partitions(partitions_), backup(backup_), table_name_in_backup(table_name_in_backup_)
+              partitions(partitions_), backup(backup_), table_name_in_backup(table_name_in_backup_),
+              restore_settings(restore_settings_)
         {
             table_name = DatabaseAndTableName{create_query->getDatabase(), create_query->getTable()};
             if (create_query->temporary)
@@ -86,8 +88,11 @@ namespace
 
         RestoreFromBackupTasks run() override
         {
+            if (restore_settings.skip_existing_tables && tryGetStorage(false))
+                return {};
+
             createStorage();
-            auto storage = getStorage();
+            auto storage = getStorage(true);
             RestoreFromBackupTasks tasks;
             if (auto task = insertDataIntoStorage(storage))
                 tasks.push_back(std::move(task));
@@ -103,7 +108,7 @@ namespace
             create_interpreter.execute();
         }
 
-        StoragePtr tryGetStorage()
+        StoragePtr tryGetStorage(bool check_data_compatibility)
         {
             if (!DatabaseCatalog::instance().isTableExist({table_name.first, table_name.second}, context))
                 return nullptr;
@@ -114,29 +119,32 @@ namespace
             if (!existing_storage)
                 return nullptr;
 
-            auto existing_table_create_query = existing_database->tryGetCreateTableQuery(table_name.second, context);
-            if (!existing_table_create_query)
-                return nullptr;
+            if (check_data_compatibility)
+            {
+                auto existing_table_create_query = existing_database->tryGetCreateTableQuery(table_name.second, context);
+                if (!existing_table_create_query)
+                    return nullptr;
 
-            if (!hasCompatibleDataToRestoreTable(*create_query, existing_table_create_query->as<ASTCreateQuery &>()))
-                throw Exception(
-                    ErrorCodes::CANNOT_RESTORE_TABLE,
-                    "Table {}.{} from backup is incompatible with existing table {}.{}. "
-                    "The create query of the table from backup: {}."
-                    "The create query of the existing table: {}",
-                    backQuoteIfNeed(table_name_in_backup.first),
-                    backQuoteIfNeed(table_name_in_backup.second),
-                    backQuoteIfNeed(table_name.first),
-                    backQuoteIfNeed(table_name.second),
-                    serializeAST(*create_query),
-                    serializeAST(*existing_table_create_query));
+                if (!hasCompatibleDataToRestoreTable(*create_query, existing_table_create_query->as<ASTCreateQuery &>()))
+                    throw Exception(
+                        ErrorCodes::CANNOT_RESTORE_TABLE,
+                        "Table {}.{} from backup is incompatible with existing table {}.{}. "
+                        "The create query of the table from backup: {}."
+                        "The create query of the existing table: {}",
+                        backQuoteIfNeed(table_name_in_backup.first),
+                        backQuoteIfNeed(table_name_in_backup.second),
+                        backQuoteIfNeed(table_name.first),
+                        backQuoteIfNeed(table_name.second),
+                        serializeAST(*create_query),
+                        serializeAST(*existing_table_create_query));
+            }
 
             return existing_storage;
         }
 
-        StoragePtr getStorage()
+        StoragePtr getStorage(bool check_data_compatibility)
         {
-            if (auto storage = tryGetStorage())
+            if (auto storage = tryGetStorage(check_data_compatibility))
                 return storage;
 
             String error_message = (table_name.first == DatabaseCatalog::TEMPORARY_DATABASE)
@@ -152,7 +160,7 @@ namespace
                 return {};
             context->checkAccess(AccessType::INSERT, table_name.first, table_name.second);
             String data_path_in_backup = getDataPathInBackup(table_name_in_backup);
-            return storage->restoreFromBackup(backup, data_path_in_backup, partitions, context);
+            return storage->restoreFromBackup(context, partitions, backup, data_path_in_backup, restore_settings);
         }
 
         ContextMutablePtr context;
@@ -161,6 +169,7 @@ namespace
         ASTs partitions;
         BackupPtr backup;
         DatabaseAndTableName table_name_in_backup;
+        RestoreFromBackupSettings restore_settings;
     };
 
 
@@ -226,7 +235,7 @@ namespace
 
             /// TODO: We need to restore tables according to their dependencies.
             for (auto & info : tables | boost::adaptors::map_values)
-                res.push_back(std::make_unique<RestoreTableFromBackupTask>(context, info.create_query, info.partitions, backup, info.name_in_backup));
+                res.push_back(std::make_unique<RestoreTableFromBackupTask>(context, info.create_query, info.partitions, backup, info.name_in_backup, restore_settings));
 
             return res;
         }

@@ -884,7 +884,7 @@ IStorage::ColumnSizeByName StorageLog::getColumnSizes() const
 }
 
 
-BackupEntries StorageLog::backup(const ASTs & partitions, ContextPtr context)
+BackupEntries StorageLog::backup(ContextPtr context, const ASTs & partitions)
 {
     if (!partitions.empty())
         throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Table engine {} doesn't support partitions", getName());
@@ -956,8 +956,8 @@ class LogRestoreTask : public IRestoreFromBackupTask
 
 public:
     LogRestoreTask(
-        std::shared_ptr<StorageLog> storage_, const BackupPtr & backup_, const String & data_path_in_backup_, ContextMutablePtr context_)
-        : storage(storage_), backup(backup_), data_path_in_backup(data_path_in_backup_), context(context_)
+        std::shared_ptr<StorageLog> storage_, ContextMutablePtr context_, const BackupPtr & backup_, const String & data_path_in_backup_)
+        : storage(storage_), context(context_), backup(backup_), data_path_in_backup(data_path_in_backup_)
     {
     }
 
@@ -1054,18 +1054,19 @@ public:
 
 private:
     std::shared_ptr<StorageLog> storage;
+    ContextMutablePtr context;
     BackupPtr backup;
     String data_path_in_backup;
-    ContextMutablePtr context;
 };
 
-RestoreFromBackupTaskPtr StorageLog::restoreFromBackup(const BackupPtr & backup, const String & data_path_in_backup, const ASTs & partitions, ContextMutablePtr context)
+RestoreFromBackupTaskPtr StorageLog::restoreFromBackup(ContextMutablePtr context, const ASTs & partitions, const BackupPtr & backup, const String & data_path_in_backup, const RestoreFromBackupSettings & restore_settings)
 {
+    UNUSED(restore_settings);
     if (!partitions.empty())
         throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Table engine {} doesn't support partitions", getName());
 
     return std::make_unique<LogRestoreTask>(
-        typeid_cast<std::shared_ptr<StorageLog>>(shared_from_this()), backup, data_path_in_backup, context);
+        typeid_cast<std::shared_ptr<StorageLog>>(shared_from_this()), context, backup, data_path_in_backup);
 }
 
 
