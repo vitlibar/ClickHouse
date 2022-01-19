@@ -3,7 +3,7 @@
 #include <Backups/BackupEntryFromImmutableFile.h>
 #include <Backups/BackupEntryFromSmallFile.h>
 #include <Backups/IBackup.h>
-#include <Backups/IRestoreFromBackupTask.h>
+#include <Backups/IRestoreTask.h>
 #include <Compression/CompressedReadBuffer.h>
 #include <DataTypes/DataTypeArray.h>
 #include <DataTypes/DataTypeDate.h>
@@ -3579,7 +3579,7 @@ BackupEntries MergeTreeData::backupDataParts(const DataPartsVector & data_parts)
 }
 
 
-class MergeTreeDataRestoreTask : public IRestoreFromBackupTask
+class MergeTreeDataRestoreTask : public IRestoreTask
 {
 public:
     MergeTreeDataRestoreTask(
@@ -3596,9 +3596,9 @@ public:
     {
     }
 
-    RestoreFromBackupTasks run() override
+    RestoreTasks run() override
     {
-        RestoreFromBackupTasks restore_part_tasks;
+        RestoreTasks restore_part_tasks;
         Strings part_names = backup->listFiles(data_path_in_backup);
         for (const String & part_name : part_names)
         {
@@ -3623,7 +3623,7 @@ private:
     std::unordered_set<String> partition_ids;
     SimpleIncrement * increment;
 
-    class RestorePartTask : public IRestoreFromBackupTask
+    class RestorePartTask : public IRestoreTask
     {
     public:
         RestorePartTask(
@@ -3642,7 +3642,7 @@ private:
         {
         }
 
-        RestoreFromBackupTasks run() override
+        RestoreTasks run() override
         {
             UInt64 total_size_of_part = 0;
             Strings filenames = backup->listFiles(data_path_in_backup + part_name + "/", "");
@@ -3687,7 +3687,7 @@ private:
 };
 
 
-RestoreFromBackupTaskPtr MergeTreeData::restoreDataPartsFromBackup(const BackupPtr & backup, const String & data_path_in_backup,
+RestoreTaskPtr MergeTreeData::restoreDataPartsFromBackup(const BackupPtr & backup, const String & data_path_in_backup,
                                                                    const std::unordered_set<String> & partition_ids,
                                                                    SimpleIncrement * increment)
 {
