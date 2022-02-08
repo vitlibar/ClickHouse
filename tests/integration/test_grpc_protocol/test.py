@@ -2,6 +2,8 @@ import os
 import pytest
 import sys
 import time
+import pytz
+import uuid
 import grpc
 from helpers.cluster import ClickHouseCluster, run_and_check
 from threading import Thread
@@ -203,6 +205,19 @@ def test_totals_and_extremes():
     assert query_and_get_totals("SELECT sum(x), y FROM t GROUP BY y WITH TOTALS") == "12\t0\n"
     assert query("SELECT x, y FROM t") == "1\t2\n2\t4\n3\t2\n3\t3\n3\t4\n"
     assert query_and_get_extremes("SELECT x, y FROM t", settings={"extremes": "1"}) == "1\t2\n3\t4\n"
+
+def test_get_query_details():
+    result = list(query_no_errors("SELECT 'a', 1", query_id = '123', output_format = 'TabSeparated'))[0]
+    assert result.query_id == '123'
+    pytz.timezone(result.time_zone)
+    assert result.output_format == 'TabSeparated'
+    result = list(query_no_errors("SELECT 'a', 1 FORMAT JSONEachRow", query_id = ''))[0]
+    uuid.UUID(result.query_id)
+    assert result.output_format == 'JSONEachRow'
+    result = list(query_no_errors("CREATE TABLE t (a UInt8) ENGINE = Memory", query_id = ''))[0]
+    uuid.UUID(result.query_id)
+    pytz.timezone(result.time_zone)
+    assert result.output_format == ''
 
 def test_errors_handling():
     e = query_and_get_error("")

@@ -642,6 +642,8 @@ namespace
         void throwIfFailedToReadQueryInfo();
         bool isQueryCancelled();
 
+        void addQueryDetailsToResult();
+        void addOutputFormatToResult();
         void addProgressToResult();
         void addTotalsToResult(const Block & totals);
         void addExtremesToResult(const Block & extremes);
@@ -1150,6 +1152,9 @@ namespace
 
     void Call::generateOutput()
     {
+        /// We add query_id and time_zone to the first result anyway.
+        addQueryDetailsToResult();
+
         if (!io.pipeline.initialized() || io.pipeline.pushing())
             return;
 
@@ -1188,6 +1193,8 @@ namespace
                 }
                 return true;
             };
+
+            addOutputFormatToResult();
 
             Block block;
             while (check_for_cancel())
@@ -1437,6 +1444,17 @@ namespace
         }
 
         return false;
+    }
+
+    void Call::addQueryDetailsToResult()
+    {
+        *result.mutable_query_id() = query_context->getClientInfo().current_query_id;
+        *result.mutable_time_zone() = DateLUT::instance().getTimeZone();
+    }
+
+    void Call::addOutputFormatToResult()
+    {
+        *result.mutable_output_format() = output_format;
     }
 
     void Call::addProgressToResult()
