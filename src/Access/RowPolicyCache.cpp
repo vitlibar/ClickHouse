@@ -22,16 +22,29 @@ namespace
     public:
         void add(const ASTPtr & filter, RowPolicyKind kind)
         {
-            if (kind == RowPolicyKind::RESTRICTIVE)
-                restrictions.push_back(filter);
-            else
+            if (kind == RowPolicyKind::PERMISSIVE)
+            {
+                setPermissionsExist(true);
                 permissions.push_back(filter);
+            }
+            else
+            {
+                restrictions.push_back(filter);
+            }
+        }
+
+        void setPermissionsExist(bool exist_)
+        {
+            permissions_exist = exist_;
         }
 
         ASTPtr getResult() &&
         {
-            /// Process permissive filters.
-            restrictions.push_back(makeASTForLogicalOr(std::move(permissions)));
+            if (permissions_exist)
+            {
+                /// Process permissive filters.
+                restrictions.push_back(makeASTForLogicalOr(std::move(permissions)));
+            }
 
             /// Process restrictive filters.
             auto result = makeASTForLogicalAnd(std::move(restrictions));
@@ -45,6 +58,7 @@ namespace
 
     private:
         ASTs permissions;
+        bool permissions_exist = false;
         ASTs restrictions;
     };
 }
@@ -223,6 +237,8 @@ void RowPolicyCache::mixFiltersFor(EnabledRowPolicies & enabled)
                 key.filter_type = filter_type;
                 auto & mixer = mixers[key];
                 mixer.database_and_table_name = info.database_and_table_name;
+                if (policy.getKind() == RowPolicyKind::PERMISSIVE)
+                    mixer.mixer.setPermissionsExist(true); /// We call setPermissionsExist() even if the current user doesn't match to a policy TO section.
                 if (match)
                     mixer.mixer.add(info.parsed_filters[filter_type_i], policy.getKind());
             }
