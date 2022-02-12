@@ -36,6 +36,10 @@ RestoreSettings RestoreSettings::fromRestoreQuery(const ASTBackupQuery & query)
                 res.throw_if_database_def_differs = SettingFieldBool{setting.value};
             else if (setting.name == "throw_if_table_def_differs")
                 res.throw_if_table_def_differs = SettingFieldBool{setting.value};
+            else if (setting.name == "throw_if_table_not_empty")
+                res.throw_if_table_not_empty = SettingFieldBool{setting.value};
+            else if (setting.name == "deduplicate_data")
+                res.deduplicate_data = SettingFieldBool{setting.value};
             else
                 throw Exception(ErrorCodes::UNKNOWN_SETTING, "Unknown setting {}", setting.name);
         }

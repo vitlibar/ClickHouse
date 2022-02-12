@@ -1,15 +1,19 @@
 import pytest
 import re
 from helpers.cluster import ClickHouseCluster
+from helpers.test_tools import TSV
 
 cluster = ClickHouseCluster(__file__)
 instance = cluster.add_instance('instance', main_configs=["configs/backups_disk.xml"], external_dirs=["/backups/"])
 
-def create_and_fill_table(engine="MergeTree"):
+def create_table(engine="MergeTree"):
     if engine == "MergeTree":
         engine = "MergeTree ORDER BY y PARTITION BY x%10"
     instance.query("CREATE DATABASE test")
     instance.query(f"CREATE TABLE test.table(x UInt32, y String) ENGINE={engine}")
+
+def create_and_fill_table(engine="MergeTree"):
+    create_table(engine=engine)
     instance.query("INSERT INTO test.table SELECT number, toString(number) FROM numbers(100)")
 
 
@@ -60,11 +64,31 @@ def test_restore_table_into_existing_table(engine):
     assert instance.query("SELECT count(), sum(x) FROM test.table") == "100\t4950\n"
     instance.query(f"BACKUP TABLE test.table TO {backup_name}")
 
-    instance.query(f"RESTORE TABLE test.table INTO test.table FROM {backup_name} SETTINGS throw_if_table_exists=0")
+    instance.query(f"RESTORE TABLE test.table INTO test.table FROM {backup_name} SETTINGS throw_if_table_exists=0, throw_if_table_not_empty=0, deduplicate_data=0")
     assert instance.query("SELECT count(), sum(x) FROM test.table") == "200\t9900\n"
 
-    instance.query(f"RESTORE TABLE test.table INTO test.table FROM {backup_name} SETTINGS throw_if_table_exists=0")
+    instance.query(f"RESTORE TABLE test.table INTO test.table FROM {backup_name} SETTINGS throw_if_table_exists=0, throw_if_table_not_empty=0, deduplicate_data=0")
     assert instance.query("SELECT count(), sum(x) FROM test.table") == "300\t14850\n"
+
+
+@pytest.mark.parametrize("engine", ["StripeLog"])
+def test_restore_table_with_deduplication(engine):
+    backup_name = new_backup_name()
+    create_table(engine=engine)
+    instance.query("INSERT INTO test.table VALUES (1, 'a')")
+    instance.query("INSERT INTO test.table VALUES (2, 'b'), (3, 'c')")
+    instance.query("INSERT INTO test.table VALUES (1, 'a')")
+    instance.query("INSERT INTO test.table VALUES (4, 'd')")
+    instance.query(f"BACKUP TABLE test.table TO {backup_name}")
+
+    instance.query("TRUNCATE TABLE test.table")
+    instance.query("INSERT INTO test.table VALUES (4, 'd')")
+    instance.query("INSERT INTO test.table VALUES (1, 'a')")
+    instance.query("INSERT INTO test.table VALUES (5, 'e')")
+    instance.query("INSERT INTO test.table VALUES (2, 'b'), (3, 'cc')")
+
+    instance.query(f"RESTORE TABLE test.table INTO test.table FROM {backup_name} SETTINGS throw_if_table_exists=0, throw_if_table_not_empty=0")
+    assert instance.query("SELECT x, y FROM test.table ORDER BY x, y") == TSV([[1, 'a'], [1, 'a'], [2, 'b'], [2, 'b'], [3, 'c'], [3, 'cc'], [4, 'd'], [5, 'e']])  
 
 
 def test_restore_table_under_another_name():

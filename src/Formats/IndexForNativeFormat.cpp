@@ -62,6 +62,16 @@ IndexOfBlockForNativeFormat IndexOfBlockForNativeFormat::extractIndexForColumns(
     return res;
 }
 
+size_t IndexOfBlockForNativeFormat::getMinOffsetInCompressedFile() const
+{
+    if (columns.empty())
+        return 0;
+    size_t offset = std::numeric_limits<size_t>::max();
+    for (const auto & column : columns)
+        if (offset > column.location.offset_in_compressed_file)
+            offset = column.location.offset_in_compressed_file;
+    return offset;
+}
 
 void IndexForNativeFormat::read(ReadBuffer & istr)
 {

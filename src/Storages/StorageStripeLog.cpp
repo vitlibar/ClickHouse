@@ -9,6 +9,7 @@
 #include <Common/Exception.h>
 
 #include <IO/WriteBufferFromFileBase.h>
+#include <Compression/CompressedBufferHeader.h>
 #include <Compression/CompressedReadBuffer.h>
 #include <Compression/CompressedReadBufferFromFile.h>
 #include <Compression/CompressedWriteBuffer.h>
@@ -39,6 +40,8 @@
 #include <Backups/BackupEntryFromSmallFile.h>
 #include <Backups/IBackup.h>
 #include <Backups/IRestoreTask.h>
+#include <Backups/RestoreSettings.h>
+#include <Disks/IVolume.h>
 #include <Disks/TemporaryFileOnDisk.h>
 
 #include <base/insertAtEnd.h>
@@ -55,6 +58,15 @@ namespace ErrorCodes
     extern const int INCORRECT_FILE_NAME;
     extern const int TIMEOUT_EXCEEDED;
     extern const int NOT_IMPLEMENTED;
+    extern const int CANNOT_RESTORE_TABLE;
+}
+
+
+namespace
+{
+    constexpr char DATA_FILE_NAME[] = "data.bin";
+    constexpr char INDEX_FILE_NAME[] = "index.mrk";
+    constexpr char SIZES_FILE_NAME[] = "sizes.json";
 }
 
 
@@ -273,9 +285,9 @@ StorageStripeLog::StorageStripeLog(
     : IStorage(table_id_)
     , disk(std::move(disk_))
     , table_path(relative_path_)
-    , data_file_path(table_path + "data.bin")
-    , index_file_path(table_path + "index.mrk")
-    , file_checker(disk, table_path + "sizes.json")
+    , data_file_path(table_path + DATA_FILE_NAME)
+    , index_file_path(table_path + INDEX_FILE_NAME)
+    , file_checker(disk, table_path + SIZES_FILE_NAME)
     , max_compress_block_size(max_compress_block_size_)
     , log(&Poco::Logger::get("StorageStripeLog"))
 {
@@ -324,9 +336,9 @@ void StorageStripeLog::rename(const String & new_path_to_table_data, const Stora
         disk->moveDirectory(table_path, new_path_to_table_data);
 
         table_path = new_path_to_table_data;
-        data_file_path = table_path + "data.bin";
-        index_file_path = table_path + "index.mrk";
-        file_checker.setPath(table_path + "sizes.json");
+        data_file_path = table_path + DATA_FILE_NAME;
+        index_file_path = table_path + INDEX_FILE_NAME;
+        file_checker.setPath(table_path + SIZES_FILE_NAME);
     }
     renameInMemory(new_table_id);
 }
@@ -516,11 +528,10 @@ BackupEntries StorageStripeLog::backup(ContextPtr context, const ASTs & partitio
     /// data.bin
     {
         /// We make a copy of the data file because it can be changed later in write() or in truncate().
-        String data_file_name = fileName(data_file_path);
-        String hardlink_file_path = temp_dir + "/" + data_file_name;
+        String hardlink_file_path = temp_dir + "/" + DATA_FILE_NAME;
         disk->createHardLink(data_file_path, hardlink_file_path);
         backup_entries.emplace_back(
-            data_file_name,
+            DATA_FILE_NAME,
             std::make_unique<BackupEntryFromAppendOnlyFile>(
                 disk, hardlink_file_path, file_checker.getFileSize(data_file_path), std::nullopt, temp_dir_owner));
     }
@@ -528,18 +539,17 @@ BackupEntries StorageStripeLog::backup(ContextPtr context, const ASTs & partitio
     /// index.mrk
     {
         /// We make a copy of the data file because it can be changed later in write() or in truncate().
-        String index_file_name = fileName(index_file_path);
-        String hardlink_file_path = temp_dir + "/" + index_file_name;
+        String hardlink_file_path = temp_dir + "/" + INDEX_FILE_NAME;
         disk->createHardLink(index_file_path, hardlink_file_path);
         backup_entries.emplace_back(
-            index_file_name,
+            INDEX_FILE_NAME,
             std::make_unique<BackupEntryFromAppendOnlyFile>(
                 disk, hardlink_file_path, file_checker.getFileSize(index_file_path), std::nullopt, temp_dir_owner));
     }
 
     /// sizes.json
-    String files_info_path = file_checker.getPath();
-    backup_entries.emplace_back(fileName(files_info_path), std::make_unique<BackupEntryFromSmallFile>(disk, files_info_path));
+    String sizes_file_path = file_checker.getPath();
+    backup_entries.emplace_back(SIZES_FILE_NAME, std::make_unique<BackupEntryFromSmallFile>(disk, sizes_file_path));
 
     /// columns.txt
     backup_entries.emplace_back(
@@ -554,6 +564,7 @@ BackupEntries StorageStripeLog::backup(ContextPtr context, const ASTs & partitio
     return backup_entries;
 }
 
+
 class StripeLogRestoreTask : public IRestoreTask
 {
     using WriteLock = StorageStripeLog::WriteLock;
@@ -561,10 +572,15 @@ class StripeLogRestoreTask : public IRestoreTask
 public:
     StripeLogRestoreTask(
         const std::shared_ptr<StorageStripeLog> storage_,
+        const ContextPtr & context_,
         const BackupPtr & backup_,
         const String & data_path_in_backup_,
-        ContextMutablePtr context_)
-        : storage(storage_), backup(backup_), data_path_in_backup(data_path_in_backup_), context(context_)
+        const StorageRestoreSettings & restore_settings_)
+        : storage(storage_)
+        , context(context_)
+        , backup(backup_)
+        , data_path_in_backup(data_path_in_backup_)
+        , restore_settings(restore_settings_)
     {
     }
 
@@ -579,41 +595,71 @@ public:
         /// Load the indices if not loaded yet. We have to do that now because we're going to update these indices.
         storage->loadIndices(lock);
 
+        if (restore_settings.throw_if_table_not_empty && !storage->indices.empty())
+            throw Exception(ErrorCodes::CANNOT_RESTORE_TABLE, "Cannot restore table {} because it's already not empty", storage->getStorageID().getFullTableName());
+
         /// If there were no files, save zero file sizes to be able to rollback in case of error.
         storage->saveFileSizes(lock);
 
         try
         {
-            /// Append the data file.
-            auto old_data_size = file_checker.getFileSize(storage->data_file_path);
+            const auto & disk = storage->disk;
+            const auto & data_file_path = storage->data_file_path;
+
+            /// Read new indices.
+            IndexForNativeFormat new_indices;
             {
-                const auto & data_file_path = storage->data_file_path;
-                String file_path_in_backup = data_path_in_backup + fileName(data_file_path);
-                auto backup_entry = backup->readFile(file_path_in_backup);
-                const auto & disk = storage->disk;
-                auto in = backup_entry->getReadBuffer();
-                auto out = disk->writeFile(data_file_path, storage->max_compress_block_size, WriteMode::Append);
-                copyData(*in, *out);
+                auto index_backup_entry = backup->readFile(data_path_in_backup + INDEX_FILE_NAME);
+                auto index_in = index_backup_entry->getReadBuffer();
+                CompressedReadBuffer index_compressed_in{*index_in};
+                new_indices.read(index_compressed_in);
             }
 
-            /// Append the index.
-            {
-                const auto & index_file_path = storage->index_file_path;
-                String index_path_in_backup = data_path_in_backup + fileName(index_file_path);
-                IndexForNativeFormat extra_indices;
-                auto backup_entry = backup->readFile(index_path_in_backup);
-                auto index_in = backup_entry->getReadBuffer();
-                CompressedReadBuffer index_compressed_in{*index_in};
-                extra_indices.read(index_compressed_in);
+            /// Start reading data from the backup.
+            auto data_backup_entry = backup->readFile(data_path_in_backup + DATA_FILE_NAME);
+            auto new_data = data_backup_entry->getReadBuffer();
 
-                /// Adjust the offsets.
-                for (auto & block : extra_indices.blocks)
+            auto old_data_size = file_checker.getFileSize(data_file_path);
+            if (old_data_size && restore_settings.deduplicate_data)
+            {
+                /// We need to deduplicate data, `new_data` should be seekable for this.
+                std::optional<TemporaryFileOnDisk> temp_file_owner;
+                auto new_data_seekable = makeReadBufferSeekable(std::move(new_data), context, temp_file_owner);
+
+                /// Calculates checksums and find out which new data parts differs from the old data parts.
+                auto old_data = disk->readFile(data_file_path, context->getReadSettings());
+                auto old_parts = collectDataPartInfos(storage->indices, readCompressedBufferHeaders(*old_data));
+                auto new_parts = collectDataPartInfos(new_indices, readCompressedBufferHeaders(*new_data_seekable));
+                new_parts = getDiff(std::move(new_parts), std::move(old_parts));
+
+                /// Copy the chosed data parts from `new_data` to `out_data`, and append the indices too.
+                auto out_data = disk->writeFile(data_file_path, storage->max_compress_block_size, WriteMode::Append);
+                size_t current_data_size = old_data_size;
+                auto & indices = storage->indices;
+                indices.blocks.reserve(indices.blocks.size() + new_parts.size());
+                for (const auto & part : new_parts)
                 {
-                    for (auto & column : block.columns)
+                    new_data_seekable->seek(part.offset, SEEK_SET);
+                    copyData(*new_data_seekable, *out_data, part.size);
+                    auto & index_block = indices.blocks.emplace_back(new_indices.blocks[part.index]);
+                    for (auto & column : index_block.columns)
+                        column.location.offset_in_compressed_file += current_data_size - part.offset;
+                    current_data_size += part.size;
+                }
+            }
+            else
+            {
+                /// Copy all the data from `new_data` to `out_data`, and append the indices too.
+                auto out_data = disk->writeFile(data_file_path, storage->max_compress_block_size, WriteMode::Append);
+                copyData(*new_data, *out_data);
+                auto & indices = storage->indices;
+                indices.blocks.reserve(indices.blocks.size() + new_indices.blocks.size());
+                for (size_t i = 0; i != new_indices.blocks.size(); ++i)
+                {
+                    auto & index_block = indices.blocks.emplace_back(new_indices.blocks[i]);
+                    for (auto & column : index_block.columns)
                         column.location.offset_in_compressed_file += old_data_size;
                 }
-
-                insertAtEnd(storage->indices.blocks, std::move(extra_indices.blocks));
             }
 
             /// Finish writing.
@@ -632,19 +678,128 @@ public:
 
 private:
     std::shared_ptr<StorageStripeLog> storage;
+    ContextPtr context;
     BackupPtr backup;
     String data_path_in_backup;
-    ContextMutablePtr context;
+    StorageRestoreSettings restore_settings;
+
+    /// Converts a ReadBuffer into a SeekableReadBuffer. The function uses a temporary file if it's necessary.
+    static std::unique_ptr<SeekableReadBuffer> makeReadBufferSeekable(std::unique_ptr<ReadBuffer> in, const ContextPtr & context, std::optional<TemporaryFileOnDisk> & temp_file)
+    {
+        if (dynamic_cast<SeekableReadBuffer *>(in.get()))
+            return std::unique_ptr<SeekableReadBuffer>(static_cast<SeekableReadBuffer *>(in.release()));
+
+        auto temp_disk = context->getTemporaryVolume()->getDisk();
+        temp_file.emplace(temp_disk);
+        auto out = temp_disk->writeFile(temp_file->getPath());
+        copyData(*in, *out);
+        out.reset();
+        return temp_disk->readFile(temp_file->getPath(), context->getReadSettings());
+    }
+
+    /// Reads all compressed buffers' headers from a passed file.
+    static CompressedBufferHeaders readCompressedBufferHeaders(SeekableReadBuffer & in)
+    {
+        CompressedBufferHeaders headers;
+        while (!in.eof())
+        {
+            CompressedBufferHeader & header = headers.emplace_back();
+            header.read(in);
+            in.seek(header.getCompressedDataSize(), SEEK_CUR);
+        }
+        return headers;
+    }
+
+    /// Represents a part of table's data, used to find a difference between new and old data parts while restoring.
+    struct DataPartInfo
+    {
+        size_t index;
+        size_t offset;
+        size_t size;
+        CityHash_v1_0_2::uint128 checksum;
+
+        struct LessOffset
+        {
+            bool operator()(const DataPartInfo & lhs, const DataPartInfo & rhs) const { return lhs.offset < rhs.offset; }
+        };
+
+        struct LessChecksum
+        {
+            bool operator()(const DataPartInfo & lhs, const DataPartInfo & rhs) const { return (lhs.size < rhs.size) || ((lhs.size == rhs.size) && (lhs.checksum < rhs.checksum)); }
+        };
+    };
+
+    /// Collects information about data parts.
+    static std::vector<DataPartInfo> collectDataPartInfos(const IndexForNativeFormat & indices, const CompressedBufferHeaders & headers)
+    {
+        if (indices.blocks.empty() || headers.empty())
+            return {};
+
+        std::vector<DataPartInfo> res;
+        size_t current_offset = 0;
+        size_t current_header = 0;
+
+        for (size_t i = 0; i != indices.blocks.size(); ++i)
+        {
+            size_t size = 0;
+            CityHash_v1_0_2::uint128 checksum = {0, 0};
+
+            if (i < indices.blocks.size() - 1)
+            {
+                size_t next_offset = indices.blocks[i + 1].getMinOffsetInCompressedFile();
+                while (current_offset + size != next_offset)
+                {
+                    if (((current_offset + size > next_offset) || (current_header >= headers.size()))
+                        throw Exception("Unexpected data format", ErrorCodes::CANNOT_RESTORE_TABLE);
+                    size += headers[current_header].getCompressedDataSize() + CompressedBufferHeader::kSize;
+                    const auto & checksum_from_header = headers[current_header].checksum;
+                    checksum = CityHash_v1_0_2::CityHash128WithSeed(reinterpret_cast<const char *>(&checksum_from_header), sizeof(checksum_from_header), checksum);
+                    current_header++;
+                }
+            }
+            else
+            {
+                while (current_header < headers.size())
+                {
+                    size += headers[current_header].getCompressedDataSize() + CompressedBufferHeader::kSize;
+                    const auto & checksum_from_header = headers[current_header].checksum;
+                    checksum = CityHash_v1_0_2::CityHash128WithSeed(reinterpret_cast<const char *>(&checksum_from_header), sizeof(checksum_from_header), checksum);
+                    current_header++;
+                }
+            }
+
+            auto & new_part_info = res.emplace_back();
+            new_part_info.index = i;
+            new_part_info.offset = current_offset;
+            new_part_info.size = size;
+            new_part_info.checksum = checksum;
+
+            current_offset += size;
+        }
+
+        return res;
+    }
+
+    /// Finds data parts in `lhs` which are not contained in `rhs`.
+    static std::vector<DataPartInfo> getDiff(std::vector<DataPartInfo> && lhs, std::vector<DataPartInfo> && rhs)
+    {
+        std::sort(lhs.begin(), lhs.end(), DataPartInfo::LessChecksum{});
+        std::sort(rhs.begin(), rhs.end(), DataPartInfo::LessChecksum{});
+        std::vector<DataPartInfo> diff;
+        std::set_difference(lhs.begin(), lhs.end(), rhs.begin(), rhs.end(), std::back_inserter(diff), DataPartInfo::LessChecksum{});
+        std::sort(diff.begin(), diff.end(), DataPartInfo::LessOffset{});
+        return diff;
+    }
 };
 
 
-RestoreTaskPtr StorageStripeLog::restoreFromBackup(ContextMutablePtr context, const ASTs & partitions, const BackupPtr & backup, const String & data_path_in_backup, const StorageRestoreSettings &)
+RestoreTaskPtr StorageStripeLog::restoreFromBackup(ContextMutablePtr context, const ASTs & partitions, const BackupPtr & backup, const String & data_path_in_backup, const StorageRestoreSettings & restore_settings)
 {
     if (!partitions.empty())
         throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Table engine {} doesn't support partitions", getName());
 
     return std::make_unique<StripeLogRestoreTask>(
-        typeid_cast<std::shared_ptr<StorageStripeLog>>(shared_from_this()), backup, data_path_in_backup, context);
+        std::static_pointer_cast<StorageStripeLog>(shared_from_this()), context, backup, data_path_in_backup, restore_settings);
 }
 
 

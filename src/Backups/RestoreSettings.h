@@ -10,6 +10,12 @@ class ASTBackupQuery;
 
 struct StorageRestoreSettings
 {
+    /// Whether RESTORE must throw an exception if destination table is not empty already.
+    bool throw_if_table_not_empty = true;
+
+    /// If this is set to true RESTORE will try to deduplicate data, which means it will
+    /// try not to restore data blocks which already exist in the destination table.
+    bool deduplicate_data = true;
 };
 
 /// Settings specified in the "SETTINGS" clause of a RESTORE query.

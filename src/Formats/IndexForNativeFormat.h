@@ -36,6 +36,8 @@ struct IndexOfBlockForNativeFormat
 
     /// Returns the index only for the required columns.
     IndexOfBlockForNativeFormat extractIndexForColumns(const NameSet & required_columns) const;
+
+    size_t getMinOffsetInCompressedFile() const;
 };
 
 /** The whole index. */

@@ -285,8 +285,13 @@ namespace
     String getResultDescription(const GRPCResult & result)
     {
         String str;
+
+        if (!result.query_id().empty())
+            str.append("query_id: ").append(result.query_id());
+        if (!result.output_format().empty())
+            str.append(str.empty() ? "" : ", ").append("output_format: ").append(result.output_format());
         if (!result.output().empty())
-            str.append("output: ").append(std::to_string(result.output().size())).append(" bytes");
+            str.append(str.empty() ? "" : ", ").append("output: ").append(std::to_string(result.output().size())).append(" bytes");
         if (!result.totals().empty())
             str.append(str.empty() ? "" : ", ").append("totals");
         if (!result.extremes().empty())
@@ -642,6 +647,8 @@ namespace
         void throwIfFailedToReadQueryInfo();
         bool isQueryCancelled();
 
+        void addQueryDetailsToResult();
+        void addOutputFormatToResult();
         void addProgressToResult();
         void addTotalsToResult(const Block & totals);
         void addExtremesToResult(const Block & extremes);
@@ -1150,6 +1157,9 @@ namespace
 
     void Call::generateOutput()
     {
+        /// We add query_id and time_zone to the first result anyway.
+        addQueryDetailsToResult();
+
         if (!io.pipeline.initialized() || io.pipeline.pushing())
             return;
 
@@ -1188,6 +1198,8 @@ namespace
                 }
                 return true;
             };
+
+            addOutputFormatToResult();
 
             Block block;
             while (check_for_cancel())
@@ -1439,6 +1451,17 @@ namespace
         return false;
     }
 
+    void Call::addQueryDetailsToResult()
+    {
+        *result.mutable_query_id() = query_context->getClientInfo().current_query_id;
+        *result.mutable_time_zone() = DateLUT::instance().getTimeZone();
+    }
+
+    void Call::addOutputFormatToResult()
+    {
+        *result.mutable_output_format() = output_format;
+    }
+
     void Call::addProgressToResult()
     {
         auto values = progress.fetchAndResetPiecewiseAtomically();
@@ -1585,7 +1608,8 @@ namespace
             }
         }
 
-        if (!send_final_message && result.output().empty() && result.totals().empty() && result.extremes().empty() && !result.logs_size()
+        if (!send_final_message && result.query_id().empty() && result.time_zone().empty() && result.output_format().empty()
+            && result.output().empty() && result.totals().empty() && result.extremes().empty() && !result.logs_size()
             && !result.has_progress() && !result.has_stats() && !result.has_exception() && !result.cancelled())
             return; /// Nothing to send.
 

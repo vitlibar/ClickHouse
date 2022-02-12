@@ -29,6 +29,7 @@
 #include <Backups/BackupEntryFromSmallFile.h>
 #include <Backups/IBackup.h>
 #include <Backups/IRestoreTask.h>
+#include <Backups/RestoreSettings.h>
 #include <Disks/TemporaryFileOnDisk.h>
 
 #include <cassert>
@@ -51,6 +52,7 @@ namespace ErrorCodes
     extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
     extern const int INCORRECT_FILE_NAME;
     extern const int NOT_IMPLEMENTED;
+    extern const int CANNOT_RESTORE_TABLE;
 }
 
 /// NOTE: The lock `StorageLog::rwlock` is NOT kept locked while reading,
@@ -956,8 +958,16 @@ class LogRestoreTask : public IRestoreTask
 
 public:
     LogRestoreTask(
-        std::shared_ptr<StorageLog> storage_, const BackupPtr & backup_, const String & data_path_in_backup_, ContextMutablePtr context_)
-        : storage(storage_), backup(backup_), data_path_in_backup(data_path_in_backup_), context(context_)
+        std::shared_ptr<StorageLog> storage_,
+        const ContextPtr & context_,
+        const BackupPtr & backup_,
+        const String & data_path_in_backup_,
+        const StorageRestoreSettings & restore_settings_)
+        : storage(storage_)
+        , context(context_)
+        , backup(backup_)
+        , data_path_in_backup(data_path_in_backup_)
+        , restore_settings(restore_settings_)
     {
     }
 
@@ -977,11 +987,133 @@ public:
         /// Load the marks if not loaded yet. We have to do that now because we're going to update these marks.
         storage->loadMarks(lock);
 
+        bool is_table_empty = !storage->file_checker.getFileSize(storage->data_files[INDEX_WITH_REAL_ROW_COUNT].path);
+        if (restore_settings.throw_if_table_not_empty && is_table_empty)
+            throw Exception(ErrorCodes::CANNOT_RESTORE_TABLE, "Cannot restore table {} because it's already not empty", storage->getStorageID().getFullTableName());
+
         /// If there were no files, save zero file sizes to be able to rollback in case of error.
         storage->saveFileSizes(lock);
 
         try
         {
+            /// Read new marks.
+            std::vector<Marks> new_marks;
+            if (use_marks_file)
+            {
+                auto marks_backup_entry = backup->readFile(data_path_in_backup + fileName(marks_file_path));
+                size_t marks_file_size = marks_backup_entry->getSize();
+                if (marks_file_size % (num_data_files * sizeof(Mark)) != 0)
+                    throw Exception("Size of marks file is inconsistent", ErrorCodes::SIZES_OF_MARKS_FILES_ARE_INCONSISTENT);
+                size_t num_new_marks = marks_file_size / (num_data_files * sizeof(Mark));
+                new_marks.resize(num_data_files);
+                for (size_t i = 0; i != num_data_files; ++i)
+                    new_marks[i].resize(num_new_marks);
+                auto marks_in = marks_backup_entry->getReadBuffer();
+                for (size_t i = 0; i != num_new_marks; ++i)
+                {
+                    new_marks[i].resize(num_new_marks);
+                    for (size_t j = 0; j != num_data_files; ++j)
+                        new_marks[i][j].read(*marks_in);
+                }
+            }
+
+            /// Start reading data from the backup.
+            std::vector<std::unique_ptr<BackupEntry> data_backup_entries;
+            data_backup_entries.resize(num_data_files);
+            auto & data_files = storage->data_files;
+            for (const auto & data_file : data_files)
+                data_backup_entries[data_file.index] = backup->readFile(data_path_in_backup + fileName(data_file.path));
+
+            std::vector<std::unique_ptr<ReadBuffer> new_data;
+            new_data.resize(num_data_files);
+            for (size_t i = 0; i != num_data_files; ++i)
+                new_data[i] = data_backup_entries[i]->getReadBuffer();
+
+            if (!is_table_empty && restore_settings.deduplicate_data)
+            {
+                /// We need to deduplicate data, `new_data` should be seekable for this.
+                std::vector<std::unique_ptr<TemporaryFileOnDisk>> temp_file_owner;
+                std::vector<SeekableReadBuffer> new_data_seekable;
+                new_data_seekable.resize(num_data_files);
+                for (size_t i = 0; i != num_data_files; ++i)
+                    new_data_seekable[i] = makeReadBufferSeekable(std::move(new_data[i]), context, temp_file_owner);
+
+                std::vector<DataPartInfo> diff;
+
+                if (use_marks_file)
+                {
+                    /// Calculates checksums and find out which new data parts differs from the old data parts.
+                    std::vector<std::pair<Marks, CompressedBufferHeaders>> new_marks_and_headers, old_marks_and_headers;
+                    new_marks_and_headers.resize(num_data_files);
+                    old_marks_and_headers.resize(num_data_files);
+                    for (size_t i = 0; i != num_data_files; ++i)
+                    {
+                        new_marks_and_headers[i].first = new_marks[i];
+                        new_marks_and_headers[i] = readCompressedBufferHeaders(*new_data_seekable[i]);
+                        old_marks_and_headers[i].first = data_files[i].marks;
+                        auto old_data = disk->readFile(data_files[i].path, context->getReadSettings());
+                        old_marks_and_headers[i].second = readCompressedBufferHeaders(*old_data)
+                    }
+                    auto new_parts = collectDataPartInfos(new_marks_and_headers);
+                    auto old_parts = collectDataPartInfos(old_marks_and_headers);
+                    new_parts = getDiff(std::move(new_parts), std::move(old_parts));
+                }
+                else
+                {
+                    std::vector<CompressedBufferHeaders> new_headers, old_headers;
+                    new_headers.resize(num_data_files);
+                    old_headers.resize(num_data_files);
+                    for (size_t i = 0; i != num_data_files; ++i)
+                    {
+                        new_headers[i] = readCompressedBufferHeaders(*new_data_seekable[i]);
+                        auto old_data = disk->readFile(data_files[i].path, context->getReadSettings());
+                        old_headers[i] = readCompressedBufferHeaders(*old_data)
+                    }
+                    new_parts = getTinyLogDiff(new_headers, old_headers);
+                }
+
+                /// Copy the chosed data parts from `new_data` to `out_data`, and append the indices too.
+                for (size_t i = 0; i != num_data_files; ++i)
+                {
+                    auto out_data = disk->writeFile(data_files[i].path, storage->max_compress_block_size, WriteMode::Append);
+                    size_t current_data_size = storage->file_checker.getFileSize(storage->data_files[i].path);
+                    for (size_t j = 0; j != new_parts.size(); ++j)
+                    {
+                        const auto & location = new_parts[j].locations_in_data_files[i];
+                        new_data_seekable[i]->seek(location.offset, SEEK_SET);
+                        copyData(*new_data_seekable[i], *out_data, location.size);
+                    }
+                }
+
+                if (use_marks_file)
+
+
+                        auto & index_block = indices.blocks.emplace_back(new_indices.blocks[part.index]);
+                        for (auto & column : index_block.columns)
+                            column.location.offset_in_compressed_file += current_data_size - part.offset;
+                        current_data_size += part.size;
+                    }
+
+
+                            old_data_size;
+                auto & indices = storage->indices;
+                indices.blocks.reserve(indices.blocks.size() + new_parts.size());
+                for (const auto & part : new_parts)
+                {
+                    new_data_seekable->seek(part.offset, SEEK_SET);
+                    copyData(*new_data_seekable, *out_data, part.size);
+                    auto & index_block = indices.blocks.emplace_back(new_indices.blocks[part.index]);
+                    for (auto & column : index_block.columns)
+                        column.location.offset_in_compressed_file += current_data_size - part.offset;
+                    current_data_size += part.size;
+                }
+
+
+
+
+
+
+
             /// Append data files.
             auto & data_files = storage->data_files;
             for (const auto & data_file : data_files)
@@ -1054,18 +1186,238 @@ public:
 
 private:
     std::shared_ptr<StorageLog> storage;
+    ContextPtr context;
     BackupPtr backup;
     String data_path_in_backup;
-    ContextMutablePtr context;
+    StorageRestoreSettings restore_settings;
+
+    /// Converts a ReadBuffer into a SeekableReadBuffer. The function uses a temporary file if it's necessary.
+    static std::unique_ptr<SeekableReadBuffer> makeReadBufferSeekable(std::unique_ptr<ReadBuffer> in, const ContextPtr & context, std::vector<std::unique_ptr<TemporaryFileOnDisk>> & temp_files)
+    {
+        if (dynamic_cast<SeekableReadBuffer *>(in.get()))
+            return std::unique_ptr<SeekableReadBuffer>(static_cast<SeekableReadBuffer *>(in.release()));
+
+        auto temp_disk = context->getTemporaryVolume()->getDisk();
+        auto & temp_file = temp_files.emplace_back(std::make_unique<TemporaryFileOnDisk>(temp_disk));
+        auto out = temp_disk->writeFile(temp_file->getPath());
+        copyData(*in, *out);
+        out.reset();
+        return temp_disk->readFile(temp_file->getPath(), context->getReadSettings());
+    }
+
+    /// Reads all compressed buffers' headers from a passed file.
+    static CompressedBufferHeaders readCompressedBufferHeaders(SeekableReadBuffer & in)
+    {
+        CompressedBufferHeaders headers;
+        while (!in.eof())
+        {
+            CompressedBufferHeader & header = headers.emplace_back();
+            header.read(in);
+            in.seek(header.getCompressedDataSize(), SEEK_CUR);
+        }
+        return headers;
+    }
+
+    /// Calculates the total size of the file from passed compressed buffers' headers.
+    static size_t getTotalSize(const CompressedBufferHeaders & headers)
+    {
+        size_t size = 0;
+        for (size_t i = 0; i != headers.size(); ++i)
+            size += headers.getCompressedDataSize() + CompressedBufferHeader::kSize;
+        return size;
+    }
+
+    /// Whether `lhs` starts with the same headers as `rhs` contains.
+    static bool startsWith(const CompressedBufferHeaders & lhs, const CompressedBufferHeaders & rhs)
+    {
+        return (lhs[i].size() >= rhs[i].size)
+            && std::equal(lhs[i].begin(), lhs[i].end(), rhs[i].begin(), CompressedBufferHeader::EqualChecksum{});
+    }
+
+    static bool allStartWith(const std::vector<CompressedBufferHeaders> & lhs, const std::vector<CompressedBufferHeaders> & rhs)
+    {
+        for (size_t i = 0; i != num_data_files; ++i)
+        {
+            if (!startsWith(lhs[i], rhs[i]))
+                return false;
+        }
+        return true;
+    }
+
+    /// Whether `lhs` ends with the same headers as `rhs` contains.
+    static bool endsWith(const CompressedBufferHeaders & lhs, const CompressedBufferHeaders & rhs)
+    {
+        if (lhs.size() < rhs.size)
+            return false;
+
+        size_t offset = lhs.size() - rhs.size;
+        return std::equal(lhs.begin() + offset, lhs.end(), rhs.begin(), CompressedBufferHeader::EqualChecksum{});
+    }
+
+    static bool allEndWith(const std::vector<CompressedBufferHeaders> & lhs, const std::vector<CompressedBufferHeaders> & rhs)
+    {
+        for (size_t i = 0; i != num_data_files; ++i)
+        {
+            if (!endsWith(lhs[i], rhs[i]))
+                return false;
+        }
+        return true;
+    }
+
+    /// Represents a part of table's data, used to find a difference between new and old data parts while restoring.
+    struct DataPartInfo
+    {
+        CityHash_v1_0_2::uint128 checksum;
+        size_t size; /// sum of all sizes in `locations_in_data_files`.
+        size_t index; /// index of a corresponding mark
+
+        struct LocationInDataFile
+        {
+            size_t offset;
+            size_t size;
+            size_t num_rows;
+        };
+        std::vector<LocationInDataFile> locations_in_data_files;
+
+        struct LessIndex
+        {
+            bool operator()(const DataPartInfo & lhs, const DataPartInfo & rhs) const { return lhs.index < rhs.index; }
+        };
+
+        struct LessChecksum
+        {
+            bool operator()(const DataPartInfo & lhs, const DataPartInfo & rhs) const { return (lhs.size < rhs.size) || ((lhs.size == rhs.size) && (lhs.checksum < rhs.checksum)); }
+        };
+    };
+
+    /// Collects information about data parts.
+    static std::vector<DataPartInfo> collectDataPartInfos(const std::vector<std::pair<Marks, CompressedBufferHeaders>> & data_files)
+    {
+        size_t num_data_files = data_files.size();
+        if (!num_data_files)
+            return {};
+
+        size_t num_parts = data_files[0].first.size();
+        if (!num_parts)
+            return {};
+
+        std::vector<DataPartInfo> res;
+        std::vector<size_t> current_offsets;
+        current_offsets.resize(num_data_files, 0);
+        std::vector<size_t> current_headers;
+        current_headers.resize(num_data_files, 0);
+
+        for (size_t i = 0; i != num_parts; ++i)
+        {
+            size_t total_size = 0;
+            CityHash_v1_0_2::uint128 checksum = {0, 0};
+            std::vector<DataPartInfo::LocationInDataFile> locations_in_data_files;
+            locations_in_data_files.reserve(num_data_files);
+
+            for (size_t j = 0; j != num_data_files; ++j)
+            {
+                const auto & marks = data_files[j].first;
+                const auto & headers = data_files[j].second;
+                size_t & current_header = current_headers[j];
+                size_t & current_offset = current_offsets[j];
+                size_t size = 0;
+
+                if (i + 1 < num_parts)
+                {
+                    size_t next_offset = marks[i + 1].offset;
+                    while (current_offset + size != next_offset)
+                    {
+                        if ((current_offset + size > next_offset) || (current_header >= headers.size()))
+                            throw Exception("Unexpected data format", ErrorCodes::CANNOT_RESTORE_TABLE);
+                        size += headers[current_header].compressed_size + sizeof(CityHash_v1_0_2::uint128);
+                        const auto & checksum_from_header = headers[current_header].checksum;
+                        checksum = CityHash_v1_0_2::CityHash128WithSeed(reinterpret_cast<const char *>(&checksum_from_header), sizeof(checksum_from_header), checksum);
+                        current_header++;
+                    }
+                }
+                else
+                {
+                    while (current_header < headers.size())
+                    {
+                        size += headers[current_header].compressed_size + sizeof(CityHash_v1_0_2::uint128);
+                        const auto & checksum_from_header = headers[current_header].checksum;
+                        checksum = CityHash_v1_0_2::CityHash128WithSeed(reinterpret_cast<const char *>(&checksum_from_header), sizeof(checksum_from_header), checksum);
+                        current_header++;
+                    }
+                }
+
+                auto & location_in_data_file = locations_in_data_files.emplace_back();
+                location_in_data_file.offset = current_offset;
+                location_in_data_file.size = size;
+                location_in_data_file.num_rows = i ? (marks[i].rows - marks[i - 1].rows) : marks[i].rows;
+                current_offset += size;
+                total_size += size;
+            }
+
+            DataPartInfo & new_part_info = res.emplace_back();
+            new_part_info.index = i;
+            new_part_info.size = total_size;
+            new_part_info.checksum = checksum;
+            new_part_info.locations_in_data_files = std::move(locations_in_data_files);
+        }
+
+        return res;
+    }
+
+    /// Finds data parts in `lhs` which are not contained in `rhs`.
+    static std::vector<DataPartInfo> getDiff(std::vector<DataPartInfo> && lhs, std::vector<DataPartInfo> && rhs)
+    {
+        std::sort(lhs.begin(), lhs.end(), DataPartInfo::LessChecksum{});
+        std::sort(rhs.begin(), rhs.end(), DataPartInfo::LessChecksum{});
+        std::vector<DataPartInfo> diff;
+        std::set_difference(lhs.begin(), lhs.end(), rhs.begin(), rhs.end(), std::back_inserter(diff), DataPartInfo::LessChecksum{});
+        std::sort(diff.begin(), diff.end(), DataPartInfo::LessOffset{});
+        return diff;
+    }
+
+    /// Finds data parts in `lhs` which are not contained in `rhs` in the case when we don't have marks.
+    static std::vector<DataPartInfo> getTinyLogDiff(const std::vector<CompressedBufferHeaders> & lhs, const std::vector<CompressedBufferHeaders> & rhs)
+    {
+        size_t num_data_files = lhs.size();
+        if (!num_data_files)
+            return {};
+
+        if (allStartWith(rhs, lhs) || allEndWith(rhs, lhs))
+            return {};
+
+        bool lhs_starts_with_rhs = allStartWith(lhs, rhs);
+        bool lhs_ends_with_rhs = !lhs_starts_with_rhs && allEndWith(lhs, rhs);
+
+        size_t num_data_files = lhs.size();
+        std::vector<DataFileInfo::LocationInDataFile> locations_in_data_files;
+        locations_in_data_files.resize(num_data_files);
+        size_t total_size = 0;
+        for (size_t i = 0; i != num_data_files)
+        {
+            size_t rhs_size = getTotalSize(rhs[i]);
+            locations_in_data_files[i].offset = lhs_starts_with_rhs ? rhs_size : 0;
+            locations_in_data_files[i].size = getTotalSize(lhs[i]) - rhs_size;
+            locations_in_data_files[i].num_rows = static_cast<size_t>(-1);
+            total_size += locations_in_data_files[i].size;
+        }
+        if (!total_size)
+            return {};
+        DataFileInfo info;
+        info.locations_in_data_files = std::move(locations_in_data_files);
+        info.index = 0;
+        info.size = total_size;
+        info.checksum = {0, 0};
+        return {info};
+    }
 };
 
-RestoreTaskPtr StorageLog::restoreFromBackup(ContextMutablePtr context, const ASTs & partitions, const BackupPtr & backup, const String & data_path_in_backup, const StorageRestoreSettings &)
+RestoreTaskPtr StorageLog::restoreFromBackup(ContextMutablePtr context, const ASTs & partitions, const BackupPtr & backup, const String & data_path_in_backup, const StorageRestoreSettings & restore_settings)
 {
     if (!partitions.empty())
         throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Table engine {} doesn't support partitions", getName());
 
     return std::make_unique<LogRestoreTask>(
-        typeid_cast<std::shared_ptr<StorageLog>>(shared_from_this()), backup, data_path_in_backup, context);
+        std::static_pointer_cast<StorageLog>(shared_from_this()), context, backup, data_path_in_backup, restore_settings);
 }
 
 
