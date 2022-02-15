@@ -1,7 +1,8 @@
 #include <Backups/BackupFactory.h>
 #include <Backups/DirectoryBackup.h>
-#include <Backups/ZipBackup.h>
+#include <Backups/ArchiveBackup.h>
 #include <Common/quoteString.h>
+#include <IO/Archives/hasRegisteredArchiveFileExtension.h>
 #include <Interpreters/Context.h>
 #include <Poco/Util/AbstractConfiguration.h>
 #include <filesystem>
@@ -141,22 +142,21 @@ void registerBackupEnginesFileAndDisk(BackupFactory & factory)
 
         std::unique_ptr<IBackup> backup;
 
-        auto extension = path.extension();
-        if ((extension == ".zip") || (extension == ".zipx"))
-        {
-            auto zip_backup = std::make_unique<ZipBackup>(backup_name, disk, path, params.context, params.base_backup_info);
-            zip_backup->setCompression(params.compression_method, params.compression_level);
-            zip_backup->setPassword(params.password);
-            backup = std::move(zip_backup);
-        }
-        else if (!path.has_filename() && !path.empty())
+        if (!path.has_filename() && !path.empty())
         {
             if (!params.password.empty())
                 throw Exception(ErrorCodes::BAD_ARGUMENTS, "Password is not applicable, backup cannot be encrypted");
             backup = std::make_unique<DirectoryBackup>(backup_name, disk, path, params.context, params.base_backup_info);
         }
+        else if (hasRegisteredArchiveFileExtension(path))
+        {
+            auto archive_backup = std::make_unique<ArchiveBackup>(backup_name, disk, path, params.context, params.base_backup_info);
+            archive_backup->setCompression(params.compression_method, params.compression_level);
+            archive_backup->setPassword(params.password);
+            backup = std::move(archive_backup);
+        }
         else
-            throw Exception(ErrorCodes::BAD_ARGUMENTS, "Path to backup must have one of the following endings: '/', '.zip', '.zipx'");
+            throw Exception(ErrorCodes::BAD_ARGUMENTS, "Path to backup must be either a directory or a path to an archive");
 
         return backup;
     };

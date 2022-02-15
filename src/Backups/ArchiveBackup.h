@@ -1,43 +1,38 @@
 #pragma once
 
 #include <Backups/BackupImpl.h>
-#include <IO/ZipArchiveWriter.h>
 
 
 namespace DB
 {
 class IDisk;
 using DiskPtr = std::shared_ptr<IDisk>;
-class ZipArchiveReader;
+class IArchiveReader;
+class IArchiveWriter;
 
 /// Stores a backup as a single .zip file.
-class ZipBackup : public BackupImpl
+class ArchiveBackup : public BackupImpl
 {
 public:
     /// `disk`_ is allowed to be nullptr and that means the `path_` is a path in the local filesystem.
-    ZipBackup(
+    ArchiveBackup(
         const String & backup_name_,
         const DiskPtr & disk_,
         const String & path_,
         const ContextPtr & context_,
         const std::optional<BackupInfo> & base_backup_info_ = {});
 
-    ~ZipBackup() override;
+    ~ArchiveBackup() override;
 
-    using CompressionMethod = ZipArchiveWriter::CompressionMethod;
-    using CompressionLevel = ZipArchiveWriter::CompressionLevel;
+    static constexpr const int kDefaultCompressionLevel = -1;
 
     /// Sets compression method and level.
-    void setCompression(CompressionMethod method_, int level_ = static_cast<int>(CompressionLevel::kDefault));
-    void setCompression(const String & method_, int level_ = static_cast<int>(CompressionLevel::kDefault));
+    void setCompression(const String & compression_method_, int compression_level_ = kDefaultCompressionLevel);
 
     /// Sets password.
     void setPassword(const String & password_);
 
 private:
-    friend class ReadBufferFromZipBackup;
-    friend class WriteBufferFromZipBackup;
-
     bool backupExists() const override;
     void openImpl(OpenMode open_mode_) override;
     void closeImpl(bool writing_finalized_) override;
@@ -47,10 +42,10 @@ private:
 
     const DiskPtr disk;
     const String path;
-    std::shared_ptr<ZipArchiveReader> reader;
-    std::shared_ptr<ZipArchiveWriter> writer;
-    CompressionMethod compression_method = CompressionMethod::kDeflate;
-    int compression_level = static_cast<int>(CompressionLevel::kDefault);
+    std::shared_ptr<IArchiveReader> reader;
+    std::shared_ptr<IArchiveWriter> writer;
+    String compression_method;
+    int compression_level = kDefaultCompressionLevel;
     String password;
 };
 

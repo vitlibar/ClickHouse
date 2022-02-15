@@ -1,14 +1,16 @@
-#include <Backups/ZipBackup.h>
+#include <Backups/ArchiveBackup.h>
 #include <Disks/IDisk.h>
 #include <IO/ReadBufferFromFileBase.h>
 #include <IO/WriteBufferFromFileBase.h>
-#include <IO/ZipArchiveReader.h>
-#include <IO/ZipArchiveWriter.h>
+#include <IO/Archives/IArchiveReader.h>
+#include <IO/Archives/IArchiveWriter.h>
+#include <IO/Archives/createArchiveReader.h>
+#include <IO/Archives/createArchiveWriter.h>
 
 
 namespace DB
 {
-ZipBackup::ZipBackup(
+ArchiveBackup::ArchiveBackup(
     const String & backup_name_,
     const DiskPtr & disk_,
     const String & path_,
@@ -18,25 +20,25 @@ ZipBackup::ZipBackup(
 {
 }
 
-ZipBackup::~ZipBackup()
+ArchiveBackup::~ArchiveBackup()
 {
     close();
 }
 
-bool ZipBackup::backupExists() const
+bool ArchiveBackup::backupExists() const
 {
     return disk ? disk->exists(path) : fs::exists(path);
 }
 
-void ZipBackup::openImpl(OpenMode open_mode_)
+void ArchiveBackup::openImpl(OpenMode open_mode_)
 {
     /// mutex is already locked
     if (open_mode_ == OpenMode::WRITE)
     {
         if (disk)
-            writer = ZipArchiveWriter::create(disk->writeFile(path), path);
+            writer = createArchiveWriter(path, disk->writeFile(path));
         else
-            writer = ZipArchiveWriter::create(path);
+            writer = createArchiveWriter(path);
 
         writer->setCompression(compression_method, compression_level);
         writer->setPassword(password);
@@ -47,16 +49,16 @@ void ZipBackup::openImpl(OpenMode open_mode_)
         {
             auto archive_read_function = [d = disk, p = path]() -> std::unique_ptr<SeekableReadBuffer> { return d->readFile(p); };
             size_t archive_size = disk->getFileSize(path);
-            reader = ZipArchiveReader::create(archive_read_function, archive_size, path);
+            reader = createArchiveReader(path, archive_read_function, archive_size);
         }
         else
-            reader = ZipArchiveReader::create(path);
+            reader = createArchiveReader(path);
 
         reader->setPassword(password);
     }
 }
 
-void ZipBackup::closeImpl(bool writing_finalized_)
+void ArchiveBackup::closeImpl(bool writing_finalized_)
 {
     /// mutex is already locked
     if (writer && writer->isWritingFile())
@@ -69,33 +71,28 @@ void ZipBackup::closeImpl(bool writing_finalized_)
         fs::remove(path);
 }
 
-std::unique_ptr<ReadBuffer> ZipBackup::readFileImpl(const String & file_name) const
+std::unique_ptr<ReadBuffer> ArchiveBackup::readFileImpl(const String & file_name) const
 {
     /// mutex is already locked
     return reader->readFile(file_name);
 }
 
-std::unique_ptr<WriteBuffer> ZipBackup::addFileImpl(const String & file_name)
+std::unique_ptr<WriteBuffer> ArchiveBackup::addFileImpl(const String & file_name)
 {
     /// mutex is already locked
     return writer->writeFile(file_name);
 }
 
-void ZipBackup::setCompression(CompressionMethod method_, int level_)
+void ArchiveBackup::setCompression(const String & compression_method_, int compression_level_)
 {
     std::lock_guard lock{mutex};
-    compression_method = method_;
-    compression_level = level_;
+    compression_method = compression_method_;
+    compression_level = compression_level_;
     if (writer)
         writer->setCompression(compression_method, compression_level);
 }
 
-void ZipBackup::setCompression(const String & method_, int level_)
-{
-    setCompression(ZipArchiveWriter::parseCompressionMethod(method_), level_);
-}
-
-void ZipBackup::setPassword(const String & password_)
+void ArchiveBackup::setPassword(const String & password_)
 {
     std::lock_guard lock{mutex};
     password = password_;
