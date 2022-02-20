@@ -559,6 +559,14 @@
     <!-- Default database. -->
     <default_database>default</default_database>
 
+    <!-- Row policies' configuration -->
+    <row_policies>
+        <!-- Whether the permissive row policies are always required to see any rows.
+             If the flag is 1 then if for some table only restrictive policies exist without permissive ones any user won't see any rows.
+             If the flag is 0 then in the above case each user will see rows chosen by applied restrictive policies. -->
+        <permissive_policies_always_required>0</permissive_policies_always_required>
+    </row_policies>
+
     <!-- Server time zone could be set here.
 
          Time zone is used when converting between String and DateTime types,

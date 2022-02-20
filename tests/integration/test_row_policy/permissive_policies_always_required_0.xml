@@ -1,0 +1,5 @@
+<clickhouse>
+    <row_policies>
+        <permissive_policies_always_required>0</permissive_policies_always_required>
+    </row_policies>
+</clickhouse>

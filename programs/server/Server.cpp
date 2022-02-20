@@ -940,7 +940,10 @@ if (ThreadFuzzer::instance().isEffective())
             updateLevels(*config, logger());
             global_context->setClustersConfig(config, has_zookeeper);
             global_context->setMacros(std::make_unique<Macros>(*config, "macros", log));
-            global_context->setExternalAuthenticatorsConfig(*config);
+
+            auto & access_control = global_context->getAccessControl();
+            access_control.setExternalAuthenticatorsConfig(*config);
+            access_control.setRowPoliciesConfig(*config);
 
             global_context->loadOrReloadDictionaries(*config);
             global_context->loadOrReloadModels(*config);
@@ -1069,6 +1072,7 @@ if (ThreadFuzzer::instance().isEffective())
     auto & access_control = global_context->getAccessControl();
     if (config().has("custom_settings_prefixes"))
         access_control.setCustomSettingsPrefixes(config().getString("custom_settings_prefixes"));
+    access_control.setRowPoliciesConfig(config());
 
     /// Initialize access storages.
     try

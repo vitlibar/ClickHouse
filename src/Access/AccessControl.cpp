@@ -425,6 +425,12 @@ void AccessControl::setExternalAuthenticatorsConfig(const Poco::Util::AbstractCo
 }
 
 
+void AccessControl::setRowPoliciesConfig(const Poco::Util::AbstractConfiguration & config)
+{
+    row_policy_cache->setConfiguration(config);
+}
+
+
 void AccessControl::setDefaultProfileName(const String & default_profile_name)
 {
     settings_profiles_cache->setDefaultProfileName(default_profile_name);

@@ -7,6 +7,7 @@ from helpers.cluster import ClickHouseCluster
 from helpers.test_tools import assert_eq_with_retry, TSV
 
 cluster = ClickHouseCluster(__file__)
+script_dir = os.path.dirname(os.path.realpath(__file__))
 node = cluster.add_instance('node', main_configs=["configs/config.d/remote_servers.xml"],
                             user_configs=["configs/users.d/row_policy.xml", "configs/users.d/another_user.xml",
                                           "configs/users.d/any_join_distinct_right_table_keys.xml"],
@@ -19,7 +20,7 @@ nodes = [node, node2]
 
 
 def copy_policy_xml(local_file_name, reload_immediately=True):
-    script_dir = os.path.dirname(os.path.realpath(__file__))
+    
     for current_node in nodes:
         current_node.copy_file_to_container(os.path.join(script_dir, local_file_name),
                                             '/etc/clickhouse-server/users.d/row_policy.xml')
@@ -435,8 +436,12 @@ def test_grant_create_row_policy():
     node.query("DROP USER X")
 
 
-def test_some_users_without_policies():
+@pytest.mark.parametrize("permissive_policies_always_required", [0, 1])
+def test_some_users_without_policies(permissive_policies_always_required):
     copy_policy_xml('no_filters.xml')
+    node.copy_file_to_container(os.path.join(script_dir, f'permissive_policies_always_required_{permissive_policies_always_required}.xml'), '/etc/clickhouse-server/config.d/permissive_policies_always_required.xml')
+    node.query("SYSTEM RELOAD CONFIG")
+
     assert node.query("SHOW POLICIES") == ""
     node.query("CREATE USER X, Y")
     node.query("GRANT SELECT ON mydb.filtered_table1 TO X, Y")
@@ -446,10 +451,65 @@ def test_some_users_without_policies():
     assert node.query("SELECT * FROM mydb.filtered_table1", user='Y') == ""
 
     node.query("ALTER POLICY pA ON mydb.filtered_table1 AS restrictive")
-    assert node.query("SELECT * FROM mydb.filtered_table1", user='X') == TSV([[0, 1]])
-    assert node.query("SELECT * FROM mydb.filtered_table1", user='Y') == TSV([[0, 0], [0, 1], [1, 0], [1, 1]])
+
+    if permissive_policies_always_required:
+        assert node.query("SELECT * FROM mydb.filtered_table1", user='X') == ""
+        assert node.query("SELECT * FROM mydb.filtered_table1", user='Y') == ""
+    else:
+        assert node.query("SELECT * FROM mydb.filtered_table1", user='X') == TSV([[0, 1]])
+        assert node.query("SELECT * FROM mydb.filtered_table1", user='Y') == TSV([[0, 0], [0, 1], [1, 0], [1, 1]])
 
     node.query("DROP USER X, Y")
+
+
+@pytest.mark.parametrize("permissive_policies_always_required", [0, 1])
+def test_multiple_row_policies_on_same_column(permissive_policies_always_required):
+    copy_policy_xml('no_filters.xml')
+    node.copy_file_to_container(os.path.join(script_dir, f'permissive_policies_always_required_{permissive_policies_always_required}.xml'), '/etc/clickhouse-server/config.d/permissive_policies_always_required.xml')
+    node.query("SYSTEM RELOAD CONFIG")
+
+    node.query("CREATE TABLE multiple_row_policies_on_same_column (x UInt8) ENGINE = MergeTree ORDER BY x")
+    node.query("INSERT INTO 02131_multiple_row_policies_on_same_column VALUES (1), (2), (3), (4)")
+
+    assert node.query("SELECT * FROM multiple_row_policies_on_same_column") == "1\n2\n3\n4\n" # No policies applied
+
+    node.query("CREATE ROW POLICY R1 ON multiple_row_policies_on_same_column USING x=1 AS permissive TO ALL")
+    assert node.query("SELECT * FROM multiple_row_policies_on_same_column") == "1\n" # Applied R1: (x == 1)
+
+    node.query("CREATE ROW POLICY R2 ON multiple_row_policies_on_same_column USING x=2 AS permissive TO ALL")
+    assert node.query("SELECT * FROM multiple_row_policies_on_same_column") == "1\n2\n" # Applied R1, R2: (x == 1) OR (x == 2)
+
+    node.query("CREATE ROW POLICY R3 ON multiple_row_policies_on_same_column USING x=3 AS permissive TO ALL")
+    assert node.query("SELECT * FROM multiple_row_policies_on_same_column") == "1\n2\n3\n" # Applied R1, R2, R3: (x == 1) OR (x == 2) OR (x == 3)
+
+    node.query("CREATE ROW POLICY R4 ON multiple_row_policies_on_same_column USING x<=2 AS restrictive TO ALL")
+    assert node.query("SELECT * FROM multiple_row_policies_on_same_column") == "1\n2\n" # Applied R1, R2, R3, R4: ((x == 1) OR (x == 2) OR (x == 3)) AND (x <= 2)
+
+    node.query("CREATE ROW POLICY R5 ON multiple_row_policies_on_same_column USING x>=2 AS restrictive TO ALL")
+    assert node.query("SELECT * FROM multiple_row_policies_on_same_column") == "2\n" # Applied R1, R2, R3, R4, R5: ((x == 1) OR (x == 2) OR (x == 3)) AND (x <= 2) AND (x >= 2)
+
+    node.query("DROP ROW POLICY R1 ON multiple_row_policies_on_same_column")
+    assert node.query("SELECT * FROM multiple_row_policies_on_same_column") == "2\n" # Applied R2, R3, R4, R5: ((x == 2) OR (x == 3)) AND (x <= 2) AND (x >= 2)
+
+    node.query("DROP ROW POLICY R2 ON multiple_row_policies_on_same_column")
+    assert node.query("SELECT * FROM multiple_row_policies_on_same_column") == "" # Applied R3, R4, R5: ((x == 3)) AND (x <= 2) AND (x >= 2)
+
+    node.query("DROP ROW POLICY R3 ON multiple_row_policies_on_same_column")
+    if permissive_policies_always_required:
+        assert node.query("SELECT * FROM multiple_row_policies_on_same_column") == "" # Applied R4, R5: FALSE AND (x <= 2) AND (x >= 2)
+    else:
+        assert node.query("SELECT * FROM multiple_row_policies_on_same_column") == "2\n" # Applied R4, R5: (x <= 2) AND (x >= 2)
+
+    node.query("DROP ROW POLICY R4 ON multiple_row_policies_on_same_column")
+    if permissive_policies_always_required:
+        assert node.query("SELECT * FROM multiple_row_policies_on_same_column") == "" # Applied R5: FALSE AND (x >= 2)
+    else:
+        assert node.query("SELECT * FROM multiple_row_policies_on_same_column") == "2\n3\n4\n" # Applied R5: (x >= 2)
+
+    node.query("DROP ROW POLICY R5 ON multiple_row_policies_on_same_column")
+    assert node.query("SELECT * FROM multiple_row_policies_on_same_column") == "1\n2\n3\n4\n" # No policies applied
+
+    node.query("DROP TABLE 02131_multiple_row_policies_on_same_column")
 
 
 def test_users_xml_is_readonly():

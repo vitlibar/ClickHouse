@@ -23,6 +23,8 @@ public:
 
     std::shared_ptr<const EnabledRowPolicies> getEnabledRowPolicies(const UUID & user_id, const boost::container::flat_set<UUID> & enabled_roles);
 
+    void setConfiguration(const Poco::Util::AbstractConfiguration & config);
+
 private:
     struct PolicyInfo
     {
@@ -42,6 +44,7 @@ private:
     void mixFiltersFor(EnabledRowPolicies & enabled);
 
     const AccessControl & access_control;
+    bool permissive_policies_always_required = false;
     std::unordered_map<UUID, PolicyInfo> all_policies;
     bool all_policies_read = false;
     scope_guard subscription;
