@@ -559,12 +559,32 @@
     <!-- Default database. -->
     <default_database>default</default_database>
 
-    <!-- Row policies' configuration -->
-    <row_policies>
-        <!-- Whether the permissive row policies are always required to see any rows.
-             If the flag is 1 then if for some table only restrictive policies exist without permissive ones any user won't see any rows.
-             If the flag is 0 then in the above case each user will see rows chosen by applied restrictive policies. -->
+    <!-- Version of row policies' implementation. By default it's 1.
+         Version 1:
+            If for some table only restrictive policies exist without permissive ones any user will see no rows.
+            By default row policies are permissive.
+            Permissive row policies affect all users by default, but that can be changed with the OF clause.
+            Row policies defined by users.xml are permissive.
+            Row policies defined by users.xml affect all users.
+
+         Version 2:
+            If for some table only restrictive policies exist without permissive ones each user will see rows chosen by applied restrictive policies.
+            By default row policies are restrictive.
+            Permissive row policies affect only users specified in the TO clause, but that can be changed with the OF clause.
+            Row policies defined by users.xml are restrictive.
+            Row policies defined by users.xml affect only users from users.xml.
+    -->
+    <row_policies_version>1</row_policies_version>
+
+        
+        Whether the permissive row policies are always required to see any rows.
+            If the flag is 1 then if for some table only restrictive policies exist without permissive ones any user won't see any rows.
+            If the flag is 0 then in the above case each user will see rows chosen by applied restrictive policies. -->
         <permissive_policies_always_required>0</permissive_policies_always_required>
+
+        <permissive_policies_always_required>0</permissive_policies_always_required>
+        <permissive_by_default>
+        <permissive_policies_affect_all_users_by_default>
     </row_policies>
 
     <!-- Server time zone could be set here.
