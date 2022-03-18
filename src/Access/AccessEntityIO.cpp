@@ -168,7 +168,7 @@ AccessEntityPtr deserializeAccessEntityImpl(const String & definition)
             if (res)
                 throw Exception("Two access entities attached in the same file", ErrorCodes::INCORRECT_ACCESS_ENTITY_DEFINITION);
             res = policy = std::make_unique<RowPolicy>();
-            InterpreterCreateRowPolicyQuery::updateRowPolicyFromQuery(*policy, *create_policy_query);
+            InterpreterCreateRowPolicyQuery::updateRowPolicyFromQuery(*policy, *create_policy_query, rbac_version);
         }
         else if (auto * create_quota_query = query->as<ASTCreateQuotaQuery>())
         {

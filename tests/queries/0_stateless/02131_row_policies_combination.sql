@@ -27,7 +27,7 @@ CREATE ROW POLICY 02131_filter_4 ON 02131_rptable USING x<=2 AS restrictive TO A
 SELECT 'R1, R2, R3, R4: ((x == 1) OR (x == 2) OR (x == 3)) AND (x <= 2)';
 SELECT * FROM 02131_rptable;
 
-CREATE ROW POLICY 02131_filter_5 ON 02131_rptable USING x>=2 AS restrictive TO ALL;
+CREATE ROW POLICY 02131_filter_5 ON 02131_rptable USING x>=2 AS simple TO ALL;
 SELECT 'R1, R2, R3, R4, R5: ((x == 1) OR (x == 2) OR (x == 3)) AND (x <= 2) AND (x >= 2)';
 SELECT * FROM 02131_rptable;
 
@@ -44,7 +44,7 @@ SELECT 'R4, R5: FALSE(no permissive filters) AND (x <= 2) AND (x >= 2)';
 SELECT * FROM 02131_rptable;
 
 DROP ROW POLICY 02131_filter_4 ON 02131_rptable;
-SELECT 'R5: FALSE(no permissive filters) AND (x >= 2)';
+SELECT 'R5: (x >= 2)';
 SELECT * FROM 02131_rptable;
 
 DROP ROW POLICY 02131_filter_5 ON 02131_rptable;

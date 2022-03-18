@@ -14,12 +14,15 @@
 
 namespace DB
 {
+extern const UInt64 RBAC_VERSION_ROW_POLICIES_ARE_SIMPLE_BY_DEFAULT;
+
 namespace
 {
     void updateRowPolicyFromQueryImpl(
         RowPolicy & policy,
         const ASTCreateRowPolicyQuery & query,
         const RowPolicyName & override_name,
+        const std::optional<RowPolicyKind> & override_kind,
         const std::optional<RolesOrUsersSet> & override_to_roles)
     {
         if (!override_name.empty())
@@ -29,16 +32,33 @@ namespace
         else if (query.names->full_names.size() == 1)
             policy.setFullName(query.names->full_names.front());
 
-        if (query.kind)
-            policy.setKind(*query.kind);
-
         for (const auto & [filter_type, filter] : query.filters)
             policy.filters[static_cast<size_t>(filter_type)] = filter ? serializeAST(*filter) : String{};
+
+        if (override_kind)
+            policy.setKind(*override_kind);
+        else if (query.kind)
+            policy.setKind(*query.kind);
 
         if (override_to_roles)
             policy.to_roles = *override_to_roles;
         else if (query.to_roles)
             policy.to_roles = *query.to_roles;
+    }
+
+
+    std::optional<RowPolicyKind> getRowPolicyKindFromQuery(const ASTCreateRowPolicyQuery & query, UInt64 rbac_version)
+    {
+        if (query.kind)
+            return query.kind;
+        if (query.alter)
+            return {};
+
+        /// Set query.kind by default if not specified.
+        if (rbac_version < RBAC_VERSION_ROW_POLICIES_ARE_SIMPLE_BY_DEFAULT)
+            return RowPolicyKind::PERMISSIVE;
+        else
+            return RowPolicyKind::SIMPLE;
     }
 }
 
@@ -47,6 +67,9 @@ BlockIO InterpreterCreateRowPolicyQuery::execute()
 {
     auto & query = query_ptr->as<ASTCreateRowPolicyQuery &>();
     auto required_access = getRequiredAccess();
+
+    UInt64 rbac_version = getContext()->getSettingsRef().rbac_version;
+    query.kind = getRowPolicyKindFromQuery(query, rbac_version);
 
     if (!query.cluster.empty())
     {
@@ -69,7 +92,7 @@ BlockIO InterpreterCreateRowPolicyQuery::execute()
         auto update_func = [&](const AccessEntityPtr & entity) -> AccessEntityPtr
         {
             auto updated_policy = typeid_cast<std::shared_ptr<RowPolicy>>(entity->clone());
-            updateRowPolicyFromQueryImpl(*updated_policy, query, {}, roles_from_query);
+            updateRowPolicyFromQueryImpl(*updated_policy, query, {}, {}, roles_from_query);
             return updated_policy;
         };
         Strings names = query.names->toStrings();
@@ -87,7 +110,7 @@ BlockIO InterpreterCreateRowPolicyQuery::execute()
         for (const auto & full_name : query.names->full_names)
         {
             auto new_policy = std::make_shared<RowPolicy>();
-            updateRowPolicyFromQueryImpl(*new_policy, query, full_name, roles_from_query);
+            updateRowPolicyFromQueryImpl(*new_policy, query, full_name, {}, roles_from_query);
             new_policies.emplace_back(std::move(new_policy));
         }
 
@@ -103,9 +126,9 @@ BlockIO InterpreterCreateRowPolicyQuery::execute()
 }
 
 
-void InterpreterCreateRowPolicyQuery::updateRowPolicyFromQuery(RowPolicy & policy, const ASTCreateRowPolicyQuery & query)
+void InterpreterCreateRowPolicyQuery::updateRowPolicyFromQuery(RowPolicy & policy, const ASTCreateRowPolicyQuery & query, UInt64 rbac_version)
 {
-    updateRowPolicyFromQueryImpl(policy, query, {}, {});
+    updateRowPolicyFromQueryImpl(policy, query, {}, getRowPolicyKindFromQuery(query, rbac_version), {});
 }
 
 
