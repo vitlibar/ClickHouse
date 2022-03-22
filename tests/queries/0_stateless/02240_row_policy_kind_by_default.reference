@@ -1,0 +1,7 @@
+rbac_version=1
+CREATE ROW POLICY `02240_r1` ON db1.table1 AS permissive
+CREATE ROW POLICY `02240_r2` ON db1.table1 AS permissive
+CREATE ROW POLICY `02240_r3` ON db1.table1 AS restrictive
+02240_r1	permissive
+02240_r2	permissive
+02240_r3	restrictive
