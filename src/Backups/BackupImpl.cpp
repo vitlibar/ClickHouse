@@ -4,9 +4,11 @@
 #include <Backups/BackupIO.h>
 #include <Backups/IBackupEntry.h>
 #include <Backups/LocalBackupCoordination.h>
+#include <Backups/DistributedBackupCoordination.h>
 #include <Common/StringUtils/StringUtils.h>
 #include <Common/hex.h>
 #include <Common/quoteString.h>
+#include <Interpreters/Context.h>
 #include <IO/Archives/IArchiveReader.h>
 #include <IO/Archives/IArchiveWriter.h>
 #include <IO/Archives/createArchiveReader.h>
@@ -114,20 +116,18 @@ BackupImpl::BackupImpl(
     const String & backup_name_,
     const ArchiveParams & archive_params_,
     const std::optional<BackupInfo> & base_backup_info_,
-    std::shared_ptr<IBackupWriter> writer_,
-    std::shared_ptr<IBackupCoordination> coordination_,
-    bool is_helper_backup_,
+    std::shared_ptr<IBackupReader> reader_,
     const ContextPtr & context_)
     : backup_name(backup_name_)
     , archive_params(archive_params_)
     , use_archives(!archive_params.archive_name.empty())
-    , base_backup_info_initial(base_backup_info_)
-    , open_mode(OpenMode::WRITE)
-    , writer(std::move(writer_))
-    , coordination(coordination_ ? coordination_ : std::make_shared<LocalBackupCoordination>())
-    , is_helper_backup(is_helper_backup_)
+    , open_mode(OpenMode::READ)
+    , reader(std::move(reader_))
+    , is_internal_backup(false)
+    , coordination(std::make_shared<LocalBackupCoordination>())
     , context(context_)
-    , version(CURRENT_BACKUP_VERSION)
+    , version(INITIAL_BACKUP_VERSION)
+    , base_backup_info(base_backup_info_)
 {
     open();
 }
@@ -137,19 +137,27 @@ BackupImpl::BackupImpl(
     const String & backup_name_,
     const ArchiveParams & archive_params_,
     const std::optional<BackupInfo> & base_backup_info_,
-    std::shared_ptr<IBackupReader> reader_,
-    const ContextPtr & context_)
+    std::shared_ptr<IBackupWriter> writer_,
+    const ContextPtr & context_,
+    const std::optional<UUID> & backup_uuid_,
+    bool is_internal_backup_,
+    const String & coordination_zk_path_)
     : backup_name(backup_name_)
     , archive_params(archive_params_)
     , use_archives(!archive_params.archive_name.empty())
-    , base_backup_info_initial(base_backup_info_)
-    , open_mode(OpenMode::READ)
-    , reader(std::move(reader_))
-    , coordination(std::make_shared<LocalBackupCoordination>())
-    , is_helper_backup(false)
+    , open_mode(OpenMode::WRITE)
+    , writer(std::move(writer_))
+    , is_internal_backup(is_internal_backup_)
     , context(context_)
-    , version(INITIAL_BACKUP_VERSION)
+    , uuid(backup_uuid_)
+    , version(CURRENT_BACKUP_VERSION)
+    , base_backup_info(base_backup_info_)
 {
+    if (coordination_zk_path_.empty())
+        coordination = std::make_shared<LocalBackupCoordination>();
+    else
+        coordination = std::make_shared<DistributedBackupCoordination>(coordination_zk_path_, [&] { return context->getZooKeeper(); });
+
     open();
 }
 
@@ -185,13 +193,15 @@ void BackupImpl::open()
     if (open_mode == OpenMode::WRITE)
     {
         timestamp = std::time(nullptr);
-        uuid = UUIDHelpers::generateV4();
+        if (!uuid)
+            uuid = UUIDHelpers::generateV4();
         writing_finalized = false;
     }
 
-    base_backup_info = base_backup_info_initial;
     if (open_mode == OpenMode::READ)
         readBackupMetadata();
+
+    assert(uuid); /// Backup's UUID must be loaded or generated at this point.
 
     if (base_backup_info)
     {
@@ -213,17 +223,17 @@ void BackupImpl::close()
 {
     std::lock_guard lock{mutex};
 
-    if (!is_helper_backup && writing_finalized)
+    if (!is_internal_backup && writing_finalized)
         writeBackupMetadata();
 
     archive_readers.clear();
     archive_writer_with_empty_suffix.reset();
     current_archive_writer.reset();
 
-    if (!is_helper_backup && writer && !writing_finalized)
+    if (!is_internal_backup && writer && !writing_finalized)
         removeAllFilesAfterFailure();
 
-    if (!is_helper_backup)
+    if (!is_internal_backup)
         coordination->drop();
 }
 
@@ -238,7 +248,7 @@ void BackupImpl::writeBackupMetadata()
     Poco::AutoPtr<Poco::Util::XMLConfiguration> config{new Poco::Util::XMLConfiguration()};
     config->setUInt("version", CURRENT_BACKUP_VERSION);
     config->setString("timestamp", toString(LocalDateTime{timestamp}));
-    config->setString("uuid", toString(uuid));
+    config->setString("uuid", toString(*uuid));
 
     if (base_backup_info)
     {
@@ -617,7 +627,7 @@ void BackupImpl::writeFile(const String & file_name, BackupEntryPtr entry)
     {
         String archive_suffix = current_archive_suffix;
         bool next_suffix = false;
-        if (info.archive_suffix.empty() && is_helper_backup)
+        if (info.archive_suffix.empty() && is_internal_backup)
             next_suffix = true;
         /*if (archive_params.max_volume_size && current_archive_writer
             && (current_archive_writer->getTotalSize() + size - base_size > archive_params.max_volume_size))
