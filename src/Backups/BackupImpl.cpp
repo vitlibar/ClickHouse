@@ -3,8 +3,8 @@
 #include <Backups/BackupEntryFromMemory.h>
 #include <Backups/BackupIO.h>
 #include <Backups/IBackupEntry.h>
-#include <Backups/LocalBackupCoordination.h>
-#include <Backups/DistributedBackupCoordination.h>
+#include <Backups/BackupCoordinationLocal.h>
+#include <Backups/BackupCoordinationDistributed.h>
 #include <Common/StringUtils/StringUtils.h>
 #include <Common/hex.h>
 #include <Common/quoteString.h>
@@ -124,7 +124,7 @@ BackupImpl::BackupImpl(
     , open_mode(OpenMode::READ)
     , reader(std::move(reader_))
     , is_internal_backup(false)
-    , coordination(std::make_shared<LocalBackupCoordination>())
+    , coordination(std::make_shared<BackupCoordinationLocal>())
     , context(context_)
     , version(INITIAL_BACKUP_VERSION)
     , base_backup_info(base_backup_info_)
@@ -154,9 +154,9 @@ BackupImpl::BackupImpl(
     , base_backup_info(base_backup_info_)
 {
     if (coordination_zk_path_.empty())
-        coordination = std::make_shared<LocalBackupCoordination>();
+        coordination = std::make_shared<BackupCoordinationLocal>();
     else
-        coordination = std::make_shared<DistributedBackupCoordination>(coordination_zk_path_, [&] { return context->getZooKeeper(); });
+        coordination = std::make_shared<BackupCoordinationDistributed>(coordination_zk_path_, [&] { return context->getZooKeeper(); });
 
     open();
 }
