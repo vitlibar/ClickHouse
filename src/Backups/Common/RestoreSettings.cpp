@@ -69,11 +69,11 @@ namespace
     M(Bool, allow_different_table_def) \
     M(Bool, allow_different_database_def) \
     M(Bool, async) \
-    M(UInt64, shard_index) \
-    M(UInt64, replica_index) \
-    M(UInt64, source_shard_index) \
-    M(UInt64, source_replica_index) \
-    M(Bool, allow_multiple_source_replicas) \
+    M(UInt64, shard) \
+    M(UInt64, replica) \
+    M(UInt64, shard_in_backup) \
+    M(UInt64, replica_in_backup) \
+    M(Bool, allow_using_multiple_replicas_in_backup) \
     M(Bool, internal)
 
 RestoreSettings RestoreSettings::fromRestoreQuery(const ASTBackupQuery & query)
@@ -108,10 +108,10 @@ void RestoreSettings::copySettingsToRestoreQuery(ASTBackupQuery & query) const
     auto query_settings = std::make_shared<ASTSetQuery>();
     query_settings->is_standalone = false;
 
-    static const RestoreSettings default_backup_settings;
+    static const RestoreSettings default_settings;
 
 #define SET_SETTINGS_IN_RESTORE_QUERY_HELPER(TYPE, NAME) \
-    if (NAME != default_backup_settings.NAME) \
+    if (NAME != default_settings.NAME) \
         query_settings->changes.emplace_back(#NAME, static_cast<Field>(SettingField##TYPE{NAME}));
 
     LIST_OF_RESTORE_SETTINGS(SET_SETTINGS_IN_RESTORE_QUERY_HELPER)

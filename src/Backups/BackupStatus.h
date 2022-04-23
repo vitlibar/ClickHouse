@@ -9,7 +9,7 @@ namespace DB
 enum class BackupStatus
 {
     /// Statuses of making backups
-    PREPARING_TO_BACKUP,
+    PREPARING,
     MAKING_BACKUP,
     BACKUP_COMPLETE,
     FAILED_TO_BACKUP,

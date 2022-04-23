@@ -19,8 +19,8 @@ namespace ErrorCodes
     M(String, password) \
     M(Bool, structure_only) \
     M(Bool, async) \
-    M(UInt64, shard_index) \
-    M(UInt64, replica_index) \
+    M(UInt64, shard) \
+    M(UInt64, replica) \
     M(Bool, allow_storing_multiple_replicas) \
     M(Bool, internal) \
     M(String, coordination_zk_path)
@@ -58,10 +58,10 @@ void BackupSettings::copySettingsToBackupQuery(ASTBackupQuery & query) const
     auto query_settings = std::make_shared<ASTSetQuery>();
     query_settings->is_standalone = false;
 
-    static const BackupSettings default_backup_settings;
+    static const BackupSettings default_settings;
 
 #define SET_SETTINGS_IN_BACKUP_QUERY_HELPER(TYPE, NAME) \
-    if (NAME != default_backup_settings.NAME) \
+    if (NAME != default_settings.NAME) \
         query_settings->changes.emplace_back(#NAME, static_cast<Field>(SettingField##TYPE{NAME}));
 
     LIST_OF_BACKUP_SETTINGS(SET_SETTINGS_IN_BACKUP_QUERY_HELPER)

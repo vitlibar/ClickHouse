@@ -15,8 +15,8 @@ std::string_view toString(BackupStatus backup_status)
 {
     switch (backup_status)
     {
-        case BackupStatus::PREPARING_TO_BACKUP:
-            return "PREPARING_TO_BACKUP";
+        case BackupStatus::PREPARING:
+            return "PREPARING";
         case BackupStatus::MAKING_BACKUP:
             return "MAKING_BACKUP";
         case BackupStatus::BACKUP_COMPLETE:

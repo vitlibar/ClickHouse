@@ -22,6 +22,8 @@
 #include <boost/range/algorithm_ext/erase.hpp>
 #include <filesystem>
 
+#include <base/sleep.h>
+
 namespace fs = std::filesystem;
 
 
@@ -343,7 +345,7 @@ namespace
             if (restore_settings->structure_only)
                 return false;
 
-            data_path_in_backup = PathsInBackup{*backup}.getDataPath(table_name_in_backup, restore_settings->shard_index, restore_settings->replica_index);
+            data_path_in_backup = PathsInBackup{*backup}.getDataPath(table_name_in_backup, restore_settings->shard_in_backup, restore_settings->replica_in_backup);
             if (backup->listFiles(data_path_in_backup).empty())
                 return false;
 
@@ -371,6 +373,10 @@ namespace
         {
             if (!hasData())
                 return {};
+
+            if (restore_settings->replica == 2)
+                sleepForSeconds(5);
+
             return storage->restoreData(context, partitions, backup, data_path_in_backup, *restore_settings);
         }
 
@@ -455,28 +461,28 @@ namespace
         void adjustIndicesOfSourceShardAndReplicaInBackup()
         {
             auto shards_in_backup = PathsInBackup{*backup}.getShards();
-            if (!restore_settings.source_shard_index)
+            if (!restore_settings.shard_in_backup)
             {
                 if (shards_in_backup.size() == 1)
-                    restore_settings.source_shard_index = shards_in_backup[0];
+                    restore_settings.shard_in_backup = shards_in_backup[0];
                 else
-                    restore_settings.source_shard_index = restore_settings.shard_index;
+                    restore_settings.shard_in_backup = restore_settings.shard;
             }
 
-            if (std::find(shards_in_backup.begin(), shards_in_backup.end(), restore_settings.source_shard_index) == shards_in_backup.end())
-                throw Exception(ErrorCodes::BACKUP_ENTRY_NOT_FOUND, "No shard #{} in backup", restore_settings.source_shard_index);
+            if (std::find(shards_in_backup.begin(), shards_in_backup.end(), restore_settings.shard_in_backup) == shards_in_backup.end())
+                throw Exception(ErrorCodes::BACKUP_ENTRY_NOT_FOUND, "No shard #{} in backup", restore_settings.shard_in_backup);
 
-            auto replicas_in_backup = PathsInBackup{*backup}.getReplicas(restore_settings.source_shard_index);
-            if (!restore_settings.source_replica_index)
+            auto replicas_in_backup = PathsInBackup{*backup}.getReplicas(restore_settings.shard_in_backup);
+            if (!restore_settings.replica_in_backup)
             {
                 if (replicas_in_backup.size() == 1)
-                    restore_settings.source_replica_index = replicas_in_backup[0];
+                    restore_settings.replica_in_backup = replicas_in_backup[0];
                 else
-                    restore_settings.source_replica_index = restore_settings.replica_index;
+                    restore_settings.replica_in_backup = restore_settings.replica;
             }
 
-            if (std::find(replicas_in_backup.begin(), replicas_in_backup.end(), restore_settings.source_replica_index) == replicas_in_backup.end())
-                throw Exception(ErrorCodes::BACKUP_ENTRY_NOT_FOUND, "No replica #{} in backup", restore_settings.source_replica_index);
+            if (std::find(replicas_in_backup.begin(), replicas_in_backup.end(), restore_settings.replica_in_backup) == replicas_in_backup.end())
+                throw Exception(ErrorCodes::BACKUP_ENTRY_NOT_FOUND, "No replica #{} in backup", restore_settings.replica_in_backup);
         }
 
         /// Prepares to restore a single table and probably its database's definition.
@@ -505,7 +511,7 @@ namespace
             if (databases.contains(new_database_name))
                 throw Exception(ErrorCodes::CANNOT_RESTORE_DATABASE, "Cannot restore the database {} twice", backQuoteIfNeed(new_database_name));
 
-            Strings table_names = PathsInBackup{*backup}.getTables(database_name_, restore_settings.shard_index, restore_settings.replica_index);
+            Strings table_names = PathsInBackup{*backup}.getTables(database_name_, restore_settings.shard_in_backup, restore_settings.replica_in_backup);
             bool has_tables_in_backup = !table_names.empty();
             bool has_create_query_in_backup = hasCreateQueryInBackup(database_name_);
 
@@ -544,7 +550,7 @@ namespace
         /// Prepares to restore all the databases contained in the backup.
         void prepareToRestoreAllDatabases(const std::set<String> & except_list_)
         {
-            for (const String & database_name : PathsInBackup{*backup}.getDatabases(restore_settings.source_shard_index, restore_settings.source_replica_index))
+            for (const String & database_name : PathsInBackup{*backup}.getDatabases(restore_settings.shard_in_backup, restore_settings.replica_in_backup))
             {
                 if (except_list_.contains(database_name))
                     continue;
@@ -555,7 +561,7 @@ namespace
         /// Reads a create query for creating a specified table from the backup.
         std::shared_ptr<ASTCreateQuery> readCreateQueryFromBackup(const DatabaseAndTableName & table_name) const
         {
-            String create_query_path = PathsInBackup{*backup}.getMetadataPath(table_name, restore_settings.source_shard_index, restore_settings.source_replica_index);
+            String create_query_path = PathsInBackup{*backup}.getMetadataPath(table_name, restore_settings.shard_in_backup, restore_settings.replica_in_backup);
             if (!backup->fileExists(create_query_path))
                 throw Exception(ErrorCodes::CANNOT_RESTORE_TABLE, "Cannot restore the {} because there is no such table in the backup",
                                 formatTableNameOrTemporaryTableName(table_name));
@@ -570,7 +576,7 @@ namespace
         /// Reads a create query for creating a specified database from the backup.
         std::shared_ptr<ASTCreateQuery> readCreateQueryFromBackup(const String & database_name) const
         {
-            String create_query_path = PathsInBackup{*backup}.getMetadataPath(database_name, restore_settings.source_shard_index, restore_settings.source_replica_index);
+            String create_query_path = PathsInBackup{*backup}.getMetadataPath(database_name, restore_settings.shard_in_backup, restore_settings.replica_in_backup);
             if (!backup->fileExists(create_query_path))
                 throw Exception(ErrorCodes::CANNOT_RESTORE_DATABASE, "Cannot restore the database {} because there is no such database in the backup", backQuoteIfNeed(database_name));
             auto read_buffer = backup->readFile(create_query_path)->getReadBuffer();
@@ -584,7 +590,7 @@ namespace
         /// Whether there is a create query for creating a specified database in the backup.
         bool hasCreateQueryInBackup(const String & database_name) const
         {
-            String create_query_path = PathsInBackup{*backup}.getMetadataPath(database_name, restore_settings.shard_index, restore_settings.replica_index);
+            String create_query_path = PathsInBackup{*backup}.getMetadataPath(database_name, restore_settings.shard_in_backup, restore_settings.replica_in_backup);
             return backup->fileExists(create_query_path);
         }
 

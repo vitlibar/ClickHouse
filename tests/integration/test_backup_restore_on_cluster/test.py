@@ -76,30 +76,25 @@ def get_path_to_backup(instance, backup_name):
     )
 
 
-def test_backup_and_restore():
+def test_replicated_table():
     create_table()
     insert_data()
 
     backup_name = new_backup_name()
 
     # Make backup on node 1.
-    node1.query(f"BACKUP TABLE tbl TO {backup_name}")
+    node1.query(f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {backup_name} SETTINGS replica=1")
 
     # Drop table on both nodes.
     drop_table()
 
     # Restore from backup on node2.
-    os.link(
-        get_path_to_backup(node1, backup_name), get_path_to_backup(node2, backup_name)
-    )
-    node2.query(f"RESTORE TABLE tbl FROM {backup_name}")
+    node2.query(f"RESTORE TABLE tbl ON CLUSTER 'cluster' FROM {backup_name}")
 
     assert node2.query("SELECT * FROM tbl ORDER BY x") == TSV(
         [[1, "Don\\'t"], [2, "count"], [3, "your"], [4, "chickens"]]
     )
 
-    # Data should be replicated to node1.
-    create_table(node1)
     assert node1.query("SELECT * FROM tbl ORDER BY x") == TSV(
         [[1, "Don\\'t"], [2, "count"], [3, "your"], [4, "chickens"]]
     )
@@ -204,7 +199,7 @@ def test7():
     assert False
 
 
-def test_different_tables_on_nodes():
+def test_different_tables_with_same_names_on_nodes():
     node1.query("CREATE TABLE tbl (`x` UInt8, `y` String) ENGINE = MergeTree ORDER BY x")
     node2.query("CREATE TABLE tbl (`w` Int64) ENGINE = MergeTree ORDER BY w")
 
@@ -212,5 +207,31 @@ def test_different_tables_on_nodes():
     node2.query("INSERT INTO tbl VALUES (-333), (-222), (-111), (0), (111)")
 
     backup_name = new_backup_name()
-    node1.query(f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {backup_name} SETTINGS allow_storing_multiple_replicas=true")
+    node1.query(f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {backup_name} SETTINGS allow_storing_multiple_replicas = true")
 
+    node1.query("DROP TABLE tbl")
+    node2.query("DROP TABLE tbl")
+
+    node2.query(f"RESTORE TABLE tbl ON CLUSTER 'cluster' FROM {backup_name} SETTINGS allow_using_multiple_replicas_in_backup = true")
+
+    assert node1.query("SELECT * FROM tbl") == TSV([[1, "Don\\'t"], [2, "count"], [3, "your"], [4, "chickens"]])
+    assert node2.query("SELECT * FROM tbl") == TSV([-333, -222, -111, 0, 111])
+
+
+def test_different_tables_on_nodes():
+    node1.query("CREATE TABLE tbl (`x` UInt8, `y` String) ENGINE = MergeTree ORDER BY x")
+    node2.query("CREATE TABLE tbl2 (`w` Int64) ENGINE = MergeTree ORDER BY w")
+
+    node1.query("INSERT INTO tbl VALUES (1, 'Don''t'), (2, 'count'), (3, 'your'), (4, 'chickens')")
+    node2.query("INSERT INTO tbl2 VALUES (-333), (-222), (-111), (0), (111)")
+
+    backup_name = new_backup_name()
+    node1.query(f"BACKUP TABLE tbl, TABLE tbl2 ON CLUSTER 'cluster' TO {backup_name} SETTINGS allow_storing_multiple_replicas = true")
+
+    node1.query("DROP TABLE tbl")
+    node2.query("DROP TABLE tbl2")
+
+    node2.query(f"RESTORE TABLE tbl, TABLE tbl2 ON CLUSTER 'cluster' FROM {backup_name} SETTINGS allow_using_multiple_replicas_in_backup = true")
+
+    assert node1.query("SELECT * FROM tbl") == TSV([[1, "Don\\'t"], [2, "count"], [3, "your"], [4, "chickens"]])
+    assert node2.query("SELECT * FROM tbl2") == TSV([-333, -222, -111, 0, 111])

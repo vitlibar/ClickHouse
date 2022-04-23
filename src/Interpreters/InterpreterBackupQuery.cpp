@@ -17,6 +17,7 @@
 #include <DataTypes/DataTypeString.h>
 #include <Processors/Executors/PullingPipelineExecutor.h>
 #include <Processors/Sources/SourceFromSingleChunk.h>
+#include <base/logger_useful.h>
 
 
 namespace DB
@@ -53,13 +54,15 @@ namespace
     void executeBackupSync(const ASTBackupQuery & query, UInt64 task_id, const ContextPtr & context, const BackupInfo & backup_info, const BackupSettings & backup_settings, bool no_throw = false)
     {
         auto & worker = BackupsWorker::instance();
+        bool is_internal_backup = backup_settings.internal;
+
         try
         {
             UUID backup_uuid = UUIDHelpers::generateV4();
 
             auto new_backup_settings = backup_settings;
             if (!query.cluster.empty() && backup_settings.coordination_zk_path.empty())
-                new_backup_settings.coordination_zk_path = query.cluster.empty() ? "" : ("/clickhouse/backups/backuping-" + toString(backup_uuid));
+                new_backup_settings.coordination_zk_path = query.cluster.empty() ? "" : ("/clickhouse/backups/backup-" + toString(backup_uuid));
             std::shared_ptr<ASTBackupQuery> new_query = std::static_pointer_cast<ASTBackupQuery>(query.clone());
             new_backup_settings.copySettingsToBackupQuery(*new_query);
 
@@ -67,13 +70,13 @@ namespace
 
             if (!query.cluster.empty())
             {
-                if (!backup_settings.internal)
+                if (!is_internal_backup)
                     worker.update(task_id, BackupStatus::MAKING_BACKUP);
 
                 DDLQueryOnClusterParams params;
-                params.shard_index = backup_settings.shard_index;
-                params.replica_index = backup_settings.replica_index;
-                params.allow_multiple_replicas = backup_settings.allow_storing_multiple_replicas;
+                params.shard_index = new_backup_settings.shard;
+                params.replica_index = new_backup_settings.replica;
+                params.allow_multiple_replicas = new_backup_settings.allow_storing_multiple_replicas;
                 auto res = executeDDLQueryOnCluster(new_query, context, params);
 
                 PullingPipelineExecutor executor(res.pipeline);
@@ -84,20 +87,20 @@ namespace
             }
             else
             {
-                auto backup_entries = makeBackupEntries(context, new_query->elements, backup_settings);
+                auto backup_entries = makeBackupEntries(context, new_query->elements, new_backup_settings);
 
-                if (!backup_settings.internal)
+                if (!is_internal_backup)
                     worker.update(task_id, BackupStatus::MAKING_BACKUP);
 
                 writeBackupEntries(backup, std::move(backup_entries), context->getSettingsRef().max_backup_threads);
             }
 
-            if (!backup_settings.internal)
+            if (!is_internal_backup)
                 worker.update(task_id, BackupStatus::BACKUP_COMPLETE);
         }
         catch (...)
         {
-            if (!backup_settings.internal)
+            if (!is_internal_backup)
                 worker.update(task_id, BackupStatus::FAILED_TO_BACKUP, getCurrentExceptionMessage(false));
             if (!no_throw)
                 throw;
@@ -107,6 +110,8 @@ namespace
     void executeRestoreSync(const ASTBackupQuery & query, UInt64 task_id, ContextMutablePtr context, const BackupInfo & backup_info, const RestoreSettings & restore_settings, bool no_throw = false)
     {
         auto & worker = BackupsWorker::instance();
+        bool is_internal_restore = restore_settings.internal;
+
         try
         {
             BackupPtr backup = openBackup(backup_info, restore_settings, context);
@@ -114,10 +119,10 @@ namespace
             if (!query.cluster.empty())
             {
                 DDLQueryOnClusterParams params;
-                params.shard_index = restore_settings.shard_index;
-                params.replica_index = restore_settings.replica_index;
-                if (!restore_settings.replica_index && !restore_settings.source_replica_index
-                    && !restore_settings.allow_multiple_source_replicas && getMinCountOfReplicas(*backup) > 1)
+                params.shard_index = restore_settings.shard;
+                params.replica_index = restore_settings.replica;
+                if (!restore_settings.replica && !restore_settings.replica_in_backup
+                    && !restore_settings.allow_using_multiple_replicas_in_backup && getMinCountOfReplicas(*backup) > 1)
                     params.allow_multiple_replicas = false;
                 auto res = executeDDLQueryOnCluster(query.clone(), context, params);
 
@@ -131,12 +136,12 @@ namespace
                 executeRestoreTasks(std::move(restore_tasks), context->getSettingsRef().max_backup_threads);
             }
 
-            if (!restore_settings.internal)
+            if (!is_internal_restore)
                 worker.update(task_id, BackupStatus::RESTORED);
         }
         catch (...)
         {
-            if (!restore_settings.internal)
+            if (!is_internal_restore)
                 worker.update(task_id, BackupStatus::FAILED_TO_RESTORE, getCurrentExceptionMessage(false));
             if (!no_throw)
                 throw;
@@ -150,7 +155,7 @@ namespace
 
         size_t task_id = 0;
         if (!backup_settings.internal)
-            task_id = BackupsWorker::instance().add(backup_info.toString(), BackupStatus::PREPARING_TO_BACKUP);
+            task_id = BackupsWorker::instance().add(backup_info.toString(), BackupStatus::PREPARING);
 
         if (backup_settings.async)
         {

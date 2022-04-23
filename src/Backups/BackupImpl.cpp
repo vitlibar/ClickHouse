@@ -227,8 +227,8 @@ void BackupImpl::close()
         writeBackupMetadata();
 
     archive_readers.clear();
-    archive_writer_with_empty_suffix.reset();
-    current_archive_writer.reset();
+    for (auto & archive_writer : archive_writers)
+        archive_writer = {"", nullptr};
 
     if (!is_internal_backup && writer && !writing_finalized)
         removeAllFilesAfterFailure();
@@ -605,6 +605,7 @@ void BackupImpl::writeFile(const String & file_name, BackupEntryPtr entry)
 
     bool is_data_file_required;
     info.data_file_name = info.file_name;
+    info.archive_suffix = current_archive_suffix;
     coordination->addFileInfo(info, is_data_file_required);
     if (!is_data_file_required)
         return; /// We copy data only if it's a new combination of size & checksum.
@@ -627,19 +628,19 @@ void BackupImpl::writeFile(const String & file_name, BackupEntryPtr entry)
     {
         String archive_suffix = current_archive_suffix;
         bool next_suffix = false;
-        if (info.archive_suffix.empty() && is_internal_backup)
+        if (current_archive_suffix.empty() && is_internal_backup)
             next_suffix = true;
         /*if (archive_params.max_volume_size && current_archive_writer
             && (current_archive_writer->getTotalSize() + size - base_size > archive_params.max_volume_size))
             next_suffix = true;*/
         if (next_suffix)
-            archive_suffix = coordination->getNextArchiveSuffix();
-        if (info.archive_suffix != archive_suffix)
+            current_archive_suffix = coordination->getNextArchiveSuffix();
+        if (info.archive_suffix != current_archive_suffix)
         {
-            info.archive_suffix = archive_suffix;
+            info.archive_suffix = current_archive_suffix;
             coordination->updateFileInfo(info);
         }
-        out = getArchiveWriter(info.archive_suffix)->writeFile(info.data_file_name);
+        out = getArchiveWriter(current_archive_suffix)->writeFile(info.data_file_name);
     }
     else
     {
@@ -682,19 +683,19 @@ std::shared_ptr<IArchiveReader> BackupImpl::getArchiveReader(const String & suff
 
 std::shared_ptr<IArchiveWriter> BackupImpl::getArchiveWriter(const String & suffix)
 {
-    if (suffix.empty() && archive_writer_with_empty_suffix)
-        return archive_writer_with_empty_suffix;
-    if ((current_archive_suffix == suffix) && current_archive_writer)
-        return current_archive_writer;
+    for (const auto & archive_writer : archive_writers)
+    {
+        if ((suffix == archive_writer.first) && archive_writer.second)
+            return archive_writer.second;
+    }
 
     String archive_name_with_suffix = getArchiveNameWithSuffix(suffix);
     auto new_archive_writer = createArchiveWriter(archive_params.archive_name, writer->writeFile(archive_name_with_suffix));
     new_archive_writer->setPassword(archive_params.password);
 
-    current_archive_writer = new_archive_writer;
-    current_archive_suffix = suffix;
-    if (suffix.empty())
-        archive_writer_with_empty_suffix = new_archive_writer;
+    size_t pos = suffix.empty() ? 0 : 1;
+    archive_writers[pos] = {suffix, new_archive_writer};
+
     return new_archive_writer;
 }
 

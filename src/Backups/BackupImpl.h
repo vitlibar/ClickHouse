@@ -100,8 +100,7 @@ private:
     std::shared_ptr<const IBackup> base_backup;
     std::optional<UUID> base_backup_uuid;
     mutable std::unordered_map<String /* archive_suffix */, std::shared_ptr<IArchiveReader>> archive_readers;
-    std::shared_ptr<IArchiveWriter> archive_writer_with_empty_suffix;
-    std::shared_ptr<IArchiveWriter> current_archive_writer;
+    std::pair<String, std::shared_ptr<IArchiveWriter>> archive_writers[2];
     String current_archive_suffix;
     bool writing_finalized = false;
 };
