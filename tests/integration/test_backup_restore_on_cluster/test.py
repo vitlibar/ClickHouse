@@ -1,3 +1,4 @@
+from time import sleep
 import pytest
 import os.path
 from helpers.cluster import ClickHouseCluster
@@ -96,6 +97,38 @@ def test_replicated_table():
     )
 
     assert node1.query("SELECT * FROM tbl ORDER BY x") == TSV(
+        [[1, "Don\\'t"], [2, "count"], [3, "your"], [4, "chickens"]]
+    )
+
+
+def test_replicated_database():
+    node1.query("CREATE DATABASE mydb ON CLUSTER 'cluster' ENGINE=Replicated('/clickhouse/path/','{shard}','{replica}')", settings={'allow_experimental_database_replicated': True})
+
+    node1.query("CREATE TABLE mydb.tbl(x UInt8, y String) ENGINE=ReplicatedMergeTree ORDER BY x")
+    assert node2.query("EXISTS mydb.tbl") == "1\n"
+
+    node1.query("INSERT INTO mydb.tbl VALUES (1, 'Don''t')")
+    node2.query("INSERT INTO mydb.tbl VALUES (2, 'count')")
+    node1.query("INSERT INTO mydb.tbl VALUES (3, 'your')")
+    node2.query("INSERT INTO mydb.tbl VALUES (4, 'chickens')")
+
+    # Make backup.
+    backup_name = new_backup_name()
+    node1.query(f"BACKUP DATABASE mydb ON CLUSTER 'cluster' TO {backup_name} SETTINGS replica=2")
+
+    # Drop table on both nodes.
+    node1.query("DROP DATABASE mydb ON CLUSTER 'cluster'")
+    print (node1.query("EXISTS DATABASE mydb"))
+    print (node2.query("EXISTS DATABASE mydb"))
+
+    # Restore from backup on node2.
+    node1.query(f"RESTORE DATABASE mydb ON CLUSTER 'cluster' FROM {backup_name}", settings={'allow_experimental_database_replicated': True})
+
+    assert node1.query("SELECT * FROM mydb.tbl ORDER BY x") == TSV(
+        [[1, "Don\\'t"], [2, "count"], [3, "your"], [4, "chickens"]]
+    )
+
+    assert node2.query("SELECT * FROM mydb.tbl ORDER BY x") == TSV(
         [[1, "Don\\'t"], [2, "count"], [3, "your"], [4, "chickens"]]
     )
 

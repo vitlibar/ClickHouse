@@ -10,6 +10,7 @@
 #include <Databases/IDatabase.h>
 #include <Interpreters/Context.h>
 #include <Parsers/ASTCreateQuery.h>
+#include <Parsers/ASTFunction.h>
 #include <Parsers/formatAST.h>
 #include <Storages/IStorage.h>
 
@@ -272,6 +273,14 @@ namespace
             auto create_query = typeid_cast<std::shared_ptr<ASTCreateQuery>>(query);
             create_query->uuid = UUIDHelpers::Nil;
             create_query->to_inner_uuid = UUIDHelpers::Nil;
+
+            if (create_query->storage && create_query->storage->engine)
+            {
+                auto & engine = *(create_query->storage->engine);
+                if (engine.name.starts_with("ReplicatedMergeTree"))////!!!
+                    engine.arguments = nullptr;
+            }
+
             return create_query;
         }
 

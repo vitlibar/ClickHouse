@@ -71,20 +71,20 @@ struct RestoreSettings : public StorageRestoreSettings
 
     /// 1-based index of a shard stored in the backup to get data from.
     /// By default it's 0: if the backup contains only one shard it means the index of that shard
-    ///                    else it means the same as shard_num.
+    ///                    else it means the same as `shard`.
     size_t shard_in_backup = 0;
 
     /// 1-based index of a replica stored in the backup to get data from.
     /// By default it's 0: if the backup contains only one replica for the current shard it means the index of that replica
-    ///                    else it means the same as replica_num.
+    ///                    else it means the same as `replica`.
     size_t replica_in_backup = 0;
-
-    /// Allows using multiple replicas stored in the backup to get data from.
-    /// By default it's disabled because usually replicas should contain the same data.
-    bool allow_using_multiple_replicas_in_backup = false;
 
     /// Internal, should not be specified by user.
     bool internal = false;
+
+    /// Internal, should not be specified by user.
+    /// Path in Zookeeper used to coordinate restoring process while executing by RESTORE ON CLUSTER.
+    String coordination_zk_path;
 
     static RestoreSettings fromRestoreQuery(const ASTBackupQuery & query);
     void copySettingsToRestoreQuery(ASTBackupQuery & query) const;

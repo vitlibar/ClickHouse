@@ -116,15 +116,22 @@ namespace
         {
             BackupPtr backup = openBackup(backup_info, restore_settings, context);
 
+            auto new_restore_settings = restore_settings;
+            if (!query.cluster.empty() && new_restore_settings.coordination_zk_path.empty())
+            {
+                UUID restore_uuid = UUIDHelpers::generateV4();
+                new_restore_settings.coordination_zk_path
+                    = query.cluster.empty() ? "" : ("/clickhouse/backups/restore-" + toString(restore_uuid));
+            }
+            std::shared_ptr<ASTBackupQuery> new_query = std::static_pointer_cast<ASTBackupQuery>(query.clone());
+            new_restore_settings.copySettingsToRestoreQuery(*new_query);
+
             if (!query.cluster.empty())
             {
                 DDLQueryOnClusterParams params;
-                params.shard_index = restore_settings.shard;
-                params.replica_index = restore_settings.replica;
-                if (!restore_settings.replica && !restore_settings.replica_in_backup
-                    && !restore_settings.allow_using_multiple_replicas_in_backup && getMinCountOfReplicas(*backup) > 1)
-                    params.allow_multiple_replicas = false;
-                auto res = executeDDLQueryOnCluster(query.clone(), context, params);
+                params.shard_index = new_restore_settings.shard;
+                params.replica_index = new_restore_settings.replica;
+                auto res = executeDDLQueryOnCluster(new_query, context, params);
 
                 PullingPipelineExecutor executor(res.pipeline);
                 Block block;
@@ -132,7 +139,7 @@ namespace
             }
             else
             {
-                auto restore_tasks = makeRestoreTasks(context, backup, query.elements, restore_settings);
+                auto restore_tasks = makeRestoreTasks(context, backup, new_query->elements, new_restore_settings);
                 executeRestoreTasks(std::move(restore_tasks), context->getSettingsRef().max_backup_threads);
             }
 

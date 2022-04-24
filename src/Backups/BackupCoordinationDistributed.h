@@ -7,7 +7,7 @@
 namespace DB
 {
 
-/// Stores backup contents information in Zookeeper, useful for distributed backups.
+/// Stores backup temporary information in Zookeeper, used to perform BACKUP ON CLUSTER.
 class BackupCoordinationDistributed : public IBackupCoordination
 {
 public:
@@ -32,8 +32,8 @@ private:
     void createRootNodes();
     void removeAllNodes();
 
-    String zookeeper_path;
-    zkutil::GetZooKeeper get_zookeeper;
+    const String zookeeper_path;
+    const zkutil::GetZooKeeper get_zookeeper;
 };
 
 }

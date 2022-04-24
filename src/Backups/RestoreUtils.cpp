@@ -6,17 +6,21 @@
 #include <Backups/IBackup.h>
 #include <Backups/IBackupEntry.h>
 #include <Backups/IRestoreTask.h>
+#include <Backups/RestoreCoordinationDistributed.h>
 #include <Backups/formatTableNameOrTemporaryTableName.h>
 #include <Common/escapeForFileName.h>
 #include <Databases/IDatabase.h>
+#include <Databases/DatabaseReplicated.h>
 #include <IO/ReadHelpers.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/InterpreterCreateQuery.h>
 #include <Parsers/ASTCreateQuery.h>
+#include <Parsers/ASTFunction.h>
 #include <Parsers/ParserCreateQuery.h>
 #include <Parsers/formatAST.h>
 #include <Parsers/parseQuery.h>
 #include <Storages/IStorage.h>
+#include <base/chrono_io.h>
 #include <base/insertAtEnd.h>
 #include <boost/range/adaptor/reversed.hpp>
 #include <boost/range/algorithm_ext/erase.hpp>
@@ -212,6 +216,7 @@ namespace
 
             auto cloned_create_query = typeid_cast<std::shared_ptr<ASTCreateQuery>>(create_query->clone());
             cloned_create_query->if_not_exists = (restore_settings->create_database == RestoreDatabaseCreationMode::kCreateIfNotExists);
+            context->setSetting("allow_experimental_database_replicated", true);////
             InterpreterCreateQuery create_interpreter{cloned_create_query, context};
             create_interpreter.execute();
         }
@@ -266,10 +271,11 @@ namespace
             const ASTs & partitions_,
             const BackupPtr & backup_,
             const DatabaseAndTableName & table_name_in_backup_,
-            const RestoreSettingsPtr & restore_settings_)
+            const RestoreSettingsPtr & restore_settings_,
+            const std::shared_ptr<IRestoreCoordination> & restore_coordination_)
             : context(context_), create_query(typeid_cast<std::shared_ptr<ASTCreateQuery>>(create_query_)),
               partitions(partitions_), backup(backup_), table_name_in_backup(table_name_in_backup_),
-              restore_settings(restore_settings_)
+              restore_settings(restore_settings_), restore_coordination(restore_coordination_)
         {
             table_name = DatabaseAndTableName{create_query->getDatabase(), create_query->getTable()};
             if (create_query->temporary)
@@ -278,9 +284,28 @@ namespace
 
         RestoreTasks run() override
         {
-            createStorage();
-            getStorage();
-            checkStorageCreateQuery();
+            if (acquireTableCreation())
+            {
+                try
+                {
+                    createStorage();
+                    getStorage();
+                    checkStorageCreateQuery();
+                    setTableCreationResult(IRestoreCoordination::Result::SUCCEEDED);
+                }
+                catch (...)
+                {
+                    setTableCreationResult(IRestoreCoordination::Result::FAILED);
+                    throw;
+                }
+            }
+            else
+            {
+                waitForTableCreation();
+                getStorage();
+                checkStorageCreateQuery();
+            }
+
             RestoreTasks tasks;
             if (auto task = insertData())
                 tasks.push_back(std::move(task));
@@ -290,6 +315,54 @@ namespace
         bool isSequential() const override { return true; }
 
     private:
+        bool acquireTableCreation()
+        {
+            if (restore_settings->create_table == RestoreTableCreationMode::kMustExist)
+                return true;
+
+            auto replicated_db
+                = typeid_cast<std::shared_ptr<const DatabaseReplicated>>(DatabaseCatalog::instance().getDatabase(table_name.first));
+            if (!replicated_db)
+                return true;
+
+            use_coordination_for_table_creation = true;
+            replicated_database_zookeeper_path = replicated_db->getZooKeeperPath();
+            if (restore_coordination->acquirePath(replicated_database_zookeeper_path, table_name.second))
+                return true;
+
+            return false;
+        }
+
+        void setTableCreationResult(IRestoreCoordination::Result res)
+        {
+            if (use_coordination_for_table_creation)
+                restore_coordination->setResult(replicated_database_zookeeper_path, table_name.second, res);
+        }
+
+        void waitForTableCreation()
+        {
+            if (!use_coordination_for_table_creation)
+                return;
+
+            IRestoreCoordination::Result res;
+            const auto & config = context->getConfigRef();
+            auto timeout = std::chrono::seconds(config.getUInt("backups.create_table_in_replicated_db_timeout", 10));
+            if (!restore_coordination->waitForResult(replicated_database_zookeeper_path, table_name.second, res, timeout))
+                throw Exception(
+                    ErrorCodes::CANNOT_RESTORE_TABLE,
+                    "Waited too long ({}) for creating of {} on another replica",
+                    to_string(timeout),
+                    formatTableNameOrTemporaryTableName(table_name));
+
+            if (res == IRestoreCoordination::Result::FAILED)
+                throw Exception(
+                    ErrorCodes::CANNOT_RESTORE_TABLE,
+                    "Failed creating of {} on another replica",
+                    formatTableNameOrTemporaryTableName(table_name));
+
+            sleepForSeconds(5);
+        }
+
         void createStorage()
         {
             if (restore_settings->create_table == RestoreTableCreationMode::kMustExist)
@@ -297,6 +370,7 @@ namespace
 
             auto cloned_create_query = typeid_cast<std::shared_ptr<ASTCreateQuery>>(create_query->clone());
             cloned_create_query->if_not_exists = (restore_settings->create_table == RestoreTableCreationMode::kCreateIfNotExists);
+            LOG_INFO(&Poco::Logger::get("!!!"), "createStorage: {}", serializeAST(*cloned_create_query));
             InterpreterCreateQuery create_interpreter{cloned_create_query, context};
             create_interpreter.execute();
         }
@@ -377,7 +451,7 @@ namespace
             if (restore_settings->replica == 2)
                 sleepForSeconds(5);
 
-            return storage->restoreData(context, partitions, backup, data_path_in_backup, *restore_settings);
+            return storage->restoreData(context, partitions, backup, data_path_in_backup, *restore_settings, restore_coordination);
         }
 
         ContextMutablePtr context;
@@ -387,6 +461,9 @@ namespace
         BackupPtr backup;
         DatabaseAndTableName table_name_in_backup;
         RestoreSettingsPtr restore_settings;
+        std::shared_ptr<IRestoreCoordination> restore_coordination;
+        bool use_coordination_for_table_creation = false;
+        String replicated_database_zookeeper_path;
         DatabasePtr database;
         StoragePtr storage;
         ASTPtr storage_create_query;
@@ -401,7 +478,11 @@ namespace
     {
     public:
         RestoreTasksBuilder(ContextMutablePtr context_, const BackupPtr & backup_, const RestoreSettings & restore_settings_)
-            : context(context_), backup(backup_), restore_settings(restore_settings_) {}
+            : context(context_), backup(backup_), restore_settings(restore_settings_)
+        {
+            if (!restore_settings.coordination_zk_path.empty())
+                restore_coordination = std::make_shared<RestoreCoordinationDistributed>(restore_settings.coordination_zk_path, [context=context] { return context->getZooKeeper(); });
+        }
 
         /// Prepares internal structures for making tasks for restoring.
         void prepare(const ASTBackupQuery::Elements & elements)
@@ -452,7 +533,7 @@ namespace
 
             /// TODO: We need to restore tables according to their dependencies.
             for (const auto & info : tables | boost::adaptors::map_values)
-                res.push_back(std::make_unique<RestoreTableTask>(context, info.create_query, info.partitions, backup, info.name_in_backup, restore_settings_ptr));
+                res.push_back(std::make_unique<RestoreTableTask>(context, info.create_query, info.partitions, backup, info.name_in_backup, restore_settings_ptr, restore_coordination));
 
             return res;
         }
@@ -625,6 +706,7 @@ namespace
         ContextMutablePtr context;
         BackupPtr backup;
         RestoreSettings restore_settings;
+        std::shared_ptr<IRestoreCoordination> restore_coordination;
         DDLRenamingSettings renaming_settings;
         std::map<String /* new_db_name */, CreateDatabaseInfo> databases;
         std::map<DatabaseAndTableName /* new_table_name */, CreateTableInfo> tables;

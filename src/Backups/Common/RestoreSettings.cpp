@@ -73,8 +73,8 @@ namespace
     M(UInt64, replica) \
     M(UInt64, shard_in_backup) \
     M(UInt64, replica_in_backup) \
-    M(Bool, allow_using_multiple_replicas_in_backup) \
-    M(Bool, internal)
+    M(Bool, internal) \
+    M(String, coordination_zk_path)
 
 RestoreSettings RestoreSettings::fromRestoreQuery(const ASTBackupQuery & query)
 {

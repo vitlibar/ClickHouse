@@ -468,8 +468,8 @@ BlockIO DatabaseReplicated::tryEnqueueReplicatedDDL(const ASTPtr & query, Contex
     if (is_readonly)
         throw Exception(ErrorCodes::NO_ZOOKEEPER, "Database is in readonly mode, because it cannot connect to ZooKeeper");
 
-    if (query_context->getClientInfo().query_kind != ClientInfo::QueryKind::INITIAL_QUERY)
-        throw Exception(ErrorCodes::INCORRECT_QUERY, "It's not initial query. ON CLUSTER is not allowed for Replicated database.");
+    //if (query_context->getClientInfo().query_kind != ClientInfo::QueryKind::INITIAL_QUERY)
+    //    throw Exception(ErrorCodes::INCORRECT_QUERY, "It's not initial query. ON CLUSTER is not allowed for Replicated database.");
 
     checkQueryValid(query, query_context);
     LOG_DEBUG(log, "Proposing query: {}", queryToString(query));

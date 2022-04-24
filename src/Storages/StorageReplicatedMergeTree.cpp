@@ -71,6 +71,7 @@
 #include <Backups/IBackup.h>
 #include <Backups/IBackupEntry.h>
 #include <Backups/IRestoreTask.h>
+#include <Backups/IRestoreCoordination.h>
 #include <Disks/TemporaryFileOnDisk.h>
 
 #include <Poco/DirectoryIterator.h>
@@ -8028,12 +8029,14 @@ public:
         const std::shared_ptr<StorageReplicatedMergeTree> & storage_,
         const std::unordered_set<String> & partition_ids_,
         const BackupPtr & backup_,
-        const String & data_path_in_backup_)
+        const String & data_path_in_backup_,
+        const std::shared_ptr<IRestoreCoordination> & restore_coordination_)
         : query_context(query_context_)
         , storage(storage_)
         , partition_ids(partition_ids_)
         , backup(backup_)
         , data_path_in_backup(data_path_in_backup_)
+        , restore_coordination(restore_coordination_)
     {
     }
 
@@ -8054,6 +8057,9 @@ public:
             if (!partition_ids.empty() && !partition_ids.contains(part_info->partition_id))
                 continue;
 
+            if (!restore_coordination->acquirePath(storage->getZooKeeperName() + storage->getZooKeeperPath(), part_info->partition_id))
+                continue; /// Other replica is already restoring this partition.
+
             restore_part_tasks.push_back(
                 std::make_unique<RestorePartTask>(storage, sink, part_name, *part_info, backup, data_path_in_backup));
         }
@@ -8066,6 +8072,7 @@ private:
     std::unordered_set<String> partition_ids;
     BackupPtr backup;
     String data_path_in_backup;
+    std::shared_ptr<IRestoreCoordination> restore_coordination;
 
     class RestorePartTask : public IRestoreTask
     {
@@ -8166,14 +8173,16 @@ RestoreTaskPtr StorageReplicatedMergeTree::restoreData(
     const ASTs & partitions,
     const BackupPtr & backup,
     const String & data_path_in_backup,
-    const StorageRestoreSettings &)
+    const StorageRestoreSettings &,
+    const std::shared_ptr<IRestoreCoordination> & restore_coordination)
 {
     return std::make_unique<ReplicatedMergeTreeRestoreTask>(
         local_context,
         std::static_pointer_cast<StorageReplicatedMergeTree>(shared_from_this()),
         getPartitionIDsFromQuery(partitions, local_context),
         backup,
-        data_path_in_backup);
+        data_path_in_backup,
+        restore_coordination);
 }
 
 }

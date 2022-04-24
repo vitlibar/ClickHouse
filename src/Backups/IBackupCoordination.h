@@ -31,7 +31,7 @@ public:
         UInt64 pos_in_archive = static_cast<UInt64>(-1);
     };
 
-    virtual ~IBackupCoordination() { }
+    virtual ~IBackupCoordination() = default;
 
     /// Adds file information.
     /// If specified checksum+size are new for this IBackupContentsInfo the function sets `is_data_file_required`.
