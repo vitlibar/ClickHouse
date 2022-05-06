@@ -50,6 +50,9 @@ public:
     AccessControl();
     ~AccessControl() override;
 
+    void setUpFromMainConfig(const Poco::Util::AbstractConfiguration & config_, const String & config_path_,
+                             const zkutil::GetZooKeeper & get_zookeeper_function_);
+
     /// Parses access entities from a configuration loaded from users.xml.
     /// This function add UsersConfigAccessStorage if it wasn't added before.
     void setUsersConfig(const Poco::Util::AbstractConfiguration & users_config_);
@@ -122,6 +125,11 @@ public:
     void setPlaintextPasswordAllowed(const bool allow_plaintext_password_);
     bool isPlaintextPasswordAllowed() const;
 
+    /// Disables old logic when no permissive policies for the current user meant no rows (in case there are any policies definied on
+    /// this table for any other user).
+    void setEnabledNoPermissivePoliciesNoRows(bool enable) { no_permissive_policies_no_rows = enable; }
+    bool isEnabledNoPermissivePoliciesNoRows() const { return no_permissive_policies_no_rows; }
+
     UUID authenticate(const Credentials & credentials, const Poco::Net::IPAddress & address) const;
     void setExternalAuthenticatorsConfig(const Poco::Util::AbstractConfiguration & config);
 
@@ -178,6 +186,7 @@ private:
     std::unique_ptr<CustomSettingsPrefixes> custom_settings_prefixes;
     std::atomic_bool allow_plaintext_password = true;
     std::atomic_bool allow_no_password = true;
+    std::atomic_bool no_permissive_policies_no_rows = false;
 };
 
 }

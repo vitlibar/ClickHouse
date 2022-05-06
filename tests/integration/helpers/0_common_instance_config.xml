@@ -18,4 +18,8 @@
         <stdout>/var/log/clickhouse-server/stdout.log</stdout>
         <rotateOnOpen>true</rotateOnOpen>
     </logger>
+
+    <access_compatibility_mode>
+        <no_permissive_policies_no_rows>false</no_permissive_policies_no_rows>
+    </access_compatibility_mode>
 </clickhouse>

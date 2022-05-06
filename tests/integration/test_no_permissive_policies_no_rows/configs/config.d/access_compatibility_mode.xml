@@ -1,0 +1,5 @@
+<clickhouse>
+    <access_compatibility_mode>
+        <no_permissive_policies_no_rows remove="remove"/>
+    </access_compatibility_mode>
+</clickhouse>

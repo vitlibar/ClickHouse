@@ -545,6 +545,12 @@
         -->
     </user_directories>
 
+    <access_compatibility_mode>
+        <!-- Enables the logic that no permissive policies for the current user means no rows in the result of a SELECT query
+             (in case there are any policies definied on this table for any other user) -->
+        <no_permissive_policies_no_rows>true</no_permissive_policies_no_rows> -->
+    </access_compatibility_mode>
+
     <!-- Default profile of settings. -->
     <default_profile>default</default_profile>
 
