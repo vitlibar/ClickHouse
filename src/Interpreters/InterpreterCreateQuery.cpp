@@ -991,6 +991,8 @@ void InterpreterCreateQuery::assertOrSetUUID(ASTCreateQuery & create, const Data
 
 BlockIO InterpreterCreateQuery::createTable(ASTCreateQuery & create)
 {
+    LOG_INFO(&Poco::Logger::get("!!!"), "createTable: {}.{}", create.getDatabase(), create.getTable());
+
     /// Temporary tables are created out of databases.
     if (create.temporary && create.database)
         throw Exception("Temporary tables cannot be inside a database. You should not specify a database for a temporary table.",
@@ -1106,11 +1108,14 @@ BlockIO InterpreterCreateQuery::createTable(ASTCreateQuery & create)
     /// Check type compatible for materialized dest table and select columns
     if (create.select && create.is_materialized_view && create.to_table_id)
     {
+        LOG_INFO(&Poco::Logger::get("!!!"), "createTable:");
+
         if (StoragePtr to_table = DatabaseCatalog::instance().tryGetTable(
             {create.to_table_id.database_name, create.to_table_id.table_name, create.to_table_id.uuid},
             getContext()
         ))
         {
+            LOG_INFO(&Poco::Logger::get("!!!"), "createTable: to_table");
             Block input_block = InterpreterSelectWithUnionQuery(
                 create.select->clone(), getContext(), SelectQueryOptions().analyze()).getSampleBlock();
 
@@ -1545,6 +1550,7 @@ void InterpreterCreateQuery::prepareOnClusterQuery(ASTCreateQuery & create, Cont
 
 BlockIO InterpreterCreateQuery::execute()
 {
+    LOG_INFO(&Poco::Logger::get("!!!"), "InterpreterCreateQuery::execute: {}", query_ptr);
     FunctionNameNormalizer().visit(query_ptr.get());
     auto & create = query_ptr->as<ASTCreateQuery &>();
     if (!create.cluster.empty())

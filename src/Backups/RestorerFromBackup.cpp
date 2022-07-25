@@ -354,6 +354,15 @@ void RestorerFromBackup::findTableInBackup(const QualifiedTableName & table_name
     res_table_info.has_data = backup->hasFiles(data_path_in_backup);
     res_table_info.data_path_in_backup = data_path_in_backup;
 
+    ///
+    if (!res_table_info.dependencies.empty())
+    {
+        LOG_INFO(&Poco::Logger::get("!!!"), "Dependencies of {}", table_name.getFullName());
+        for (const auto & dep : res_table_info.dependencies)
+            LOG_INFO(&Poco::Logger::get("!!!"), "- table: ", dep.getFullName());
+    }
+    ///
+        
     if (partitions)
     {
         if (!res_table_info.partitions)

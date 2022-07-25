@@ -66,6 +66,9 @@ StorageMaterializedView::StorageMaterializedView(
     const String & comment)
     : IStorage(table_id_), WithMutableContext(local_context->getGlobalContext())
 {
+    if (table_id_)
+        throw Exception("Temp exc " + getName(), ErrorCodes::INCORRECT_QUERY);
+
     StorageInMemoryMetadata storage_metadata;
     storage_metadata.setColumns(columns_);
 

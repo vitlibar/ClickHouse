@@ -43,7 +43,7 @@ bool DDLDependencyVisitor::needChildVisit(const ASTPtr & node, const ASTPtr & ch
     if (auto * create = node->as<ASTCreateQuery>())
     {
         if (child.get() == create->select)
-            return false;
+            return true;
     }
 
     return true;
@@ -128,7 +128,7 @@ void DDLDependencyVisitor::extractTableNameFromArgument(const ASTFunction & func
     }
     else
     {
-        assert(false);
+        //assert(false);
         return;
     }
 

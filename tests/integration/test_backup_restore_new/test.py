@@ -450,10 +450,10 @@ def test_materialized_view():
 def test_materialized_view_with_target_table():
     create_and_fill_table(n=5)
     instance.query(
-        "CREATE TABLE test.target(x Int64, y String) ENGINE=MergeTree ORDER BY tuple()"
+        "CREATE TABLE test.atarget(x Int64, y String) ENGINE=MergeTree ORDER BY tuple()"
     )
     instance.query(
-        "CREATE MATERIALIZED VIEW test.view TO test.target AS SELECT y, x FROM test.table"
+        "CREATE MATERIALIZED VIEW test.bview TO test.atarget AS SELECT y, x FROM test.table"
     )
     instance.query("INSERT INTO test.table VALUES (990, 'a')")
 
@@ -462,10 +462,10 @@ def test_materialized_view_with_target_table():
 
     assert sorted(
         os.listdir(os.path.join(get_path_to_backup(backup_name), "metadata/test"))
-    ) == ["table.sql", "target.sql", "view.sql"]
+    ) == ["atarget.sql", "bview.sql", "table.sql"]
     assert sorted(
         os.listdir(os.path.join(get_path_to_backup(backup_name), "data/test"))
-    ) == ["table", "target"]
+    ) == ["atarget", "table"]
 
     instance.query("DROP DATABASE test")
 
@@ -473,7 +473,7 @@ def test_materialized_view_with_target_table():
 
     instance.query("INSERT INTO test.table VALUES (991, 'b')")
 
-    assert instance.query("SELECT * FROM test.view ORDER BY x") == TSV(
+    assert instance.query("SELECT * FROM test.bview ORDER BY x") == TSV(
         [["a", 990], ["b", 991]]
     )
 
@@ -910,3 +910,24 @@ def test_mutation():
     instance.query("DROP TABLE test.table")
 
     instance.query(f"RESTORE TABLE test.table FROM {backup_name}")
+
+
+def test_new_test():
+    backup_name = new_backup_name()
+
+    instance.query("DROP DATABASE IF EXISTS `_test.ДБ_atomic_` SYNC")
+    instance.query("CREATE DATABASE `_test.ДБ_atomic_` ENGINE = Atomic")
+
+    instance.query("CREATE TABLE `_test.ДБ_atomic_`.mv_src_table UUID 'a06c0bae-95f1-4b55-a94a-25f121020844' (`id` UInt64) ENGINE = MergeTree ORDER BY id SETTINGS index_granularity = 8192")
+
+    instance.query("CREATE TABLE `_test.ДБ_atomic_`.mv_dst_table UUID 'b9498dba-0a2f-4a9a-99f4-30c7add40d79' (`id` UInt64) ENGINE = MergeTree ORDER BY id SETTINGS index_granularity = 8192")
+
+    instance.query("CREATE MATERIALIZED VIEW `_test.ДБ_atomic_`.mv_max_with_dst UUID 'aa5fcc4a-db19-4d94-a8f2-f4157fa330e0' TO `_test.ДБ_atomic_`.mv_dst_table (`id` UInt64) AS SELECT max(id) AS id FROM `_test.ДБ_atomic_`.mv_src_table")
+    
+    instance.query(f"BACKUP TABLE `_test.ДБ_atomic_`.`mv_dst_table`, TABLE `_test.ДБ_atomic_`.`mv_max_with_dst`, TABLE `_test.ДБ_atomic_`.`mv_src_table` TO {backup_name}")
+
+    instance.query("DROP TABLE `_test.ДБ_atomic_`.mv_max_with_dst SYNC")
+    instance.query("DROP TABLE `_test.ДБ_atomic_`.mv_src_table SYNC")
+    instance.query("DROP TABLE `_test.ДБ_atomic_`.mv_dst_table SYNC")
+
+    instance.query(f"RESTORE TABLE `_test.ДБ_atomic_`.`mv_src_table`, TABLE `_test.ДБ_atomic_`.`mv_dst_table`, TABLE `_test.ДБ_atomic_`.`mv_max_with_dst` FROM {backup_name}")
