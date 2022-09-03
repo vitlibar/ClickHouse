@@ -10,6 +10,8 @@
 
 #if USE_YAML_CPP
 
+namespace YAML { class Node; }
+
 namespace DB
 {
 
@@ -17,7 +19,12 @@ namespace DB
 class YAMLParserImpl
 {
 public:
-    static Poco::AutoPtr<Poco::XML::Document> parse(const String& path);
+    Poco::AutoPtr<Poco::XML::Document> parse(const String& path);
+
+private:
+    void processNode(const YAML::Node & node, Poco::XML::Element & parent_xml_element);
+
+    int version = 1;
 };
 
 using YAMLParser = YAMLParserImpl;

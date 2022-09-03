@@ -500,7 +500,7 @@ XMLDocumentPtr ConfigProcessor::processConfig(
 
         if (extension == ".yaml" || extension == ".yml")
         {
-            config = YAMLParser::parse(path);
+            config = YAMLParser{}.parse(path);
         }
         else if (extension == ".xml" || extension == ".conf" || extension.empty())
         {
@@ -552,7 +552,7 @@ XMLDocumentPtr ConfigProcessor::processConfig(
 
             if (extension == ".yaml" || extension == ".yml")
             {
-                with = YAMLParser::parse(merge_file);
+                with = YAMLParser{}.parse(merge_file);
             }
             else
             {
