@@ -1,3 +1,4 @@
+yaml_parser_version: 2
 metric_log:
   database: system
   table: metric_log

@@ -1,3 +1,4 @@
+yaml_parser_version: 2
 keeper_server:
   tcp_port: 9181
   server_id: 1

@@ -1,3 +1,4 @@
+yaml_parser_version: 2
 remote_servers:
   single_remote_shard_at_port_9001:
     shard:

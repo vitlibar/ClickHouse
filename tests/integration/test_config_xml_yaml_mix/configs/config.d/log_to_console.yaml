@@ -1,3 +1,4 @@
+yaml_parser_version: 2
 logger:
   console: true
   log:

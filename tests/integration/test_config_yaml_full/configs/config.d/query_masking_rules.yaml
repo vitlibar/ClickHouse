@@ -1,3 +1,4 @@
+yaml_parser_version: 2
 query_masking_rules:
   rule:
     regexp: TOPSECRET.TOPSECRET

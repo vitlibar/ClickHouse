@@ -1,3 +1,4 @@
+yaml_parser_version: 2
 text_log:
   database: system
   table: text_log

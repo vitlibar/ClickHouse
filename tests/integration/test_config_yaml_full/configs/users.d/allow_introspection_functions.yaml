@@ -1,3 +1,4 @@
+yaml_parser_version: 2
 profiles:
   default:
     allow_introspection_functions: 1

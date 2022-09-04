@@ -1,3 +1,5 @@
+yaml_parser_version: 2
+
 # Profiles of settings.
 profiles:
     # Default settings.

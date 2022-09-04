@@ -1,3 +1,4 @@
+yaml_parser_version: 2
 timezone: Etc/UTC
 listen_host: 0.0.0.0
 custom_settings_prefixes: custom_
