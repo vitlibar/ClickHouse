@@ -7,6 +7,7 @@
 #include <Backups/IRestoreCoordination.h>
 #include <Backups/RestorerFromBackup.h>
 #include <Functions/UserDefined/IUserDefinedSQLObjectsLoader.h>
+#include <Functions/UserDefined/UserDefinedSQLObjectType.h>
 #include <Interpreters/Context.h>
 #include <Parsers/ParserCreateFunctionQuery.h>
 #include <Parsers/parseQuery.h>
@@ -29,13 +30,14 @@ void backupUserDefinedSQLObjects(
     const std::vector<std::pair<String, ASTPtr>> & objects)
 {
     std::vector<std::pair<String, BackupEntryPtr>> backup_entries;
+    backup_entries.reserve(objects.size());
     for (const auto & [function_name, create_function_query] : objects)
         backup_entries.emplace_back(
             escapeForFileName(function_name) + ".sql", std::make_shared<BackupEntryFromMemory>(queryToString(create_function_query)));
 
     auto context = backup_entries_collector.getContext();
     const auto & loader = context->getUserDefinedSQLObjectsLoader();
-    
+
     if (!loader.isReplicated())
     {
         fs::path data_path_in_backup_fs{data_path_in_backup};
