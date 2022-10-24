@@ -117,7 +117,7 @@ namespace
                 data.is_create_dictionary_query = true;
             else if (query.table)
                 data.is_create_table_query = true;
-            else
+            else if (query.database)
                 data.is_create_database_query = true;
         }
 
@@ -304,7 +304,7 @@ namespace
             if (!tryGetNumArguments(function, &num_arguments) || (num_arguments < 3))
                 return;
 
-            auto & arguments = function.arguments->as<ASTExpressionList>()->children;
+            auto & arguments = assert_cast<ASTExpressionList &>(*function.arguments).children;
             size_t arg_num = 1;
 
             /// Skip 1 or 2 arguments with table_function() or db.table or 'db', 'table'.
@@ -355,21 +355,23 @@ namespace
                 return;
 
             wipePasswordFromArgument(function, data, 1);
-            function.arguments->as<ASTExpressionList>()->children.resize(2);
+
+            auto & arguments = assert_cast<ASTExpressionList &>(*function.arguments).children;
+            arguments.resize(2);
         }
 
         static void visitBackupQuery(ASTBackupQuery & query, Data & data)
         {
             if (query.backup_name)
             {
-                if (auto * backup_engine = query.backup_name->as<ASTFunction>())
-                    wipePasswordFromBackupEngineArguments(*backup_engine, data);
+                auto & backup_engine = assert_cast<ASTFunction &>(*query.backup_name);
+                wipePasswordFromBackupEngineArguments(backup_engine, data);
             }
 
             if (query.base_backup_name)
             {
-                if (auto * backup_engine = query.base_backup_name->as<ASTFunction>())
-                    wipePasswordFromBackupEngineArguments(*backup_engine, data);
+                auto & base_backup_engine = assert_cast<ASTFunction &>(*query.base_backup_name);
+                wipePasswordFromBackupEngineArguments(base_backup_engine, data);
             }
         }
 
@@ -393,12 +395,7 @@ namespace
             if (!function.arguments)
                 return;
 
-            auto * expr_list = function.arguments->as<ASTExpressionList>();
-            if (!expr_list)
-                return;
-
-            auto & arguments = expr_list->children;
-
+            auto & arguments = assert_cast<ASTExpressionList &>(*function.arguments).children;
             if (arg_idx < arguments.size())
                 arguments[arg_idx] = std::make_shared<ASTLiteral>("[HIDDEN]");
         }
@@ -408,11 +405,8 @@ namespace
             if (!function.arguments)
                 return false;
 
-            auto * expr_list = function.arguments->as<ASTExpressionList>();
-            if (!expr_list)
-                return false;
-
-            *num_arguments = expr_list->children.size();
+            const auto & arguments = assert_cast<const ASTExpressionList &>(*function.arguments).children;
+            *num_arguments = arguments.size();
             return true;
         }
 
@@ -421,12 +415,7 @@ namespace
             if (!function.arguments)
                 return false;
 
-            const auto * expr_list = function.arguments->as<ASTExpressionList>();
-            if (!expr_list)
-                return false;
-
-            const auto & arguments = expr_list->children;
-
+            const auto & arguments = assert_cast<const ASTExpressionList &>(*function.arguments).children;
             if (arg_idx >= arguments.size())
                 return false;
 
@@ -444,12 +433,7 @@ namespace
             if (!function.arguments)
                 return false;
 
-            const auto * expr_list = function.arguments->as<ASTExpressionList>();
-            if (!expr_list)
-                return false;
-
-            const auto & arguments = expr_list->children;
-
+            const auto & arguments = assert_cast<const ASTExpressionList &>(*function.arguments).children;
             if (arg_idx >= arguments.size())
                 return false;
 
@@ -463,11 +447,11 @@ namespace
                 return false;
             }
 
-            const auto * literal = argument->as<ASTLiteral>();
-            if (!literal || literal->value.getType() != Field::Types::String)
+            const auto & literal = assert_cast<const ASTLiteral &>(*argument);
+            if (literal.value.getType() != Field::Types::String)
                 return false;
 
-            *value = literal->value.safeGet<String>();
+            *value = literal.value.safeGet<String>();
             return true;
         }
 
@@ -477,12 +461,7 @@ namespace
             if (!function.arguments)
                 return false;
 
-            const auto * expr_list = function.arguments->as<ASTExpressionList>();
-            if (!expr_list)
-                return false;
-
-            const auto & arguments = expr_list->children;
-
+            const auto & arguments = assert_cast<const ASTExpressionList &>(*function.arguments).children;
             if (arg_idx >= arguments.size())
                 return false;
 
@@ -496,11 +475,11 @@ namespace
                 return false;
             }
 
-            const auto * literal = argument->as<ASTLiteral>();
-            if (!literal || literal->value.getType() != Field::Types::String)
+            const auto & literal = assert_cast<const ASTLiteral &>(*argument);
+            if (literal.value.getType() != Field::Types::String)
                 return false;
 
-            *value = literal->value.safeGet<String>();
+            *value = literal.value.safeGet<String>();
             return true;
         }
 
@@ -509,27 +488,22 @@ namespace
             if (!dictionary.source || !dictionary.source->elements)
                 return;
 
-            const auto * elements = dictionary.source->elements->as<ASTExpressionList>();
-            if (!elements)
-                return;
+            auto & elements = assert_cast<ASTExpressionList &>(*dictionary.source->elements);
 
             /// We replace password in the dictionary's definition:
             /// SOURCE(CLICKHOUSE(host 'example01-01-1' port 9000 user 'default' password 'qwe123' db 'default' table 'ids')) ->
             /// SOURCE(CLICKHOUSE(host 'example01-01-1' port 9000 user 'default' password '[HIDDEN]' db 'default' table 'ids'))
-            for (const auto & element : elements->children)
+            for (auto & element : elements.children)
             {
-                auto * pair = element->as<ASTPair>();
-                if (!pair)
-                    continue;
-
-                if (pair->first == "password")
+                auto & pair = assert_cast<ASTPair &>(*element);
+                if (pair.first == "password")
                 {
                     if constexpr (check_only)
                     {
                         data.can_contain_password = true;
                         return;
                     }
-                    pair->set(pair->second, std::make_shared<ASTLiteral>("[HIDDEN]"));
+                    pair.set(pair.second, std::make_shared<ASTLiteral>("[HIDDEN]"));
                 }
             }
         }
