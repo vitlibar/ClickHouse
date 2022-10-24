@@ -8,12 +8,14 @@
 #include <IO/ReadBufferFromString.h>
 #include <Poco/Net/NetException.h>
 #include <Common/logger_useful.h>
-#include <Parsers/ParserQuery.h>
-#include <Parsers/parseQuery.h>
 #include <Parsers/ASTQueryWithOnCluster.h>
+#include <Parsers/ParserQuery.h>
 #include <Parsers/formatAST.h>
+#include <Parsers/parseQuery.h>
+#include <Parsers/queryToString.h>
 #include <Parsers/ASTQueryWithTableAndOutput.h>
 #include <Databases/DatabaseReplicated.h>
+#include <Interpreters/maskSensitiveInfoInQueryForLogging.h>
 
 
 namespace DB
@@ -265,11 +267,16 @@ void DDLTask::setClusterInfo(ContextPtr context, Poco::Logger * log)
                  host_id.readableString(), entry_name, address_in_cluster.readableString(), cluster_name);
     }
 
+    /// Rewrite AST without ON CLUSTER.
     WithoutOnClusterASTRewriteParams params;
     params.default_database = address_in_cluster.default_database;
     params.host_id = address_in_cluster.toString();
     query = query_on_cluster->getRewrittenASTWithoutOnCluster(params);
     query_on_cluster = nullptr;
+
+    /// Convert rewritten AST back to string.
+    query_str = queryToString(*query);
+    query_for_logging = maskSensitiveInfoInQueryForLogging(query_str, query, context);
 }
 
 bool DDLTask::tryFindHostInCluster()
