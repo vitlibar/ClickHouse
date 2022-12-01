@@ -95,10 +95,11 @@ void TablesLoader::buildDependencyGraph()
 {
     for (const auto & [table_name, table_metadata] : metadata.parsed_tables)
     {
+        auto new_referential_dependencies = getDependenciesFromCreateQuery(global_context, table_name, table_metadata.ast);
         auto new_loading_dependencies = getLoadingDependenciesFromCreateQuery(global_context, table_name, table_metadata.ast);
 
-        if (!new_loading_dependencies.empty())
-            referential_dependencies.addDependencies(table_name, new_loading_dependencies);
+        if (!new_referential_dependencies.empty())
+            referential_dependencies.addDependencies(table_name, new_referential_dependencies);
 
         /// We're adding `new_loading_dependencies` to the graph here even if they're empty because
         /// we need to have all tables from `metadata.parsed_tables` in the graph.

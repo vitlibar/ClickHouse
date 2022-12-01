@@ -53,10 +53,10 @@ StorageSystemTables::StorageSystemTables(const StorageID & table_id_)
         {"lifetime_bytes", std::make_shared<DataTypeNullable>(std::make_shared<DataTypeUInt64>())},
         {"comment", std::make_shared<DataTypeString>()},
         {"has_own_data", std::make_shared<DataTypeUInt8>()},
-        {"loading_dependencies_database", std::make_shared<DataTypeArray>(std::make_shared<DataTypeString>())},
-        {"loading_dependencies_table", std::make_shared<DataTypeArray>(std::make_shared<DataTypeString>())},
-        {"loading_dependents_database", std::make_shared<DataTypeArray>(std::make_shared<DataTypeString>())},
-        {"loading_dependents_table", std::make_shared<DataTypeArray>(std::make_shared<DataTypeString>())},
+        {"referential_dependencies_database", std::make_shared<DataTypeArray>(std::make_shared<DataTypeString>())},
+        {"referential_dependencies_table", std::make_shared<DataTypeArray>(std::make_shared<DataTypeString>())},
+        {"referential_dependents_database", std::make_shared<DataTypeArray>(std::make_shared<DataTypeString>())},
+        {"referential_dependents_table", std::make_shared<DataTypeArray>(std::make_shared<DataTypeString>())},
     }, {
         {"table", std::make_shared<DataTypeString>(), "name"}
     }));

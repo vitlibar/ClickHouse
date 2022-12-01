@@ -2,7 +2,7 @@
 #include <Common/logger_useful.h>
 #include <Databases/DatabaseMemory.h>
 #include <Databases/DatabasesCommon.h>
-#include <Databases/DDLLoadingDependencyVisitor.h>
+#include <Databases/DDLDependencyVisitor.h>
 #include <Interpreters/Context.h>
 #include <Parsers/ASTCreateQuery.h>
 #include <Parsers/ASTFunction.h>
@@ -143,7 +143,7 @@ void DatabaseMemory::alterTable(ContextPtr local_context, const StorageID & tabl
 
     applyMetadataChangesToCreateQuery(it->second, metadata);
 
-    auto new_dependencies = getLoadingDependenciesFromCreateQuery(local_context->getGlobalContext(), table_id.getQualifiedName(), it->second);
+    auto new_dependencies = getDependenciesFromCreateQuery(local_context->getGlobalContext(), table_id.getQualifiedName(), it->second);
     DatabaseCatalog::instance().updateDependencies(table_id, std::move(new_dependencies));
 }
 
