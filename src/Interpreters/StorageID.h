@@ -71,7 +71,6 @@ struct StorageID
 
     bool hasDatabase() const { return !database_name.empty(); }
 
-    bool operator<(const StorageID & rhs) const;
     bool operator==(const StorageID & rhs) const;
 
     void assertNotEmpty() const
