@@ -20,7 +20,9 @@ SELECT CAST(ALow, 'String') AS AStr
 FROM testView
 GROUP BY AStr ORDER BY AStr;
 
-DROP TABLE testTable;
+DROP TABLE testTable; -- { serverError 630 }
+
+DROP TABLE testTable SETTINGS check_table_dependencies = false;
 
 CREATE TABLE IF NOT EXISTS testTable (
  A String, -- like voter

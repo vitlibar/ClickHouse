@@ -5,11 +5,12 @@ CURDIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$CURDIR"/../shell_config.sh
 
 
-$CLICKHOUSE_CLIENT -q "drop table if exists dict_src;"
-$CLICKHOUSE_CLIENT -q "drop dictionary if exists dict1;"
+$CLICKHOUSE_CLIENT -q "drop table if exists t;"
+$CLICKHOUSE_CLIENT -q "drop table if exists s;"
 $CLICKHOUSE_CLIENT -q "drop dictionary if exists dict2;"
 $CLICKHOUSE_CLIENT -q "drop table if exists join;"
-$CLICKHOUSE_CLIENT -q "drop table if exists t;"
+$CLICKHOUSE_CLIENT -q "drop dictionary if exists dict1;"
+$CLICKHOUSE_CLIENT -q "drop table if exists dict_src;"
 
 $CLICKHOUSE_CLIENT -q "create table dict_src (n int, m int, s String) engine=MergeTree order by n;"
 
@@ -31,14 +32,14 @@ $CLICKHOUSE_CLIENT -q "create table t (n int, m int default joinGet($CLICKHOUSE_
 s String default dictGet($CLICKHOUSE_DATABASE.dict1, 's', 42::UInt64), y default dictGet($CLICKHOUSE_DATABASE.dict2, 'm', 42::UInt64)) engine=MergeTree order by n;"
 
 $CLICKHOUSE_CLIENT -q "select table, arraySort(dependencies_table),
-arraySort(loading_dependencies_table), arraySort(loading_dependent_table) from system.tables where database=currentDatabase() order by table"
+arraySort(referential_dependencies_table), arraySort(referential_dependents_table) from system.tables where database=currentDatabase() order by table"
 $CLICKHOUSE_CLIENT -q "select '====='"
 $CLICKHOUSE_CLIENT -q "alter table t add column x int default in(1, $CLICKHOUSE_DATABASE.s), drop column y"
 
 $CLICKHOUSE_CLIENT -q "create materialized view mv to s as select n from t where n in (select n from join)"
 
 $CLICKHOUSE_CLIENT -q "select table, arraySort(dependencies_table),
-arraySort(loading_dependencies_table), arraySort(loading_dependent_table) from system.tables where database=currentDatabase() order by table"
+arraySort(referential_dependencies_table), arraySort(referential_dependents_table) from system.tables where database=currentDatabase() order by table"
 
 CLICKHOUSE_CLIENT_DEFAULT_DB=$(echo ${CLICKHOUSE_CLIENT} | sed 's/'"--database=${CLICKHOUSE_DATABASE}"'/--database=default/g')
 
@@ -54,7 +55,7 @@ $CLICKHOUSE_CLIENT -q "drop table join" 2>&1| grep -Fa "some tables depend on it
 $CLICKHOUSE_CLIENT -q "detach dictionary dict1 permanently" 2>&1| grep -Fa "some tables depend on it" >/dev/null && echo "OK"
 
 $CLICKHOUSE_CLIENT -q "select table, arraySort(dependencies_table),
-arraySort(loading_dependencies_table), arraySort(loading_dependent_table) from system.tables where database=currentDatabase() order by table"
+arraySort(referential_dependencies_table), arraySort(referential_dependents_table) from system.tables where database=currentDatabase() order by table"
 
 engine=`$CLICKHOUSE_CLIENT -q "select engine from system.databases where name='${CLICKHOUSE_DATABASE}'"`
 $CLICKHOUSE_CLIENT -q "drop database if exists ${CLICKHOUSE_DATABASE}_1"
@@ -76,7 +77,7 @@ if [[ $engine == "Atomic" ]]; then
 fi
 
 $CLICKHOUSE_CLIENT -q "select table, arraySort(dependencies_table),
-arraySort(loading_dependencies_table), arraySort(loading_dependent_table) from system.tables where database in (currentDatabase(), '$t_database') order by table"
+arraySort(referential_dependencies_table), arraySort(referential_dependents_table) from system.tables where database in (currentDatabase(), '$t_database') order by table"
 
 $CLICKHOUSE_CLIENT -q "drop table ${t_database}.t;"
 $CLICKHOUSE_CLIENT -q "drop table s;"
@@ -84,7 +85,7 @@ $CLICKHOUSE_CLIENT -q "drop dictionary dict2;"
 
 $CLICKHOUSE_CLIENT -q "select '====='"
 $CLICKHOUSE_CLIENT -q "select table, arraySort(dependencies_table),
-arraySort(loading_dependencies_table), arraySort(loading_dependent_table) from system.tables where database=currentDatabase() order by table"
+arraySort(referential_dependencies_table), arraySort(referential_dependents_table) from system.tables where database=currentDatabase() order by table"
 if [[ $engine != "Ordinary" ]]; then
     $CLICKHOUSE_CLIENT -q "create or replace table dict_src (n int, m int, s String) engine=MergeTree order by (n, m);"
 fi

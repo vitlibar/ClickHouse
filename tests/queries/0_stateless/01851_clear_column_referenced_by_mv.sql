@@ -31,5 +31,5 @@ ALTER TABLE `01851_merge_tree`
 ALTER TABLE `01851_merge_tree`
     CLEAR COLUMN n2;
 
-DROP TABLE `01851_merge_tree`;
 DROP TABLE `01851_merge_tree_mv`;
+DROP TABLE `01851_merge_tree`;
