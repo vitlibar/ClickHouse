@@ -7,10 +7,10 @@ CURDIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=../shell_config.sh
 . "$CURDIR"/../shell_config.sh
 
-${CLICKHOUSE_CLIENT} --query "DROP TABLE IF EXISTS root"
 ${CLICKHOUSE_CLIENT} --query "DROP TABLE IF EXISTS a"
 ${CLICKHOUSE_CLIENT} --query "DROP TABLE IF EXISTS b"
 ${CLICKHOUSE_CLIENT} --query "DROP TABLE IF EXISTS c"
+${CLICKHOUSE_CLIENT} --query "DROP TABLE IF EXISTS root"
 
 ${CLICKHOUSE_CLIENT} --query "CREATE TABLE root (d UInt64) ENGINE = ReplicatedMergeTree('/clickhouse/$CLICKHOUSE_TEST_ZOOKEEPER_PREFIX/root', '1') ORDER BY d"
 ${CLICKHOUSE_CLIENT} --query "CREATE MATERIALIZED VIEW a (d UInt64) ENGINE = ReplicatedMergeTree('/clickhouse/$CLICKHOUSE_TEST_ZOOKEEPER_PREFIX/a', '1') ORDER BY d AS SELECT * FROM root"
@@ -27,10 +27,10 @@ fi
 echo
 ${CLICKHOUSE_CLIENT} --query "SELECT _table, d FROM merge('${CLICKHOUSE_DATABASE}', '^[abc]\$') ORDER BY _table, d"
 
-${CLICKHOUSE_CLIENT} --query "DROP TABLE root"
 ${CLICKHOUSE_CLIENT} --query "DROP TABLE a"
 ${CLICKHOUSE_CLIENT} --query "DROP TABLE b"
 ${CLICKHOUSE_CLIENT} --query "DROP TABLE c"
+${CLICKHOUSE_CLIENT} --query "DROP TABLE root"
 
 # Deduplication check for non-replicated root table
 echo
@@ -39,5 +39,6 @@ ${CLICKHOUSE_CLIENT} --query "CREATE MATERIALIZED VIEW d (d UInt64) ENGINE = Rep
 ${CLICKHOUSE_CLIENT} --query "INSERT INTO root VALUES (1)";
 ${CLICKHOUSE_CLIENT} --query "INSERT INTO root VALUES (1)";
 ${CLICKHOUSE_CLIENT} --query "SELECT * FROM d";
-${CLICKHOUSE_CLIENT} --query "DROP TABLE root"
+
 ${CLICKHOUSE_CLIENT} --query "DROP TABLE d"
+${CLICKHOUSE_CLIENT} --query "DROP TABLE root"

@@ -526,7 +526,7 @@ void DatabaseAtomic::renameDatabase(ContextPtr query_context, const String & new
     {
         std::lock_guard lock(mutex);
         for (auto & table : tables)
-            DatabaseCatalog::instance().checkTableCanBeRemovedOrRenamed({database_name, table.first});
+            DatabaseCatalog::instance().checkTableCanBeRemovedOrRenamed({database_name, table.first}, true);
     }
 
     try

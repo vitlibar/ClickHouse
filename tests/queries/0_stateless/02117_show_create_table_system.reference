@@ -1064,10 +1064,10 @@ CREATE TABLE system.tables
     `lifetime_bytes` Nullable(UInt64),
     `comment` String,
     `has_own_data` UInt8,
-    `loading_dependencies_database` Array(String),
-    `loading_dependencies_table` Array(String),
-    `loading_dependent_database` Array(String),
-    `loading_dependent_table` Array(String),
+    `referential_dependencies_database` Array(String),
+    `referential_dependencies_table` Array(String),
+    `referential_dependents_database` Array(String),
+    `referential_dependents_table` Array(String),
     `table` String
 )
 ENGINE = SystemTables

@@ -2,8 +2,8 @@
 
 SET prefer_localhost_replica = 1;
 
-DROP DATABASE IF EXISTS test_01155_ordinary;
 DROP DATABASE IF EXISTS test_01155_atomic;
+DROP DATABASE IF EXISTS test_01155_ordinary;
 
 set allow_deprecated_database_ordinary=1;
 CREATE DATABASE test_01155_ordinary ENGINE=Ordinary;
@@ -37,9 +37,9 @@ SELECT 'ordinary:';
 SHOW TABLES FROM test_01155_ordinary;
 RENAME TABLE test_01155_ordinary.mv1 TO test_01155_atomic.mv1;
 RENAME TABLE test_01155_ordinary.mv2 TO test_01155_atomic.mv2;
+SET check_table_dependencies=0;
 RENAME TABLE test_01155_ordinary.dst TO test_01155_atomic.dst;
 RENAME TABLE test_01155_ordinary.src TO test_01155_atomic.src;
-SET check_table_dependencies=0;
 RENAME TABLE test_01155_ordinary.dist TO test_01155_atomic.dist;
 SET check_table_dependencies=1;
 RENAME DICTIONARY test_01155_ordinary.dict TO test_01155_atomic.dict;

@@ -6,9 +6,9 @@ SELECT toTypeName(now64(3));
 SELECT toTypeName(now64(3) - 1);
 SELECT toTypeName(toTimeZone(now64(3), 'UTC') - 1);
 
+DROP TABLE IF EXISTS tt_mv;
 DROP TABLE IF EXISTS tt_null;
 DROP TABLE IF EXISTS tt;
-DROP TABLE IF EXISTS tt_mv;
 
 create table tt_null(p String) engine = Null;
 
@@ -21,6 +21,6 @@ from tt_null group by p;
 
 insert into tt_null values('x');
 
+DROP TABLE tt_mv;
 DROP TABLE tt_null;
 DROP TABLE tt;
-DROP TABLE tt_mv;

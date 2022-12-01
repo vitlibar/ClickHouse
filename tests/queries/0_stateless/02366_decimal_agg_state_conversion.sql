@@ -15,9 +15,9 @@ select minMerge(y) from
 );
 
 
+drop table if exists mv_02366;
 drop table if exists consumer_02366;
 drop table if exists producer_02366;
-drop table if exists mv_02366;
 
 CREATE TABLE consumer_02366
 (
@@ -57,6 +57,6 @@ SELECT
     finalizeAggregation(dec)
 FROM consumer_02366;
 
+drop table mv_02366;
 drop table consumer_02366;
 drop table producer_02366;
-drop table mv_02366;

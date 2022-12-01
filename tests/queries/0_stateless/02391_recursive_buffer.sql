@@ -14,5 +14,9 @@ CREATE TABLE test2 (key UInt32) Engine = Buffer(currentDatabase(), test1, 16, 10
 SELECT * FROM test1; -- { serverError 306 }
 SELECT * FROM test2; -- { serverError 306 }
 SELECT * FROM system.tables WHERE table IN ('test1', 'test2') AND database = currentDatabase(); -- { serverError 306 }
-DROP TABLE test1;
-DROP TABLE test2;
+
+DROP TABLE test1; -- { serverError 630 }
+DROP TABLE test2; -- { serverError 630 }
+
+DROP TABLE test1 SETTINGS check_table_dependencies = false;
+DROP TABLE test2 SETTINGS check_table_dependencies = false;
