@@ -34,6 +34,7 @@ set(AWS_PRIVATE_INCLUDES)
 set(AWS_PUBLIC_COMPILE_DEFS)
 set(AWS_PRIVATE_COMPILE_DEFS)
 set(AWS_PRIVATE_LIBS)
+set(AWS_PUBLIC_LINK_OPTIONS)
 
 if (CMAKE_BUILD_TYPE_UC STREQUAL "DEBUG")
     list(APPEND AWS_PRIVATE_COMPILE_DEFS "-DDEBUG_BUILD")
@@ -293,6 +294,13 @@ if (USE_S2N)
         "${AWS_S2N_TLS_DIR}/"
         "${AWS_S2N_TLS_DIR}/api/"
     )
+
+    if (AWS_ARCH_PPC64)
+        # pthread_atfork symbol is handled specially - it is statically linked into programs,
+        # unlike other pthread_* symbols which are dynamically linked.
+        # For details see http://ryanarn.blogspot.com/2011/07/curious-case-of-pthreadatfork-on.html
+        list(APPEND AWS_PUBLIC_LINK_OPTIONS "-u,pthread_atfork")
+    endif()
 endif()
 
 
@@ -364,6 +372,7 @@ target_include_directories(_aws SYSTEM BEFORE PRIVATE ${AWS_PRIVATE_INCLUDES})
 target_compile_definitions(_aws PUBLIC ${AWS_PUBLIC_COMPILE_DEFS})
 target_compile_definitions(_aws PRIVATE ${AWS_PRIVATE_COMPILE_DEFS})
 target_link_libraries(_aws PRIVATE ${AWS_PRIVATE_LIBS})
+target_link_options(_aws PUBLIC ${AWS_PUBLIC_LINK_OPTIONS})
 
 aws_set_thread_affinity_method(_aws)
 aws_set_thread_name_method(_aws)

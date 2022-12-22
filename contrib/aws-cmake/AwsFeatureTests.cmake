@@ -82,6 +82,15 @@ check_c_source_compiles("
 " AWS_ARCH_ARM32)
 
 check_c_source_compiles("
+    int main() {
+#if !(defined(__powerpc64__))
+#    error \"not powerpc64\"
+#endif
+        return 0;
+    }
+" AWS_ARCH_PPC64)
+
+check_c_source_compiles("
 int main() {
     int foo = 42, bar = 24;
     __asm__ __volatile__(\"\":\"=r\"(foo):\"r\"(bar):\"memory\");
