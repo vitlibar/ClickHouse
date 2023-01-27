@@ -147,6 +147,7 @@ PocoHTTPClient::PocoHTTPClient(const PocoHTTPClientConfiguration & client_config
     , put_request_throttler(client_configuration.put_request_throttler)
     , extra_headers(client_configuration.extra_headers)
 {
+    enable_s3_requests_logging = true;
 }
 
 std::shared_ptr<Aws::Http::HttpResponse> PocoHTTPClient::MakeRequest(
@@ -460,12 +461,15 @@ void PocoHTTPClient::makeRequestInternal(
                     response->AddHeader(header_name, header_value);
             }
 
+            std::string response_string((std::istreambuf_iterator<char>(response_body_stream)),
+                            std::istreambuf_iterator<char>());
+            /// Set response from string
+            response->SetResponseBody(response_string);
+            LOG_INFO(&Poco::Logger::get("!!!"), "Response body: {}", response_string);
+
             /// Request is successful but for some special requests we can have actual error message in body
             if (status_code >= SUCCESS_RESPONSE_MIN && status_code <= SUCCESS_RESPONSE_MAX && checkRequestCanReturn2xxAndErrorInBody(request))
             {
-                std::string response_string((std::istreambuf_iterator<char>(response_body_stream)),
-                               std::istreambuf_iterator<char>());
-
                 /// Just trim string so it will not be so long
                 LOG_TRACE(log, "Got dangerous response with successful code {}, checking its body: '{}'", status_code, response_string.substr(0, 300));
                 const static std::string_view needle = "<Error>";
@@ -477,11 +481,7 @@ void PocoHTTPClient::makeRequestInternal(
                     addMetric(request, S3MetricType::Errors);
                     if (error_report)
                         error_report(request_configuration);
-
                 }
-
-                /// Set response from string
-                response->SetResponseBody(response_string);
             }
             else
             {
@@ -496,7 +496,6 @@ void PocoHTTPClient::makeRequestInternal(
                     if (status_code >= 500 && error_report)
                         error_report(request_configuration);
                 }
-                response->SetResponseBody(response_body_stream, session);
             }
 
             return;
