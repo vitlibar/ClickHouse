@@ -17,30 +17,37 @@ class IDataType;
 
 using ExpressionActionsPtr = std::shared_ptr<ExpressionActions>;
 
+struct EvaluateConstantExpressionOptions
+{
+    bool allow_self_aliases = true;
+    bool execute_scalar_subqueries = true;
+};
+
 /** Evaluate constant expression and its type.
   * Used in rare cases - for elements of set for IN, for data to INSERT.
   * Throws exception if it's not a constant expression.
   * Quite suboptimal.
   */
-std::pair<Field, std::shared_ptr<const IDataType>> evaluateConstantExpression(const ASTPtr & node, const ContextPtr & context);
+std::pair<Field, std::shared_ptr<const IDataType>>
+evaluateConstantExpression(const ASTPtr & node, const ContextPtr & context, const EvaluateConstantExpressionOptions & options = {});
 
 
 /** Evaluate constant expression and returns ASTLiteral with its value.
   */
-ASTPtr evaluateConstantExpressionAsLiteral(const ASTPtr & node, const ContextPtr & context);
+ASTPtr evaluateConstantExpressionAsLiteral(const ASTPtr & node, const ContextPtr & context, const EvaluateConstantExpressionOptions & options = {});
 
 
 /** Evaluate constant expression and returns ASTLiteral with its value.
   * Also, if AST is identifier, then return string literal with its name.
   * Useful in places where some name may be specified as identifier, or as result of a constant expression.
   */
-ASTPtr evaluateConstantExpressionOrIdentifierAsLiteral(const ASTPtr & node, const ContextPtr & context);
+ASTPtr evaluateConstantExpressionOrIdentifierAsLiteral(const ASTPtr & node, const ContextPtr & context, const EvaluateConstantExpressionOptions & options = {});
 
 /** The same as evaluateConstantExpressionOrIdentifierAsLiteral(...),
  *  but if result is an empty string, replace it with current database name
  *  or default database name.
  */
-ASTPtr evaluateConstantExpressionForDatabaseName(const ASTPtr & node, const ContextPtr & context);
+ASTPtr evaluateConstantExpressionForDatabaseName(const ASTPtr & node, const ContextPtr & context, const EvaluateConstantExpressionOptions & options = {});
 
 /** Try to fold condition to countable set of constant values.
   * @param node a condition that we try to fold.

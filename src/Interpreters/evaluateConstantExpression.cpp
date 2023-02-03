@@ -42,7 +42,7 @@ static std::pair<Field, std::shared_ptr<const IDataType>> getFieldAndDataTypeFro
     return {res, type};
 }
 
-std::pair<Field, std::shared_ptr<const IDataType>> evaluateConstantExpression(const ASTPtr & node, const ContextPtr & context)
+std::pair<Field, std::shared_ptr<const IDataType>> evaluateConstantExpression(const ASTPtr & node, const ContextPtr & context, const EvaluateConstantExpressionOptions & options)
 {
     if (ASTLiteral * literal = node->as<ASTLiteral>())
         return getFieldAndDataTypeFromLiteral(literal);
@@ -71,7 +71,14 @@ std::pair<Field, std::shared_ptr<const IDataType>> evaluateConstantExpression(co
         FunctionNameNormalizer().visit(ast.get());
 
     String name = ast->getColumnName();
-    auto syntax_result = TreeRewriter(context).analyze(ast, source_columns);
+    auto syntax_result = TreeRewriter(context).analyze(
+        ast,
+        source_columns,
+        /* storage= */ nullptr,
+        /* storage_snapshot= */ nullptr,
+        /* allow_aggregations= */ false,
+        options.allow_self_aliases,
+        options.execute_scalar_subqueries);
 
     /// AST potentially could be transformed to literal during TreeRewriter analyze.
     /// For example if we have SQL user defined function that return literal AS subquery.
@@ -108,25 +115,25 @@ std::pair<Field, std::shared_ptr<const IDataType>> evaluateConstantExpression(co
 }
 
 
-ASTPtr evaluateConstantExpressionAsLiteral(const ASTPtr & node, const ContextPtr & context)
+ASTPtr evaluateConstantExpressionAsLiteral(const ASTPtr & node, const ContextPtr & context, const EvaluateConstantExpressionOptions & options)
 {
     /// If it's already a literal.
     if (node->as<ASTLiteral>())
         return node;
-    return std::make_shared<ASTLiteral>(evaluateConstantExpression(node, context).first);
+    return std::make_shared<ASTLiteral>(evaluateConstantExpression(node, context, options).first);
 }
 
-ASTPtr evaluateConstantExpressionOrIdentifierAsLiteral(const ASTPtr & node, const ContextPtr & context)
+ASTPtr evaluateConstantExpressionOrIdentifierAsLiteral(const ASTPtr & node, const ContextPtr & context, const EvaluateConstantExpressionOptions & options)
 {
     if (const auto * id = node->as<ASTIdentifier>())
         return std::make_shared<ASTLiteral>(id->name());
 
-    return evaluateConstantExpressionAsLiteral(node, context);
+    return evaluateConstantExpressionAsLiteral(node, context, options);
 }
 
-ASTPtr evaluateConstantExpressionForDatabaseName(const ASTPtr & node, const ContextPtr & context)
+ASTPtr evaluateConstantExpressionForDatabaseName(const ASTPtr & node, const ContextPtr & context, const EvaluateConstantExpressionOptions & options)
 {
-    ASTPtr res = evaluateConstantExpressionOrIdentifierAsLiteral(node, context);
+    ASTPtr res = evaluateConstantExpressionOrIdentifierAsLiteral(node, context, options);
     auto & literal = res->as<ASTLiteral &>();
     if (literal.value.safeGet<String>().empty())
     {

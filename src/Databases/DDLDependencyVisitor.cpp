@@ -285,7 +285,10 @@ namespace
 
             try
             {
-                evaluated = evaluateConstantExpressionOrIdentifierAsLiteral(arg, context);
+                /// We're just searching for dependencies here, it's not safe to execute subqueries now.
+                EvaluateConstantExpressionOptions options;
+                options.execute_scalar_subqueries = false;
+                evaluated = evaluateConstantExpressionOrIdentifierAsLiteral(arg, context, options);
             }
             catch (...)
             {
