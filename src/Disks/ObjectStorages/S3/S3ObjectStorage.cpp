@@ -18,7 +18,7 @@
 #include <IO/SeekAvoidingReadBuffer.h>
 #include <IO/S3/getObjectInfo.h>
 #include <IO/S3/copyS3File.h>
-#include <Interpreters/threadPoolCallbackRunner.h>
+#include <Common/threadPoolCallbackRunner.h>
 #include <Disks/ObjectStorages/S3/diskSettings.h>
 
 #include <Common/getRandomASCIIString.h>

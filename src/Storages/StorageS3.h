@@ -18,7 +18,7 @@
 #include <IO/S3/getObjectInfo.h>
 #include <IO/CompressionMethod.h>
 #include <Interpreters/Context.h>
-#include <Interpreters/threadPoolCallbackRunner.h>
+#include <Common/threadPoolCallbackRunner.h>
 #include <Storages/ExternalDataSourceConfiguration.h>
 #include <Storages/Cache/SchemaCache.h>
 #include <Storages/StorageConfiguration.h>

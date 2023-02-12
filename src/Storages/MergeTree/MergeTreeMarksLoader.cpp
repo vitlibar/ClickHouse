@@ -2,7 +2,7 @@
 #include <Storages/MergeTree/MergeTreeData.h>
 #include <Common/MemoryTrackerBlockerInThread.h>
 #include <IO/ReadBufferFromFile.h>
-#include <Interpreters/threadPoolCallbackRunner.h>
+#include <Common/threadPoolCallbackRunner.h>
 #include <Compression/CompressedReadBufferFromFile.h>
 #include <Common/setThreadName.h>
 #include <Common/scope_guard_safe.h>
