@@ -20,7 +20,7 @@ using OnFinishCallbackForAsyncJob
 /// Makes sure `on_finish_callback` is always called even if a passed job or a scheduler throw an exception.
 template <typename Result>
 void runAsyncWithOnFinishCallback(
-    const ThreadPoolCallbackRunner<Result> & scheduler,
+    const ThreadPoolCallbackRunner<void> & schedule,
     const std::function<Result()> & job,
     const OnFinishCallbackForAsyncJob<Result> & on_finish_callback);
 
@@ -43,14 +43,7 @@ public:
         if (on_finish_callback && !on_finish_callback_called.load())
         {
             /// Though we can call `on_finish_callback` now, but this is not normal.
-            try
-            {
-                throw Exception(ErrorCodes::LOGICAL_ERROR, "onFinish() must be called before ~OnFinishCallbackRunnerForAsyncJob. It's a bug");
-            }
-            catch (...)
-            {
-                runImpl(std::current_exception());
-            }
+            run(Exception{ErrorCodes::LOGICAL_ERROR, "onFinish() must be called before ~OnFinishCallbackRunnerForAsyncJob. It's a bug"});
         }
     }
 
@@ -63,6 +56,11 @@ public:
     void run(std::exception_ptr error = nullptr)
     {
         runImpl(std::move(error));
+    }
+
+    void run(const std::exception & error)
+    {
+        runImpl(std::make_exception_ptr(error));
     }
 
     void onExitInitialScope()
@@ -124,18 +122,26 @@ private:
 
 
 template <typename Result>
-void runAsyncWithOnFinishCallback(const ThreadPoolCallbackRunner<Result> & scheduler,
+void runAsyncWithOnFinishCallback(const ThreadPoolCallbackRunner<void> & schedule,
                                   const std::function<Result()> & job,
                                   const OnFinishCallbackForAsyncJob<Result> & on_finish_callback)
 {
-    auto on_finish = std::make_shared<OnFinishCallbackRunnerForAsyncJob>(on_finish_callback);
+    auto on_finish = std::make_shared<OnFinishCallbackRunnerForAsyncJob<Result>>(on_finish_callback);
     SCOPE_EXIT( on_finish->onExitInitialScope(); );
 
     auto job_with_on_finish = [job, on_finish]
     {
         try
         {
-            on_finish->run(job());
+            if constexpr (std::is_void_v<Result>)
+            {
+                job();
+                on_finish->run();
+            }
+            else
+            {
+                on_finish->run(job());
+            }
         }
         catch(...)
         {
@@ -145,7 +151,46 @@ void runAsyncWithOnFinishCallback(const ThreadPoolCallbackRunner<Result> & sched
 
     try
     {
-        scheduler(job_with_on_finish);
+        schedule(job_with_on_finish, 0);
+    }
+    catch(...)
+    {
+        on_finish->run(std::current_exception());
+    }
+}
+
+template <typename Result>
+void runAsyncWithOnFinishCallback(const ThreadPoolCallbackRunner<void> & schedule,
+                                  const std::function<void(OnFinishCallbackForAsyncJob<Result>)> & job,
+                                  const OnFinishCallbackForAsyncJob<Result> & on_finish_callback)
+{
+    auto on_finish = std::make_shared<OnFinishCallbackRunnerForAsyncJob<Result>>(on_finish_callback);
+    SCOPE_EXIT( on_finish->onExitInitialScope(); );
+
+    auto job_with_on_finish = [job, on_finish]
+    {
+        try
+        {
+            if constexpr (std::is_void_v<Result>)
+            {
+                auto 
+                job();
+                on_finish->run();
+            }
+            else
+            {
+                on_finish->run(job());
+            }
+        }
+        catch(...)
+        {
+            on_finish->run(std::current_exception());
+        }
+    };
+
+    try
+    {
+        schedule(job_with_on_finish, 0);
     }
     catch(...)
     {

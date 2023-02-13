@@ -3,6 +3,7 @@
 #include <Core/Types.h>
 #include <Disks/DiskType.h>
 #include <Disks/IDisk.h>
+#include <Common/threadPoolCallbackRunner.h>
 
 namespace DB
 {
@@ -34,9 +35,19 @@ public:
     virtual void removeFile(const String & file_name) = 0;
     virtual void removeFiles(const Strings & file_names) = 0;
     virtual DataSourceDescription getDataSourceDescription() const = 0;
-    virtual void copyDataToFile(const CreateReadBufferFunction & create_read_buffer, UInt64 offset, UInt64 size, const String & dest_file_name);
-    virtual bool supportNativeCopy(DataSourceDescription /* data_source_description */) const { return false; }
-    virtual void copyFileNative(DiskPtr src_disk, const String & src_file_name, UInt64 src_offset, UInt64 src_size, const String & dest_file_name);
-};
 
+    virtual void copyDataToFile(const CreateReadBufferFunction & create_read_buffer, UInt64 offset, UInt64 size, const String & dest_file_name,
+                                const ThreadPoolCallbackRunner<void> & scheduler);
+
+    virtual void copyDataToFileAsync(const CreateReadBufferFunction & create_read_buffer, UInt64 offset, UInt64 size, const String & dest_file_name,
+                                     const ThreadPoolCallbackRunner<void> & scheduler, const std::function<void(std::exception_ptr)> & on_finish_callback);
+
+    virtual bool supportNativeCopy(DataSourceDescription /* data_source_description */) const { return false; }
+
+    virtual void copyFileNative(DiskPtr src_disk, const String & src_file_name, UInt64 src_offset, UInt64 src_size, const String & dest_file_name,
+                                const ThreadPoolCallbackRunner<void> & scheduler);
+
+    virtual void copyFileNativeAsync(DiskPtr src_disk, const String & src_file_name, UInt64 src_offset, UInt64 src_size, const String & dest_file_name,
+                                     const ThreadPoolCallbackRunner<void> & scheduler, const std::function<void(std::exception_ptr)> & on_finish_callback);
+};
 }

@@ -105,7 +105,8 @@ bool BackupWriterDisk::supportNativeCopy(DataSourceDescription data_source_descr
     return data_source_description == disk->getDataSourceDescription();
 }
 
-void BackupWriterDisk::copyFileNative(DiskPtr src_disk, const String & src_file_name, UInt64 src_offset, UInt64 src_size, const String & dest_file_name)
+void BackupWriterDisk::copyFileNative(DiskPtr src_disk, const String & src_file_name, UInt64 src_offset, UInt64 src_size, const String & dest_file_name,
+                                      const ThreadPoolCallbackRunner<void> & scheduler)
 {
     if (!src_disk)
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Cannot natively copy data to disk without source disk");
@@ -113,7 +114,7 @@ void BackupWriterDisk::copyFileNative(DiskPtr src_disk, const String & src_file_
     if ((src_offset != 0) || (src_size != src_disk->getFileSize(src_file_name)))
     {
         auto create_read_buffer = [src_disk, src_file_name] { return src_disk->readFile(src_file_name); };
-        copyDataToFile(create_read_buffer, src_offset, src_size, dest_file_name);
+        copyDataToFile(create_read_buffer, src_offset, src_size, dest_file_name, scheduler);
         return;
     }
 

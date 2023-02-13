@@ -119,6 +119,7 @@ void registerBackupEngineS3(BackupFactory & factory)
                 params.base_backup_info,
                 writer,
                 params.context,
+                params.scheduler,
                 params.is_internal_backup,
                 params.backup_coordination,
                 params.backup_uuid,

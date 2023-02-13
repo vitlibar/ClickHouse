@@ -60,71 +60,42 @@ DDLRenamingMap makeRenamingMapFromBackupQuery(const ASTBackupQuery::Elements & e
 }
 
 
-void writeBackupEntries(BackupMutablePtr backup, BackupEntries && backup_entries, ThreadPool & thread_pool)
+void writeBackupEntries(BackupMutablePtr backup, BackupEntries && backup_entries)
 {
-    size_t num_active_jobs = 0;
     std::mutex mutex;
-    std::condition_variable event;
-    std::exception_ptr exception;
+    size_t num_entries_requested = 0;
+    size_t num_entries_responded;
+    std::exception_ptr error;
+    Poco::Event all_finished;
 
-    bool always_single_threaded = !backup->supportsWritingInMultipleThreads();
-    auto thread_group = CurrentThread::getGroup();
-
-    for (auto & name_and_entry : backup_entries)
+    auto on_entry_written = [&](std::exception_ptr error_)
     {
-        auto & name = name_and_entry.first;
-        auto & entry = name_and_entry.second;
+        std::lock_guard lock{mutex};
+        if (!error)
+            error = error_;
+        ++num_entries_responded;
+        size_t expect_num_entries_responded = error ? num_entries_requested : backup_entries.size();
+        if (num_entries_responded == expect_num_entries_responded)
+            all_finished.set();
+    };
 
+    for (auto & [name, entry] : backup_entries)
+    {
         {
-            std::unique_lock lock{mutex};
-            if (exception)
+            std::lock_guard lock{mutex};
+            if (error)
                 break;
-            ++num_active_jobs;
+            ++num_entries_requested;
         }
-
-        auto job = [&](bool async)
-        {
-            SCOPE_EXIT_SAFE(
-                std::lock_guard lock{mutex};
-                if (!--num_active_jobs)
-                    event.notify_all();
-                if (async)
-                    CurrentThread::detachQueryIfNotDetached();
-            );
-
-            try
-            {
-                if (async && thread_group)
-                    CurrentThread::attachTo(thread_group);
-
-                if (async)
-                    setThreadName("BackupWorker");
-
-                {
-                    std::lock_guard lock{mutex};
-                    if (exception)
-                        return;
-                }
-
-                backup->writeFile(name, std::move(entry));
-            }
-            catch (...)
-            {
-                std::lock_guard lock{mutex};
-                if (!exception)
-                    exception = std::current_exception();
-            }
-        };
-
-        if (always_single_threaded || !thread_pool.trySchedule([job] { job(true); }))
-            job(false);
+        backup->writeFileAsync(name, entry, on_entry_written);
     }
 
+    all_finished.wait();
+
     {
-        std::unique_lock lock{mutex};
-        event.wait(lock, [&] { return !num_active_jobs; });
-        if (exception)
-            std::rethrow_exception(exception);
+        std::lock_guard lock{mutex};
+        if (error)
+            std::rethrow_exception(error);
     }
 }
 

@@ -18,7 +18,7 @@ class DDLRenamingMap;
 DDLRenamingMap makeRenamingMapFromBackupQuery(const ASTBackupQuery::Elements & elements);
 
 /// Write backup entries to an opened backup.
-void writeBackupEntries(BackupMutablePtr backup, BackupEntries && backup_entries, ThreadPool & thread_pool);
+void writeBackupEntries(BackupMutablePtr backup, BackupEntries && backup_entries);
 
 /// Run data restoring tasks which insert data to tables.
 void restoreTablesData(DataRestoreTasks && tasks, ThreadPool & thread_pool);

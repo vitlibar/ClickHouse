@@ -288,6 +288,7 @@ void BackupsWorker::doBackup(
         BackupFactory::CreateParams backup_create_params;
         backup_create_params.open_mode = IBackup::OpenMode::WRITE;
         backup_create_params.context = context;
+        backup_create_params.scheduler = threadPoolCallbackRunner<void>(backups_thread_pool, "BackupWorker");
         backup_create_params.backup_info = backup_info;
         backup_create_params.base_backup_info = backup_settings.base_backup_info;
         backup_create_params.compression_method = backup_settings.compression_method;
@@ -331,7 +332,7 @@ void BackupsWorker::doBackup(
             }
 
             /// Write the backup entries to the backup.
-            writeBackupEntries(backup, std::move(backup_entries), backups_thread_pool);
+            writeBackupEntries(backup, std::move(backup_entries));
 
             /// We have written our backup entries, we need to tell other hosts (they could be waiting for it).
             backup_coordination->setStage(backup_settings.host_id, Stage::COMPLETED, "");

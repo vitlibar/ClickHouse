@@ -3,6 +3,7 @@
 #include <Backups/IBackup.h>
 #include <Backups/BackupInfo.h>
 #include <Core/Types.h>
+#include <Common/threadPoolCallbackRunner.h>
 #include <Parsers/IAST_fwd.h>
 #include <boost/noncopyable.hpp>
 #include <memory>
@@ -31,6 +32,7 @@ public:
         int compression_level = -1;
         String password;
         ContextPtr context;
+        ThreadPoolCallbackRunner<void> scheduler;
         bool is_internal_backup = false;
         std::shared_ptr<IBackupCoordination> backup_coordination;
         std::optional<UUID> backup_uuid;

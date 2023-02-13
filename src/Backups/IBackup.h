@@ -98,14 +98,11 @@ public:
     virtual BackupEntryPtr readFile(const String & file_name) const = 0;
     virtual BackupEntryPtr readFile(const SizeAndChecksum & size_and_checksum) const = 0;
 
-    /// Puts a new entry to the backup.
-    virtual void writeFile(const String & file_name, BackupEntryPtr entry) = 0;
+    /// Puts a new entry to the backup. It copies a backup entry asynchronously, the function `on_finish_callback` is called when it's done or failed.
+    virtual void writeFileAsync(const String & file_name, BackupEntryPtr entry, const std::function<void(std::exception_ptr)> & on_finish_callback) = 0;
 
     /// Finalizes writing the backup, should be called after all entries have been successfully written.
     virtual void finalizeWriting() = 0;
-
-    /// Whether it's possible to add new entries to the backup in multiple threads.
-    virtual bool supportsWritingInMultipleThreads() const = 0;
 };
 
 using BackupPtr = std::shared_ptr<const IBackup>;

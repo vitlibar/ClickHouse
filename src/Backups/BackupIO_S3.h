@@ -43,33 +43,32 @@ public:
     bool fileContentsEqual(const String & file_name, const String & expected_file_contents) override;
     std::unique_ptr<WriteBuffer> writeFile(const String & file_name) override;
 
-    void copyDataToFile(const CreateReadBufferFunction & create_read_buffer, UInt64 offset, UInt64 size, const String & dest_file_name) override;
-
     void removeFile(const String & file_name) override;
     void removeFiles(const Strings & file_names) override;
 
+    void copyDataToFile(const CreateReadBufferFunction & create_read_buffer, UInt64 offset, UInt64 size, const String & dest_file_name,
+                        const ThreadPoolCallbackRunner<void> & scheduler) override;
+
+    void copyDataToFileAsync(const CreateReadBufferFunction & create_read_buffer, UInt64 offset, UInt64 size, const String & dest_file_name,
+                             const ThreadPoolCallbackRunner<void> & scheduler, const std::function<void(std::exception_ptr)> & on_finish_callback) override;
+
     DataSourceDescription getDataSourceDescription() const override;
     bool supportNativeCopy(DataSourceDescription data_source_description) const override;
-    void copyFileNative(DiskPtr src_disk, const String & src_file_name, UInt64 src_offset, UInt64 src_size, const String & dest_file_name) override;
+
+    void copyFileNative(DiskPtr src_disk, const String & src_file_name, UInt64 src_offset, UInt64 src_size, const String & dest_file_name,
+                        const ThreadPoolCallbackRunner<void> & scheduler) override;
+
+    void copyFileNativeAsync(DiskPtr src_disk, const String & src_file_name, UInt64 src_offset, UInt64 src_size, const String & dest_file_name,
+                             const ThreadPoolCallbackRunner<void> & scheduler, const std::function<void(std::exception_ptr)> & on_finish_callback) override;
 
 private:
-    void copyObjectImpl(
-        const String & src_bucket,
-        const String & src_key,
-        const String & dst_bucket,
-        const String & dst_key,
-        size_t size,
-        const std::optional<ObjectAttributes> & metadata = std::nullopt) const;
-
-    void copyObjectMultipartImpl(
-        const String & src_bucket,
-        const String & src_key,
-        const String & dst_bucket,
-        const String & dst_key,
-        size_t size,
-        const std::optional<ObjectAttributes> & metadata = std::nullopt) const;
-
     void removeFilesBatch(const Strings & file_names);
+
+    void copyDataToFileImpl(const CreateReadBufferFunction & create_read_buffer, UInt64 offset, UInt64 size, const String & dest_file_name,
+                            const ThreadPoolCallbackRunner<void> & scheduler, bool async, const std::function<void(std::exception_ptr)> & on_finish_callback);
+
+    void copyFileNativeImpl(DiskPtr src_disk, const String & src_file_name, UInt64 src_offset, UInt64 src_size, const String & dest_file_name,
+                            const ThreadPoolCallbackRunner<void> & scheduler, bool async, const std::function<void(std::exception_ptr)> & on_finish_callback);
 
     S3::URI s3_uri;
     std::shared_ptr<S3::Client> client;

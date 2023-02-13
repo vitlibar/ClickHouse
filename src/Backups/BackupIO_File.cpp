@@ -125,7 +125,8 @@ bool BackupWriterFile::supportNativeCopy(DataSourceDescription data_source_descr
     return data_source_description == getDataSourceDescription();
 }
 
-void BackupWriterFile::copyFileNative(DiskPtr src_disk, const String & src_file_name, UInt64 src_offset, UInt64 src_size, const String & dest_file_name)
+void BackupWriterFile::copyFileNative(DiskPtr src_disk, const String & src_file_name, UInt64 src_offset, UInt64 src_size, const String & dest_file_name,
+                                      const ThreadPoolCallbackRunner<void> & scheduler)
 {
     std::string abs_source_path;
     if (src_disk)
@@ -136,7 +137,7 @@ void BackupWriterFile::copyFileNative(DiskPtr src_disk, const String & src_file_
     if ((src_offset != 0) || (src_size != fs::file_size(abs_source_path)))
     {
         auto create_read_buffer = [abs_source_path] { return createReadBufferFromFileBase(abs_source_path, {}); };
-        copyDataToFile(create_read_buffer, src_offset, src_size, dest_file_name);
+        copyDataToFile(create_read_buffer, src_offset, src_size, dest_file_name, scheduler);
         return;
     }
 
