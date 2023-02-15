@@ -63,6 +63,7 @@ def drop_after_test():
     try:
         yield
     finally:
+        return
         node1.query("DROP TABLE IF EXISTS tbl ON CLUSTER 'cluster3' NO DELAY")
         node1.query("DROP TABLE IF EXISTS tbl2 ON CLUSTER 'cluster3' NO DELAY")
         node1.query("DROP DATABASE IF EXISTS mydb ON CLUSTER 'cluster3' NO DELAY")
@@ -87,9 +88,13 @@ def test_replicated_table():
     node1.query(
         "CREATE TABLE tbl ON CLUSTER 'cluster' ("
         "x UInt8, y String"
-        ") ENGINE=ReplicatedMergeTree('/clickhouse/tables/tbl/', '{replica}')"
+        ") ENGINE=ReplicatedMergeTree('/clickhouse/tables/tbl/{uuid}', '{replica}')"
         "ORDER BY x"
     )
+
+    print(node1.query("SHOW CREATE TABLE tbl SETTINGS show_table_uuid_in_table_create_query_if_not_nil=true"))
+    print(node2.query("SHOW CREATE TABLE tbl SETTINGS show_table_uuid_in_table_create_query_if_not_nil=true"))
+    assert False
 
     node1.query("INSERT INTO tbl VALUES (1, 'Don''t')")
     node2.query("INSERT INTO tbl VALUES (2, 'count')")
@@ -108,7 +113,13 @@ def test_replicated_table():
     node1.query(f"DROP TABLE tbl ON CLUSTER 'cluster' NO DELAY")
 
     # Restore from backup on node2.
+    #node2.query(f"RESTORE TABLE tbl FROM {backup_name}")
+
+    #node1.query(f"RESTORE TABLE tbl FROM {backup_name}")
     node2.query(f"RESTORE TABLE tbl ON CLUSTER 'cluster' FROM {backup_name}")
+
+    return
+
     node1.query("SYSTEM SYNC REPLICA ON CLUSTER 'cluster' tbl")
 
     assert node2.query("SELECT * FROM tbl ORDER BY x") == TSV(
