@@ -49,21 +49,21 @@ namespace
     public:
         BaseS3FileCopier(
             const std::shared_ptr<const S3::Client> & client_ptr_,
-            const String & dest_bucket_,
-            const String & dest_key_,
-            const CopyS3FileSettings & copy_settings_,
+            String && dest_bucket_,
+            String && dest_key_,
+            CopyS3FileSettings && copy_settings_,
             Poco::Logger * log_)
             : client_ptr(client_ptr_)
-            , dest_bucket(dest_bucket_)
-            , dest_key(dest_key_)
+            , dest_bucket(std::move(dest_bucket_))
+            , dest_key(std::move(dest_key_))
             , offset(copy_settings_.offset)
             , size(copy_settings_.size)
-            , request_settings(copy_settings_.request_settings)
+            , request_settings(std::move(copy_settings_.request_settings))
             , upload_settings(request_settings.getUploadSettings())
-            , object_metadata(copy_settings_.object_metadata)
+            , object_metadata(std::move(copy_settings_.object_metadata))
             , schedule(copy_settings_.scheduler)
             , async(copy_settings_.async)
-            , on_finish(copy_settings_.on_finish_callback)
+            , on_finish_callback_holder(makeThreadSafeHolderForOnFinishCallback(std::move(copy_settings_.on_finish_callback)))
             , for_disk_s3(copy_settings_.for_disk_s3)
             , log(log_)
         {
@@ -77,44 +77,21 @@ namespace
             if (async && !schedule)
                 throw Exception(ErrorCodes::LOGICAL_ERROR, "Async copying to S3 cannot work without a scheduler");
 
-            /// Exceptions can be thrown only from this call stack.
-            SCOPE_EXIT( on_finish.onExitInitialScope() );
-
-            auto job = [this, keep_this_alive = shared_from_this()]
+            auto job = [this, keep_this_alive = shared_from_this()]()
             {
-                try
-                {
-                    if (size == static_cast<size_t>(-1))
-                        size = calculateSize();
+                if (size == static_cast<size_t>(-1))
+                    size = calculateSize();
 
-                    if (shouldUseMultipartCopy())
-                        performMultipartCopy();
-                    else
-                        performSinglepartCopy();
-                }
-                catch(...)
-                {
-                    /// Couldn't calculate the size or make a copy.
-                    onFinish(std::current_exception());
-                }
+                if (shouldUseMultipartCopy())
+                    performMultipartCopy();
+                else
+                    performSinglepartCopy();
             };
 
             if (async)
-            {
-                try
-                {
-                    schedule(job, 0);
-                }
-                catch (...)
-                {
-                    /// Couldn't schedule a job.
-                    onFinish(std::current_exception());
-                }
-            }
+                runAsyncWithOnFinishCallback(schedule, job, on_finish_callback_holder);
             else
-            {
                 job();
-            }
         }
 
     protected:
@@ -128,7 +105,7 @@ namespace
         const std::optional<std::map<String, String>> object_metadata;
         const ThreadPoolCallbackRunner<void> schedule;
         const bool async;
-        OnFinishCallbackRunnerForAsyncJob<void> on_finish;
+        const std::shared_ptr<ThreadSafeHolderForOnFinishCallback<void(std::exception_ptr)>> on_finish_callback_holder;
         const bool for_disk_s3;
         Poco::Logger * log;
 
@@ -151,8 +128,14 @@ namespace
         mutable std::mutex bg_tasks_mutex;
         mutable Poco::Event bg_tasks_finished;
 
-        /// Called at the end of copying no matter if it was successful or not.
-        void onFinish(std::exception_ptr error = nullptr) { on_finish.run(error); }
+        /// Called at the end of copying.
+        void onFinish(std::exception_ptr error = nullptr)
+        {
+            if (async)
+                on_finish_callback_holder->callOrLogError(error);
+            else
+                on_finish_callback_holder->callOrThrow(error);
+        }
 
         /// Called to determinine the size to copy if it's set to -1.
         virtual size_t calculateSize() const = 0;
@@ -595,10 +578,10 @@ namespace
         DataToS3FileCopier(
             const std::function<std::unique_ptr<SeekableReadBuffer>()> & create_read_buffer_,
             const std::shared_ptr<const S3::Client> & client_ptr_,
-            const String & dest_bucket_,
-            const String & dest_key_,
-            const CopyS3FileSettings & copy_settings_)
-            : BaseS3FileCopier(client_ptr_, dest_bucket_, dest_key_, copy_settings_, &Poco::Logger::get("copyDataToS3File"))
+            String && dest_bucket_,
+            String && dest_key_,
+            CopyS3FileSettings && copy_settings_)
+            : BaseS3FileCopier(client_ptr_, std::move(dest_bucket_), std::move(dest_key_), std::move(copy_settings_), &Poco::Logger::get("copyDataToS3File"))
             , create_read_buffer(create_read_buffer_)
         {
         }
@@ -727,14 +710,14 @@ namespace
     public:
         S3FileCopier(
             const std::shared_ptr<const S3::Client> & client_ptr_,
-            const String & src_bucket_,
-            const String & src_key_,
-            const String & dest_bucket_,
-            const String & dest_key_,
-            const CopyS3FileSettings & copy_settings_)
-            : BaseS3FileCopier(client_ptr_, dest_bucket_, dest_key_, copy_settings_, &Poco::Logger::get("copyS3File"))
-            , src_bucket(src_bucket_)
-            , src_key(src_key_)
+            String && src_bucket_,
+            String && src_key_,
+            String && dest_bucket_,
+            String && dest_key_,
+            CopyS3FileSettings && copy_settings_)
+            : BaseS3FileCopier(client_ptr_, std::move(dest_bucket_), std::move(dest_key_), std::move(copy_settings_), &Poco::Logger::get("copyS3File"))
+            , src_bucket(std::move(src_bucket_))
+            , src_key(std::move(src_key_))
         {
         }
 
@@ -871,24 +854,24 @@ namespace
 void copyDataToS3File(
     const std::function<std::unique_ptr<SeekableReadBuffer>()> & create_read_buffer,
     const std::shared_ptr<const S3::Client> & dest_s3_client,
-    const String & dest_bucket,
-    const String & dest_key,
-    const CopyS3FileSettings & copy_settings)
+    String dest_bucket,
+    String dest_key,
+    CopyS3FileSettings copy_settings)
 {
-    auto copier = std::make_shared<DataToS3FileCopier>(create_read_buffer, dest_s3_client, dest_bucket, dest_key, copy_settings);
+    auto copier = std::make_shared<DataToS3FileCopier>(create_read_buffer, dest_s3_client, std::move(dest_bucket), std::move(dest_key), std::move(copy_settings));
     copier->run();
 }
 
 
 void copyS3File(
     const std::shared_ptr<const S3::Client> & s3_client,
-    const String & src_bucket,
-    const String & src_key,
-    const String & dest_bucket,
-    const String & dest_key,
-    const CopyS3FileSettings & copy_settings)
+    String src_bucket,
+    String src_key,
+    String dest_bucket,
+    String dest_key,
+    CopyS3FileSettings copy_settings)
 {
-    auto copier = std::make_shared<S3FileCopier>(s3_client, src_bucket, src_key, dest_bucket, dest_key, copy_settings);
+    auto copier = std::make_shared<S3FileCopier>(s3_client, std::move(src_bucket), std::move(src_key), std::move(dest_bucket), std::move(dest_key), std::move(copy_settings));
     copier->run();
 }
 

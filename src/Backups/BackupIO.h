@@ -40,7 +40,7 @@ public:
                                 const ThreadPoolCallbackRunner<void> & scheduler);
 
     virtual void copyDataToFileAsync(const CreateReadBufferFunction & create_read_buffer, UInt64 offset, UInt64 size, const String & dest_file_name,
-                                     const ThreadPoolCallbackRunner<void> & scheduler, const std::function<void(std::exception_ptr)> & on_finish_callback);
+                                     const ThreadPoolCallbackRunner<void> & scheduler, std::function<void(std::exception_ptr)> on_finish_callback);
 
     virtual bool supportNativeCopy(DataSourceDescription /* data_source_description */) const { return false; }
 
@@ -48,6 +48,6 @@ public:
                                 const ThreadPoolCallbackRunner<void> & scheduler);
 
     virtual void copyFileNativeAsync(DiskPtr src_disk, const String & src_file_name, UInt64 src_offset, UInt64 src_size, const String & dest_file_name,
-                                     const ThreadPoolCallbackRunner<void> & scheduler, const std::function<void(std::exception_ptr)> & on_finish_callback);
+                                     const ThreadPoolCallbackRunner<void> & scheduler, std::function<void(std::exception_ptr)> on_finish_callback);
 };
 }

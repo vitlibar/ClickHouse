@@ -155,7 +155,7 @@ BackupImpl::BackupImpl(
     , version(INITIAL_BACKUP_VERSION)
     , base_backup_info(base_backup_info_)
 {
-    open(context_);
+    openBackup(context_);
 }
 
 
@@ -834,35 +834,21 @@ ChecksumsForNewEntry calculateNewEntryChecksumsIfNeeded(BackupEntryPtr entry, si
 
 }
 
-void BackupImpl::writeFileAsync(const String & file_name, BackupEntryPtr entry, const std::function<void(std::exception_ptr)> & on_finish_callback)
+void BackupImpl::writeFileAsync(const String & file_name, BackupEntryPtr entry, std::function<void(std::exception_ptr)> on_finish_callback)
 {
-    auto on_finish = std::make_shared<OnFinishCallbackRunnerForAsyncJob<void>>(on_finish_callback);
-    SCOPE_EXIT( on_finish->onExitInitialScope(); );
+    auto on_finish_callback_holder = makeThreadSafeHolderForOnFinishCallback(std::move(on_finish_callback));
 
-    auto job = [this, file_name, entry, on_finish]
+    auto job = [this, file_name, entry, on_finish_callback_holder]
     {
-        try
-        {
-            writeFile(file_name, entry, on_finish);
-        }
-        catch (...)
-        {
-            on_finish->run(std::current_exception());
-        }
+        writeFile(file_name, entry,
+                  [on_finish_callback_holder](std::exception_ptr error) { on_finish_callback_holder->callOrLogError(error); });
     };
 
-    try
-    {
-        scheduler(job, 0);
-    }
-    catch (...)
-    {
-        on_finish->run(std::current_exception());
-    }
+    runAsyncWithOnFinishCallback(scheduler, job, on_finish_callback_holder);
 }
 
 
-void BackupImpl::writeFile(const String & file_name, BackupEntryPtr entry, const std::shared_ptr<OnFinishCallbackRunnerForAsyncJob<void>> & on_finish)
+void BackupImpl::writeFile(const String & file_name, BackupEntryPtr entry, std::function<void(std::exception_ptr)> && on_finish_callback)
 {
     if (open_mode != OpenMode::WRITE)
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Backup is not opened for writing");
@@ -902,7 +888,7 @@ void BackupImpl::writeFile(const String & file_name, BackupEntryPtr entry, const
     if (info.size == 0 && deduplicate_files)
     {
         coordination_ptr->addFileInfo(info);
-        on_finish->run();
+        on_finish_callback(nullptr);
         return;
     }
 
@@ -974,7 +960,7 @@ void BackupImpl::writeFile(const String & file_name, BackupEntryPtr entry, const
     {
         LOG_TRACE(log, "File {} already exist in current backup, adding reference", adjusted_path);
         coordination_ptr->addFileInfo(info);
-        on_finish->run();
+        on_finish_callback(nullptr);
         return;
     }
 
@@ -987,7 +973,7 @@ void BackupImpl::writeFile(const String & file_name, BackupEntryPtr entry, const
         info.base_size = info.size;
         info.base_checksum = info.checksum;
         coordination_ptr->addFileInfo(info);
-        on_finish->run();
+        on_finish_callback(nullptr);
         return;
     }
 
@@ -1007,7 +993,7 @@ void BackupImpl::writeFile(const String & file_name, BackupEntryPtr entry, const
     if (!is_data_file_required && deduplicate_files)
     {
         LOG_TRACE(log, "File {} doesn't exist in current backup, but we have file with same size and checksum", adjusted_path);
-        on_finish->run();
+        on_finish_callback(nullptr);
         return; /// We copy data only if it's a new combination of size & checksum.
     }
 
@@ -1017,16 +1003,16 @@ void BackupImpl::writeFile(const String & file_name, BackupEntryPtr entry, const
             checkLockFile(true);
     }
 
-    auto on_file_written = [this, on_finish, size_of_entry = info.size - info.base_size](std::exception_ptr error)
+    auto on_file_written = [this, size_of_entry = info.size - info.base_size, on_finish_callback = std::move(on_finish_callback)](std::exception_ptr error) mutable
     {
         if (!error)
         {
-            std::lock_guard lock{mutex};
+            std::lock_guard lock2{mutex};
             ++num_entries;
             size_of_entries += size_of_entry;
             uncompressed_size += size_of_entry;
         }
-        on_finish->run(error);
+        (std::move(on_finish_callback))(error);
     };
 
     if (use_archives)
@@ -1077,7 +1063,13 @@ void BackupImpl::writeFile(const String & file_name, BackupEntryPtr entry, const
 }
 
 
-void BackupImpl::addFileToArchive(const String & archive_suffix, const String & file_name, BackupEntryPtr backup_entry, size_t offset, size_t size, const std::function<void(std::exception_ptr)> & on_finish_callback)
+void BackupImpl::addFileToArchive(
+    const String & archive_suffix,
+    const String & file_name,
+    BackupEntryPtr backup_entry,
+    size_t offset,
+    size_t size,
+    std::function<void(std::exception_ptr)> && on_finish_callback)
 {
     {
         std::lock_guard lock{mutex};
@@ -1086,7 +1078,7 @@ void BackupImpl::addFileToArchive(const String & archive_suffix, const String & 
         item.backup_entry = backup_entry;
         item.offset = offset;
         item.size = size;
-        item.on_finish_callback = on_finish_callback;
+        item.on_finish_callback = std::move(on_finish_callback);
         auto & queue = archive_writing_queues[archive_suffix];
         queue.queue.push(std::move(item));
 
@@ -1124,7 +1116,7 @@ void BackupImpl::addFileToArchive(const String & archive_suffix, const String & 
         }
         catch (...)
         {
-            item->on_finish_callback(std::current_exception());
+            (std::move(item->on_finish_callback))(std::current_exception());
         }
     }
 }

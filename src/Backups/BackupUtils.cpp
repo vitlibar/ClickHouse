@@ -4,6 +4,7 @@
 #include <Access/Common/AccessRightsElement.h>
 #include <Databases/DDLRenamingVisitor.h>
 #include <Interpreters/DatabaseCatalog.h>
+#include <Common/runAsyncWithOnFinishCallback.h>
 #include <Common/scope_guard_safe.h>
 #include <Common/setThreadName.h>
 
@@ -60,43 +61,37 @@ DDLRenamingMap makeRenamingMapFromBackupQuery(const ASTBackupQuery::Elements & e
 }
 
 
-void writeBackupEntries(BackupMutablePtr backup, BackupEntries && backup_entries)
+void writeBackupEntries(
+    BackupMutablePtr backup, BackupEntries && backup_entries, std::function<void(std::exception_ptr)> on_finish_callback)
 {
-    std::mutex mutex;
-    size_t num_entries_requested = 0;
-    size_t num_entries_responded;
-    std::exception_ptr error;
-    Poco::Event all_finished;
-
-    auto on_entry_written = [&](std::exception_ptr error_)
-    {
-        std::lock_guard lock{mutex};
-        if (!error)
-            error = error_;
-        ++num_entries_responded;
-        size_t expect_num_entries_responded = error ? num_entries_requested : backup_entries.size();
-        if (num_entries_responded == expect_num_entries_responded)
-            all_finished.set();
-    };
+    auto tracker = std::make_shared<MultipleTasksTrackerWithOnFinishCallback>(backup_entries.size(), std::move(on_finish_callback));
+    auto on_task_finished = [tracker](std::exception_ptr error_) { tracker->onTaskFinished(error_); };
 
     for (auto & [name, entry] : backup_entries)
     {
-        {
-            std::lock_guard lock{mutex};
-            if (error)
-                break;
-            ++num_entries_requested;
-        }
-        backup->writeFileAsync(name, entry, on_entry_written);
+        if (!tracker->onTaskStarted())
+            break;
+        backup->writeFileAsync(name, entry, on_task_finished);
     }
+}
 
-    all_finished.wait();
 
+void writeBackupEntries(BackupMutablePtr backup, BackupEntries && backup_entries)
+{
+    Poco::Event finished;
+    std::exception_ptr error;
+
+    auto on_finish_callback = [&finished, &error](std::exception_ptr error_)
     {
-        std::lock_guard lock{mutex};
-        if (error)
-            std::rethrow_exception(error);
-    }
+        error = error_;
+        finished.set();
+    };
+
+    writeBackupEntries(backup, std::move(backup_entries), on_finish_callback);
+
+    finished.wait();
+    if (error)
+        std::rethrow_exception(error);
 }
 
 

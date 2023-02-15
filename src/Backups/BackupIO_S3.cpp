@@ -147,13 +147,13 @@ void BackupWriterS3::copyDataToFile(const CreateReadBufferFunction & create_read
 }
 
 void BackupWriterS3::copyDataToFileAsync(const CreateReadBufferFunction & create_read_buffer, UInt64 offset, UInt64 size, const String & dest_file_name,
-                                         const ThreadPoolCallbackRunner<void> & scheduler, const std::function<void(std::exception_ptr)> & on_finish_callback)
+                                         const ThreadPoolCallbackRunner<void> & scheduler, std::function<void(std::exception_ptr)> on_finish_callback)
 {
-    copyDataToFileImpl(create_read_buffer, offset, size, dest_file_name, scheduler, /* async= */ true, on_finish_callback);
+    copyDataToFileImpl(create_read_buffer, offset, size, dest_file_name, scheduler, /* async= */ true, std::move(on_finish_callback));
 }
 
 void BackupWriterS3::copyDataToFileImpl(const CreateReadBufferFunction & create_read_buffer, UInt64 offset, UInt64 size, const String & dest_file_name,
-                                        const ThreadPoolCallbackRunner<void> & scheduler, bool async, const std::function<void(std::exception_ptr)> & on_finish_callback)
+                                        const ThreadPoolCallbackRunner<void> & scheduler, bool async, std::function<void(std::exception_ptr)> && on_finish_callback)
 {
     CopyS3FileSettings copy_settings;
     copy_settings.request_settings = request_settings;
@@ -161,8 +161,8 @@ void BackupWriterS3::copyDataToFileImpl(const CreateReadBufferFunction & create_
     copy_settings.size = size;
     copy_settings.scheduler = scheduler;
     copy_settings.async = async;
-    copy_settings.on_finish_callback = on_finish_callback;
-    copyDataToS3File(create_read_buffer,client, s3_uri.bucket, fs::path(s3_uri.key) / dest_file_name, copy_settings);
+    copy_settings.on_finish_callback = std::move(on_finish_callback);
+    copyDataToS3File(create_read_buffer,client, s3_uri.bucket, fs::path(s3_uri.key) / dest_file_name, std::move(copy_settings));
 }
 
 DataSourceDescription BackupWriterS3::getDataSourceDescription() const
@@ -182,13 +182,13 @@ void BackupWriterS3::copyFileNative(DiskPtr src_disk, const String & src_file_na
 }
 
 void BackupWriterS3::copyFileNativeAsync(DiskPtr src_disk, const String & src_file_name, UInt64 src_offset, UInt64 src_size, const String & dest_file_name,
-                                         const ThreadPoolCallbackRunner<void> & scheduler, const std::function<void(std::exception_ptr)> & on_finish_callback)
+                                         const ThreadPoolCallbackRunner<void> & scheduler, std::function<void(std::exception_ptr)> on_finish_callback)
 {
-    copyFileNativeImpl(src_disk, src_file_name, src_offset, src_size, dest_file_name, scheduler, /* async= */ true, on_finish_callback);
+    copyFileNativeImpl(src_disk, src_file_name, src_offset, src_size, dest_file_name, scheduler, /* async= */ true, std::move(on_finish_callback));
 }
 
 void BackupWriterS3::copyFileNativeImpl(DiskPtr src_disk, const String & src_file_name, UInt64 src_offset, UInt64 src_size, const String & dest_file_name,
-                                        const ThreadPoolCallbackRunner<void> & scheduler, bool async, const std::function<void(std::exception_ptr)> & on_finish_callback)
+                                        const ThreadPoolCallbackRunner<void> & scheduler, bool async, std::function<void(std::exception_ptr)> && on_finish_callback)
 {
     if (!src_disk)
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Cannot natively copy data to disk without source disk");
@@ -197,7 +197,7 @@ void BackupWriterS3::copyFileNativeImpl(DiskPtr src_disk, const String & src_fil
     if ((objects.size() != 1) || (src_offset != 0) || (src_size != objects[0].bytes_size))
     {
         auto create_read_buffer = [src_disk, src_file_name] { return src_disk->readFile(src_file_name); };
-        copyDataToFileImpl(create_read_buffer, src_offset, src_size, dest_file_name, scheduler, async, on_finish_callback);
+        copyDataToFileImpl(create_read_buffer, src_offset, src_size, dest_file_name, scheduler, async, std::move(on_finish_callback));
         return;
     }
 
@@ -210,8 +210,8 @@ void BackupWriterS3::copyFileNativeImpl(DiskPtr src_disk, const String & src_fil
     copy_settings.size = src_size;
     copy_settings.scheduler = scheduler;
     copy_settings.async = async;
-    copy_settings.on_finish_callback = on_finish_callback;
-    copyS3File(client, src_bucket, objects[0].absolute_path, s3_uri.bucket, file_path, copy_settings);
+    copy_settings.on_finish_callback = std::move(on_finish_callback);
+    copyS3File(client, src_bucket, objects[0].absolute_path, s3_uri.bucket, file_path, std::move(copy_settings));
 }
 
 BackupWriterS3::~BackupWriterS3() = default;

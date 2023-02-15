@@ -30,13 +30,13 @@ void IBackupWriter::copyDataToFileAsync(
     UInt64 size,
     const String & dest_file_name,
     const ThreadPoolCallbackRunner<void> & scheduler,
-    const std::function<void(std::exception_ptr)> & on_finish_callback)
+    std::function<void(std::exception_ptr)> on_finish_callback)
 {
-    std::function<void()> job = [this, create_read_buffer, offset, size, dest_file_name, scheduler]
+    auto job = [this, create_read_buffer, offset, size, dest_file_name, scheduler]
     {
         copyDataToFile(create_read_buffer, offset, size, dest_file_name, scheduler);
     };
-    runAsyncWithOnFinishCallback(scheduler, job, on_finish_callback);
+    runAsyncWithOnFinishCallback(scheduler, job, std::move(on_finish_callback));
 }
 
 void IBackupWriter::copyFileNative(
@@ -57,12 +57,12 @@ void IBackupWriter::copyFileNativeAsync(
     UInt64 src_size,
     const String & dest_file_name,
     const ThreadPoolCallbackRunner<void> & scheduler,
-    const std::function<void(std::exception_ptr)> & on_finish_callback)
+    std::function<void(std::exception_ptr)> on_finish_callback)
 {
-    std::function<void()> job = [this, src_disk, src_file_name, src_offset, src_size, dest_file_name, scheduler]
+    auto job = [this, src_disk, src_file_name, src_offset, src_size, dest_file_name, scheduler]
     {
         copyFileNative(src_disk, src_file_name, src_offset, src_size, dest_file_name, scheduler);
     };
-    runAsyncWithOnFinishCallback(scheduler, job, on_finish_callback);
+    runAsyncWithOnFinishCallback(scheduler, job, std::move(on_finish_callback));
 }
 }

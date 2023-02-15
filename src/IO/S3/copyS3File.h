@@ -46,11 +46,11 @@ struct CopyS3FileSettings
 /// however copyS3File() is faster and spends less network traffic and memory.
 void copyS3File(
     const std::shared_ptr<const S3::Client> & s3_client,
-    const String & src_bucket,
-    const String & src_key,
-    const String & dest_bucket,
-    const String & dest_key,
-    const CopyS3FileSettings & copy_settings);
+    String src_bucket,
+    String src_key,
+    String dest_bucket,
+    String dest_key,
+    CopyS3FileSettings copy_settings);
 
 /// Copies data from any seekable source to S3.
 /// The same functionality can be done by using the function copyData() and the class WriteBufferFromS3
@@ -59,9 +59,9 @@ void copyS3File(
 void copyDataToS3File(
     const std::function<std::unique_ptr<SeekableReadBuffer>()> & create_read_buffer,
     const std::shared_ptr<const S3::Client> & dest_s3_client,
-    const String & dest_bucket,
-    const String & dest_key,
-    const CopyS3FileSettings & copy_settings);
+    String dest_bucket,
+    String dest_key,
+    CopyS3FileSettings copy_settings);
 
 }
 

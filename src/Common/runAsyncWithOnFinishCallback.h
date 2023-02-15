@@ -5,196 +5,176 @@
 namespace DB
 {
 
-namespace ErrorCodes
-{
-    extern const int LOGICAL_ERROR;
-}
-
-/// Either `std::function<void(std::optional<Result>, std::exception_ptr)>` or `std::function<void(std::exception_ptr)>`.
-/// See runAsyncWithOnFinishCallback().
-template <typename Result>
-using OnFinishCallbackForAsyncJob
-    = std::function<std::conditional_t<std::is_void_v<Result>, void(std::exception_ptr), void(std::optional<Result>, std::exception_ptr)>>;
-
 /// Runs a passed job on a scheduler, and then call `on_finish_callback`.
 /// Makes sure `on_finish_callback` is always called even if a passed job or a scheduler throw an exception.
-template <typename Result>
-void runAsyncWithOnFinishCallback(
-    const ThreadPoolCallbackRunner<void> & schedule,
-    const std::function<Result()> & job,
-    const OnFinishCallbackForAsyncJob<Result> & on_finish_callback);
+void runAsyncWithOnFinishCallback(const ThreadPoolCallbackRunner<void> & scheduler,
+                                  std::function<void()> && job,
+                                  std::function<void(std::exception_ptr)> && on_finish_callback);
 
-/// Helper for implementation of runAsyncWithOnFinishCallback().
-template <typename Result>
-class OnFinishCallbackRunnerForAsyncJob
+template<typename Signature>
+class ThreadSafeHolderForOnFinishCallback;
+
+template <typename Result, typename... ArgTypes>
+class ThreadSafeHolderForOnFinishCallback<Result(ArgTypes...)>
 {
 public:
-    using OnFinishCallback = OnFinishCallbackForAsyncJob<Result>;
-    static const constexpr bool result_is_void = std::is_void_v<Result>;
+    using CallbackType = std::function<Result(ArgTypes...)>;
 
-    OnFinishCallbackRunnerForAsyncJob(const OnFinishCallback & on_finish_callback_)
-        : on_finish_callback(on_finish_callback_), thread_id_which_can_throw(std::this_thread::get_id())
-    {
-    }
+    ThreadSafeHolderForOnFinishCallback(CallbackType && callback_) : callback(std::move(callback_)) {}
 
-    ~OnFinishCallbackRunnerForAsyncJob()
+    ~ThreadSafeHolderForOnFinishCallback()
     {
-        /// If there was `on_finish_callback` it must be called before calling this destructor.
-        if (on_finish_callback && !on_finish_callback_called.load())
+        if (get())
         {
-            /// Though we can call `on_finish_callback` now, but this is not normal.
-            run(Exception{ErrorCodes::LOGICAL_ERROR, "onFinish() must be called before ~OnFinishCallbackRunnerForAsyncJob. It's a bug"});
+            LOG_ERROR(&Poco::Logger::get("runAsyncWithOnFinishCallback"), "on_finish_callback was never called!");
+            chassert(false);
         }
     }
 
-    template <typename T = Result>
-    std::enable_if_t<std::is_same_v<T, Result> && !result_is_void> run(T result)
+    void callOrThrow(std::exception_ptr error = nullptr)
     {
-        runImpl(std::move(result));
+        chassert(error);
+        if (auto cl = get())
+            (std::move(cl))(error);
+        else if (error)
+            std::rethrow_exception(error);
     }
 
-    void run(std::exception_ptr error = nullptr)
+    void callOrLogError(std::exception_ptr error = nullptr)
     {
-        runImpl(std::move(error));
-    }
-
-    void run(const std::exception & error)
-    {
-        runImpl(std::make_exception_ptr(error));
-    }
-
-    void onExitInitialScope()
-    {
-        std::lock_guard lock{mutex};
-        thread_id_which_can_throw = std::thread::id{};
-    }
-
-private:
-    template <typename T>
-    void runImpl(T result_or_error)
-    {
-        constexpr bool is_error = std::is_same_v<T, std::exception_ptr>;
-        if (on_finish_callback && !on_finish_callback_called.exchange(true))
+        chassert(error);
+        if (auto cl = get())
         {
             try
             {
-                if constexpr (result_is_void)
-                    on_finish_callback(result_or_error);
-                else if constexpr (is_error)
-                    on_finish_callback(std::nullopt, result_or_error);
-                else
-                    on_finish_callback(result_or_error, nullptr);
+                (std::move(cl))(error);
             }
-            catch(...)
+            catch (...)
             {
-                if (can_throw())
-                    throw;
-                else
-                    tryLogCurrentException("OnFinishCallbackRunner");
+                tryLogCurrentException(&Poco::Logger::get("runAsyncWithOnFinishCallback"));
             }
         }
-        else
-        {
-            if constexpr(is_error)
-            {
-                if (result_or_error)
-                {
-                    if (can_throw())
-                        std::rethrow_exception(result_or_error);
-                    else
-                        tryLogException(result_or_error, "OnFinishCallbackRunner");
-                }
-            }
-        }
+        else if(error)
+            tryLogException(error, &Poco::Logger::get("runAsyncWithOnFinishCallback"));
     }
 
-    bool can_throw() const
+    CallbackType get()
     {
         std::lock_guard lock{mutex};
-        return thread_id_which_can_throw == std::this_thread::get_id();
+        CallbackType res;
+        std::swap(res, callback);
+        return res;
     }
 
-    OnFinishCallback on_finish_callback;
-    std::atomic<bool> on_finish_callback_called = false;
-    std::thread::id TSA_GUARDED_BY(mutex) thread_id_which_can_throw;
+private:
+    CallbackType TSA_GUARDED_BY(mutex) callback;
+    std::mutex mutex;
+};
+
+template <typename Result, typename... ArgTypes>
+std::shared_ptr<ThreadSafeHolderForOnFinishCallback<Result(ArgTypes...)>> makeThreadSafeHolderForOnFinishCallback(std::function<Result(ArgTypes...)> && callback)
+{
+    return std::make_shared<ThreadSafeHolderForOnFinishCallback<Result(ArgTypes...)>>(std::move(callback));
+}
+
+inline void runAsyncWithOnFinishCallback(const ThreadPoolCallbackRunner<void> & scheduler,
+                                         std::function<void()> && job,
+                                         const std::shared_ptr<ThreadSafeHolderForOnFinishCallback<void(std::exception_ptr)>> & on_finish_callback_holder)
+{
+    auto try_job = [job, on_finish_callback_holder]
+    {
+        try
+        {
+            job();
+        }
+        catch(...)
+        {
+            on_finish_callback_holder->callOrLogError(std::current_exception());
+        }
+    };
+
+    try
+    {
+        scheduler(try_job, 0);
+    }
+    catch(...)
+    {
+        on_finish_callback_holder->callOrThrow(std::current_exception());
+    }
+}
+
+inline void runAsyncWithOnFinishCallback(const ThreadPoolCallbackRunner<void> & scheduler,
+                                         std::function<void()> && job,
+                                         std::function<void(std::exception_ptr)> && on_finish_callback)
+{
+    auto on_finish_callback_holder = makeThreadSafeHolderForOnFinishCallback(std::move(on_finish_callback));
+
+    auto run_job = [job = std::move(job), on_finish_callback_holder]() mutable
+    {
+        job();
+        on_finish_callback_holder->callOrLogError();
+    };
+
+    runAsyncWithOnFinishCallback(scheduler, std::move(run_job), on_finish_callback_holder);
+}
+
+
+class MultipleTasksTrackerWithOnFinishCallback
+{
+public:
+    MultipleTasksTrackerWithOnFinishCallback(size_t num_tasks_, std::function<void(std::exception_ptr)> && on_finish_callback_)
+        : num_tasks(num_tasks_), on_finish_callback_holder(makeThreadSafeHolderForOnFinishCallback(std::move(on_finish_callback_)))
+    {
+    }
+
+    bool hasError() const
+    {
+        std::lock_guard lock{mutex};
+        return error != nullptr;
+    }
+
+    [[nodiscard]] bool onTaskStarted()
+    {
+        std::lock_guard lock{mutex};
+        if (error != nullptr || (num_tasks_started >= num_tasks))
+            return false;
+        ++num_tasks_started;
+        return true;
+    }
+
+    void onTaskFinished(std::exception_ptr error_)
+    {
+        std::lock_guard lock{mutex};
+        ++num_tasks_finished;
+        if (!error)
+            error = error_;
+        size_t num_tasks_expected = error ? num_tasks_started : num_tasks;
+        if (num_tasks_finished == num_tasks_expected)
+            on_finish_callback_holder->callOrLogError(error);
+    }
+
+private:
+    const size_t num_tasks;
+    const std::shared_ptr<ThreadSafeHolderForOnFinishCallback<void(std::exception_ptr)>> on_finish_callback_holder;
+    size_t TSA_GUARDED_BY(mutex) num_tasks_started = 0;
+    size_t TSA_GUARDED_BY(mutex) num_tasks_finished;
+    std::exception_ptr TSA_GUARDED_BY(mutex) error;
     mutable std::mutex mutex;
 };
 
 
-template <typename Result>
-void runAsyncWithOnFinishCallback(const ThreadPoolCallbackRunner<void> & schedule,
-                                  const std::function<Result()> & job,
-                                  const OnFinishCallbackForAsyncJob<Result> & on_finish_callback)
+inline void runAsyncMultipleTasksWithOnFinishCallback(const ThreadPoolCallbackRunner<void> & scheduler,
+                                                      std::vector<std::function<void()>> & jobs,
+                                                      std::function<void(std::exception_ptr)> on_finish_callback)
 {
-    auto on_finish = std::make_shared<OnFinishCallbackRunnerForAsyncJob<Result>>(on_finish_callback);
-    SCOPE_EXIT( on_finish->onExitInitialScope(); );
+    auto tracker = std::make_shared<MultipleTasksTrackerWithOnFinishCallback>(jobs.size(), std::move(on_finish_callback));
+    auto on_task_finished = [tracker](std::exception_ptr error_) { tracker->onTaskFinished(error_); };
 
-    auto job_with_on_finish = [job, on_finish]
+    for (auto & job : jobs)
     {
-        try
-        {
-            if constexpr (std::is_void_v<Result>)
-            {
-                job();
-                on_finish->run();
-            }
-            else
-            {
-                on_finish->run(job());
-            }
-        }
-        catch(...)
-        {
-            on_finish->run(std::current_exception());
-        }
-    };
-
-    try
-    {
-        schedule(job_with_on_finish, 0);
-    }
-    catch(...)
-    {
-        on_finish->run(std::current_exception());
-    }
-}
-
-template <typename Result>
-void runAsyncWithOnFinishCallback(const ThreadPoolCallbackRunner<void> & schedule,
-                                  const std::function<void(OnFinishCallbackForAsyncJob<Result>)> & job,
-                                  const OnFinishCallbackForAsyncJob<Result> & on_finish_callback)
-{
-    auto on_finish = std::make_shared<OnFinishCallbackRunnerForAsyncJob<Result>>(on_finish_callback);
-    SCOPE_EXIT( on_finish->onExitInitialScope(); );
-
-    auto job_with_on_finish = [job, on_finish]
-    {
-        try
-        {
-            if constexpr (std::is_void_v<Result>)
-            {
-                auto 
-                job();
-                on_finish->run();
-            }
-            else
-            {
-                on_finish->run(job());
-            }
-        }
-        catch(...)
-        {
-            on_finish->run(std::current_exception());
-        }
-    };
-
-    try
-    {
-        schedule(job_with_on_finish, 0);
-    }
-    catch(...)
-    {
-        on_finish->run(std::current_exception());
+        if (!tracker->onTaskStarted())
+            break;
+        runAsyncWithOnFinishCallback(scheduler, std::move(job), on_task_finished);
     }
 }
 

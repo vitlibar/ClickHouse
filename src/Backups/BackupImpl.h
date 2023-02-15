@@ -79,7 +79,7 @@ public:
     SizeAndChecksum getFileSizeAndChecksum(const String & file_name) const override;
     BackupEntryPtr readFile(const String & file_name) const override;
     BackupEntryPtr readFile(const SizeAndChecksum & size_and_checksum) const override;
-    void writeFileAsync(const String & file_name, BackupEntryPtr entry, const std::function<void(std::exception_ptr)> & on_finish_callback) override;
+    void writeFileAsync(const String & file_name, BackupEntryPtr entry, std::function<void(std::exception_ptr)> on_finish_callback) override;
     void finalizeWriting() override;
 
 private:
@@ -113,8 +113,8 @@ private:
     std::shared_ptr<IBackupWriter> getWriter() const;
     std::shared_ptr<IBackupCoordination> getCoordination() const;   
 
-    void writeFile(const String & file_name, BackupEntryPtr entry, const std::shared_ptr<OnFinishCallbackRunnerForAsyncJob<void>> & on_finish);
-    void addFileToArchive(const String & archive_suffix, const String & file_name, BackupEntryPtr backup_entry, size_t offset, size_t size, const std::function<void(std::exception_ptr)> & on_finish_callback);
+    void writeFile(const String & file_name, BackupEntryPtr entry, std::function<void(std::exception_ptr)> && on_finish_callback);
+    void addFileToArchive(const String & archive_suffix, const String & file_name, BackupEntryPtr backup_entry, size_t offset, size_t size, std::function<void(std::exception_ptr)> && on_finish_callback);
 
     std::shared_ptr<IArchiveReader> getArchiveReader(const String & archive_suffix) const;
     std::shared_ptr<IArchiveReader> getArchiveReaderNoLock(const String & archive_suffix) const TSA_REQUIRES(mutex);

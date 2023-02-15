@@ -99,7 +99,7 @@ public:
     virtual BackupEntryPtr readFile(const SizeAndChecksum & size_and_checksum) const = 0;
 
     /// Puts a new entry to the backup. It copies a backup entry asynchronously, the function `on_finish_callback` is called when it's done or failed.
-    virtual void writeFileAsync(const String & file_name, BackupEntryPtr entry, const std::function<void(std::exception_ptr)> & on_finish_callback) = 0;
+    virtual void writeFileAsync(const String & file_name, BackupEntryPtr entry, std::function<void(std::exception_ptr)> on_finish_callback) = 0;
 
     /// Finalizes writing the backup, should be called after all entries have been successfully written.
     virtual void finalizeWriting() = 0;
