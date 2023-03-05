@@ -3,7 +3,6 @@
 #include <Common/CoTask_fwd.h>
 #include <Common/scope_guard_safe.h>
 #include <Common/threadPoolCallbackRunner.h>
-#include <boost/tti/has_member_function.hpp>
 #include <coroutine>
 #include <utility>
 
@@ -66,84 +65,75 @@ public:
     {
     }
 
-    void schedule(std::function<void()> callback) const { schedule_function(std::move(callback)); }
+    void schedule(std::function<void()> && callback) const { schedule_function(std::move(callback)); }
 
 private:
     static void defaultScheduleFunction(std::function<void()> callback) { std::move(callback)(); }
     std::function<void(std::function<void()>)> schedule_function;
 };
 
-namespace details { class CancelStatus; }
-
-/// Used to run a coroutine from another coroutine.
-struct TaskRunParams
-{
-    Scheduler scheduler;
-    std::shared_ptr<details::CancelStatus> cancel_status;
-};
+struct TaskRunParams;
 
 
-/// Keeps an asynchronous task, used as a return type in coroutines.
-template <typename ResultType>
+/// Co::Task keeps an asynchronous task, must be specified as a result type when declaring a coroutine.
+/// For example,
+///     Co::Task<> doSomething {}
+///     Co::Task<int> readInt() { co_return 5; }
+template <typename ResultType /* = void */>
 class [[nodiscard]] Task
 {
-    class AwaitControl;
     class Promise;
-    class PromiseBase;
 
 public:
-    using promise_type = Promise;
-
     /// Creates a non-initialized task, it cannot be executed until assigned.
     Task() = default;
 
-    /// Tasks are initialized by promise_type.
-    explicit Task(const std::shared_ptr<AwaitControl> & await_control_) : await_control(await_control_) {}
-
-    /// Task is a move-only class.
-    Task(const Task &) = delete;
+    /// Task is a copyable class.
+    Task(const Task &);
     Task & operator=(const Task &) = delete;
 
-    Task(Task&& task_) noexcept : await_control(std::exchange(task_.await_control, {})) {}
+    Task(Task&& task_) noexcept : controller(std::exchange(task_.controller, {})) {}
+    Task & operator=(Task && task_) noexcept;
 
-    Task & operator=(Task && task_) noexcept
-    {
-        if (this == &task_)
-            return *this;
-        await_control = std::exchange(task_.await_control, {});
-        return *this;
-    }
+    /// It's allowed to destroy a task anytime (before starting, while running, after completion).
+    ~Task();
 
     /// Whether this is an initialized task ready to execute.
     /// Returns false if the task is either created by the default constructor or has already run.
-    operator bool() const { return static_cast<bool>(await_control); }
+    operator bool() const { return static_cast<bool>(controller); }
 
     class Awaiter;
 
     /// Runs a task on a passed scheduler, returns a waiter which can be checked to find out when it's done.
     /// Example of usage: `co_await task.run(scheduler)`.
-    Awaiter run(const Scheduler & scheduler) &&
-    {
-        TaskRunParams params;
-        params.scheduler = scheduler;
-        return std::move(*this).run(params);
+    Awaiter run(const Scheduler & scheduler) &&;
 
-    }
+    /// `RunParams` is a structure used to run a coroutine from another coroutine.
+    /// `co_await Co::TaskRunParams{}` can be used to get `RunParams` inside a coroutine.
+    using RunParams = TaskRunParams;
 
-    Awaiter run(const TaskRunParams & params) &&
-    {
-        chassert(await_control);
-        auto awaiter = await_control->run(params);
-        await_control.reset();
-        return awaiter;
-    }
+    /// Runs a coroutine from another coroutine. Normally shouldn't be called because the `co_await` operator should be used instead.
+    /// The following two calls are the same
+    /// `co_await subCoroutineName(a, b)`
+    /// `co_await subCoroutineName(a, b).runWithParams(co_await Co::TaskRunParams{})`
+    Awaiter runWithParams(const RunParams & params) &&;
 
     /// Runs a task and blocks the current thread until it's done.
     /// Prefer run() to this function if possible.
     ResultType syncRun(const Scheduler & scheduler) &&;
 
+    /// We should define `promise_type` so C++ compiler will be able to use Co::Task<...> with coroutines.
+    using promise_type = Promise;
+
 private:
-    std::shared_ptr<AwaitControl> await_control;
+    class Controller;
+    class PromiseBase;
+
+    /// Tasks are initialized by promise_type.
+    friend class Promise;
+    explicit Task(const std::shared_ptr<Controller> & controller_) : controller(controller_) {}
+
+    std::shared_ptr<Controller> controller;
 };
 
 
@@ -153,18 +143,10 @@ template <typename ResultType>
 class [[nodiscard]] Task<ResultType>::Awaiter
 {
 public:
-    Awaiter(const std::shared_ptr<AwaitControl> & await_control_) : await_control(await_control_) {}
+    /// Awaiters are copyable, no problem with that.
 
-    bool await_ready() { return await_control->isContinuationProcessed(); }
-    bool await_suspend(std::coroutine_handle<> handle_) { return await_control->addContinuation(handle_); }
-
-    ResultType await_resume()
-    {
-        if (auto exception = await_control->getException())
-            std::rethrow_exception(exception);
-        if constexpr (!std::is_void_v<ResultType>)
-            return await_control->getResult();
-    }
+    /// Returns true if the task has already finished.
+    bool isReady() const { return controller->isContinuationProcessed(); }
 
     /// Blocks the current thread until the coroutine finishes or throws an exception.
     ResultType syncWait();
@@ -172,43 +154,63 @@ public:
     /// Tries to cancel the coroutine. If succeeded the coroutine stops with a specified exception.
     /// That doesn't act immediately because the coroutine decides by itself where to stop (by calling coawait Co::StopIfCancelled{}).
     /// After calling tryCancelTask() the coroutine can still finish successfully if it decides so.
-    void tryCancelTask(std::exception_ptr cancel_exception_) { await_control->getCancelStatus()->setCancelException(cancel_exception_); }
-    void tryCancelTask(const String & message_ = {}) { await_control->getCancelStatus()->setCancelException(message_); }
+    void tryCancelTask(std::exception_ptr cancel_exception_) { controller->getCancelStatus()->setCancelException(cancel_exception_); }
+    void tryCancelTask(const String & message_ = {}) { controller->getCancelStatus()->setCancelException(message_); }
+
+    /// To be a proper awaiter this class defines await_ready(), await_suspend(), await_resume() functions.
+    /// Those functions are required by compiler to generate code for the statement `co_await awaiter`.
+    bool await_ready() { return controller->isContinuationProcessed(); }
+    bool await_suspend(std::coroutine_handle<> handle_) { return controller->addContinuation(handle_); }
+
+    ResultType await_resume()
+    {
+        if (auto exception = controller->getException())
+            std::rethrow_exception(exception);
+        if constexpr (!std::is_void_v<ResultType>)
+            return controller->getResult();
+    }
 
 private:
-    std::shared_ptr<AwaitControl> await_control;
+    /// Awaiter can be made by Task::run() only.
+    friend class Task<ResultType>;
+    Awaiter(const std::shared_ptr<Controller> & controller_) : controller(controller_) {}
+
+    std::shared_ptr<Controller> controller;
 };
 
 
-/// Runs multiple tasks one after another.
+/// Runs multiple tasks one after another and returns all the results in the same order.
 template <typename Result>
 Task<std::vector<Result>> sequential(std::vector<Task<Result>> && tasks);
 
 Task<> sequential(std::vector<Task<>> && tasks);
 
 
-/// Runs multiple tasks in parallel.
+/// Runs multiple tasks in parallel and returns all the results in the same order.
 template <typename Result>
 Task<std::vector<Result>> parallel(std::vector<Task<Result>> && tasks);
 
 Task<> parallel(std::vector<Task<>> && tasks);
 
 
-/// Usage: `co_await Co::IsCancelled{}` inside a coroutine returns a boolean meaning whether the coroutine is ordered to cancel and .
+/// Usage: `co_await Co::IsCancelled{}` inside a coroutine returns a boolean meaning whether the coroutine is ordered to cancel
+/// (by calling awaiter.tryCancelTask()). Then the coroutine can decide by itself what to do with that: it can either ignore that and continue working
+/// or finish working by returning or throwing an exception.
 struct IsCancelled
 {
     bool value = false;
     operator bool() const { return value; }
 };
 
-/// Usage: `co_await Co::StopIfCancelled{}` inside a coroutine stops the coroutine by throwing the exception specified in Awaiter::tryCancelTask().
+/// Usage: `co_await Co::StopIfCancelled{}` inside a coroutine checks whether the coroutine is ordered to cancel, and if so,
+/// stops the coroutine by throwing the exception specified in Awaiter::tryCancelTask().
 struct StopIfCancelled {};
 
 
 /// The following are implementation details.
 namespace details
 {
-    /// ContinuationList is used to run resume waiting coroutines after the task has finished.
+    /// ContinuationList is used to resume waiting coroutines after the task has finished.
     class ContinuationList
     {
     public:
@@ -218,6 +220,7 @@ namespace details
         /// Process all items in the list. The function returns false if they were already processed or there were no items in the list.
         void process();
 
+        /// Returns whether the list is already processed.
         bool isProcessed() const;
 
     private:
@@ -226,7 +229,7 @@ namespace details
         mutable std::mutex mutex;
     };
 
-    /// Keeps a result for the promise type.
+    /// Keeps the result of a coroutine (which can be void).
     template <typename ResultType>
     class ResultHolder
     {
@@ -247,11 +250,12 @@ namespace details
         void return_void() {}
     };
 
-    BOOST_TTI_HAS_MEMBER_FUNCTION(await_ready)
-
     /// Checks whether a specified type is an awaiter, i.e. has the member function await_ready().
-    template <typename T>
-    inline constexpr bool is_awaiter_type_v = has_member_function_await_ready<bool (T::*)()>::value;
+    template<typename F>
+    concept AwaiterConcept = requires(F f)
+    {
+        {f.await_ready()} -> std::same_as<bool>;
+    };
 
     /// Holds a cancel exception to helps implementing Awaiter::tryCancelTask().
     class CancelStatus
@@ -284,7 +288,7 @@ namespace details
     {
     public:
         template <typename ResultType>
-        static SyncWaitTask run(typename Task<ResultType>::Awaiter & awaiter, ResultHolder<ResultType> & result, std::exception_ptr & exception, Poco::Event & event)
+        static SyncWaitTask runAndSetEvent(typename Task<ResultType>::Awaiter & awaiter, ResultHolder<ResultType> & result, std::exception_ptr & exception, Poco::Event & event)
         {
             try
             {
@@ -298,7 +302,6 @@ namespace details
                 exception = std::current_exception();
             }
             event.set();
-            co_return;
         }
 
         struct promise_type
@@ -319,7 +322,7 @@ ResultType Task<ResultType>::Awaiter::syncWait()
     Poco::Event event;
     std::exception_ptr exception;
     details::ResultHolder<ResultType> result_holder;
-    details::SyncWaitTask::run(*this, result_holder, exception, event);
+    details::SyncWaitTask::runAndSetEvent(*this, result_holder, exception, event);
     event.wait();
     if (exception)
         std::rethrow_exception(exception);
@@ -337,12 +340,55 @@ ResultType Task<ResultType>::syncRun(const Scheduler & scheduler) &&
 }
 
 template <typename ResultType>
+Task<ResultType>::~Task()
+{
+    if (controller)
+        controller->onTaskDestroyedBeforeStart();
+}
+
+template <typename ResultType>
+Task<ResultType> & Task<ResultType>::operator=(Task && task_) noexcept
+{
+    if (this == &task_)
+        return *this;
+    if (controller)
+        controller->onTaskDestroyedBeforeStart();
+    controller = std::exchange(task_.controller, {});
+    return *this;
+}
+
+/// TaskRunParams contains parameters to run a coroutine, see Task::runWithParams().
+struct TaskRunParams
+{
+    bool reschedule = true;
+    Scheduler scheduler;
+    std::shared_ptr<details::CancelStatus> cancel_status;
+};
+
+template <typename ResultType>
+typename Task<ResultType>::Awaiter Task<ResultType>::run(const Scheduler & scheduler) &&
+{
+    TaskRunParams params;
+    params.scheduler = scheduler;
+    return std::move(*this).runWithParams(params);
+}
+
+template <typename ResultType>
+typename Task<ResultType>::Awaiter Task<ResultType>::runWithParams(const TaskRunParams & params) &&
+{
+    chassert(controller);
+    auto ctrl = std::exchange(controller, nullptr);
+    return ctrl->run(params);
+}
+
+/// PromiseBase is a helper which is used as a base class for Promise.
+template <typename ResultType>
 class Task<ResultType>::PromiseBase
 {
 public:
-    void return_value(ResultType result_) { await_control->setResult(std::move(result_)); }
+    void return_value(ResultType result_) { controller->setResult(std::move(result_)); }
 protected:
-    std::shared_ptr<typename Task<ResultType>::AwaitControl> await_control;
+    std::shared_ptr<typename Task<ResultType>::Controller> controller;
 };
 
 template <>
@@ -351,35 +397,39 @@ class Task<void>::PromiseBase
 public:
     void return_void() {}
 protected:
-    std::shared_ptr<typename Task<>::AwaitControl> await_control;
+    std::shared_ptr<typename Task<>::Controller> controller;
 };
 
 /// Represents the `promise_type` for coroutine tasks.
+/// There is always a single instance of Promise per each coroutine running.
+/// When a coroutine starts the compiler-generated code:
+/// 1) creates an instance of the `promise_type` and calls `Promise::Promise()`
+/// 2) creates a task by calling `Promise::get_return_object()`.
+/// 3) suspends the coroutine because `initial_suspend()` returns `std::suspend_always{}`
+/// 4) the coroutine stays in suspended state until `Task::run()` or `Task::syncRun()` will resume it.
 template <typename ResultType>
 class Task<ResultType>::Promise : public PromiseBase
 {
 public:
-    Promise() { this->await_control = std::make_shared<AwaitControl>(std::coroutine_handle<Promise>::from_promise(*this)); }
+    Promise() { this->controller = std::make_shared<Controller>(std::coroutine_handle<Promise>::from_promise(*this)); }
 
-    Task get_return_object() { return Task(getAwaitControl()); }
-
-    Awaiter run(const Scheduler & scheduler_) { return getAwaitControl()->run(scheduler_); }
+    Task get_return_object() { return Task(getController()); }
 
     auto initial_suspend() { return std::suspend_always{}; }
 
     class FinalSuspend;
-    auto final_suspend() noexcept { return FinalSuspend{getAwaitControl()}; }
+    auto final_suspend() noexcept { return FinalSuspend{getController()}; }
 
-    void unhandled_exception() { getAwaitControl()->setException(std::current_exception()); }
+    void unhandled_exception() { getController()->setException(std::current_exception()); }
 
-    auto await_transform(TaskRunParams)
+    auto await_transform(RunParams)
     {
         struct Getter : std::suspend_never
         {
-            TaskRunParams params;
-            TaskRunParams await_resume() const noexcept { return params; }
+            RunParams params;
+            RunParams await_resume() const noexcept { return params; }
         };
-        return Getter{{}, getAwaitControl()->getRunParams()};
+        return Getter{{}, getController()->getRunParams()};
     }
 
     auto await_transform(IsCancelled)
@@ -389,7 +439,7 @@ public:
             bool is_cancelled;
             IsCancelled await_resume() const noexcept { return {is_cancelled}; }
         };
-        return Getter{{}, static_cast<bool>(getAwaitControl()->getCancelStatus()->isCancelled())};
+        return Getter{{}, static_cast<bool>(getController()->getCancelStatus()->isCancelled())};
     }
 
     auto await_transform(StopIfCancelled)
@@ -403,11 +453,11 @@ public:
                     std::rethrow_exception(cancel_exception);
             }
         };
-        return Getter{{}, getAwaitControl()->getCancelStatus()->getCancelException()};
+        return Getter{{}, getController()->getCancelStatus()->getCancelException()};
     }
 
-    template <typename AwaiterType>
-    auto await_transform(AwaiterType && awaiter, typename std::enable_if_t<details::is_awaiter_type_v<std::remove_cvref_t<AwaiterType>>> * = nullptr)
+    template <details::AwaiterConcept AwaiterType>
+    auto await_transform(AwaiterType && awaiter)
     {
         return std::forward<AwaiterType>(awaiter);
     }
@@ -415,92 +465,118 @@ public:
     template <typename SubTaskResultType>
     typename Task<SubTaskResultType>::Awaiter await_transform(Task<SubTaskResultType> && sub_task)
     {
-        return std::move(sub_task).run(getAwaitControl()->getRunParams());
+        return std::move(sub_task).runWithParams(getController()->getRunParams());
     }
 
 private:
-    std::shared_ptr<typename Task<ResultType>::AwaitControl> getAwaitControl() { return this->await_control; }
+    std::shared_ptr<typename Task<ResultType>::Controller> getController() { return this->controller; }
 };
 
 /// FinalSuspend is used to resume waiting coroutines stored in the contunuation list after the task has finished.
+///
+/// `co_await subtask_awaiter` is transformed by the compiler into something like:
+/// if (!subtask_awaiter.await_ready())
+/// {
+///     subtask_awaiter.suspend(this_task_handle); // Stores <resume_point> in the continuation list of `subtask`. Later when `subtask` is done,
+///                                                // its `FinalSuspend` will process the continuation list and resume `this_task` at <resume_point>.
+///     <resume_point>
+/// }
+/// subtask_awaiter.resume(); /// This will rethrow an exception from `subtask`.
+///
 template <typename ResultType>
 class Task<ResultType>::Promise::FinalSuspend : public std::suspend_never
 {
 public:
-    FinalSuspend(std::shared_ptr<AwaitControl> await_control_) : await_control(await_control_) {}
+    FinalSuspend(std::shared_ptr<Controller> controller_) : controller(controller_) {}
 
     bool await_ready() noexcept
     {
-        /// The coroutine has finished normally, maybe with an exception, but it wasn't cancelled,
-        /// so ~AwaitControl must not destroy it.
-        await_control->setIsFinalized();
-
         /// Give control to the code waiting for this coroutine to be finished.
-        await_control->processContinuation();
+        controller->processContinuation();
         return true;
     }
 
 private:
-    std::shared_ptr<AwaitControl> await_control;
+    std::shared_ptr<Controller> controller;
 };
 
-/// Keeps std::coroutine_handle<> and destroys it in the destructor if the coroutine has not finished
-/// (if it has finished it will be destroyed automatically).
+/// The core of the coroutine. An instance of Controller is shared between Task, Promise, and Awaiter (there can be 0 or 1 or more Awaiters).
 template <typename ResultType>
-class Task<ResultType>::AwaitControl : public details::ResultHolder<ResultType>, public std::enable_shared_from_this<AwaitControl>
+class Task<ResultType>::Controller : public details::ResultHolder<ResultType>, public std::enable_shared_from_this<Controller>
 {
 public:
-    AwaitControl(std::coroutine_handle<Promise> handle_) : handle(handle_) { }
-    AwaitControl(const AwaitControl &) = delete;
-    AwaitControl & operator=(const AwaitControl &) = delete;
+    Controller(std::coroutine_handle<Promise> handle_) : handle(handle_) { }
+    Controller(const Controller &) = delete;
+    Controller & operator=(const Controller &) = delete;
 
-    Awaiter run(const TaskRunParams & params_)
+    /// This is possible that a task is destroyed without calling run().
+    void onTaskDestroyedBeforeStart() { destroyHandleIfNeverResumed(); }
+
+    Awaiter run(const RunParams & params_)
     {
-        auto awaiter = Awaiter(this->shared_from_this());
-        params = params_;
+        /// The coroutine handle will be destroyed along with the `job` if it's never resumed.
+        auto destroy_handle_if_never_resumed = std::make_shared<scope_guard>([this, keep_this_from_destruction = this->shared_from_this()]
+                                                                             { destroyHandleIfNeverResumed(); });
 
-        if (!params.cancel_status)
-            params.cancel_status = std::make_shared<details::CancelStatus>();
-
-        params.scheduler.schedule([this, keep_this_from_destruction = this->shared_from_this()]
+        auto job = [this, destroy_handle_if_never_resumed]
         {
             if (auto cancel_exception = getCancelStatus()->getCancelException())
             {
                 /// Go straight to the continuation list without resuming this task.
-                handle.destroy();
                 setException(cancel_exception);
                 processContinuation();
                 return;
             }
 
+            resumed = true;
             handle.resume();
-        });
+        };
 
-        return awaiter;
+        scheduler = params_.scheduler;
+        cancel_status = params_.cancel_status;
+
+        if (!cancel_status)
+            cancel_status = std::make_shared<details::CancelStatus>();
+
+        if (params_.reschedule)
+            scheduler.schedule(job);
+        else
+            job();
+
+        return Awaiter(this->shared_from_this());
     }
+
+    /// Gets parameter to run a subtask.
+    RunParams getRunParams() const { return {false, scheduler, cancel_status}; }
 
     bool isContinuationProcessed() const { return continuation_list.isProcessed(); }
     bool addContinuation(std::coroutine_handle<> handle_) { return continuation_list.add(handle_); }
     void processContinuation() { continuation_list.process(); }
 
-    void setIsFinalized() { is_finalized = true; }
     void setException(std::exception_ptr exception_) { exception = exception_; }
     std::exception_ptr getException() const { return exception; }
-
-    TaskRunParams getRunParams() const { return params; }
-    std::shared_ptr<details::CancelStatus> getCancelStatus() const { return params.cancel_status; }
+    std::shared_ptr<details::CancelStatus> getCancelStatus() const { return cancel_status; }
 
 private:
+    /// std::coroutine_handle<>::destroy() must be called only if the coroutine is never resumed.
+    /// (Because if the coroutine is resumed and executes normally it will destroy itself after finish.)
+    void destroyHandleIfNeverResumed()
+    {
+        if (handle && !resumed)
+        {
+            handle.destroy();
+            handle = nullptr;
+        }
+    }
+
     std::coroutine_handle<Promise> handle;
-    TaskRunParams params;
+    Scheduler scheduler;
+    std::shared_ptr<details::CancelStatus> cancel_status;
+    std::atomic<bool> resumed = false; /// The coroutine is resumed in run(), but it might be never resumed.
     details::ContinuationList continuation_list;
 
-    /// Mutex is not needed to access `is_finalized` because it's accessed in separate moments of time (so no concurrent access possible):
-    /// FinalSuspend::await_ready(), ~AwaitControl()
-    bool is_finalized = false;
-
-    /// Mutex is not needed to access `exception` because it's accessed in separate moments of time (so no concurrent access possible):
-    /// AwaitControl::run(), Promise::unhandled_exception(), Awaiter::await_resume().
+    /// Mutex is not needed for `exception` because `exception` is accessed in separate moments of time (so no concurrent access possible):
+    /// Controller::run(), Promise::unhandled_exception(), Awaiter::await_resume().
     std::exception_ptr exception;
 };
 
@@ -514,12 +590,13 @@ Task<std::vector<ResultType>> sequential(std::vector<Task<ResultType>> && tasks)
     SCOPE_EXIT_SAFE({ tasks.clear(); });
     results.reserve(tasks.size());
 
+    /// Use the same run parameters to start all the tasks.
     auto params = co_await TaskRunParams{};
 
     for (auto & task : tasks)
     {
-        co_await StopIfCancelled{};
-        results.emplace_back(co_await std::move(task).run(params));
+        co_await StopIfCancelled{}; /// Stop starting tasks if cancelled.
+        results.emplace_back(co_await std::move(task).runWithParams(params));
     }
 
     co_return results;
@@ -535,7 +612,9 @@ Task<std::vector<ResultType>> parallel(std::vector<Task<ResultType>> && tasks)
     SCOPE_EXIT_SAFE({ tasks.clear(); });
     results.reserve(tasks.size());
 
+    /// Use the same run parameters to start all the tasks.
     auto params = co_await TaskRunParams{};
+    params.reschedule = (tasks.size() > 1);
     auto cancel_status = std::make_shared<details::CancelStatus>();
     params.cancel_status->addChild(cancel_status);
     params.cancel_status = cancel_status;
@@ -544,7 +623,7 @@ Task<std::vector<ResultType>> parallel(std::vector<Task<ResultType>> && tasks)
     {
         typename Task<ResultType>::Awaiter awaiter;
         bool ready = false;
-        size_t index_in_results = static_cast<size_t>(-1);
+        size_t index_in_results = static_cast<size_t>(-1); /// we reorder results in the correct order at finish
     };
     std::vector<AwaitInfo> await_infos;
     await_infos.reserve(tasks.size());
@@ -553,31 +632,36 @@ Task<std::vector<ResultType>> parallel(std::vector<Task<ResultType>> && tasks)
 
     try
     {
+        /// Start or schedule all the tasks.  
         for (auto & task : tasks)
         {
-            await_infos.emplace_back(AwaitInfo{std::move(task).run(params)});
+            co_await StopIfCancelled{}; /// can cancel before each task.
+
+            await_infos.emplace_back(AwaitInfo{std::move(task).runWithParams(params)});
             auto & info = await_infos.back();
 
-            /// After `task.run()` the `task` can be already finished.
-            if (info.awaiter.await_ready())
+            /// After `task.runWithParams()` the `task` can be already finished.
+            if (info.awaiter.isReady())
             {
                 info.ready = true;
                 info.index_in_results = results.size();
-                results.emplace_back(co_await info.awaiter);
+                results.emplace_back(co_await info.awaiter); /// Call co_await here to extract the result from the finished task.
             }
         }
 
+        /// Wait for each task to finish.
         for (auto & info : await_infos)
         {
             if (!info.ready)
             {
-                co_await StopIfCancelled{};
+                co_await StopIfCancelled{}; /// can cancel before each task.
                 info.ready = true;
                 info.index_in_results = results.size();
                 results.emplace_back(co_await info.awaiter);
             }
         }
 
+        /// Reorder the results in the correct order.
         for (size_t i = 0; i != tasks.size(); ++i)
         {
             std::swap(results[i], results[await_infos[i].index_in_results]);

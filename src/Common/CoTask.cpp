@@ -75,12 +75,14 @@ Task<> sequential(std::vector<Task<>> && tasks)
         co_return;
 
     SCOPE_EXIT_SAFE({ tasks.clear(); });
+
+    /// Use the same run parameters to start all the tasks.
     auto params = co_await TaskRunParams{};
 
     for (auto & task : tasks)
     {
-        co_await StopIfCancelled{};
-        co_await std::move(task).run(params);
+        co_await StopIfCancelled{}; /// Stop starting tasks if cancelled.
+        co_await std::move(task).runWithParams(params);
     }
 }
 
@@ -91,7 +93,9 @@ Task<> parallel(std::vector<Task<>> && tasks)
 
     SCOPE_EXIT_SAFE({ tasks.clear(); });
 
+    /// Use the same run parameters to start all the tasks.
     auto params = co_await TaskRunParams{};
+    params.reschedule = (tasks.size() > 1);
     auto cancel_status = std::make_shared<details::CancelStatus>();
     params.cancel_status->addChild(cancel_status);
     params.cancel_status = cancel_status;
@@ -111,11 +115,13 @@ Task<> parallel(std::vector<Task<>> && tasks)
     {
         for (auto & task : tasks)
         {
-            await_infos.emplace_back(AwaitInfo{std::move(task).run(params)});
+            co_await StopIfCancelled{}; /// can cancel before each task.
+
+            await_infos.emplace_back(AwaitInfo{std::move(task).runWithParams(params)});
             auto & info = await_infos.back();
 
-            /// After `task.run()` the `task` can be already finished.
-            if (info.awaiter.await_ready())
+            /// After `task.runWithParams()` the `task` can be already finished.
+            if (info.awaiter.isReady())
             {
                 info.ready = true;
                 co_await info.awaiter; /// Call co_await anyway because it can throw an exception.
@@ -126,7 +132,7 @@ Task<> parallel(std::vector<Task<>> && tasks)
         {
             if (!info.ready)
             {
-                co_await StopIfCancelled{};
+                co_await StopIfCancelled{}; /// can cancel before each task.
                 info.ready = true;
                 co_await info.awaiter;
             }
