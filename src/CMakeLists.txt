@@ -81,6 +81,7 @@ set(dbms_headers)
 set(dbms_sources)
 
 add_headers_and_sources(clickhouse_common_io Common)
+add_headers_and_sources(clickhouse_common_io Common/Coroutines)
 add_headers_and_sources(clickhouse_common_io Common/HashTable)
 add_headers_and_sources(clickhouse_common_io IO)
 add_headers_and_sources(clickhouse_common_io IO/Archives)

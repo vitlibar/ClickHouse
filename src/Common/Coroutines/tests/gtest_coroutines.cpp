@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
-#include <Common/CoTask.h>
+#include <Common/Coroutines/Task.h>
+#include <Common/Coroutines/parallel.h>
+#include <Common/Coroutines/sequential.h>
 #include <base/sleep.h>
 #include <boost/algorithm/string.hpp>
 
@@ -8,7 +10,7 @@ namespace DB::ErrorCodes
 {
     extern const int BAD_ARGUMENTS;
     extern const int CANNOT_SCHEDULE_TASK;
-    extern const int TASK_CANCELLED;
+    extern const int COROUTINE_TASK_CANCELLED;
 }
 
 using namespace DB;
@@ -45,7 +47,7 @@ namespace
 
     /// A simple coroutine. Normally the first argument's type should be rather `std::shared_ptr<ThreadSafeOutput>`, but I wanted to make the test simple.
     /// Because in these tests any instance of ThreadSafeOutput passed to this coroutine won't go out of scope while the coroutine is running.
-    Co::Task<> appendChars(ThreadSafeOutput * output, char first_char, size_t num_chars, bool throw_exception = false)
+    Coroutine::Task<> appendChars(ThreadSafeOutput * output, char first_char, size_t num_chars, bool throw_exception = false)
     {
         for (size_t i = 0; i != num_chars; ++i)
         {
@@ -59,7 +61,7 @@ namespace
     }
 
     /// Similar to appendChars(), but this coroutine returns a string.
-    Co::Task<std::string> appendCharsWithResult(ThreadSafeOutput * output, char first_char, size_t num_chars, bool throw_exception = false)
+    Coroutine::Task<std::string> appendCharsWithResult(ThreadSafeOutput * output, char first_char, size_t num_chars, bool throw_exception = false)
     {
         std::string result;
         for (size_t i = 0; i != num_chars; ++i)
@@ -74,12 +76,12 @@ namespace
         co_return result;
     }
 
-    /// Calls a few `append_chars()` CoTask either sequentially or in parallel.
-    Co::Task<> appendCharsMulti(ThreadSafeOutput * output, bool parallel, size_t num_tasks = 3, bool throw_exception = false)
+    /// Calls a few `append_chars()` tasks either sequentially or in parallel.
+    Coroutine::Task<> appendCharsMulti(ThreadSafeOutput * output, bool parallel, size_t num_tasks = 3, bool throw_exception = false)
     {
         output->append(parallel ? "par_" : "seq_");
 
-        std::vector<Co::Task<>> tasks;
+        std::vector<Coroutine::Task<>> tasks;
         if (num_tasks >= 1)
             tasks.push_back(appendChars(output, 'a', 3));
         if (num_tasks >= 2)
@@ -87,11 +89,11 @@ namespace
         if (num_tasks >= 3)
             tasks.push_back(appendChars(output, 'a', 7));
 
-        Co::Task<> main_task;
+        Coroutine::Task<> main_task;
         if (parallel)
-            main_task = Co::parallel(std::move(tasks));
+            main_task = Coroutine::parallel(std::move(tasks));
         else
-            main_task = Co::sequential(std::move(tasks));
+            main_task = Coroutine::sequential(std::move(tasks));
 
         output->append("run_");
 
@@ -101,11 +103,11 @@ namespace
     }
 
     /// Similar to appendCharsMulti(), but this coroutine returns a string.
-    Co::Task<std::string> appendCharsWithResultMulti(ThreadSafeOutput * output, bool parallel, size_t num_tasks = 3, bool throw_exception = false)
+    Coroutine::Task<std::string> appendCharsWithResultMulti(ThreadSafeOutput * output, bool parallel, size_t num_tasks = 3, bool throw_exception = false)
     {
         output->append(parallel ? "par_" : "seq_");
         
-        std::vector<Co::Task<std::string>> tasks;
+        std::vector<Coroutine::Task<std::string>> tasks;
         if (num_tasks >= 1)
             tasks.push_back(appendCharsWithResult(output, 'a', 3));
         if (num_tasks >= 2)
@@ -113,11 +115,11 @@ namespace
         if (num_tasks >= 3)
             tasks.push_back(appendCharsWithResult(output, 'a', 7));
 
-        Co::Task<std::vector<std::string>> main_task;
+        Coroutine::Task<std::vector<std::string>> main_task;
         if (parallel)
-            main_task = Co::parallel(std::move(tasks));
+            main_task = Coroutine::parallel(std::move(tasks));
         else
-            main_task = Co::sequential(std::move(tasks));
+            main_task = Coroutine::sequential(std::move(tasks));
 
         output->append("run_");
         auto results = co_await std::move(main_task);
@@ -126,36 +128,36 @@ namespace
         co_return boost::join(results, "|");
     }
 
-    Co::Task<std::string> concatTwoStrings(std::string s1, std::string s2)
+    Coroutine::Task<std::string> concatTwoStrings(std::string s1, std::string s2)
     {
         co_return s1 + s2;
     }
 
-    Co::Task<std::string> concatTwoStringsWithDelay(std::string s1, std::string s2)
+    Coroutine::Task<std::string> concatTwoStringsWithDelay(std::string s1, std::string s2)
     {
         sleepForMilliseconds(SLEEP_TIME);
         co_return s1 + s2;
     }
 
-    Co::Task<int> getValueFromSharedPtr(std::shared_ptr<int> ptr)
+    Coroutine::Task<int> getValueFromSharedPtr(std::shared_ptr<int> ptr)
     {
         sleepForMilliseconds(SLEEP_TIME);
-        co_await Co::StopIfCancelled{};
+        co_await Coroutine::StopIfCancelled{};
         co_return *ptr;
     }
 
-    Co::Task<int> getValueFromSharedPtrConstRef(const std::shared_ptr<int> & ptr)
+    Coroutine::Task<int> getValueFromSharedPtrConstRef(const std::shared_ptr<int> & ptr)
     {
         co_return *ptr;
     }
 
-    Co::Task<int> getValueFromSharedPtrRef(std::shared_ptr<int> & ptr)
+    Coroutine::Task<int> getValueFromSharedPtrRef(std::shared_ptr<int> & ptr)
     {
         co_return *ptr;
     }
 
 #if 0
-    Co::Task<std::pair<int, int>> getValueFromSharedPtrRValue(std::shared_ptr<int> && ptr)
+    Coroutine::Task<std::pair<int, int>> getValueFromSharedPtrRValue(std::shared_ptr<int> && ptr)
     {
         co_return {*ptr, ptr.use_count()};
     }
@@ -187,19 +189,19 @@ namespace
 
 /// Actual tests.
 
-TEST(CoTask, Sequential)
+TEST(Coroutines, Sequential)
 {
     ThreadPool thread_pool{10};
     ThreadSafeOutput output;
-    appendCharsMulti(&output, /* parallel= */ false).syncRun(Co::Scheduler{thread_pool});
+    appendCharsMulti(&output, /* parallel= */ false).syncRun(Coroutine::Scheduler{thread_pool});
     EXPECT_EQ(output.get(), "seq_run_abcABCDEFGHIJabcdefg_end");
 }
 
-TEST(CoTask, Parallel)
+TEST(Coroutines, Parallel)
 {
     ThreadPool thread_pool{10};
     ThreadSafeOutput output;
-    appendCharsMulti(&output, /* parallel= */ true).syncRun(Co::Scheduler{thread_pool});
+    appendCharsMulti(&output, /* parallel= */ true).syncRun(Coroutine::Scheduler{thread_pool});
     {
         auto output_string = output.get();
         SCOPED_TRACE(output_string);
@@ -207,11 +209,11 @@ TEST(CoTask, Parallel)
     }
 }
 
-TEST(CoTask, ParallelOnSmallerNumThreads)
+TEST(Coroutines, ParallelOnSmallerNumThreads)
 {
     ThreadPool thread_pool{1, 0, 0};
     ThreadSafeOutput output;
-    appendCharsMulti(&output, /* parallel= */ true).syncRun(Co::Scheduler{thread_pool});
+    appendCharsMulti(&output, /* parallel= */ true).syncRun(Coroutine::Scheduler{thread_pool});
     {
         auto output_string = output.get();
         SCOPED_TRACE(output_string);
@@ -219,36 +221,36 @@ TEST(CoTask, ParallelOnSmallerNumThreads)
     }
 }
 
-TEST(CoTask, ParallelOnSingleThread)
+TEST(Coroutines, ParallelOnSingleThread)
 {
     ThreadSafeOutput output;
 
     /// A single thread cannot execute tasks in parallel, so we expect the same result as for just sequential tasks.
     //{
-    //    appendCharsMulti(&output, /* parallel= */ true).syncRun(Co::Scheduler{});
+    //    appendCharsMulti(&output, /* parallel= */ true).syncRun(Coroutine::Scheduler{});
     //    EXPECT_EQ(output.get(), "par_run_abcABCDEFGHIJabcdefg_end");
     //}
 
     {
         ThreadPool thread_pool{1, 0, 0};
-        appendCharsMulti(&output, /* parallel= */ true).syncRun(Co::Scheduler{thread_pool});
+        appendCharsMulti(&output, /* parallel= */ true).syncRun(Coroutine::Scheduler{thread_pool});
         EXPECT_EQ(output.get(), "par_run_abcABCDEFGHIJabcdefg_end");
     }
 }
 
-TEST(CoTask, WithResult)
+TEST(Coroutines, WithResult)
 {
     ThreadPool thread_pool{10};
     ThreadSafeOutput output;
 
     {
-        auto result_string = appendCharsWithResultMulti(&output, /* parallel= */ false).syncRun(Co::Scheduler{thread_pool});
+        auto result_string = appendCharsWithResultMulti(&output, /* parallel= */ false).syncRun(Coroutine::Scheduler{thread_pool});
         EXPECT_EQ(output.get(), "seq_run_abcABCDEFGHIJabcdefg_end");
         EXPECT_EQ(result_string, "abc|ABCDEFGHIJ|abcdefg");
     }
 
     {
-        auto result_string = appendCharsWithResultMulti(&output, /* parallel= */ true).syncRun(Co::Scheduler{thread_pool});
+        auto result_string = appendCharsWithResultMulti(&output, /* parallel= */ true).syncRun(Coroutine::Scheduler{thread_pool});
         {
             auto output_string = output.get();
             SCOPED_TRACE(output_string);
@@ -258,29 +260,29 @@ TEST(CoTask, WithResult)
     }
 
     {
-        auto result_string = appendCharsWithResultMulti(&output, /* parallel= */ true).syncRun(Co::Scheduler{});
+        auto result_string = appendCharsWithResultMulti(&output, /* parallel= */ true).syncRun(Coroutine::Scheduler{});
         EXPECT_EQ(output.get(), "par_run_abcABCDEFGHIJabcdefg_end");
         EXPECT_EQ(result_string, "abc|ABCDEFGHIJ|abcdefg");
     }
 }
 
-TEST(CoTask, SequentialNoTasks)
+TEST(Coroutines, SequentialNoTasks)
 {
     ThreadPool thread_pool{10};
     ThreadSafeOutput output;
 
     {
-        appendCharsMulti(&output, /* parallel= */ false, /* num_tasks= */ 0).syncRun(Co::Scheduler{thread_pool});
+        appendCharsMulti(&output, /* parallel= */ false, /* num_tasks= */ 0).syncRun(Coroutine::Scheduler{thread_pool});
         EXPECT_EQ(output.get(), "seq_run__end");
     }
 
     {
-        appendCharsMulti(&output, /* parallel= */ false, /* num_tasks= */ 0).syncRun(Co::Scheduler{});
+        appendCharsMulti(&output, /* parallel= */ false, /* num_tasks= */ 0).syncRun(Coroutine::Scheduler{});
         EXPECT_EQ(output.get(), "seq_run__end");
     }
 
     {
-        appendCharsWithResultMulti(&output, /* parallel= */ false, /* num_tasks= */ 0).syncRun(Co::Scheduler{thread_pool});
+        appendCharsWithResultMulti(&output, /* parallel= */ false, /* num_tasks= */ 0).syncRun(Coroutine::Scheduler{thread_pool});
         {
             auto output_string = output.get();
             SCOPED_TRACE(output_string);
@@ -289,23 +291,23 @@ TEST(CoTask, SequentialNoTasks)
     }
 }
 
-TEST(CoTask, SequentialSingleTask)
+TEST(Coroutines, SequentialSingleTask)
 {
     ThreadPool thread_pool{10};
     ThreadSafeOutput output;
 
     {
-        appendCharsMulti(&output, /* parallel= */ false, /* num_tasks= */ 1).syncRun(Co::Scheduler{thread_pool});
+        appendCharsMulti(&output, /* parallel= */ false, /* num_tasks= */ 1).syncRun(Coroutine::Scheduler{thread_pool});
         EXPECT_EQ(output.get(), "seq_run_abc_end");
     }
 
     {
-        appendCharsMulti(&output, /* parallel= */ false, /* num_tasks= */ 1).syncRun(Co::Scheduler{});
+        appendCharsMulti(&output, /* parallel= */ false, /* num_tasks= */ 1).syncRun(Coroutine::Scheduler{});
         EXPECT_EQ(output.get(), "seq_run_abc_end");
     }
 
     {
-        appendCharsWithResultMulti(&output, /* parallel= */ false, /* num_tasks= */ 1).syncRun(Co::Scheduler{thread_pool});
+        appendCharsWithResultMulti(&output, /* parallel= */ false, /* num_tasks= */ 1).syncRun(Coroutine::Scheduler{thread_pool});
         {
             auto output_string = output.get();
             SCOPED_TRACE(output_string);
@@ -314,23 +316,23 @@ TEST(CoTask, SequentialSingleTask)
     }
 }
 
-TEST(CoTask, ParallelNoTasks)
+TEST(Coroutines, ParallelNoTasks)
 {
     ThreadPool thread_pool{10};
     ThreadSafeOutput output;
 
     {
-        appendCharsMulti(&output, /* parallel= */ true, /* num_tasks= */ 0).syncRun(Co::Scheduler{thread_pool});
+        appendCharsMulti(&output, /* parallel= */ true, /* num_tasks= */ 0).syncRun(Coroutine::Scheduler{thread_pool});
         EXPECT_EQ(output.get(), "par_run__end");
     }
 
     {
-        appendCharsMulti(&output, /* parallel= */ true, /* num_tasks= */ 0).syncRun(Co::Scheduler{});
+        appendCharsMulti(&output, /* parallel= */ true, /* num_tasks= */ 0).syncRun(Coroutine::Scheduler{});
         EXPECT_EQ(output.get(), "par_run__end");
     }
 
     {
-        appendCharsWithResultMulti(&output, /* parallel= */ true, /* num_tasks= */ 0).syncRun(Co::Scheduler{thread_pool});
+        appendCharsWithResultMulti(&output, /* parallel= */ true, /* num_tasks= */ 0).syncRun(Coroutine::Scheduler{thread_pool});
         {
             auto output_string = output.get();
             SCOPED_TRACE(output_string);
@@ -339,23 +341,23 @@ TEST(CoTask, ParallelNoTasks)
     }
 }
 
-TEST(CoTask, ParallelSingleTask)
+TEST(Coroutines, ParallelSingleTask)
 {
     ThreadPool thread_pool{10};
     ThreadSafeOutput output;
 
     {
-        appendCharsMulti(&output, /* parallel= */ true, /* num_tasks= */ 1).syncRun(Co::Scheduler{thread_pool});
+        appendCharsMulti(&output, /* parallel= */ true, /* num_tasks= */ 1).syncRun(Coroutine::Scheduler{thread_pool});
         EXPECT_EQ(output.get(), "par_run_abc_end");
     }
 
     {
-        appendCharsMulti(&output, /* parallel= */ true, /* num_tasks= */ 1).syncRun(Co::Scheduler{});
+        appendCharsMulti(&output, /* parallel= */ true, /* num_tasks= */ 1).syncRun(Coroutine::Scheduler{});
         EXPECT_EQ(output.get(), "par_run_abc_end");
     }
 
     {
-        appendCharsWithResultMulti(&output, /* parallel= */ true, /* num_tasks= */ 1).syncRun(Co::Scheduler{thread_pool});
+        appendCharsWithResultMulti(&output, /* parallel= */ true, /* num_tasks= */ 1).syncRun(Coroutine::Scheduler{thread_pool});
         {
             auto output_string = output.get();
             SCOPED_TRACE(output_string);
@@ -364,7 +366,7 @@ TEST(CoTask, ParallelSingleTask)
     }
 }
 
-TEST(CoTask, ExceptionInTask)
+TEST(Coroutines, ExceptionInTask)
 {
     ThreadPool thread_pool{10};
     ThreadSafeOutput output;
@@ -373,17 +375,17 @@ TEST(CoTask, ExceptionInTask)
     { checkThrowsExpectedException(std::move(f), Exception(ErrorCodes::BAD_ARGUMENTS, "Test error")); };
 
     {
-        check_throws([&]{ appendCharsMulti(&output, /* parallel= */ false, /* num_tasks= */ 3, /* throw_exception= */ true).syncRun(Co::Scheduler{thread_pool}); });
+        check_throws([&]{ appendCharsMulti(&output, /* parallel= */ false, /* num_tasks= */ 3, /* throw_exception= */ true).syncRun(Coroutine::Scheduler{thread_pool}); });
         EXPECT_EQ(output.get(), "seq_run_abcABCDE");
     }
 
     {
-        check_throws([&]{ appendCharsWithResultMulti(&output, /* parallel= */ false, /* num_tasks= */ 3, /* throw_exception= */ true).syncRun(Co::Scheduler{thread_pool}); });
+        check_throws([&]{ appendCharsWithResultMulti(&output, /* parallel= */ false, /* num_tasks= */ 3, /* throw_exception= */ true).syncRun(Coroutine::Scheduler{thread_pool}); });
         EXPECT_EQ(output.get(), "seq_run_abcABCDE");
     }
 
     {
-        check_throws([&]{ appendCharsMulti(&output, /* parallel= */ true, /* num_tasks= */ 3, /* throw_exception= */ true).syncRun(Co::Scheduler{thread_pool}); });
+        check_throws([&]{ appendCharsMulti(&output, /* parallel= */ true, /* num_tasks= */ 3, /* throw_exception= */ true).syncRun(Coroutine::Scheduler{thread_pool}); });
         {
             auto output_string = output.get();
             SCOPED_TRACE(output_string);
@@ -392,7 +394,7 @@ TEST(CoTask, ExceptionInTask)
     }
 
     {
-        check_throws([&]{ appendCharsWithResultMulti(&output, /* parallel= */ true, /* num_tasks= */ 3, /* throw_exception= */ true).syncRun(Co::Scheduler{thread_pool}); });
+        check_throws([&]{ appendCharsWithResultMulti(&output, /* parallel= */ true, /* num_tasks= */ 3, /* throw_exception= */ true).syncRun(Coroutine::Scheduler{thread_pool}); });
         {
             auto output_string = output.get();
             SCOPED_TRACE(output_string);
@@ -401,17 +403,17 @@ TEST(CoTask, ExceptionInTask)
     }
 
     {
-        check_throws([&]{ appendCharsMulti(&output, /* parallel= */ true, /* num_tasks= */ 3, /* throw_exception= */ true).syncRun(Co::Scheduler{}); });
+        check_throws([&]{ appendCharsMulti(&output, /* parallel= */ true, /* num_tasks= */ 3, /* throw_exception= */ true).syncRun(Coroutine::Scheduler{}); });
         EXPECT_EQ(output.get(), "par_run_abcABCDE");
     }
 
     {
-        check_throws([&]{ appendCharsWithResultMulti(&output, /* parallel= */ true, /* num_tasks= */ 3, /* throw_exception= */ true).syncRun(Co::Scheduler{}); });
+        check_throws([&]{ appendCharsWithResultMulti(&output, /* parallel= */ true, /* num_tasks= */ 3, /* throw_exception= */ true).syncRun(Coroutine::Scheduler{}); });
         EXPECT_EQ(output.get(), "par_run_abcABCDE");
     }
 }
 
-TEST(CoTask, ExceptionInScheduler)
+TEST(Coroutines, ExceptionInScheduler)
 {
     ThreadPool thread_pool{1, 0, 1};
     ThreadSafeOutput output;
@@ -420,7 +422,7 @@ TEST(CoTask, ExceptionInScheduler)
     { checkThrowsExpectedException(std::move(f), Exception(ErrorCodes::CANNOT_SCHEDULE_TASK, "Cannot schedule a task: no free thread (timeout=0) (threads=1, jobs=1)")); };
 
     {
-        check_throws([&]{ appendCharsMulti(&output, /* parallel= */ true).syncRun(Co::Scheduler{thread_pool}); });
+        check_throws([&]{ appendCharsMulti(&output, /* parallel= */ true).syncRun(Coroutine::Scheduler{thread_pool}); });
         {
             auto output_string = output.get();
             SCOPED_TRACE(output_string);
@@ -429,7 +431,7 @@ TEST(CoTask, ExceptionInScheduler)
     }
 
     {
-        check_throws([&]{ appendCharsWithResultMulti(&output, /* parallel= */ true).syncRun(Co::Scheduler{thread_pool}); });
+        check_throws([&]{ appendCharsWithResultMulti(&output, /* parallel= */ true).syncRun(Coroutine::Scheduler{thread_pool}); });
         {
             auto output_string = output.get();
             SCOPED_TRACE(output_string);
@@ -438,16 +440,16 @@ TEST(CoTask, ExceptionInScheduler)
     }
 }
 
-TEST(CoTask, CancelTask)
+TEST(Coroutines, CancelTask)
 {
     ThreadPool thread_pool{2, 0, 0};
     ThreadSafeOutput output;
 
     auto check_throws = [](std::function<void()> && f)
-    { checkThrowsExpectedException(std::move(f), Exception(ErrorCodes::TASK_CANCELLED, "Task cancelled")); };
+    { checkThrowsExpectedException(std::move(f), Exception(ErrorCodes::COROUTINE_TASK_CANCELLED, "Task cancelled")); };
 
     {
-        auto awaiter = appendCharsMulti(&output, /* parallel= */ false).run(Co::Scheduler{thread_pool});
+        auto awaiter = appendCharsMulti(&output, /* parallel= */ false).run(Coroutine::Scheduler{thread_pool});
         sleepForMilliseconds(SLEEP_TIME / 2);
         awaiter.tryCancelTask();
         check_throws([&] { awaiter.syncWait(); });
@@ -455,7 +457,7 @@ TEST(CoTask, CancelTask)
     }
 
     {
-        auto awaiter = appendCharsMulti(&output, /* parallel= */ true).run(Co::Scheduler{thread_pool});
+        auto awaiter = appendCharsMulti(&output, /* parallel= */ true).run(Coroutine::Scheduler{thread_pool});
         sleepForMilliseconds(SLEEP_TIME / 2);
         awaiter.tryCancelTask();
         check_throws([&] { awaiter.syncWait(); });
@@ -465,7 +467,7 @@ TEST(CoTask, CancelTask)
     }
 }
 
-TEST(CoTask, OwnershipArgument)
+TEST(Coroutines, OwnershipArgument)
 {
     auto ptr = std::make_shared<int>(5);
     EXPECT_EQ(ptr.use_count(), 1); /// No references on `ptr` except `ptr`.
@@ -475,7 +477,7 @@ TEST(CoTask, OwnershipArgument)
         ThreadPool thread_pool{10};
         auto task = getValueFromSharedPtr(ptr);
         EXPECT_GE(ptr.use_count(), 2); /// Now `task` should also own `ptr`.
-        auto awaiter = std::move(task).run(Co::Scheduler{thread_pool});
+        auto awaiter = std::move(task).run(Coroutine::Scheduler{thread_pool});
         EXPECT_GE(ptr.use_count(), 2); /// Now `awaiter` should own `ptr` instead of `task`.
         EXPECT_FALSE(awaiter.isReady());
         auto result = awaiter.syncWait();
@@ -489,7 +491,7 @@ TEST(CoTask, OwnershipArgument)
         ThreadPool thread_pool{0 /* no threads */, 0, 1 /* one place in queue */};
         auto task = getValueFromSharedPtr(ptr);
         EXPECT_GE(ptr.use_count(), 2); /// Now `task` should also own `ptr`.
-        auto awaiter = std::move(task).run(Co::Scheduler{thread_pool});
+        auto awaiter = std::move(task).run(Coroutine::Scheduler{thread_pool});
         EXPECT_GE(ptr.use_count(), 2); /// Now `awaiter` should own `ptr` instead of `task`.
         EXPECT_FALSE(awaiter.isReady());
         sleepForMilliseconds(SLEEP_TIME * 2);
@@ -514,9 +516,9 @@ TEST(CoTask, OwnershipArgument)
         ThreadPool thread_pool{10};
         auto task = getValueFromSharedPtr(ptr);
         EXPECT_GE(ptr.use_count(), 2); /// Now `task` should also own `ptr`.
-        auto awaiter = std::move(task).run(Co::Scheduler{thread_pool});
+        auto awaiter = std::move(task).run(Coroutine::Scheduler{thread_pool});
         awaiter.tryCancelTask();
-        checkThrowsExpectedException([&] { awaiter.syncWait(); }, Exception(ErrorCodes::TASK_CANCELLED, "Task cancelled"));
+        checkThrowsExpectedException([&] { awaiter.syncWait(); }, Exception(ErrorCodes::COROUTINE_TASK_CANCELLED, "Task cancelled"));
     }
     EXPECT_EQ(ptr.use_count(), 1); /// Now `awaiter` went out of scope, so no references on `ptr` except `ptr` again.
 
@@ -525,7 +527,7 @@ TEST(CoTask, OwnershipArgument)
         ThreadPool thread_pool{0 /* no threads */, 0, 1 /* one place in queue */};
         auto task = getValueFromSharedPtr(ptr);
         EXPECT_GE(ptr.use_count(), 2); /// Now `task` should also own `ptr`.
-        auto awaiter = std::move(task).run(Co::Scheduler{thread_pool});
+        auto awaiter = std::move(task).run(Coroutine::Scheduler{thread_pool});
         EXPECT_GE(ptr.use_count(), 2); /// Now `awaiter` should own `ptr` instead of `task`.
         EXPECT_FALSE(awaiter.isReady());
         awaiter.tryCancelTask();
@@ -533,7 +535,7 @@ TEST(CoTask, OwnershipArgument)
         EXPECT_GE(ptr.use_count(), 2); /// Nothing changed, the task cannot be cancelled yet because there are still no threads in the thread pool.
         EXPECT_FALSE(awaiter.isReady());
         thread_pool.setMaxThreads(1); /// We add one thread to the pool so now task can now be executed (and cancelled).
-        checkThrowsExpectedException([&] { awaiter.syncWait(); }, Exception(ErrorCodes::TASK_CANCELLED, "Task cancelled"));
+        checkThrowsExpectedException([&] { awaiter.syncWait(); }, Exception(ErrorCodes::COROUTINE_TASK_CANCELLED, "Task cancelled"));
     }
     EXPECT_EQ(ptr.use_count(), 1); /// Now `awaiter` went out of scope, so no references on `ptr` except `ptr` again.
 
@@ -544,7 +546,7 @@ TEST(CoTask, OwnershipArgument)
         auto task = getValueFromSharedPtr(ptr);
         EXPECT_GE(ptr.use_count(), 2); /// Now `task` should also own `ptr`.
         checkThrowsExpectedException(
-            [&] { [[maybe_unused]] auto awaiter = std::move(task).run(Co::Scheduler{thread_pool}); },
+            [&] { [[maybe_unused]] auto awaiter = std::move(task).run(Coroutine::Scheduler{thread_pool}); },
             Exception(ErrorCodes::CANNOT_SCHEDULE_TASK, "Cannot schedule a task: no free thread (timeout=0) (threads=0, jobs=1)"));
     }
     EXPECT_EQ(ptr.use_count(), 1); /// An awaiter was never created, so no references on `ptr` except `ptr` again.
@@ -554,13 +556,13 @@ TEST(CoTask, OwnershipArgument)
         ThreadPool thread_pool{0 /* no threads */, 0, 1 /* no place in queue */};
         auto task = getValueFromSharedPtr(ptr);
         EXPECT_GE(ptr.use_count(), 2); /// Now `task` should also own `ptr`.
-        [[maybe_unused]] auto awaiter = std::move(task).run(Co::Scheduler{thread_pool});
+        [[maybe_unused]] auto awaiter = std::move(task).run(Coroutine::Scheduler{thread_pool});
     }
     EXPECT_EQ(ptr.use_count(), 1); /// Thread pool was destroyed and the task never ran.
 }
 
 /// Ownership when we pass an argument by reference, not by value.
-TEST(CoTask, OwnershipArgumentRef)
+TEST(Coroutines, OwnershipArgumentRef)
 {
     auto ptr = std::make_shared<int>(5);
     EXPECT_EQ(ptr.use_count(), 1); /// No references on `ptr` except `ptr`.
@@ -570,7 +572,7 @@ TEST(CoTask, OwnershipArgumentRef)
         ThreadPool thread_pool{10};
         auto task = getValueFromSharedPtrConstRef(ptr);
         EXPECT_EQ(ptr.use_count(), 1);
-        auto awaiter = std::move(task).run(Co::Scheduler{thread_pool});
+        auto awaiter = std::move(task).run(Coroutine::Scheduler{thread_pool});
         EXPECT_EQ(ptr.use_count(), 1);
         EXPECT_FALSE(awaiter.isReady());
         auto result = awaiter.syncWait();
@@ -583,7 +585,7 @@ TEST(CoTask, OwnershipArgumentRef)
         ThreadPool thread_pool{10};
         auto task = getValueFromSharedPtrRef(ptr);
         EXPECT_EQ(ptr.use_count(), 1);
-        auto awaiter = std::move(task).run(Co::Scheduler{thread_pool});
+        auto awaiter = std::move(task).run(Coroutine::Scheduler{thread_pool});
         EXPECT_EQ(ptr.use_count(), 1);
         EXPECT_FALSE(awaiter.isReady());
         auto result = awaiter.syncWait();
@@ -595,13 +597,13 @@ TEST(CoTask, OwnershipArgumentRef)
 #if 0
 /// Ownership when we pass a move-only argument.
 /// TODO: Arguments of coroutines must not be rvalues, so we need to check argument types at compile time and make a compiler fail with an error.
-TEST(CoTask, OwnershipArgumentMoveOnly)
+TEST(Coroutines, OwnershipArgumentMoveOnly)
 {
     /// Pass `ptr` as `std::shared_ptr<int> &&`
     {
         ThreadPool thread_pool{10};
         auto task = getValueFromSharedPtrRValue(std::exchange(ptr, nullptr));
-        auto awaiter = std::move(task).run(Co::Scheduler{thread_pool});
+        auto awaiter = std::move(task).run(Coroutine::Scheduler{thread_pool});
         EXPECT_FALSE(awaiter.isReady());
         auto result = awaiter.syncWait();
         EXPECT_EQ(result.first, 5);
@@ -611,12 +613,12 @@ TEST(CoTask, OwnershipArgumentMoveOnly)
 }
 #endif
 
-TEST(CoTask, MultipleAwaiters)
+TEST(Coroutines, MultipleAwaiters)
 {
     ThreadPool thread_pool{10};
 
     {
-        auto awaiter1 = concatTwoStrings("first", "second").run(Co::Scheduler{thread_pool});
+        auto awaiter1 = concatTwoStrings("first", "second").run(Coroutine::Scheduler{thread_pool});
         auto awaiter2 = awaiter1;
         auto awaiter3 = awaiter2;
         auto result1 = awaiter1.syncWait();
@@ -628,7 +630,7 @@ TEST(CoTask, MultipleAwaiters)
     }
 
     {
-        auto awaiter1 = concatTwoStringsWithDelay("first", "second").run(Co::Scheduler{thread_pool});
+        auto awaiter1 = concatTwoStringsWithDelay("first", "second").run(Coroutine::Scheduler{thread_pool});
         auto awaiter2 = awaiter1;
         auto awaiter3 = awaiter2;
         EXPECT_FALSE(awaiter2.isReady());

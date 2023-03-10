@@ -2,7 +2,7 @@
 
 /// This file provides forward declarations for Co::Task.
 
-namespace DB::Co
+namespace DB::Coroutine
 {
 
 template <typename ResultType = void>

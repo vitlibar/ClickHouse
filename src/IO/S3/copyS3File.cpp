@@ -2,7 +2,8 @@
 
 #if USE_AWS_S3
 
-#include <Common/CoTask.h>
+#include <Common/Coroutines/Task.h>
+#include <Common/Coroutines/parallel.h>
 #include <Common/ProfileEvents.h>
 #include <Common/typeid_cast.h>
 #include <IO/LimitSeekableReadBuffer.h>
@@ -71,7 +72,7 @@ namespace
         virtual ~S3UploadHelper() = default;
 
         /// Main function.
-        Co::Task<> upload() const
+        Coroutine::Task<> upload() const
         {
             if (size == static_cast<size_t>(-1))
                 throw Exception(ErrorCodes::LOGICAL_ERROR, "Copy size is not set");
@@ -264,7 +265,7 @@ namespace
             LOG_TRACE(log, "Object {} exists after upload", dest_key);
         }
 
-        Co::Task<> performMultipartUpload() const
+        Coroutine::Task<> performMultipartUpload() const
         {
             size_t part_size = calculatePartSize();
             size_t num_parts = calculateNumParts(part_size);
@@ -280,7 +281,7 @@ namespace
                     abortMultipartUpload(multipart_upload_id, num_parts, num_parts_uploaded.load());
             });
 
-            std::vector<Co::Task<String>> part_uploads;
+            std::vector<Coroutine::Task<String>> part_uploads;
 
             for (size_t part_number = 1; part_number <= num_parts; ++part_number)
             {
@@ -289,13 +290,13 @@ namespace
                 size_t current_part_size = std::min(part_size, offset + size - position);
 
                 /// It's safe to pass `num_parts_uploaded` and `multipart_upload_aborted` to the `part_uploads` tasks by reference because
-                /// those tasks will be finished or cancelled before those variables go out of scope, `co_await Co::parallel()` guarantees that.
+                /// those tasks will be finished or cancelled before those variables go out of scope, `co_await Coroutine::parallel()` guarantees that.
                 part_uploads.emplace_back(uploadPart(multipart_upload_id, part_number, position, current_part_size, num_parts, num_parts_uploaded, multipart_upload_aborted));
             }
 
-            auto part_tags = co_await Co::parallel(std::move(part_uploads));
+            auto part_tags = co_await Coroutine::parallel(std::move(part_uploads));
 
-            if (multipart_upload_aborted.load()) /// `co_await Co::Parallel()` must have thrown an exception in this case
+            if (multipart_upload_aborted.load()) /// `co_await Coroutine::Parallel()` must have thrown an exception in this case
                 throw Exception(ErrorCodes::LOGICAL_ERROR, "Aborted multipart upload came to completion. This must not happen");
 
             completeMultipartUpload(multipart_upload_id, part_tags);
@@ -360,7 +361,7 @@ namespace
             return (size + part_size - 1) / part_size;
         }
 
-        Co::Task<String> uploadPart(
+        Coroutine::Task<String> uploadPart(
             const String & multipart_upload_id,
             size_t part_number,
             size_t part_offset,
@@ -532,7 +533,7 @@ namespace
         }
 
         /// Main function.
-        Co::Task<> upload()
+        Coroutine::Task<> upload()
         {
             if (whole_file)
             {
@@ -630,7 +631,7 @@ namespace
 }
 
 
-Co::Task<> copyDataToS3FileAsync(
+Coroutine::Task<> copyDataToS3FileAsync(
     const std::function<std::unique_ptr<SeekableReadBuffer>()> create_read_buffer,
     const std::shared_ptr<const S3::Client> dest_s3_client,
     const String dest_bucket,
@@ -641,7 +642,7 @@ Co::Task<> copyDataToS3FileAsync(
     co_await helper.upload();
 }
 
-Co::Task<> copyS3FileAsync(
+Coroutine::Task<> copyS3FileAsync(
     const std::shared_ptr<const S3::Client> s3_client,
     const String src_bucket,
     const String src_key,
@@ -674,7 +675,7 @@ void copyS3File(
     const CopyS3FileSettings & copy_settings,
     const ThreadPoolCallbackRunner<void> & scheduler)
 {
-    copyS3FileAsync(s3_client, src_bucket, src_key, dest_bucket, dest_key, copy_settings).syncRun(Co::Scheduler{scheduler});
+    copyS3FileAsync(s3_client, src_bucket, src_key, dest_bucket, dest_key, copy_settings).syncRun(Coroutine::Scheduler{scheduler});
 }
 
 void copyDataToS3File(
@@ -685,7 +686,7 @@ void copyDataToS3File(
     const CopyS3FileSettings & copy_settings,
     const ThreadPoolCallbackRunner<void> & scheduler)
 {
-    copyDataToS3FileAsync(create_read_buffer, dest_s3_client, dest_bucket, dest_key, copy_settings).syncRun(Co::Scheduler(scheduler));
+    copyDataToS3FileAsync(create_read_buffer, dest_s3_client, dest_bucket, dest_key, copy_settings).syncRun(Coroutine::Scheduler(scheduler));
 }
 
 }

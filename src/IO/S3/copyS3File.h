@@ -6,7 +6,7 @@
 
 #include <Storages/StorageS3Settings.h>
 #include <Common/threadPoolCallbackRunner.h>
-#include <Common/CoTask_fwd.h>
+#include <Common/Coroutines/Task_fwd.h>
 #include <base/types.h>
 #include <functional>
 #include <memory>
@@ -47,7 +47,7 @@ void copyS3File(
     const CopyS3FileSettings & copy_settings,
     const ThreadPoolCallbackRunner<void> & scheduler = {});
 
-Co::Task<> copyS3FileAsync(
+Coroutine::Task<> copyS3FileAsync(
     std::shared_ptr<const S3::Client> s3_client,
     const String src_bucket,
     const String src_key,
@@ -68,7 +68,7 @@ void copyDataToS3File(
     const CopyS3FileSettings & copy_settings,
     const ThreadPoolCallbackRunner<void> & schedule_ = {});
 
-Co::Task<> copyDataToS3FileAsync(
+Coroutine::Task<> copyDataToS3FileAsync(
     const std::function<std::unique_ptr<SeekableReadBuffer>()> create_read_buffer,
     const std::shared_ptr<const S3::Client> dest_s3_client,
     const String dest_bucket,
