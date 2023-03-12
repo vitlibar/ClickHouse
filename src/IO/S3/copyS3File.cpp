@@ -675,7 +675,7 @@ void copyS3File(
     const CopyS3FileSettings & copy_settings,
     const ThreadPoolCallbackRunner<void> & scheduler)
 {
-    copyS3FileAsync(s3_client, src_bucket, src_key, dest_bucket, dest_key, copy_settings).syncRun(Coroutine::Scheduler{scheduler});
+    copyS3FileAsync(s3_client, src_bucket, src_key, dest_bucket, dest_key, copy_settings).syncRun(scheduler);
 }
 
 void copyDataToS3File(
@@ -686,7 +686,7 @@ void copyDataToS3File(
     const CopyS3FileSettings & copy_settings,
     const ThreadPoolCallbackRunner<void> & scheduler)
 {
-    copyDataToS3FileAsync(create_read_buffer, dest_s3_client, dest_bucket, dest_key, copy_settings).syncRun(Coroutine::Scheduler(scheduler));
+    copyDataToS3FileAsync(create_read_buffer, dest_s3_client, dest_bucket, dest_key, copy_settings).syncRun(scheduler);
 }
 
 }

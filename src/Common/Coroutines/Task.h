@@ -1,8 +1,9 @@
 #pragma once
 
 #include <Common/Coroutines/Task_fwd.h>
-#include <Common/scope_guard_safe.h>
+#include <Common/ThreadPool.h>
 #include <Common/threadPoolCallbackRunner.h>
+#include <Common/scope_guard_safe.h>
 #include <coroutine>
 #include <utility>
 
@@ -15,8 +16,8 @@ namespace DB::ErrorCodes
 
 namespace DB::Coroutine
 {
-class Scheduler;
 struct RunParams;
+class CancelStatus;
 
 /// This file declares utilities to deal with C++20 coroutines.
 /// Example: (prints integers using three threads in parallel)
@@ -44,9 +45,8 @@ struct RunParams;
 /// void main()
 /// {
 ///     ThreadPool thread_pool{10};
-///     Coroutine::Scheduler scheduler{thread_pool};
 ///     auto main_task = print_numbers_in_parallel(); /// create a main task to execute but don't execute it yet
-///     std::move(main_task).syncRun(scheduler); /// execute the main task and block the current thread until it finishes or throws an exception.
+///     std::move(main_task).syncRun(thread_pool); /// execute the main task and block the current thread until it finishes or throws an exception.
 ///  }
 
 /// Coroutine::Task keeps an asynchronous task, must be specified as a result type when declaring a coroutine.
@@ -84,22 +84,29 @@ public:
 
     class Awaiter;
 
-    /// Starts executing the task using a scheduler, returns a waiter which must be used to find out when it's done.
-    /// Example of usage: `co_await task.run(scheduler)`.
+    /// Starts executing the task using a thread pool, returns a waiter which must be used to find out when it's done.
+    /// Example of usage: `co_await task.run(thread_pool)`.
     /// NOTE: A repeated call of run() doesn't execute a coroutine again, it just returns a copy of the first awaiter.
-    Awaiter run(const Scheduler & scheduler) const;
+    Awaiter run(ThreadPool & thread_pool, const String & thread_name = "CoroutineWorker") const;
+    Awaiter run(const ThreadPoolCallbackRunner<void> & thread_pool_callback_runner) const;
 
     /// Starts executing the task using specified parameters.
-    /// The parameters can be constructed either from a scheduler, or extracted from inside of another coroutine with `co_await Coroutine::RunParams{}`.
+    /// The parameters can be either constructed from scratch, or extracted from inside of another coroutine with `co_await Coroutine::RunParams{}`.
     /// Usually this function shouldn't be called because the `co_await` operator can be used instead.
     /// The following two calls do the same
-    /// `co_await subCoroutineName(a, b, c)`
-    /// `co_await subCoroutineName(a, b, c).runWithParams(co_await Coroutine::RunParams{})`
-    Awaiter runWithParams(const RunParams & params) const;
+    /// `co_await subCoroutine(a, b, c)`
+    /// `co_await subCoroutine(a, b, c).run(co_await Coroutine::RunParams{})`
+    Awaiter run(const RunParams & params) const;
+
+    /// Makes an awaiter without starting execution of the task.
+    /// That means the task must be either already started by calling run() or syncRun() or it can be started soon.
+    Awaiter getAwaiter() const;
 
     /// Runs a task and blocks the current thread until it's done.
     /// Prefer run() or the `co_await` operator to this function if possible.
-    ResultType syncRun(const Scheduler & scheduler) const;
+    ResultType syncRun() const;
+    ResultType syncRun(ThreadPool & thread_pool, const String & thread_name = "CoroutineWorker") const;
+    ResultType syncRun(const ThreadPoolCallbackRunner<void> & thread_pool_callback_runner) const;
 
     /// We should define `promise_type` so C++ compiler will be able to use Coroutine::Task<...> with coroutines.
     using promise_type = Promise;
@@ -114,6 +121,36 @@ private:
     explicit Task(const std::shared_ptr<Controller> & controller_) : controller(controller_) {}
 
     std::shared_ptr<Controller> controller;
+};
+
+
+/// RunParams contains parameters to execute a coroutine, see Task::run().
+struct RunParams
+{
+    /// Scheduler which will be used to execute the coroutine. The coroutine will be executed on the current thread if `scheduler` is not set.
+    std::function<void(std::function<void()>)> scheduler;
+
+    /// Scheduler which will be used to execute parallel subtasks when it's necessary to do that.
+    /// See for example the coroutine parallel().
+    std::function<void(std::function<void()>)> scheduler_for_parallel_tasks;
+
+    /// Scheduler which will be used to execute delayed subtasks when it's necessary to do that.
+    /// See for example the coroutine sleepForSeconds().
+    std::function<void(std::function<void()>)> scheduler_for_delayed_tasks;
+
+    /// Used to cancel execution of the coroutine. It's ok to not set this field.
+    std::shared_ptr<CancelStatus> cancel_status;
+
+    /// The default constructor makes parameters to execute the coroutine and all its subtasks on the current thread.
+    /// It's not the best but still possible choice.
+    RunParams() = default;
+
+    /// Makes parameters to execute the coroutine and its subtasks on a specified thread pool.
+    RunParams(ThreadPool & thread_pool, const String & thread_name = "CoroutineWorker");
+    RunParams(const ThreadPoolCallbackRunner<void> & thread_pool_callback_runner);
+
+    static std::function<void(std::function<void()>)> makeScheduler(ThreadPool & thread_pool, const String & thread_name = "CoroutineWorker", bool allow_fallback_to_sync_run = false, bool ignore_queue_size = false);
+    static std::function<void(std::function<void()>)> makeScheduler(const ThreadPoolCallbackRunner<void> & thread_pool_callback_runner);
 };
 
 
@@ -172,38 +209,6 @@ private:
 };
 
 
-/// Scheduler is used to schedule tasks to run them on another thread.
-class Scheduler
-{
-public:
-    Scheduler() : schedule_function(&Scheduler::defaultScheduleFunction) { }
-
-    explicit Scheduler(const std::function<void(std::function<void()>)> & schedule_function_) : Scheduler()
-    {
-        if (schedule_function_)
-            schedule_function = schedule_function_;
-    }
-
-    explicit Scheduler(const ThreadPoolCallbackRunner<void> & thread_pool_callback_runner) : Scheduler()
-    {
-        if (thread_pool_callback_runner)
-            schedule_function = [thread_pool_callback_runner](std::function<void()> callback)
-            { thread_pool_callback_runner(std::move(callback), 0); };
-    }
-
-    explicit Scheduler(ThreadPool & thread_pool, const std::string & thread_name = "Co::Scheduler")
-        : Scheduler(threadPoolCallbackRunner<void>(thread_pool, thread_name))
-    {
-    }
-
-    void schedule(std::function<void()> && callback) const { schedule_function(std::move(callback)); }
-
-private:
-    static void defaultScheduleFunction(std::function<void()> callback) { std::move(callback)(); }
-    std::function<void(std::function<void()>)> schedule_function;
-};
-
-
 /// Usage: `co_await Co::IsCancelled{}` inside a coroutine returns a boolean meaning whether the coroutine is ordered to cancel
 /// (by calling awaiter.tryCancelTask()). Then the coroutine can decide by itself what to do with that: it can either ignore that and continue working
 /// or finish working by returning or throwing an exception.
@@ -216,6 +221,23 @@ struct IsCancelled
 /// Usage: `co_await Co::StopIfCancelled{}` inside a coroutine checks whether the coroutine is ordered to cancel, and if so,
 /// stops the coroutine by throwing the exception specified in Awaiter::tryCancelTask().
 struct StopIfCancelled {};
+
+
+/// Keeps the cancel status of one or more coroutines. Used to implement Awaiter::tryCancelTask().
+class CancelStatus : public std::enable_shared_from_this<CancelStatus>
+{
+public:
+    void setIsCancelled(const String & message_ = {}) noexcept;
+    void setIsCancelled(std::exception_ptr cancel_exception_) noexcept;
+    bool isCancelled() const noexcept { return static_cast<bool>(getCancelException()); }
+    std::exception_ptr getCancelException() const noexcept;
+    scope_guard subscribe(const std::function<void(std::exception_ptr)> & callback);
+
+protected:
+    std::exception_ptr TSA_GUARDED_BY(mutex) cancel_exception;
+    std::list<std::function<void(std::exception_ptr)>> TSA_GUARDED_BY(mutex) subscriptions;
+    mutable std::mutex mutex;
+};
 
 
 /// The following are implementation details.
@@ -258,22 +280,6 @@ namespace details
     {
     public:
         void * getResultPtr() { return nullptr; }
-    };
-
-    /// Keeps the cancel status of a coroutine. Used to implement Awaiter::tryCancelTask().
-    class CancelStatus : public std::enable_shared_from_this<CancelStatus>
-    {
-    public:
-        void setIsCancelled(const String & message_ = {}) noexcept;
-        void setIsCancelled(std::exception_ptr cancel_exception_) noexcept;
-        bool isCancelled() const noexcept { return static_cast<bool>(getCancelException()); }
-        std::exception_ptr getCancelException() const noexcept;
-        scope_guard subscribe(const std::function<void(std::exception_ptr)> & callback);
-
-    protected:
-        std::exception_ptr TSA_GUARDED_BY(mutex) cancel_exception;
-        std::list<std::function<void(std::exception_ptr)>> TSA_GUARDED_BY(mutex) subscriptions;
-        mutable std::mutex mutex;
     };
 
     /// State of the controller.
@@ -343,36 +349,59 @@ ResultType Task<ResultType>::Awaiter::syncWait() const
 }
 
 template <typename ResultType>
-ResultType Task<ResultType>::syncRun(const Scheduler & scheduler) const
+ResultType Task<ResultType>::syncRun() const
 {
+    auto awaiter = run(RunParams{});
     if constexpr (std::is_void_v<ResultType>)
-        run(scheduler).syncWait();
+        awaiter.syncWait();
     else
-        return run(scheduler).syncWait();
-}
-
-/// TaskRunParams contains parameters to run a coroutine, see Task::runWithParams().
-struct RunParams
-{
-    bool reschedule = true;
-    Scheduler scheduler;
-    std::shared_ptr<details::CancelStatus> cancel_status;
-
-    RunParams() = default;
-    RunParams(const Scheduler & scheduler_) : scheduler(scheduler_) {}
-};
-
-template <typename ResultType>
-typename Task<ResultType>::Awaiter Task<ResultType>::run(const Scheduler & scheduler) const
-{
-    return runWithParams(RunParams{scheduler});
+        return awaiter.syncWait();
 }
 
 template <typename ResultType>
-typename Task<ResultType>::Awaiter Task<ResultType>::runWithParams(const RunParams & params) const
+ResultType Task<ResultType>::syncRun(ThreadPool & thread_pool, const String & thread_name) const
+{
+    auto awaiter = run(thread_pool, thread_name);
+    if constexpr (std::is_void_v<ResultType>)
+        awaiter.syncWait();
+    else
+        return awaiter.syncWait();
+}
+
+template <typename ResultType>
+ResultType Task<ResultType>::syncRun(const ThreadPoolCallbackRunner<void> & thread_pool_callback_runner) const
+{
+    auto awaiter = run(thread_pool_callback_runner);
+    if constexpr (std::is_void_v<ResultType>)
+        awaiter.syncWait();
+    else
+        return awaiter.syncWait();
+}
+
+template <typename ResultType>
+typename Task<ResultType>::Awaiter Task<ResultType>::run(ThreadPool & thread_pool, const String & thread_name) const
+{
+    return run(RunParams{thread_pool, thread_name});
+}
+
+template <typename ResultType>
+typename Task<ResultType>::Awaiter Task<ResultType>::run(const ThreadPoolCallbackRunner<void> & thread_pool_callback_runner) const
+{
+    return run(RunParams{thread_pool_callback_runner});
+}
+
+template <typename ResultType>
+typename Task<ResultType>::Awaiter Task<ResultType>::run(const RunParams & params) const
 {
     chassert(controller);
     return controller->run(params);
+}
+
+template <typename ResultType>
+typename Task<ResultType>::Awaiter Task<ResultType>::getAwaiter() const
+{
+    chassert(controller);
+    return controller->getAwaiter();
 }
 
 /// PromiseBase is a helper which is used as a base class for Promise.
@@ -469,7 +498,7 @@ public:
     template <typename SubTaskResultType>
     typename Task<SubTaskResultType>::Awaiter await_transform(const Task<SubTaskResultType> & sub_task) const
     {
-        return sub_task.runWithParams(this->controller->getRunParams());
+        return sub_task.run(this->controller->getRunParams());
     }
 };
 
@@ -525,7 +554,7 @@ public:
                 getCancelStatus()->setIsCancelled("Cancelled because none awaits us");
             try
             {
-                Awaiter(this->shared_from_this()).syncWait();
+                getAwaiter().syncWait();
             }
             catch (Exception & e)
             {
@@ -562,11 +591,12 @@ public:
         auto old_state_initialized = State::INITIALIZED;
         if (state.compare_exchange_strong(old_state_initialized, State::STARTED))
         {
-            scheduler = params_.scheduler;
+            scheduler_for_parallel_tasks = params_.scheduler_for_parallel_tasks;
+            scheduler_for_delayed_tasks = params_.scheduler_for_delayed_tasks;
             cancel_status = params_.cancel_status;
 
             if (!cancel_status)
-                cancel_status = std::make_shared<details::CancelStatus>();
+                cancel_status = std::make_shared<CancelStatus>();
 
             auto job = [this, keep_this_from_destruction = this->shared_from_this()]
             {
@@ -575,21 +605,24 @@ public:
                     coroutine_handle.resume();
             };
 
-            if (params_.reschedule)
-                scheduler.schedule(job);
+            if (params_.scheduler)
+                params_.scheduler(job);
             else
                 job();
         }
 
-        return Awaiter(this->shared_from_this());
+        return getAwaiter();
     }
+
+    Awaiter getAwaiter() { return Awaiter{this->shared_from_this()}; }
 
     /// Gets parameter to run a subtask.
     RunParams getRunParams() const
     {
         RunParams params_for_subtask;
-        params_for_subtask.reschedule = false;
-        params_for_subtask.scheduler = scheduler;
+        /// We don't set `params_for_subtask.scheduler` here because normally a subtask can be executed on the same thread as the main task.
+        params_for_subtask.scheduler_for_parallel_tasks = scheduler_for_parallel_tasks;
+        params_for_subtask.scheduler_for_delayed_tasks = scheduler_for_delayed_tasks;
         params_for_subtask.cancel_status = cancel_status;
         return params_for_subtask;
     }
@@ -608,15 +641,16 @@ public:
 
     std::exception_ptr getResultException() const noexcept { return result_exception; }
 
-    std::shared_ptr<details::CancelStatus> getCancelStatus() const noexcept { return cancel_status; }
+    std::shared_ptr<CancelStatus> getCancelStatus() const noexcept { return cancel_status; }
 
 private:
     std::atomic<details::State> state = State::INITIALIZED;
 
     std::coroutine_handle<Promise> coroutine_handle;
-    Scheduler scheduler;
+    std::function<void(std::function<void()>)> scheduler_for_parallel_tasks;
+    std::function<void(std::function<void()>)> scheduler_for_delayed_tasks;
+    std::shared_ptr<CancelStatus> cancel_status;
     std::exception_ptr result_exception;
-    std::shared_ptr<details::CancelStatus> cancel_status;
     details::ContinuationList continuation_list;
 };
 

@@ -13,26 +13,33 @@ namespace DB
 template <typename Result, typename Callback = std::function<Result()>>
 using ThreadPoolCallbackRunner = std::function<std::future<Result>(Callback &&, int64_t priority)>;
 
+/// Wraps a scheduled 
+template <typename Result, typename Callback = std::function<Result()>>
+Result wrapScheduledCallback(Callback && callback, const String & thread_name, ThreadGroupStatusPtr thread_group)
+{
+    if (thread_group)
+        CurrentThread::attachTo(thread_group);
+
+    SCOPE_EXIT_SAFE({
+        if (thread_group)
+            CurrentThread::detachQueryIfNotDetached();
+    });
+
+    setThreadName(thread_name.data());
+
+    return std::move(callback)(); 
+}
+
 /// Creates CallbackRunner that runs every callback with 'pool->scheduleOrThrow()'.
 template <typename Result, typename Callback = std::function<Result()>>
 ThreadPoolCallbackRunner<Result, Callback> threadPoolCallbackRunner(ThreadPool & pool, const std::string & thread_name)
 {
-    return [pool = &pool, thread_group = CurrentThread::getGroup(), thread_name](Callback && callback, int64_t priority) mutable -> std::future<Result>
+    return [pool = &pool, thread_name, thread_group = CurrentThread::getGroup()](
+               Callback && callback, int64_t priority) mutable -> std::future<Result>
     {
-        auto task = std::make_shared<std::packaged_task<Result()>>([thread_group, thread_name, callback = std::move(callback)]() mutable -> Result
-        {
-            if (thread_group)
-                CurrentThread::attachTo(thread_group);
-
-            SCOPE_EXIT_SAFE({
-                if (thread_group)
-                    CurrentThread::detachQueryIfNotDetached();
-            });
-
-            setThreadName(thread_name.data());
-
-            return callback();
-        });
+        auto task = std::make_shared<std::packaged_task<Result()>>(
+            [callback = std::move(callback), thread_name, thread_group]() mutable -> Result
+            { return wrapScheduledCallback<Result>(std::move(callback), thread_name, thread_group); });
 
         auto future = task->get_future();
 

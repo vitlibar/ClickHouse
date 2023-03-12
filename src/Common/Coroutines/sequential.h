@@ -53,13 +53,14 @@ namespace details
         auto params = co_await RunParams{};
 
         /// Run all the subtasks in a sequence.
-        for (const auto & subtask : subtasks)
+        for (auto & subtask : subtasks)
         {
             co_await StopIfCancelled{};
+            auto awaiter = std::move(subtask).run(params);
             if constexpr (std::is_void_v<ResultType>)
-                co_await std::move(subtask).runWithParams(params);
+                co_await awaiter;
             else
-                result_holder.getResultPtr()->emplace_back(co_await std::move(subtask).runWithParams(params));
+                result_holder.getResultPtr()->emplace_back(co_await awaiter);
         }
 
         /// Returns the results of the subtasks as a vector (if it's not void).

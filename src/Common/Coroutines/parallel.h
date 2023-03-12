@@ -54,11 +54,11 @@ namespace details
         auto params = co_await RunParams{};
 
         /// Run the subtasks in parallel if the scheduler allows it.
-        params.reschedule = true;
+        params.scheduler = params.scheduler_for_parallel_tasks;
 
         /// Make a separate cancel status for subtasks, so we'll able to cancel them if the main task is not cancelled.
         auto main_task_cancel_status = params.cancel_status;
-        auto subtask_cancel_status = std::make_shared<details::CancelStatus>();
+        auto subtask_cancel_status = std::make_shared<CancelStatus>();
         auto main_task_cancel_status_subscription = main_task_cancel_status->subscribe(
             [subtask_cancel_status](std::exception_ptr exception) { subtask_cancel_status->setIsCancelled(exception); });
         params.cancel_status = subtask_cancel_status;
@@ -74,7 +74,7 @@ namespace details
             {
                 /// Cancel all the subtasks if any of them fail.
                 exception = std::current_exception();
-                subtask_cancel_status->setIsCancelled("A parallel task failed");
+                subtask_cancel_status->setIsCancelled("Cancelled because a parallel task failed");
             }
         };
 
@@ -107,7 +107,7 @@ namespace details
                     }
                 };
 
-                awaiters.emplace_back(do_subtask(std::move(subtasks[i]), result_holder, i, store_current_exception).runWithParams(params));
+                awaiters.emplace_back(do_subtask(std::move(subtasks[i]), result_holder, i, store_current_exception).run(params));
             }
         }
         catch (...)
