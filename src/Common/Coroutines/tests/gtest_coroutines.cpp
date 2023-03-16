@@ -2,6 +2,8 @@
 #include <Common/Coroutines/Task.h>
 #include <Common/Coroutines/parallel.h>
 #include <Common/Coroutines/sequential.h>
+#include <Common/Coroutines/setTimeout.h>
+#include <Common/Coroutines/sleep.h>
 #include <base/sleep.h>
 #include <boost/algorithm/string.hpp>
 
@@ -11,6 +13,7 @@ namespace DB::ErrorCodes
     extern const int BAD_ARGUMENTS;
     extern const int CANNOT_SCHEDULE_TASK;
     extern const int COROUTINE_TASK_CANCELLED;
+    extern const int COROUTINE_TASK_TIMEOUT;
 }
 
 using namespace DB;
@@ -76,7 +79,7 @@ namespace
         co_return result;
     }
 
-    /// Calls a few `append_chars()` tasks either sequentially or in parallel.
+    /// Calls a few `appendChars()` tasks either sequentially or in parallel.
     Coroutine::Task<> appendCharsMulti(ThreadSafeOutput * output, bool parallel, size_t num_tasks = 3, bool throw_exception = false)
     {
         output->append(parallel ? "par_" : "seq_");
@@ -162,6 +165,46 @@ namespace
         co_return {*ptr, ptr.use_count()};
     }
 #endif
+
+    /// Similar to appendChars(), but uses coroutine sleep instead of normal sleep.
+    Coroutine::Task<> appendCharsWithCoSleep(ThreadSafeOutput * output, char first_char, size_t num_chars)
+    {
+        for (size_t i = 0; i != num_chars; ++i)
+        {
+            char c = static_cast<char>(i + first_char);
+            output->append(c);
+            std::cout << "start sleeping " << std::this_thread::get_id() << ", c=" << c << std::endl;
+            co_await Coroutine::sleepForMilliseconds(SLEEP_TIME);
+            std::cout << "stop sleeping " << std::this_thread::get_id() << ", c=" << c << std::endl;
+        }
+        std::cout << "appendCharsWithCoSleep - end" << std::endl;
+        co_return;
+    }
+
+    /// Similar to `appendCharsMulti()` but uses coroutine sleep instead of normal sleep.
+    Coroutine::Task<> appendCharsMultiWithCoSleep(ThreadSafeOutput * output, bool parallel)
+    {
+        output->append(parallel ? "par_" : "seq_");
+
+        std::vector<Coroutine::Task<>> tasks;
+        tasks.push_back(appendCharsWithCoSleep(output, 'a', 3));
+        tasks.push_back(appendCharsWithCoSleep(output, 'A', 10));
+        tasks.push_back(appendCharsWithCoSleep(output, '0', 7));
+
+        Coroutine::Task<> main_task;
+        if (parallel)
+            main_task = Coroutine::parallel(std::move(tasks));
+        else
+            main_task = Coroutine::sequential(std::move(tasks));
+
+        output->append("run_");
+
+        co_await std::move(main_task); /// That's how we call another coroutine.
+
+        output->append("_end");
+
+        std::cout << "appendCharsMultiWithCoSleep - end" << std::endl;
+    }
 
     void checkThrowsExpectedException(std::function<void()> && f, const Exception & expected_exception)
     {
@@ -620,7 +663,7 @@ TEST(Coroutines, OwnershipArgumentRef)
 
 #if 0
 /// Ownership when we pass a move-only argument.
-/// TODO: Arguments of coroutines must not be rvalues, so we need to check argument types at compile time and make a compiler fail with an error.
+/// TODO: Arguments of coroutines must not be rvalues.
 TEST(Coroutines, OwnershipArgumentMoveOnly)
 {
     /// Pass `ptr` as `std::shared_ptr<int> &&`
@@ -666,4 +709,69 @@ TEST(Coroutines, MultipleAwaiters)
         EXPECT_EQ(result2, "firstsecond");
         EXPECT_EQ(result3, "firstsecond");
     }
+}
+
+TEST(Coroutines, CoSleep)
+{
+    ThreadPool thread_pool{10};
+    ThreadSafeOutput output;
+
+    appendCharsMultiWithCoSleep(&output, /* parallel= */ false).syncRun(thread_pool);
+    EXPECT_EQ(output.get(), "seq_run_abcABCDEFGHIJabcdefg_end");
+
+    appendCharsMultiWithCoSleep(&output, /* parallel= */ true).syncRun(thread_pool);
+    {
+        auto output_string = output.get();
+        SCOPED_TRACE(output_string);
+        EXPECT_TRUE(boost::iequals(output_string, "par_run_aAabBbcCcDdEeFfGgHIJ_end"));
+    }
+
+    {
+        auto awaiter = appendCharsMultiWithCoSleep(&output, /* parallel= */ false).run(thread_pool);
+        sleepForMilliseconds(SLEEP_TIME * 5 / 2);
+        awaiter.tryCancelTask();
+        checkThrowsExpectedException([&] { awaiter.syncWait(); }, Exception(ErrorCodes::COROUTINE_TASK_CANCELLED, "Task cancelled"));
+        auto output_string = output.get();
+        SCOPED_TRACE(output_string);
+        EXPECT_TRUE(boost::iequals(output_string, "seq_run_abc"));
+    }
+
+    {
+        auto awaiter = appendCharsMultiWithCoSleep(&output, /* parallel= */ true).run(thread_pool);
+        sleepForMilliseconds(SLEEP_TIME * 5 / 2);
+        awaiter.tryCancelTask();
+        checkThrowsExpectedException([&] { awaiter.syncWait(); }, Exception(ErrorCodes::COROUTINE_TASK_CANCELLED, "Task cancelled"));
+        auto output_string = output.get();
+        SCOPED_TRACE(output_string);
+        EXPECT_TRUE(boost::iequals(output_string, "par_run_aAaBbbCcc"));
+    }
+}
+
+TEST(Coroutines, SetTimeout)
+{
+    ThreadPool thread_pool{10};
+    ThreadSafeOutput output;
+
+    std::cout << "sequential" << std::endl;
+    setTimeoutInSeconds(appendCharsMultiWithCoSleep(&output, /* parallel= */ false), 3600000 /* very long time */).syncRun(thread_pool);
+    std::cout << "sequential-end" << std::endl;
+    EXPECT_EQ(output.get(), "seq_run_abcABCDEFGHIJabcdefg_end");
+
+    std::cout << "parallel" << std::endl;
+    setTimeoutInSeconds(appendCharsMultiWithCoSleep(&output, /* parallel= */ true), 3600000 /* very long time */).syncRun(thread_pool);
+    std::cout << "parallel-end" << std::endl;
+    {
+        auto output_string = output.get();
+        SCOPED_TRACE(output_string);
+        EXPECT_TRUE(boost::iequals(output_string, "par_run_aAabBbcCcDdEeFfGgHIJ_end"));
+    }
+
+#if 0
+    checkThrowsExpectedException([&] { setTimeoutInSeconds(appendCharsMultiWithCoSleep(&output, /* parallel= */ false), SLEEP_TIME * 5 / 2).syncRun(thread_pool); },
+        Exception(ErrorCodes::COROUTINE_TASK_TIMEOUT, "Task cancelled"));
+    EXPECT_EQ(output.get(), "seq_run_abc");
+
+    setTimeoutInSeconds(appendCharsMultiWithCoSleep(&output, /* parallel= */ true), SLEEP_TIME * 5 / 2).syncRun(thread_pool);
+    EXPECT_EQ(output.get(), "par_run_aAaBbbCcc");
+#endif
 }

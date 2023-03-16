@@ -54,7 +54,7 @@ namespace details
         auto params = co_await RunParams{};
 
         /// Run the subtasks in parallel if the scheduler allows it.
-        params.scheduler = params.scheduler_for_parallel_tasks;
+        params.scheduler = params.scheduler_for_parallel_subtasks;
 
         /// Make a separate cancel status for subtasks, so we'll able to cancel them if the main task is not cancelled.
         auto main_task_cancel_status = params.cancel_status;
@@ -89,7 +89,7 @@ namespace details
             {
                 co_await StopIfCancelled{};
 
-                auto do_subtask = [/* lambda without captures can be a coroutine */](
+                auto do_subtask = [/* a lambda function without captures can be a coroutine */](
                                       SubTaskType subtask_, auto & result_holder_, size_t i_, auto & store_current_exception_) -> Task<>
                 {
                     try

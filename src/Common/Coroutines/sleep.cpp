@@ -1,8 +1,6 @@
 #include <Common/Coroutines/sleep.h>
 
 #include <Common/Coroutines/Task.h>
-#include <Common/Coroutines/Timer.h>
-#include <Common/Coroutines/setTimeout.h>
 
 
 namespace DB::Coroutine
@@ -12,7 +10,9 @@ namespace
 {
     using TimeUnit = details::TimeUnit;
 
-    void syncSleep(uint64_t microseconds, std::shared_ptr<CancelStatus> cancel_status)
+    /// Synchronous waiting as a special case.
+    /// This function is used when `scheduler_for_parallel_subtasks` is not set so rescheduling is not possible.
+    void syncSleep(uint64_t microseconds, std::shared_ptr<details::CancelStatus> cancel_status)
     {
         /// `params.scheduler` is not set so we will do synchronous waiting for the specified time until the task is cancelled.
         auto event = std::make_shared<Poco::Event>();
@@ -23,15 +23,18 @@ namespace
         if (event->tryWait(microseconds))
             throw cancel_status->getCancelException();
     }
-    
+
+    /// Special awaiter to implement asynchronous waiting.
+    /// Uses details::Timer to reschedule after the specified time passes.
     class SleepAwaiter
     {
     public:
         SleepAwaiter(
             uint64_t microseconds_,
+            std::shared_ptr<details::Timer> timer_,
             std::function<void(std::function<void()>)> scheduler_,
-            std::shared_ptr<CancelStatus> cancel_status_)
-            : microseconds(microseconds_), scheduler(scheduler_), cancel_status(cancel_status_)
+            std::shared_ptr<details::CancelStatus> cancel_status_)
+            : timer(timer_), microseconds(microseconds_), cancel_status(cancel_status_), state(std::make_shared<State>(scheduler_))
         {
         }
 
@@ -39,46 +42,109 @@ namespace
 
         void await_suspend(std::coroutine_handle<> handle_)
         {
-            auto schedule_resume = [handle_, scheduler = scheduler, is_resumed = is_resumed]
+            std::cout << "SleepAwaiter::await_suspend: " << reinterpret_cast<size_t>(this) << std::endl;
+
+            auto do_resume = [handle_, state = state]
             {
-                if (!is_resumed->exchange(true))
-                    scheduler([handle_] { handle_.resume(); });
+                std::cout << "sleep - do_resume" << std::endl;
+                std::lock_guard lock{state->mutex};
+                /// We must not resume the coroutine twice.
+                /// (There can be a race between timer_subscription and cancel_status_subscription).
+                if (!state->is_resumed)
+                {
+                    state->is_resumed = true;
+                    state->cancel_subscription.reset();
+                    state->timer_subscription.reset();
+                    std::cout << "sleep - do_resume-scheduling" << std::endl;
+                    state->scheduler([handle_] {
+                        std::cout << "sleep - do_resume-resuming, thread_id=" << std::this_thread::get_id() << std::endl;
+                        handle_.resume();
+                    });
+                }
             };
 
-            auto schedule_resume_with_arg = [schedule_resume](std::exception_ptr) { schedule_resume(); };
+            auto timer_subscription = timer->scheduleDelayedTask(microseconds, do_resume);
+            auto cancel_subscription = cancel_status->subscribe([do_resume](std::exception_ptr) { do_resume(); });
 
-            timer_subscription = Timer::instance().scheduleDelayedTask(microseconds, schedule_resume);
-            cancel_status_subscription = cancel_status->subscribe(schedule_resume_with_arg);
+            {
+                std::lock_guard lock{state->mutex};
+                if (!state->is_resumed) /// If it's resumed already we don't need to store those subscriptions anywhere.
+                {
+                    state->timer_subscription = std::move(timer_subscription);
+                    state->cancel_subscription = std::move(cancel_subscription);
+                }
+            }
+
+            /// Will proceed scheduled tasks on timer if some other thread isn't already processing them.
+            timer->run();
         }
 
         void await_resume() const
         {
+            std::cout << "SleepAwaiter::await_resume: " << reinterpret_cast<size_t>(this) << std::endl;
+
+            /// If the waiting was cancelled we need to rethrow the exception.
             if (auto exception = cancel_status->getCancelException())
                 std::rethrow_exception(exception);
         }
 
     private:
+        struct State
+        {
+            std::function<void(std::function<void()>)> scheduler;
+            bool TSA_GUARDED_BY(mutex) is_resumed = false;
+            scope_guard TSA_GUARDED_BY(mutex) timer_subscription;
+            scope_guard TSA_GUARDED_BY(mutex) cancel_subscription;
+            std::mutex mutex;
+            State(std::function<void(std::function<void()>)> scheduler_) : scheduler(scheduler_) {}
+        };
+
+        std::shared_ptr<details::Timer> timer;
         uint64_t microseconds;
-        std::function<void(std::function<void()>)> scheduler;
-        std::shared_ptr<std::atomic<bool>> is_resumed = std::make_shared<std::atomic<bool>>(false);
-        std::shared_ptr<CancelStatus> cancel_status;
-        scope_guard timer_subscription;
-        scope_guard cancel_status_subscription;
+        std::shared_ptr<details::CancelStatus> cancel_status;
+        std::shared_ptr<State> state;
     };
 
+    /// The implementation of the sleepFor* coroutines.
     Task<> sleepImpl(TimeUnit time_unit, uint64_t count)
     {
         auto microseconds = details::toMicroseconds(time_unit, count);
         auto params = co_await RunParams{};
 
-        if (params.scheduler_for_delayed_tasks)
+        if (params.scheduler_for_parallel_subtasks)
         {
-            co_await SleepAwaiter{microseconds, params.scheduler_for_delayed_tasks, params.cancel_status};
+            co_await SleepAwaiter{microseconds, params.timer, params.scheduler_for_parallel_subtasks, params.cancel_status};
         }
         else
         {
             syncSleep(microseconds, params.cancel_status);
         }
+    }
+}
+
+
+namespace details
+{
+    std::string_view getTimeUnitsName(TimeUnit time_unit)
+    {
+        switch (time_unit)
+        {
+            case TimeUnit::SECONDS: return "seconds";
+            case TimeUnit::MILLISECONDS: return "milliseconds";
+            case TimeUnit::MICROSECONDS: return "microseconds";
+        }
+        UNREACHABLE();
+    }
+
+    uint64_t toMicroseconds(TimeUnit time_unit, uint64_t count)
+    {
+        switch (time_unit)
+        {
+            case TimeUnit::SECONDS: return count * 1000000;
+            case TimeUnit::MILLISECONDS: return count * 1000;
+            case TimeUnit::MICROSECONDS: return count;
+        }
+        UNREACHABLE();
     }
 }
 

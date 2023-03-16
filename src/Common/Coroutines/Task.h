@@ -17,7 +17,6 @@ namespace DB::ErrorCodes
 namespace DB::Coroutine
 {
 struct RunParams;
-class CancelStatus;
 
 /// This file declares utilities to deal with C++20 coroutines.
 /// Example: (prints integers using three threads in parallel)
@@ -124,22 +123,24 @@ private:
 };
 
 
+namespace details { class CancelStatus; class Timer; }
+
+
 /// RunParams contains parameters to execute a coroutine, see Task::run().
 struct RunParams
 {
-    /// Scheduler which will be used to execute the coroutine. The coroutine will be executed on the current thread if `scheduler` is not set.
+    /// Scheduler which will be called to execute the coroutine. The coroutine will be executed on the current thread if `scheduler` is not set.
     std::function<void(std::function<void()>)> scheduler;
 
-    /// Scheduler which will be used to execute parallel subtasks when it's necessary to do that.
-    /// See for example the coroutine parallel().
-    std::function<void(std::function<void()>)> scheduler_for_parallel_tasks;
+    /// Scheduler which will be called to execute parallel subtasks when it's necessary to do that.
+    /// See for example the coroutines parallel(), setTimeout().
+    std::function<void(std::function<void()>)> scheduler_for_parallel_subtasks;
 
-    /// Scheduler which will be used to execute delayed subtasks when it's necessary to do that.
-    /// See for example the coroutine sleepForSeconds().
-    std::function<void(std::function<void()>)> scheduler_for_delayed_tasks;
+    /// A cancel status is used to cancel execution of the coroutine. Managed internally.
+    std::shared_ptr<details::CancelStatus> cancel_status;
 
-    /// Used to cancel execution of the coroutine. It's ok to not set this field.
-    std::shared_ptr<CancelStatus> cancel_status;
+    /// A timer is used to implement the coroutines sleepForSeconds() and setTimeout(). Managed internally.
+    std::shared_ptr<details::Timer> timer;
 
     /// The default constructor makes parameters to execute the coroutine and all its subtasks on the current thread.
     /// It's not the best but still possible choice.
@@ -149,7 +150,7 @@ struct RunParams
     RunParams(ThreadPool & thread_pool, const String & thread_name = "CoroutineWorker");
     RunParams(const ThreadPoolCallbackRunner<void> & thread_pool_callback_runner);
 
-    static std::function<void(std::function<void()>)> makeScheduler(ThreadPool & thread_pool, const String & thread_name = "CoroutineWorker", bool allow_fallback_to_sync_run = false, bool ignore_queue_size = false);
+    static std::function<void(std::function<void()>)> makeScheduler(ThreadPool & thread_pool, const String & thread_name = "CoroutineWorker", bool allow_fallback_to_sync_run = false);
     static std::function<void(std::function<void()>)> makeScheduler(const ThreadPoolCallbackRunner<void> & thread_pool_callback_runner);
 };
 
@@ -223,26 +224,16 @@ struct IsCancelled
 struct StopIfCancelled {};
 
 
-/// Keeps the cancel status of one or more coroutines. Used to implement Awaiter::tryCancelTask().
-class CancelStatus : public std::enable_shared_from_this<CancelStatus>
-{
-public:
-    void setIsCancelled(const String & message_ = {}) noexcept;
-    void setIsCancelled(std::exception_ptr cancel_exception_) noexcept;
-    bool isCancelled() const noexcept { return static_cast<bool>(getCancelException()); }
-    std::exception_ptr getCancelException() const noexcept;
-    scope_guard subscribe(const std::function<void(std::exception_ptr)> & callback);
-
-protected:
-    std::exception_ptr TSA_GUARDED_BY(mutex) cancel_exception;
-    std::list<std::function<void(std::exception_ptr)>> TSA_GUARDED_BY(mutex) subscriptions;
-    mutable std::mutex mutex;
-};
-
-
 /// The following are implementation details.
 namespace details
 {
+    /// Checks whether a specified type is an awaiter, i.e. has the member function await_ready().
+    template<typename F>
+    concept AwaiterConcept = requires(F f)
+    {
+        {f.await_ready()} -> std::same_as<bool>;
+    };
+
     /// ContinuationList is used to resume waiting coroutines after the task has finished.
     class ContinuationList
     {
@@ -291,15 +282,61 @@ namespace details
         FINISHED, /// the coroutine finished and the continuation list was processed.
     };
 
+    /// Keeps the cancel status of one or more coroutines. Used to implement Awaiter::tryCancelTask().
+    class CancelStatus : public std::enable_shared_from_this<CancelStatus>
+    {
+    public:
+        void setIsCancelled(const String & message_ = {}) noexcept;
+        void setIsCancelled(std::exception_ptr cancel_exception_) noexcept;
+        bool isCancelled() const noexcept { return static_cast<bool>(getCancelException()); }
+        std::exception_ptr getCancelException() const noexcept;
+        scope_guard subscribe(const std::function<void(std::exception_ptr)> & callback);
+
+    protected:
+        std::exception_ptr TSA_GUARDED_BY(mutex) cancel_exception;
+        struct CallbackWithID
+        {
+            std::function<void(std::exception_ptr)> callback;
+            size_t id;
+        };
+        using CallbacksWithIDs = std::vector<CallbackWithID>;
+        CallbacksWithIDs TSA_GUARDED_BY(mutex) subscriptions;
+        size_t TSA_GUARDED_BY(mutex) last_id = 0;
+        mutable std::mutex mutex;
+    };
+
+    /// An internal timer used in the coroutines like `sleepForSeconds()`.
+    class Timer
+    {
+    public:
+        ~Timer();
+
+        /// Schedules a delayed task, returns a scope_guard which can be destroyed to unsubscribe.
+        scope_guard scheduleDelayedTask(uint64_t microseconds, std::function<void()> callback);
+
+        /// Waits for the first scheduled time, calls the callback, then waits for the next scheduled time, calls the next callback, and so on
+        /// until the timed queue is empty.
+        void run();
+
+    private:
+        void unscheduleDelayedTask(Poco::Timestamp timestamp, uint64_t id);
+
+        struct CallbackWithID
+        {
+            std::function<void()> callback;
+            size_t id;
+        };
+        using CallbacksWithIDs = std::vector<CallbackWithID>;
+
+        bool TSA_GUARDED_BY(mutex) is_running = false;
+        std::map<Poco::Timestamp, CallbacksWithIDs> TSA_GUARDED_BY(mutex) timed_queue;
+        size_t TSA_GUARDED_BY(mutex) last_id = 0;
+        Poco::Event timed_queue_updated;
+        std::mutex mutex;
+    };
+
     void logErrorStateMustBeFinishedAfterWait(State state);
     void logErrorControllerDestructsWhileRunning();
-
-    /// Checks whether a specified type is an awaiter, i.e. has the member function await_ready().
-    template<typename F>
-    concept AwaiterConcept = requires(F f)
-    {
-        {f.await_ready()} -> std::same_as<bool>;
-    };
 
     /// A helper task, part of the implementation of syncWait() and syncRun().
     class SyncWaitTask
@@ -591,12 +628,15 @@ public:
         auto old_state_initialized = State::INITIALIZED;
         if (state.compare_exchange_strong(old_state_initialized, State::STARTED))
         {
-            scheduler_for_parallel_tasks = params_.scheduler_for_parallel_tasks;
-            scheduler_for_delayed_tasks = params_.scheduler_for_delayed_tasks;
+            scheduler_for_parallel_subtasks = params_.scheduler_for_parallel_subtasks;
             cancel_status = params_.cancel_status;
+            timer = params_.timer;
 
             if (!cancel_status)
-                cancel_status = std::make_shared<CancelStatus>();
+                cancel_status = std::make_shared<details::CancelStatus>();
+
+            if (!timer)
+                timer = std::make_shared<details::Timer>();
 
             auto job = [this, keep_this_from_destruction = this->shared_from_this()]
             {
@@ -621,9 +661,9 @@ public:
     {
         RunParams params_for_subtask;
         /// We don't set `params_for_subtask.scheduler` here because normally a subtask can be executed on the same thread as the main task.
-        params_for_subtask.scheduler_for_parallel_tasks = scheduler_for_parallel_tasks;
-        params_for_subtask.scheduler_for_delayed_tasks = scheduler_for_delayed_tasks;
+        params_for_subtask.scheduler_for_parallel_subtasks = scheduler_for_parallel_subtasks;
         params_for_subtask.cancel_status = cancel_status;
+        params_for_subtask.timer = timer;
         return params_for_subtask;
     }
 
@@ -641,15 +681,14 @@ public:
 
     std::exception_ptr getResultException() const noexcept { return result_exception; }
 
-    std::shared_ptr<CancelStatus> getCancelStatus() const noexcept { return cancel_status; }
+    std::shared_ptr<details::CancelStatus> getCancelStatus() const noexcept { return cancel_status; }
 
 private:
     std::atomic<details::State> state = State::INITIALIZED;
-
     std::coroutine_handle<Promise> coroutine_handle;
-    std::function<void(std::function<void()>)> scheduler_for_parallel_tasks;
-    std::function<void(std::function<void()>)> scheduler_for_delayed_tasks;
-    std::shared_ptr<CancelStatus> cancel_status;
+    std::function<void(std::function<void()>)> scheduler_for_parallel_subtasks;
+    std::shared_ptr<details::CancelStatus> cancel_status;
+    std::shared_ptr<details::Timer> timer;
     std::exception_ptr result_exception;
     details::ContinuationList continuation_list;
 };
