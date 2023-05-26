@@ -22,10 +22,14 @@ namespace ErrorCodes
 
 
 BackupCoordinationStageSync::BackupCoordinationStageSync(
-    const String & root_zookeeper_path_,
+    const String & backup_zk_path_,
+    const Strings & all_hosts_,
+    const String & current_host_,
     WithRetries & with_retries_,
     Poco::Logger * log_)
-    : zookeeper_path(root_zookeeper_path_ + "/stage")
+    : backup_zk_path(backup_zk_path_)
+    , all_hosts(all_hosts_)
+    , current_host(current_host_)
     , with_retries(with_retries_)
     , log(log_)
 {
@@ -39,10 +43,64 @@ void BackupCoordinationStageSync::createRootNodes()
         [&, &zookeeper = holder.faulty_zookeeper]()
     {
         with_retries.renewZooKeeper(zookeeper);
-        zookeeper->createAncestors(zookeeper_path);
-        zookeeper->createIfNotExists(zookeeper_path, "");
+        zookeeper->createAncestors(backup_zk_path);
+        zookeeper->createIfNotExists(backup_zk_path, "");
+        zookeeper->createIfNotExists(backup_zk_path + "/stage", "");
     });
 }
+
+void BackupCoordinationStageSync::setStage(const String & new_stage)
+{
+    auto holder = with_retries.createRetriesControlHolder("set");
+    holder.retries_ctl.retryLoop(
+        [&, &zookeeper = holder.faulty_zookeeper]()
+    {
+        with_retries.renewZooKeeper(zookeeper);
+
+        zookeeper->createIfNotExists(backup_zk_path + "/stage/started|" + current_host, "");
+        zookeeper->createIfNotExists(backup_zk_path + "/stage/current|" + current_host + "|" + new_stage, "");
+
+        bool all_hosts_ready = true;
+
+        for (const auto & host : all_hosts)
+        {
+            if ((host != current_host) && !zookeeper->exists(backup_zk_path + "/stage/current|" + host + "|" + new_stage, ""))
+            {
+                all_hosts_ready = false;
+                break;
+            }
+        }
+
+        if (all_hosts_ready)
+        {
+            Coordination::Stat stat;
+            String s = zookeeper->get(backup_zk_path, &stat);
+            if (s.starts_with(BackupCoordinationStage::ERROR))
+                throw;
+            zookeeper->trySet(backup_zk_path, new_stage, stat.version);
+        }
+
+    
+
+        if (all_hosts)
+        {
+            auto code = zookeeper->trySet(zookeeper_path, new_stage);
+            if (code != Coordination::Error::ZOK)
+                throw zkutil::KeeperException(code, zookeeper_path);
+        }
+        else
+        {
+        }
+    });
+}
+
+    /// Sets that the BACKUP/RESTORE failed with an error.
+    void setError(std::exception_ptr exception);
+
+    /// Waits until all the hosts come to a specified stage. If `timeout` is set the waiting will be limited by the timeout.
+    /// If some host failed with an exception this function will rethrow it with information about that host's name.
+    void waitForStage(const String & stage_to_wait, std::optional<std::chrono::milliseconds> timeout = {});
+
 
 void BackupCoordinationStageSync::set(const String & current_host, const String & new_stage, const String & message, const bool & all_hosts)
 {

@@ -10,32 +10,38 @@ class BackupCoordinationStageSync
 {
 public:
     BackupCoordinationStageSync(
-        const String & root_zookeeper_path_,
+        const String & backup_zk_path_,
+        const Strings & all_hosts_,
+        const String & current_host_,
         WithRetries & with_retries_,
         Poco::Logger * log_);
 
-    /// Sets the stage of the current host and signal other hosts if there were other hosts waiting for that.
-    void set(const String & current_host, const String & new_stage, const String & message, const bool & all_hosts = false);
-    void setError(const String & current_host, const Exception & exception);
+    /// Sets the stage of the current host.
+    void setStage(const String & new_stage);
 
-    /// Sets the stage of the current host and waits until all hosts come to the same stage.
-    /// The function returns the messages all hosts set when they come to the required stage.
-    Strings wait(const Strings & all_hosts, const String & stage_to_wait);
+    /// Sets that the BACKUP/RESTORE failed with an error.
+    void setError(std::exception_ptr exception);
 
-    /// Almost the same as setAndWait() but this one stops waiting and throws an exception after a specific amount of time.
-    Strings waitFor(const Strings & all_hosts, const String & stage_to_wait, std::chrono::milliseconds timeout);
+    /// Waits until all the hosts come to a specified stage. If `timeout` is set the waiting will be limited by the timeout.
+    /// If some host failed with an exception this function will rethrow it with information about that host's name.
+    void waitForStage(const String & stage_to_wait, std::optional<std::chrono::milliseconds> timeout = {});
 
 private:
     void createRootNodes();
 
+#if 0
     struct State;
     State readCurrentState(const Strings & zk_nodes, const Strings & all_hosts, const String & stage_to_wait) const;
 
     Strings waitImpl(const Strings & all_hosts, const String & stage_to_wait, std::optional<std::chrono::milliseconds> timeout) const;
+#endif
 
-    String zookeeper_path;
     /// A reference to the field of parent object - BackupCoordinationRemote or RestoreCoordinationRemote
     WithRetries & with_retries;
+
+    const String backup_zk_path;
+    const Strings all_hosts;
+    const String current_host;
     Poco::Logger * log;
 };
 

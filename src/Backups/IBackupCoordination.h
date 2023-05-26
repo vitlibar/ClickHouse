@@ -20,11 +20,11 @@ class IBackupCoordination
 public:
     virtual ~IBackupCoordination() = default;
 
-    /// Sets the current stage and waits for other hosts to come to this stage too.
-    virtual void setStage(const String & new_stage, const String & message) = 0;
-    virtual void setError(const Exception & exception) = 0;
-    virtual Strings waitForStage(const String & stage_to_wait) = 0;
-    virtual Strings waitForStage(const String & stage_to_wait, std::chrono::milliseconds timeout) = 0;
+    /// Sets the stage of the current host.
+    virtual void setStage(const String & new_stage) = 0;
+
+    /// Waits until all the hosts come to the specified stage. If `timeout` is set the waiting will be limited by the timeout.
+    virtual void waitForStage(const String & stage_to_wait, std::optional<std::chrono::milliseconds> timeout) = 0;
 
     struct PartNameAndChecksum
     {
