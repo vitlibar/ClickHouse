@@ -167,6 +167,7 @@ public:
     static std::shared_ptr<const ContextAccess> getFullAccess();
 
     ~ContextAccess();
+    AccessControl * getAccessControl() const { return access_control; }
 
 private:
     friend class AccessControl;

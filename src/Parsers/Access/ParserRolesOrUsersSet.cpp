@@ -16,6 +16,9 @@ namespace
     {
         return IParserBase::wrapParseImpl(pos, [&]
         {
+            if (ParserKeyword{"REVOKE"}.ignore(pos, expected))
+                return false; /// "REVOKE" cannot be the name of a role or a user.
+
             if (!id_mode)
                 return parseRoleName(pos, expected, res);
 

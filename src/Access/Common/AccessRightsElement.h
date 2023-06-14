@@ -18,7 +18,7 @@ struct AccessRightsElement
     bool any_table = true;
     bool any_column = true;
     bool grant_option = false;
-    bool is_partial_revoke = false;
+    bool is_revoke = false;
 
     AccessRightsElement() = default;
     AccessRightsElement(const AccessRightsElement &) = default;
@@ -83,6 +83,10 @@ public:
     bool empty() const;
     bool sameDatabaseAndTable() const;
     bool sameOptions() const;
+
+    bool hasGrants() const;
+    bool hasRevokes() const;
+    bool hasWithGrantOptions(bool grant_option) const;
 
     /// Resets flags which cannot be granted.
     void eraseNonGrantable();

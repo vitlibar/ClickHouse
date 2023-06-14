@@ -22,34 +22,141 @@ namespace ErrorCodes
 
 namespace
 {
-    /// Extracts access rights elements which are going to be granted or revoked from a query.
-    void collectAccessRightsElementsToGrantOrRevoke(
-        const ASTGrantQuery & query,
-        AccessRightsElements & elements_to_grant,
-        AccessRightsElements & elements_to_revoke)
+    /// Collects recipients of the GRANT or REVOKE command, i.e. users and roles which are going to be changed.
+    /// `current_user` may be null only if it's executed to ATTACH queries at startup.
+    std::unordered_map<UUID, AccessEntityPtr>
+    collectGrantees(const ASTGrantQuery & query, const std::shared_ptr<const ContextAccess> & current_user)
     {
-        elements_to_grant.clear();
-        elements_to_revoke.clear();
+        if (!query.grantees)
+            return {};
+        const AccessControl * access_control = current_user ? current_user->getAccessControl() : nullptr;
+        std::unordered_map<UUID, AccessEntityPtr> res;
+        if (access_control)
+        {
+            auto ids = RolesOrUsersSet{*query.grantees, *access_control, current_user->getUserID()}.getMatchingIDs(*access_control);
+            for (const auto & id : ids)
+                res.emplace(id, access_control->tryRead(id));
+        }
+        else
+        {
+            auto ids = RolesOrUsersSet{*query.grantees}.getMatchingIDs();
+            for (const auto & id : ids)
+                res.emplace(id, nullptr);
+        }
+        return res;
+    }
+
+    /// Checks that all recipients are allowed for the current user.
+    void checkGranteesAreAllowed(const std::unordered_map<UUID, AccessEntityPtr> & grantees, const std::shared_ptr<const ContextAccess> & current_user)
+    {
+        if (!current_user)
+            return;
+        for (const auto & [id, grantee] : grantees)
+        {
+            if (grantee)
+                current_user->checkGranteeIsAllowed(id, *grantee);
+        }
+    }
+
+    struct RightsToGrantAndRevoke
+    {
+        AccessRightsElements rights_to_grant;
+        AccessRightsElements rights_to_revoke;
+    };
+
+    /// Extracts access rights elements which are going to be granted or revoked from a query.
+    /// `current_user` may be null only if it's executed in the global context.
+    RightsToGrantAndRevoke
+    collectRightsToGrantAndRevoke(const ASTGrantQuery & query, const std::unordered_map<UUID, AccessEntityPtr> & grantees)
+    {
+        AccessRightsElements rights_to_grant, rights_to_revoke;
 
         if (query.is_revoke)
         {
             /// REVOKE
-            elements_to_revoke = query.access_rights_elements;
+            rights_to_revoke = query.access_rights_elements;
         }
         else if (query.replace_access)
         {
             /// GRANT WITH REPLACE OPTION
-            elements_to_grant = query.access_rights_elements;
-            elements_to_revoke.emplace_back(AccessType::ALL);
+            rights_to_grant = query.access_rights_elements;
+            rights_to_revoke.emplace_back(AccessType::ALL);
         }
         else
         {
             /// GRANT
-            elements_to_grant = query.access_rights_elements;
+            rights_to_grant = query.access_rights_elements;
         }
+
+        /// It's impossible to revoke more than a user have.
+        if (!rights_to_revoke.empty())
+        {
+            AccessRights already_granted_to_grantees;
+            for (const auto & [id, grantee] : grantees)
+            {
+                if (auto role = typeid_cast<RolePtr>(grantee))
+                    already_granted_to_grantees.makeUnion(role->access);
+                else if (auto user = typeid_cast<UserPtr>(grantee))
+                    already_granted_to_grantees.makeUnion(user->access);
+            }
+
+            AccessRights intersection;
+            std::for_each(rights_to_revoke.begin(), rights_to_revoke.end(), [&](AccessRightsElement & element) { element.is_partial_revoke = false; });
+            intersection.grant(rights_to_revoke);
+            intersection.makeIntersection(already_granted_to_grantees);
+
+            /// Build more accurate list of elements to revoke, now we use an intesection of the initial list of elements to revoke
+            /// and all the granted access rights to these grantees.
+            bool grant_option = !rights_to_revoke.empty() && rights_to_revoke[0].grant_option;
+            rights_to_revoke.clear();
+            for (auto & element : intersection.getElements())
+            {
+                if (!element.is_partial_revoke && (element.grant_option || !grant_option))
+                    rights_to_revoke.emplace_back(std::move(element));
+            }
+        }
+
+        AccessRightsElements res;
+        res.reserve(rights_to_grant.size() + rights_to_revoke.size());
+        res = std::move(rights_to_grant);
+        res.insert(res.end(), rights_to_revoke.begin(), rights_to_revoke.end());
+        return res;
     }
 
+    struct RolesToGrantAndRevoke
+    {
+        std::unordered_map<UUID, AccessEntityPtr> roles_to_grant;
+        std::unordered_map<UUID, AccessEntityPtr> roles_to_revoke;
+    };
+
     /// Extracts roles which are going to be granted or revoked from a query.
+    RolesToGrantAndRevoke collectRolesToGrantAndRevoke(const ASTGrantQuery & query, const AccessControl & access_control, const std::unordered_map<UUID, AccessEntityPtr> & grantees)
+    {
+
+    }
+
+    void checkGrantOption(const AccessRightsElements & elements, const std::shared_ptr<const ContextAccess> & current_user)
+    {
+
+    }
+
+    void checkAdminOption(const RolesToGrantOrRevoke & roles, const ContextAccess & current_user_access)
+    {
+
+    }
+
+#if 0
+    AccessRightsElements filterAccessRightsByGrantOption(const AccessRightsElements & elements, const ContextAccess & current_user_access)
+    {
+
+    }
+
+    RolesToGrantOrRevoke filterRolesByAdminOption(const RolesToGrantOrRevoke & roles, const ContextAccess & current_user_access)
+    {
+
+    }
+#endif
+
     void collectRolesToGrantOrRevoke(
         const AccessControl & access_control,
         const ASTGrantQuery & query,

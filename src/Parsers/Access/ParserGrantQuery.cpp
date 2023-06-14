@@ -111,7 +111,7 @@ namespace
     }
 
 
-    bool parseElementsWithoutOptions(IParser::Pos & pos, Expected & expected, AccessRightsElements & elements)
+    bool parseRights(IParser::Pos & pos, Expected & expected, AccessRightsElements & elements)
     {
         return IParserBase::wrapParseImpl(pos, [&]
         {
@@ -223,6 +223,49 @@ namespace
             return ParserKeyword{"ON"}.ignore(pos, expected) && ASTQueryWithOnCluster::parse(pos, cluster, expected);
         });
     }
+
+    bool parseOptions(IParserBase::Pos & pos, Expected & expected, bool prefix_form, bool & grant_option, bool & admin_option, bool & replace_option)
+    {
+        auto parse_option = [&]
+        {
+            if (ParserKeyword{"GRANT OPTION"}.ignore(pos, expected))
+            {
+                grant_option = true;
+                return true;
+            }
+            if (ParserKeyword{"ADMIN OPTION"}.ignore(pos, expected))
+            {
+                admin_option = true;
+                return true;
+            }
+            if (ParserKeyword{"REPLACE OPTION"}.ignore(pos, expected))
+            {
+                replace_option = true;
+                return true;
+            }
+            return false;
+        };
+
+        return IParserBase::wrapParseImpl(pos, [&]
+        {
+            if (!prefix_form && !ParserKeyword{"WITH"}.ignore(pos, expected))
+                return false;
+
+            if (!ParserList::parseUtil(pos, expected, parse_option, false))
+                return false;
+
+            if (prefix_form && !ParserKeyword{"FOR"}.ignore(pos, expected))
+                return false;
+        });
+    }
+
+    bool ignoreCommaAndRevoke(IParserBase::Pos & pos, Expected & expected)
+    {
+        return IParserBase::wrapParseImpl(pos, [&]
+        {
+            return ParserToken{TokenType::Comma}.ignore(pos, expected) && ParserKeyword{"REVOKE"}.ignore(pos, expected);
+        });
+    }
 }
 
 
@@ -231,7 +274,6 @@ bool ParserGrantQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
     if (attach_mode && !ParserKeyword{"ATTACH"}.ignore(pos, expected))
         return false;
 
-    bool is_replace = false;
     bool is_revoke = false;
     if (ParserKeyword{"REVOKE"}.ignore(pos, expected))
         is_revoke = true;
@@ -243,18 +285,41 @@ bool ParserGrantQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
 
     bool grant_option = false;
     bool admin_option = false;
+    bool replace_option = false;
+    if (is_revoke && !parseOptions(pos, expected, /* prefix_form= */ true, grant_option, admin_option, replace_option))
+        return false;
+
+    if (cluster.empty())
+        parseOnCluster(pos, expected, cluster);
+
+    AccessRightsElements rights_to_grant, rights_to_revoke, rights;
+    std::shared_ptr<ASTRolesOrUsersSet> roles_to_grant, roles_to_revoke, roles;
+    if (!parseRights(pos, expected, rights) && !parseRoles(pos, expected, is_revoke, attach_mode, roles))
+        return false;
+
     if (is_revoke)
     {
-        if (ParserKeyword{"GRANT OPTION FOR"}.ignore(pos, expected))
-            grant_option = true;
-        else if (ParserKeyword{"ADMIN OPTION FOR"}.ignore(pos, expected))
-            admin_option = true;
+        rights_to_revoke = std::move(rights);
+        roles_to_revoke = std::move(roles);
     }
-
-    AccessRightsElements elements;
-    std::shared_ptr<ASTRolesOrUsersSet> roles;
-    if (!parseElementsWithoutOptions(pos, expected, elements) && !parseRoles(pos, expected, is_revoke, attach_mode, roles))
-        return false;
+    else
+    {
+        rights_to_grant = std::move(rights);
+        roles_to_grant = std::move(roles);
+        if (ignoreCommaAndRevoke(pos, expected))
+        {
+            if (roles_to_grant)
+            {
+                if (!parseRoles(pos, expected, true, attach_mode, roles_to_revoke))
+                    return false;
+            }
+            else
+            {
+                if (!parseRights(pos, expected, rights_to_revoke))
+                    return false;
+            }
+        }
+    }
 
     if (cluster.empty())
         parseOnCluster(pos, expected, cluster);
@@ -266,62 +331,46 @@ bool ParserGrantQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
     if (cluster.empty())
         parseOnCluster(pos, expected, cluster);
 
-    if (!is_revoke)
-    {
-        if (ParserKeyword{"WITH GRANT OPTION"}.ignore(pos, expected))
-            grant_option = true;
-        else if (ParserKeyword{"WITH ADMIN OPTION"}.ignore(pos, expected))
-            admin_option = true;
-
-        if (ParserKeyword{"WITH REPLACE OPTION"}.ignore(pos, expected))
-            is_replace = true;
-    }
+    if (!is_revoke && !parseOptions(pos, expected, /* prefix_form= */ false, grant_option, admin_option, replace_option))
+        return false;
 
     if (cluster.empty())
         parseOnCluster(pos, expected, cluster);
 
-    if (grant_option && roles)
-        throw Exception("GRANT OPTION should be specified for access types", ErrorCodes::SYNTAX_ERROR);
-    if (admin_option && !elements.empty())
-        throw Exception("ADMIN OPTION should be specified for roles", ErrorCodes::SYNTAX_ERROR);
+    if (roles_to_grant || roles_to_revoke)
+    {
+        if (grant_option)
+            throw Exception(ErrorCodes::SYNTAX_ERROR, "GRANT OPTION cannot be specified for {} roles", is_revoke ? "revoking" : "granting");
+    }
+    else
+    {
+        if (admin_option)
+            throw Exception(ErrorCodes::SYNTAX_ERROR, "ADMIN OPTION can be used for {} roles only", is_revoke ? "revoking" : "granting");
+    }
+
+    throwIfNotGrantable(rights_to_grant);
 
     if (grant_option)
     {
-        for (auto & element : elements)
+        for (auto & element : rights_to_grant)
             element.grant_option = true;
-    }
-
-
-    bool replace_access = false;
-    bool replace_role = false;
-    if (is_replace)
-    {
-        if (roles)
-            replace_role = true;
-        else
-            replace_access = true;
-    }
-
-    if (!is_revoke)
-    {
-        if (attach_mode)
-            elements.eraseNonGrantable();
-        else
-            throwIfNotGrantable(elements);
+        for (auto & element : rights_to_revoke)
+            element.grant_option = true;
     }
 
     auto query = std::make_shared<ASTGrantQuery>();
     node = query;
 
-    query->is_revoke = is_revoke;
-    query->attach_mode = attach_mode;
-    query->cluster = std::move(cluster);
-    query->access_rights_elements = std::move(elements);
-    query->roles = std::move(roles);
+    query->rights_to_grant = std::move(rights_to_grant);
+    query->rights_to_revoke = std::move(rights_to_revoke);
+    query->roles_to_grant = std::move(roles_to_grant);
+    query->roles_to_revoke = std::move(roles_to_revoke);
     query->grantees = std::move(grantees);
+    query->grant_option = grant_option;
     query->admin_option = admin_option;
-    query->replace_access = replace_access;
-    query->replace_granted_roles = replace_role;
+    query->replace_option = replace_option;
+    query->cluster = std::move(cluster);
+    query->attach_mode = attach_mode;
 
     return true;
 }
