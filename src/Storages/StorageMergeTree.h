@@ -21,6 +21,8 @@
 
 namespace DB
 {
+class MergeTreeCurrentlyRestoringFromBackup;
+
 
 /** See the description of the data structure in MergeTreeData.
   */
@@ -127,6 +129,7 @@ private:
     MergeTreeDataMergerMutator merger_mutator;
 
     std::unique_ptr<MergeTreeDeduplicationLog> deduplication_log;
+    std::unique_ptr<MergeTreeCurrentlyRestoringFromBackup> currently_restoring_from_backup;
 
     /// For block numbers.
     SimpleIncrement increment;
@@ -265,9 +268,10 @@ private:
     void startBackgroundMovesIfNeeded() override;
 
     BackupEntries backupMutations(UInt64 version, const String & data_path_in_backup) const;
-
-    /// Attaches restored parts to the storage.
-    void attachRestoredParts(MutableDataPartsVector && parts) override;
+    scope_guard allocateBlockNumbersForRestoringFromBackup(std::vector<MergeTreePartInfo> & part_infos, Strings & part_names_in_backup, std::vector<MutationInfoFromBackup> & mutation_infos, Strings & mutation_names_in_backup, bool check_table_is_empty, ContextMutablePtr) override;
+    void attachPartFromBackup(MutableDataPartPtr && part, SinkToStoragePtr) override;
+    void attachMutationFromBackup(MutationInfoFromBackup && mutation_info, ContextMutablePtr) override;
+    void startProcessingDataFromBackup() override;
 
     std::unique_ptr<MergeTreeSettings> getDefaultSettings() const override;
 
@@ -277,7 +281,7 @@ private:
     friend class MergeTreeData;
     friend class MergePlainMergeTreeTask;
     friend class MutatePlainMergeTreeTask;
-
+    friend class MergeTreeCurrentlyRestoringFromBackup;
 
 protected:
     std::map<int64_t, MutationCommands> getAlterMutationCommandsForPart(const DataPartPtr & part) const override;
