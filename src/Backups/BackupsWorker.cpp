@@ -60,7 +60,7 @@ namespace
 
             auto get_zookeeper = [global_context = context->getGlobalContext()] { return global_context->getZooKeeper(); };
 
-            BackupCoordinationRemote::BackupKeeperSettings keeper_settings = WithRetries::KeeperSettings::fromContext(context);
+            auto keeper_settings = WithRetries::KeeperSettings::fromContext(context);
 
             auto all_hosts = BackupSettings::Util::filterHostIDs(
                 backup_settings.cluster_host_ids, backup_settings.shard_num, backup_settings.replica_num);
@@ -90,15 +90,7 @@ namespace
 
             auto get_zookeeper = [global_context = context->getGlobalContext()] { return global_context->getZooKeeper(); };
 
-            RestoreCoordinationRemote::RestoreKeeperSettings keeper_settings
-            {
-                .keeper_max_retries = context->getSettingsRef().backup_restore_keeper_max_retries,
-                .keeper_retry_initial_backoff_ms = context->getSettingsRef().backup_restore_keeper_retry_initial_backoff_ms,
-                .keeper_retry_max_backoff_ms = context->getSettingsRef().backup_restore_keeper_retry_max_backoff_ms,
-                .batch_size_for_keeper_multiread = context->getSettingsRef().backup_restore_batch_size_for_keeper_multiread,
-                .keeper_fault_injection_probability = context->getSettingsRef().backup_restore_keeper_fault_injection_probability,
-                .keeper_fault_injection_seed = context->getSettingsRef().backup_restore_keeper_fault_injection_seed
-            };
+            auto keeper_settings = WithRetries::KeeperSettings::fromContext(context);
 
             auto all_hosts = BackupSettings::Util::filterHostIDs(
                 restore_settings.cluster_host_ids, restore_settings.shard_num, restore_settings.replica_num);

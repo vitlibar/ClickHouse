@@ -18,6 +18,8 @@ columns
 columns
 creator_info
 creator_info
+currently_restoring_from_backup
+currently_restoring_from_backup
 failed_parts
 failed_parts
 flags

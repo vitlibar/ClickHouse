@@ -53,7 +53,8 @@ void WithRetries::renewZooKeeper(FaultyKeeper my_faulty_zookeeper) const
         zookeeper = get_zookeeper();
         my_faulty_zookeeper->setKeeper(zookeeper);
 
-        callback(my_faulty_zookeeper);
+        if (callback)
+            callback(my_faulty_zookeeper);
     }
     else
     {
@@ -80,6 +81,5 @@ WithRetries::FaultyKeeper WithRetries::getFaultyZooKeeper() const
 
     return faulty_zookeeper;
 }
-
 
 }

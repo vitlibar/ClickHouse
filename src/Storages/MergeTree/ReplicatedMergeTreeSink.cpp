@@ -429,7 +429,13 @@ void ReplicatedMergeTreeSinkImpl<false>::finishDelayedChunk(const ZooKeeperWithF
 
         try
         {
-            bool deduplicated = commitPart(zookeeper, part, partition.block_id, delayed_chunk->replicas_num, false).second;
+            bool deduplicated = commitPart(
+                zookeeper,
+                part,
+                partition.block_id,
+                delayed_chunk->replicas_num,
+                /* writing_existing_part= */ false,
+                /* allocate_block_number= */ true).second;
 
             last_block_is_duplicate = last_block_is_duplicate || deduplicated;
 
@@ -473,7 +479,15 @@ void ReplicatedMergeTreeSinkImpl<true>::finishDelayedChunk(const ZooKeeperWithFa
         while (true)
         {
             partition.temp_part.finalize();
-            auto conflict_block_ids = commitPart(zookeeper, partition.temp_part.part, partition.block_id, delayed_chunk->replicas_num, false).first;
+
+            auto conflict_block_ids = commitPart(
+                zookeeper,
+                partition.temp_part.part,
+                partition.block_id,
+                delayed_chunk->replicas_num,
+                /* writing_existing_part= */ false,
+                /* allocate_block_number= */ true).first;
+
             if (conflict_block_ids.empty())
                 break;
             ++retry_times;
@@ -492,7 +506,7 @@ void ReplicatedMergeTreeSinkImpl<true>::finishDelayedChunk(const ZooKeeperWithFa
 }
 
 template<>
-bool ReplicatedMergeTreeSinkImpl<false>::writeExistingPart(MergeTreeData::MutableDataPartPtr & part)
+bool ReplicatedMergeTreeSinkImpl<false>::writeExistingPart(MergeTreeData::MutableDataPartPtr & part, bool allocate_block_number)
 {
     /// NOTE: No delay in this case. That's Ok.
     auto origin_zookeeper = storage.getZooKeeper();
@@ -528,7 +542,7 @@ bool ReplicatedMergeTreeSinkImpl<false>::writeExistingPart(MergeTreeData::Mutabl
     {
         part->version.setCreationTID(Tx::PrehistoricTID, nullptr);
         String block_id = deduplicate ? fmt::format("{}_{}", part->info.partition_id, part->checksums.getTotalChecksumHex()) : "";
-        bool deduplicated = commitPart(zookeeper, part, block_id, replicas_num, /* writing_existing_part */ true).second;
+        bool deduplicated = commitPart(zookeeper, part, block_id, replicas_num, /* writing_existing_part */ true, allocate_block_number).second;
 
         /// Set a special error code if the block is duplicate
         int error = (deduplicate && deduplicated) ? ErrorCodes::INSERT_WAS_DEDUPLICATED : 0;
@@ -623,13 +637,19 @@ std::pair<std::vector<String>, bool> ReplicatedMergeTreeSinkImpl<async_insert>::
     MergeTreeData::MutableDataPartPtr & part,
     const BlockIDsType & block_id,
     size_t replicas_num,
-    bool writing_existing_part)
+    bool writing_existing_part,
+    bool allocate_block_number)
 {
     /// It is possible that we alter a part with different types of source columns.
     /// In this case, if column was not altered, the result type will be different with what we have in metadata.
     /// For now, consider it is ok. See 02461_alter_update_respect_part_column_type_bug for an example.
     ///
     /// metadata_snapshot->check(part->getColumns());
+
+    if (!allocate_block_number && !writing_existing_part)
+        throw Exception(ErrorCodes::LOGICAL_ERROR, "Only existing part can be written without allocating a block number");
+    if (!allocate_block_number && !block_id.empty())
+        throw Exception(ErrorCodes::LOGICAL_ERROR, "Deduplication check can be only used with allocating a block number");
 
     auto block_id_path = getBlockIdPath(storage.zookeeper_path, block_id);
 
@@ -801,47 +821,62 @@ std::pair<std::vector<String>, bool> ReplicatedMergeTreeSinkImpl<async_insert>::
 
         LOG_INFO(log, "commit_new_part_stage");
 
-        /// Obtain incremental block number and lock it. The lock holds our intention to add the block to the filesystem.
-        /// We remove the lock just after renaming the part. In case of exception, block number will be marked as abandoned.
-        /// Also, make deduplication check. If a duplicate is detected, no nodes are created.
+        /// Get a block number.
+        Int64 block_number = -1;
+        std::optional<EphemeralLockInZooKeeper> block_number_lock;
 
-        /// Allocate new block number and check for duplicates
-        auto block_number_lock = storage.allocateBlockNumber(part->info.partition_id, zookeeper, block_id_path); /// 1 RTT
+        if (allocate_block_number)
+        {
+            /// Obtain incremental block number and lock it. The lock holds our intention to add the block to the filesystem.
+            /// We remove the lock just after renaming the part. In case of exception, block number will be marked as abandoned.
+            /// Also, make deduplication check. If a duplicate is detected, no nodes are created.
+
+            /// Allocate new block number and check for duplicates
+            block_number_lock = storage.allocateBlockNumber(part->info.partition_id, zookeeper, block_id_path); /// 1 RTT
+        }
+        else
+        {
+            /// Block number is already known.
+            block_number = part->info.min_block;
+        }
 
         ThreadFuzzer::maybeInjectSleep();
 
-        if (!block_number_lock.has_value())
+        if (allocate_block_number)
         {
-            return CommitRetryContext::DUPLICATED_PART;
-        }
+            if (!block_number_lock.has_value())
+                return CommitRetryContext::DUPLICATED_PART;
 
-        if constexpr (async_insert)
-        {
-            /// The truth is that we always get only one path from block_number_lock.
-            /// This is a restriction of Keeper. Here I would like to use vector because
-            /// I wanna keep extensibility for future optimization, for instance, using
-            /// cache to resolve conflicts in advance.
-            String conflict_path = block_number_lock->getConflictPath();
-            if (!conflict_path.empty())
+            if constexpr (async_insert)
             {
-                LOG_TRACE(log, "Cannot get lock, the conflict path is {}", conflict_path);
-                retry_context.conflict_block_ids.push_back(conflict_path);
+                /// The truth is that we always get only one path from block_number_lock.
+                /// This is a restriction of Keeper. Here I would like to use vector because
+                /// I wanna keep extensibility for future optimization, for instance, using
+                /// cache to resolve conflicts in advance.
+                String conflict_path = block_number_lock->getConflictPath();
+                if (!conflict_path.empty())
+                {
+                    LOG_TRACE(log, "Cannot get lock, the conflict path is {}", conflict_path);
+                    retry_context.conflict_block_ids.push_back(conflict_path);
 
-                return CommitRetryContext::ERROR;
+                    return CommitRetryContext::ERROR;
+                }
             }
+
+            block_number = block_number_lock->getNumber();
+
+            /// Set part attributes according to part_number.
+            part->info.min_block = block_number;
+            part->info.max_block = block_number;
+            part->info.level = 0;
+            part->info.mutation = 0;
+
+            part->setName(part->getNewName(part->info));
         }
 
-        auto block_number = block_number_lock->getNumber();
-
+        chassert(block_number != -1);
         LOG_INFO(log, "lock_part_number_stage {}", block_number);
 
-        /// Set part attributes according to part_number.
-        part->info.min_block = block_number;
-        part->info.max_block = block_number;
-        part->info.level = 0;
-        part->info.mutation = 0;
-
-        part->setName(part->getNewName(part->info));
         retry_context.actual_part_name = part->name;
 
         /// Prepare transaction to ZooKeeper
@@ -851,8 +886,12 @@ std::pair<std::vector<String>, bool> ReplicatedMergeTreeSinkImpl<async_insert>::
         get_logs_ops(ops);
 
         /// Deletes the information that the block number is used for writing.
-        size_t block_unlock_op_idx = ops.size();
-        block_number_lock->getUnlockOp(ops);
+        size_t block_unlock_op_idx = std::numeric_limits<size_t>::max();
+        if (block_number_lock)
+        {
+            block_unlock_op_idx = ops.size();
+            block_number_lock->getUnlockOp(ops);
+        }
 
         get_quorum_ops(ops);
 
@@ -905,7 +944,8 @@ std::pair<std::vector<String>, bool> ReplicatedMergeTreeSinkImpl<async_insert>::
             transaction.commit();
 
             /// Lock nodes have been already deleted, do not delete them in destructor
-            block_number_lock->assumeUnlocked();
+            if (block_number_lock)
+                block_number_lock->assumeUnlocked();
             return CommitRetryContext::SUCCESS;
         }
 

@@ -8,6 +8,7 @@ blocks
 columns
 columns
 creator_info
+currently_restoring_from_backup
 failed_parts
 flags
 host
@@ -51,6 +52,7 @@ blocks
 columns
 columns
 creator_info
+currently_restoring_from_backup
 failed_parts
 flags
 host
