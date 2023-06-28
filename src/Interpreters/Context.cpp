@@ -1857,6 +1857,11 @@ bool Context::displaySecretsInShowAndSelect() const
     return shared->server_settings.display_secrets_in_show_and_select;
 }
 
+bool Context::shouldRestoreAllocateBlockNumbersInBatch() const
+{
+    return shared->server_settings.restore_allocates_block_numbers_in_batch;
+}
+
 Settings Context::getSettings() const
 {
     auto lock = getLocalSharedLock();
