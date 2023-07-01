@@ -409,15 +409,6 @@ std::shared_ptr<const EnabledRolesInfo> ContextAccess::getRolesInfo() const
     return no_roles;
 }
 
-std::shared_ptr<const EnabledRowPolicies> ContextAccess::getEnabledRowPolicies() const
-{
-    std::lock_guard lock{mutex};
-    if (enabled_row_policies)
-        return enabled_row_policies;
-    static const auto no_row_policies = std::make_shared<EnabledRowPolicies>();
-    return no_row_policies;
-}
-
 RowPolicyFilterPtr ContextAccess::getRowPolicyFilter(const String & database, const String & table_name, RowPolicyFilterType filter_type) const
 {
     std::lock_guard lock{mutex};
