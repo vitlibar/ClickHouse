@@ -10,6 +10,7 @@
 #include <Access/EnabledSettings.h>
 #include <Access/SettingsProfilesInfo.h>
 #include <Interpreters/DatabaseCatalog.h>
+#include <Interpreters/Context.h>
 #include <Common/Exception.h>
 #include <Common/quoteString.h>
 #include <Core/Settings.h>
@@ -221,15 +222,15 @@ namespace
 }
 
 
-ContextAccess::ContextAccess(const AccessControl & access_control_, const Params & params_)
-    : access_control(&access_control_)
-    , params(params_)
+std::shared_ptr<const ContextAccess> ContextAccess::fromContext(const ContextPtr & context)
 {
+    return context->getAccess();
 }
 
 
-ContextAccess::ContextAccess(FullAccess)
-    : is_full_access(true), access(std::make_shared<AccessRights>(AccessRights::getFullAccess())), access_with_implicit(access)
+ContextAccess::ContextAccess(const AccessControl & access_control_, const Params & params_)
+    : access_control(&access_control_)
+    , params(params_)
 {
 }
 
@@ -251,18 +252,34 @@ ContextAccess::~ContextAccess()
 
 void ContextAccess::initialize()
 {
-     std::lock_guard lock{mutex};
-     subscription_for_user_change = access_control->subscribeForChanges(
-         *params.user_id, [weak_ptr = weak_from_this()](const UUID &, const AccessEntityPtr & entity)
-     {
-         auto ptr = weak_ptr.lock();
-         if (!ptr)
-             return;
-         UserPtr changed_user = entity ? typeid_cast<UserPtr>(entity) : nullptr;
-         std::lock_guard lock2{ptr->mutex};
-         ptr->setUser(changed_user);
-     });
-     setUser(access_control->read<User>(*params.user_id));
+    std::lock_guard lock{mutex};
+
+    if (params.full_access)
+    {
+        access = std::make_shared<AccessRights>(AccessRights::getFullAccess());
+        access_with_implicit = access;
+        return;
+    }
+
+    if (!params.user_id)
+    {
+        user_was_dropped = true;
+        return;
+    }
+
+    subscription_for_user_change = access_control->subscribeForChanges(
+        *params.user_id,
+        [weak_ptr = weak_from_this()](const UUID &, const AccessEntityPtr & entity)
+        {
+            auto ptr = weak_ptr.lock();
+            if (!ptr)
+                return;
+            UserPtr changed_user = entity ? typeid_cast<UserPtr>(entity) : nullptr;
+            std::lock_guard lock2{ptr->mutex};
+            ptr->setUser(changed_user);
+        });
+
+    setUser(access_control->read<User>(*params.user_id));
 }
 
 
@@ -294,10 +311,10 @@ void ContextAccess::setUser(const UserPtr & user_) const
         current_roles = user->granted_roles.findGranted(user->default_roles);
         current_roles_with_admin_option = user->granted_roles.findGrantedWithAdminOption(user->default_roles);
     }
-    else
+    else if (params.current_roles)
     {
-        current_roles = user->granted_roles.findGranted(params.current_roles);
-        current_roles_with_admin_option = user->granted_roles.findGrantedWithAdminOption(params.current_roles);
+        current_roles = user->granted_roles.findGranted(*params.current_roles);
+        current_roles_with_admin_option = user->granted_roles.findGrantedWithAdminOption(*params.current_roles);
     }
 
     subscription_for_roles_changes.reset();
@@ -316,12 +333,16 @@ void ContextAccess::setRolesInfo(const std::shared_ptr<const EnabledRolesInfo> &
 {
     assert(roles_info_);
     roles_info = roles_info_;
+
     enabled_row_policies = access_control->getEnabledRowPolicies(
         *params.user_id, roles_info->enabled_roles);
+
     enabled_quota = access_control->getEnabledQuota(
         *params.user_id, user_name, roles_info->enabled_roles, params.address, params.forwarded_address, params.quota_key);
+
     enabled_settings = access_control->getEnabledSettings(
         *params.user_id, user->settings, roles_info->enabled_roles, roles_info->settings_from_enabled_roles);
+
     calculateAccessRights();
 }
 
@@ -417,14 +438,6 @@ std::optional<QuotaUsage> ContextAccess::getQuotaUsage() const
 }
 
 
-std::shared_ptr<const ContextAccess> ContextAccess::getFullAccess()
-{
-    static const std::shared_ptr<const ContextAccess> res =
-        [] { return std::shared_ptr<ContextAccess>(new ContextAccess{kFullAccess}); }();
-    return res;
-}
-
-
 SettingsChanges ContextAccess::getDefaultSettings() const
 {
     std::lock_guard lock{mutex};
@@ -478,7 +491,7 @@ bool ContextAccess::checkAccessImplHelper(AccessFlags flags, const Args &... arg
         throw Exception(ErrorCodes::UNKNOWN_USER, "{}: User has been dropped", getUserName());
     }
 
-    if (is_full_access)
+    if (params.full_access)
         return true;
 
     auto access_granted = [&]
@@ -608,7 +621,9 @@ bool ContextAccess::checkAccessImpl(const AccessFlags & flags) const
 template <bool throw_if_denied, bool grant_option, typename... Args>
 bool ContextAccess::checkAccessImpl(const AccessFlags & flags, std::string_view database, const Args &... args) const
 {
-    return checkAccessImplHelper<throw_if_denied, grant_option>(flags, database.empty() ? params.current_database : database, args...);
+    if (database.empty() && !params.current_database.empty())
+        database = params.current_database;
+    return checkAccessImplHelper<throw_if_denied, grant_option>(flags, database, args...);
 }
 
 template <bool throw_if_denied, bool grant_option>
@@ -706,7 +721,7 @@ bool ContextAccess::checkAdminOptionImplHelper(const Container & role_ids, const
         return false;
     };
 
-    if (is_full_access)
+    if (params.full_access)
         return true;
 
     if (user_was_dropped)
@@ -806,7 +821,7 @@ void ContextAccess::checkAdminOption(const std::vector<UUID> & role_ids, const s
 
 void ContextAccess::checkGranteeIsAllowed(const UUID & grantee_id, const IAccessEntity & grantee) const
 {
-    if (is_full_access)
+    if (params.full_access)
         return;
 
     auto current_user = getUser();
@@ -816,7 +831,7 @@ void ContextAccess::checkGranteeIsAllowed(const UUID & grantee_id, const IAccess
 
 void ContextAccess::checkGranteesAreAllowed(const std::vector<UUID> & grantee_ids) const
 {
-    if (is_full_access)
+    if (params.full_access)
         return;
 
     auto current_user = getUser();
