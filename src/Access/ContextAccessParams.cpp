@@ -26,6 +26,7 @@ ContextAccessParams::ContextAccessParams(
     , address(client_info_.current_address.host())
     , forwarded_address(client_info_.getLastForwardedFor())
     , quota_key(client_info_.quota_key)
+    , initial_user((client_info_.initial_user != client_info_.current_user) ? client_info_.initial_user : "")
 {
 }
 
@@ -48,6 +49,7 @@ bool operator <(const ContextAccessParams & left, const ContextAccessParams & ri
     CONTEXT_ACCESS_PARAMS_LESS(address)
     CONTEXT_ACCESS_PARAMS_LESS(forwarded_address)
     CONTEXT_ACCESS_PARAMS_LESS(quota_key)
+    CONTEXT_ACCESS_PARAMS_LESS(initial_user)
 
     #undef CONTEXT_ACCESS_PARAMS_LESS
 
@@ -73,6 +75,7 @@ bool operator ==(const ContextAccessParams & left, const ContextAccessParams & r
     CONTEXT_ACCESS_PARAMS_EQUAL(address)
     CONTEXT_ACCESS_PARAMS_EQUAL(forwarded_address)
     CONTEXT_ACCESS_PARAMS_EQUAL(quota_key)
+    CONTEXT_ACCESS_PARAMS_EQUAL(initial_user)
 
     #undef CONTEXT_ACCESS_PARAMS_EQUAL
 

@@ -47,6 +47,9 @@ public:
 
     const String quota_key;
 
+    /// Initial user is used to combine row policies with.
+    const String initial_user;
+
     friend bool operator <(const ContextAccessParams & left, const ContextAccessParams & right);
     friend bool operator ==(const ContextAccessParams & left, const ContextAccessParams & right);
     friend bool operator !=(const ContextAccessParams & left, const ContextAccessParams & right) { return !(left == right); }

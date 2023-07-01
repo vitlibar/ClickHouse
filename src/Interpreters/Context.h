@@ -50,7 +50,6 @@ struct User;
 using UserPtr = std::shared_ptr<const User>;
 struct SettingsProfilesInfo;
 struct EnabledRolesInfo;
-class EnabledRowPolicies;
 struct RowPolicyFilter;
 using RowPolicyFilterPtr = std::shared_ptr<const RowPolicyFilter>;
 class EnabledQuota;
@@ -249,7 +248,6 @@ private:
     std::shared_ptr<const SettingsConstraintsAndProfileIDs> settings_constraints_and_current_profiles;
     mutable std::shared_ptr<const ContextAccess> access;
     mutable bool need_recalculate_access = true;
-    std::shared_ptr<const EnabledRowPolicies> row_policies_of_initial_user;
     String current_database;
     Settings settings;  /// Setting for query execution.
 
@@ -569,13 +567,6 @@ public:
     std::shared_ptr<const ContextAccess> getAccess() const;
 
     RowPolicyFilterPtr getRowPolicyFilter(const String & database, const String & table_name, RowPolicyFilterType filter_type) const;
-
-    /// Finds and sets extra row policies to be used based on `client_info.initial_user`,
-    /// if the initial user exists.
-    /// TODO: we need a better solution here. It seems we should pass the initial row policy
-    /// because a shard is allowed to not have the initial user or it might be another user
-    /// with the same name.
-    void enableRowPoliciesOfInitialUser();
 
     std::shared_ptr<const EnabledQuota> getQuota() const;
     std::optional<QuotaUsage> getQuotaUsage() const;

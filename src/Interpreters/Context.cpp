@@ -1230,23 +1230,7 @@ std::shared_ptr<const ContextAccess> Context::getAccess() const
 
 RowPolicyFilterPtr Context::getRowPolicyFilter(const String & database, const String & table_name, RowPolicyFilterType filter_type) const
 {
-    auto lock = getLock();
-    RowPolicyFilterPtr row_filter_of_initial_user;
-    if (row_policies_of_initial_user)
-        row_filter_of_initial_user = row_policies_of_initial_user->getFilter(database, table_name, filter_type);
-    return getAccess()->getRowPolicyFilter(database, table_name, filter_type, row_filter_of_initial_user);
-}
-
-void Context::enableRowPoliciesOfInitialUser()
-{
-    auto lock = getLock();
-    row_policies_of_initial_user = nullptr;
-    if (client_info.initial_user == client_info.current_user)
-        return;
-    auto initial_user_id = getAccessControl().find<User>(client_info.initial_user);
-    if (!initial_user_id)
-        return;
-    row_policies_of_initial_user = getAccessControl().tryGetDefaultRowPolicies(*initial_user_id);
+    return getAccess()->getRowPolicyFilter(database, table_name, filter_type);
 }
 
 
