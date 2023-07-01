@@ -1052,33 +1052,48 @@ ConfigurationPtr Context::getUsersConfig()
     return shared->users_config;
 }
 
-void Context::setUser(const UUID & user_id_)
+void Context::setUser(const UUID & user_id_, bool set_current_profiles_, bool set_current_roles_, bool set_current_database_)
 {
+    /// Prepare lists of profiles, constraints, settings, roles, and get user's default database.
+    std::shared_ptr<const ContextAccess> temp_access;
+    std::shared_ptr<const User> user;
+    if (set_current_profiles_ || set_current_roles_ || set_current_database_)
+    {
+        /// getContextAccess() may require some IO work, so the context's mutex is better be unlocked while we're doing that.
+        ContextAccessParams params{user_id, /* full_access= */ false, /* use_default_roles = */ true, {}, {}, {}, {}};
+        temp_access = getAccessControl().getContextAccess(params);
+        user = temp_access->getUser();
+    }
+
+    std::shared_ptr<const SettingsProfilesInfo> profiles;
+    if (set_current_profiles_)
+        profiles = temp_access->getDefaultProfileInfo();
+
+    std::optional<std::vector<UUID>> roles;
+    if (set_current_roles_)
+        roles = user->granted_roles.findGranted(user->default_roles);
+
+    String database;
+    if (set_current_database_)
+        database = user->default_database;
+
+    /// Apply user's profiles, constraints, settings, roles, and user's default database.
     auto lock = getLock();
 
-    user_id = user_id_;
+    setUserID(user_id_);
 
-    ContextAccessParams params{
-        user_id,
-        /* full_access= */ false,
-        /* use_default_roles = */ true,
-        /* current_roles = */ nullptr,
-        settings,
-        current_database,
-        client_info};
+    if (profiles)
+    {
+        /// A profile can specify a value and a readonly constraint at the same time for the same setting,
+        /// so setCurrentProfiles() shouldn't check constraints here.
+        setCurrentProfiles(*profiles, /* check_constraints= */ false);
+    }
 
-    access = getAccessControl().getContextAccess(params);
-
-    auto user = access->getUser();
-
-    current_roles = std::make_shared<std::vector<UUID>>(user->granted_roles.findGranted(user->default_roles));
-
-    auto default_profile_info = access->getDefaultProfileInfo();
-    settings_constraints_and_current_profiles = default_profile_info->getConstraintsAndProfileIDs();
-    applySettingsChanges(default_profile_info->settings);
-
-    if (!user->default_database.empty())
-        setCurrentDatabase(user->default_database);
+    if (roles)
+        setCurrentRoles(*roles);
+   
+    if (!database.empty())
+        setCurrentDatabase(database);
 }
 
 std::shared_ptr<const User> Context::getUser() const
@@ -1089,6 +1104,13 @@ std::shared_ptr<const User> Context::getUser() const
 String Context::getUserName() const
 {
     return getAccess()->getUserName();
+}
+
+void Context::setUserID(const UUID & user_id_)
+{
+    auto lock = getLock();
+    user_id = user_id_;
+    need_recalculate_access = true;
 }
 
 std::optional<UUID> Context::getUserID() const
@@ -1110,7 +1132,10 @@ void Context::setCurrentRoles(const std::vector<UUID> & current_roles_)
     auto lock = getLock();
     if (current_roles ? (*current_roles == current_roles_) : current_roles_.empty())
        return;
-    current_roles = std::make_shared<std::vector<UUID>>(current_roles_);
+    if (!current_roles_.empty())
+        current_roles = std::make_shared<std::vector<UUID>>(current_roles_);
+    else
+        current_roles = nullptr;
     need_recalculate_access = true;
 }
 
@@ -1157,7 +1182,7 @@ void Context::checkAccess(const AccessRightsElements & elements) const { return 
 
 std::shared_ptr<const ContextAccess> Context::getAccess() const
 {
-    /// Collect parameters to get a ContextAccess.
+    /// Collect parameters to calculate access rights.
     auto get_params = [](const Context & ctx)
     {
         return ContextAccessParams{
@@ -1175,26 +1200,26 @@ std::shared_ptr<const ContextAccess> Context::getAccess() const
     {
         auto lock = getLock();
         if (access && !need_recalculate_access)
-            return access; /// The current ContextAccess is still valid.
+            return access; /// The current access rights are still valid, no need to recalculate them.
         
         params.emplace(get_params(*this));
 
         if (access && access->getParams() == params)
         {
             need_recalculate_access = false;
-            return access; /// The current ContextAccess is still valid.
+            return access; /// The current access rights are still valid, no need to recalculate them.
         }
     }
 
-    /// Get a new ContextAccess.
-    /// That may require some IO, so the context mutex is better be unlocked while we're doint that.
+    /// Calculate new access rights according to the parameters.
+    /// getContextAccess() may require some IO work, so the context's mutex is better be unlocked while we're doing that.
     auto res = getAccessControl().getContextAccess(*params);
 
     {
         auto lock = getLock();
         if (res->getParams() == get_params(*this))
         {
-            /// Store the new ContextAccess in the Context to allow using it later.
+            /// Store the new access rights in the Context to allow using it again later.
             access = res;
             need_recalculate_access = false;
         }
@@ -1237,13 +1262,12 @@ std::optional<QuotaUsage> Context::getQuotaUsage() const
 }
 
 
-void Context::setCurrentProfile(const String & profile_name)
+void Context::setCurrentProfile(const String & profile_name, bool check_constraints)
 {
-    auto lock = getLock();
     try
     {
         UUID profile_id = getAccessControl().getID<SettingsProfile>(profile_name);
-        setCurrentProfile(profile_id);
+        setCurrentProfile(profile_id, check_constraints);
     }
     catch (Exception & e)
     {
@@ -1252,15 +1276,20 @@ void Context::setCurrentProfile(const String & profile_name)
     }
 }
 
-void Context::setCurrentProfile(const UUID & profile_id)
+void Context::setCurrentProfile(const UUID & profile_id, bool check_constraints)
 {
-    auto lock = getLock();
     auto profile_info = getAccessControl().getSettingsProfileInfo(profile_id);
-    checkSettingsConstraints(profile_info->settings);
-    applySettingsChanges(profile_info->settings);
-    settings_constraints_and_current_profiles = profile_info->getConstraintsAndProfileIDs(settings_constraints_and_current_profiles);
+    setCurrentProfiles(*profile_info, check_constraints);
 }
 
+void Context::setCurrentProfiles(const SettingsProfilesInfo & profiles_info, bool check_constraints)
+{
+    auto lock = getLock();
+    if (check_constraints)
+        checkSettingsConstraints(profiles_info.settings);
+    applySettingsChanges(profiles_info.settings);
+    settings_constraints_and_current_profiles = profiles_info.getConstraintsAndProfileIDs();
+}
 
 std::vector<UUID> Context::getCurrentProfiles() const
 {
