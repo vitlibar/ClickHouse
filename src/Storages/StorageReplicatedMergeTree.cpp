@@ -9984,7 +9984,7 @@ void StorageReplicatedMergeTree::backupData(
     coordination->addReplicatedPartNames(shared_id, getStorageID().getFullTableName(), getReplicaName(), part_names_with_hashes);
 
     /// Send a list of mutations to the coordination too (we need to find the mutations which are not finished for added part names).
-    if (backup_entries_collector.getBackupSettings().mutations)
+    if (backup_entries_collector.getBackupSettings().with_mutations)
     {
         auto zookeeper = getZooKeeper();
         Strings mutation_ids;
