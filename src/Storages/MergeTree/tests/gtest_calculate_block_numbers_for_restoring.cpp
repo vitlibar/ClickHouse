@@ -15,9 +15,9 @@ namespace
     struct ListOfPartsAndMutations
     {
         std::vector<MergeTreePartInfo> part_infos;
-        std::vector<String> part_names_in_backup;
         std::vector<MutationInfoFromBackup> mutation_infos;
-        std::vector<String> mutation_names_in_backup;
+        std::vector<String> original_part_names;
+        std::vector<String> original_mutation_names;
     };
 
     using StringPairs = std::vector<std::pair<String, String>>;
@@ -28,16 +28,16 @@ namespace
 
         size_t num_parts = original_part_names.size();
         lst.part_infos.reserve(num_parts);
-        lst.part_names_in_backup = original_part_names;
+        lst.original_part_names = original_part_names;
         for (const auto & part_name : original_part_names)
             lst.part_infos.emplace_back(MergeTreePartInfo::fromPartName(part_name, ::DB::MERGE_TREE_DATA_MIN_FORMAT_VERSION_WITH_CUSTOM_PARTITIONING));
 
         size_t num_mutations = original_mutations.size();
         lst.mutation_infos.reserve(num_mutations);
-        lst.mutation_names_in_backup.reserve(num_mutations);
+        lst.original_mutation_names.reserve(num_mutations);
         for (const auto & [mutation_name, mutation_as_string] : original_mutations)
         {
-            lst.mutation_names_in_backup.emplace_back(mutation_name);
+            lst.original_mutation_names.emplace_back(mutation_name);
             lst.mutation_infos.emplace_back(MutationInfoFromBackup::parseFromString(mutation_as_string, mutation_name));
         }
 
@@ -48,23 +48,23 @@ namespace
     {
         Strings lines;
 
-        if (lst.part_infos.size() != lst.part_names_in_backup.size())
+        if (lst.part_infos.size() != lst.original_part_names.size())
         {
             lines.push_back("number of parts mismatch");
             return lines;
         }
 
-        if (lst.mutation_infos.size() != lst.mutation_names_in_backup.size())
+        if (lst.mutation_infos.size() != lst.original_mutation_names.size())
         {
             lines.push_back("number of mutations mismatch");
             return lines;
         }
 
         for (size_t i = 0; i != lst.part_infos.size(); ++i)
-            lines.push_back(fmt::format("Part #{}: {} -> {}", i + 1, lst.part_names_in_backup[i], lst.part_infos[i].getPartNameForLogs()));
+            lines.push_back(fmt::format("Part #{}: {} -> {}", i + 1, lst.original_part_names[i], lst.part_infos[i].getPartNameForLogs()));
 
         for (size_t i = 0; i != lst.mutation_infos.size(); ++i)
-            lines.push_back(fmt::format("Mutation #{}: {} -> {} ({})", i + 1, lst.mutation_names_in_backup[i],
+            lines.push_back(fmt::format("Mutation #{}: {} -> {} ({})", i + 1, lst.original_mutation_names[i],
                             lst.mutation_infos[i].name, lst.mutation_infos[i].toString(/* one_line= */ true)));
         return lines;
     }
@@ -86,13 +86,12 @@ namespace
     void checkCalculationForMergeTree(
         const Strings & original_part_names,
         const StringPairs & original_mutations,
-        AllocateBlockNumbersToRestoreMergeTreeFunction allocate_block_numbers,
+        BlockNumbersForRestoringMergeTreeAllocator allocate_block_numbers,
         const Strings & expected_result)
     {
         ListOfPartsAndMutations lst = prepareListOfPartsAndMutations(original_part_names, original_mutations);
 
-        ::DB::calculateBlockNumbersForRestoringMergeTree(
-            lst.part_infos, lst.part_names_in_backup, lst.mutation_infos, lst.mutation_names_in_backup, allocate_block_numbers);
+        ::DB::calculateBlockNumbersForRestoringMergeTree(lst.part_infos, lst.mutation_infos, allocate_block_numbers);
 
         Strings result = toLines(lst);
 
@@ -103,21 +102,19 @@ namespace
     void checkCalculationForReplicatedMergeTree(
         const Strings & original_part_names,
         const StringPairs & original_mutations,
-        AllocateBlockNumbersToRestoreReplicatedMergeTreeFunction allocate_block_numbers,
-        AllocateMutationNumbersToRestoreReplicatedMergeTreeFunction allocate_mutation_numbers,
-        GetPartitionIdsAffectedByCommandsFunction get_partition_ids_affected_by_commands,
+        BlockNumbersForRestoringReplicatedMergeTreeAllocator allocate_block_numbers,
+        MutationNumbersForRestoringReplicatedMergeTreeAllocator allocate_mutation_numbers,
+        PartitionsAffectedByMutationGetter get_partitions_affected_by_mutation,
         const Strings & expected_result)
     {
         ListOfPartsAndMutations lst = prepareListOfPartsAndMutations(original_part_names, original_mutations);
 
         ::DB::calculateBlockNumbersForRestoringReplicatedMergeTree(
             lst.part_infos,
-            lst.part_names_in_backup,
             lst.mutation_infos,
-            lst.mutation_names_in_backup,
             allocate_block_numbers,
             allocate_mutation_numbers,
-            get_partition_ids_affected_by_commands);
+            get_partitions_affected_by_mutation);
 
         Strings result = toLines(lst);
 
@@ -154,7 +151,7 @@ namespace
         return res;
     }
 
-    std::unordered_set<String> getPartitionIdsAffectedByCommands(const MutationCommands &)
+    std::unordered_set<String> getPartitionsAffectedByMutation(const MutationCommands &)
     {
         return {};
     }
@@ -319,7 +316,7 @@ TEST(CalculateBlockNumbersForRestoring, ReplicatedMergeTree)
         mutations,
         allocateBlockNumbersForReplicatedMergeTree,
         allocateMutationNumbers,
-        getPartitionIdsAffectedByCommands,
+        getPartitionsAffectedByMutation,
         expected_result);
 
     auto expected_result_2 = Strings{
@@ -348,6 +345,6 @@ TEST(CalculateBlockNumbersForRestoring, ReplicatedMergeTree)
         mutations,
         allocateBlockNumbersForReplicatedMergeTree_2,
         allocateMutationNumbers_2,
-        getPartitionIdsAffectedByCommands,
+        getPartitionsAffectedByMutation,
         expected_result_2);
 }
