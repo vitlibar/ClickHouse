@@ -5342,7 +5342,8 @@ namespace
                     disk->createDirectories(temp_part_dir / subdir);
             }
 
-            /// TODO Transactions: Decide what to do with version metadata (if any). Let's just skip it for now.
+            /// We don't copy information about transactions this part had participated before it was written to the backup.
+            /// (Now we have different transactions anyway.)
             if (filename.ends_with(IMergeTreeDataPart::TXN_VERSION_METADATA_FILE_NAME))
                 continue;
 
@@ -5637,20 +5638,17 @@ void MergeTreeData::restoreDataFromBackup(RestorerFromBackup & restorer, const S
     }
 
     /// Start attaching mutations (RestorerFromBackup will execute these tasks in parallel).
-    if (!mutation_infos.empty())
+    for (size_t i = 0; i != mutation_infos.size(); ++i)
     {
-        for (size_t i = 0; i != mutation_infos.size(); ++i)
-        {
-            add_data_restore_task(
-                [this,
-                 mutation_name_in_backup = mutation_names_in_backup[i],
-                 mutation_info = std::move(mutation_infos[i]),
-                 local_context] mutable
-                {
-                    LOG_INFO(log, "Attaching mutation {} restored from backup (former name: {})", mutation_info.name, mutation_name_in_backup);
-                    attachMutationFromBackup(std::move(mutation_info), local_context);
-                });
-        }
+        add_data_restore_task(
+            [this,
+                mutation_name_in_backup = mutation_names_in_backup[i],
+                mutation_info = std::move(mutation_infos[i]),
+                local_context] mutable
+            {
+                LOG_INFO(log, "Attaching mutation {} restored from backup (former name: {})", mutation_info.name, mutation_name_in_backup);
+                attachMutationFromBackup(std::move(mutation_info), local_context);
+            });
     }
 }
 
