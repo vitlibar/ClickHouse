@@ -1257,9 +1257,57 @@ static void preparePartForRemoval(const MergeTreeMutableDataPartPtr & part)
     }
 }
 
-static constexpr size_t loading_parts_initial_backoff_ms = 100;
-static constexpr size_t loading_parts_max_backoff_ms = 5000;
-static constexpr size_t loading_parts_max_tries = 3;
+namespace
+{
+    /// Try executing the `load_part_function` and if it fails, try it again, and so on multiple times.
+    /// Helps to implement functions for loading parts.
+    template <typename ResultType>
+    ResultType doRetriesForLoadingPart(
+        const String & part_name,
+        const std::function<ResultType()> & load_part_function,
+        size_t initial_backoff_ms,
+        size_t max_backoff_ms,
+        size_t max_tries,
+        Poco::Logger * log)
+    {
+        for (size_t try_no = 0; try_no < max_tries; ++try_no)
+        {
+            try
+            {
+                return load_part_function();
+            }
+            catch (...)
+            {
+                if (!isRetryableException(std::current_exception()))
+                    throw;
+
+                if (try_no + 1 == max_tries)
+                    throw;
+
+                String exception_message;
+
+                if (const auto * e = exception_cast<Exception *>(std::current_exception()))
+                    exception_message = e->message();
+
+                #if USE_AZURE_BLOB_STORAGE
+                    if (const auto * e = exception_cast<const Azure::Core::RequestFailedException *>(std::current_exception()))
+                        exception_message = e->Message;
+                #endif
+
+                LOG_DEBUG(log, "Failed to load data part {} at try {} with retryable error: {}. Will retry in {} ms",
+                        part_name, try_no, exception_message, initial_backoff_ms);
+
+                std::this_thread::sleep_for(std::chrono::milliseconds(initial_backoff_ms));
+                initial_backoff_ms = std::min(initial_backoff_ms * 2, max_backoff_ms);
+            }
+        }
+        UNREACHABLE();
+    }
+
+    constexpr size_t loading_parts_initial_backoff_ms = 100;
+    constexpr size_t loading_parts_max_backoff_ms = 5000;
+    constexpr size_t loading_parts_max_tries = 3;
+}
 
 MergeTreeData::LoadPartResult MergeTreeData::loadDataPart(
     const MergeTreePartInfo & part_info,
@@ -1278,23 +1326,10 @@ MergeTreeData::LoadPartResult MergeTreeData::loadDataPart(
     String marker_path = fs::path(part_path) / IMergeTreeDataPart::DELETE_ON_DESTROY_MARKER_FILE_NAME_DEPRECATED;
 
     /// Ignore broken parts that can appear as a result of hard server restart.
-    auto mark_broken = [&]
+    auto mark_broken = [&](std::exception_ptr exception)
     {
-        if (!res.part)
-        {
-            /// Build a fake part and mark it as broken in case of filesystem error.
-            /// If the error impacts part directory instead of single files,
-            /// an exception will be thrown during detach and silently ignored.
-            res.part = getDataPartBuilder(part_name, single_disk_volume, part_name)
-                .withPartStorageType(MergeTreeDataPartStorageType::Full)
-                .withPartType(MergeTreeDataPartType::Wide)
-                .build();
-        }
+        markBrokenPartInLoadResult(res, exception, part_name, part_disk_ptr, part_name);
 
-        res.is_broken = true;
-        tryLogCurrentException(log, fmt::format("while loading part {} on path {}", part_name, part_path));
-
-        res.size_of_part = calculatePartSizeSafe(res.part, log);
         auto part_size_str = res.size_of_part ? formatReadableSizeWithBinarySuffix(*res.size_of_part) : "failed to calculate size";
 
         LOG_ERROR(log,
@@ -1318,7 +1353,7 @@ MergeTreeData::LoadPartResult MergeTreeData::loadDataPart(
         if (isRetryableException(std::current_exception()))
             throw;
         LOG_DEBUG(log, "Failed to load data part {}, unknown exception", part_name);
-        mark_broken();
+        mark_broken(std::current_exception());
         return res;
     }
 
@@ -1348,7 +1383,7 @@ MergeTreeData::LoadPartResult MergeTreeData::loadDataPart(
         /// during loading, such as "not enough memory" or network error.
         if (isRetryableException(std::current_exception()))
             throw;
-        mark_broken();
+        mark_broken(std::current_exception());
         return res;
     }
 
@@ -1461,50 +1496,34 @@ MergeTreeData::LoadPartResult MergeTreeData::loadDataPartWithRetries(
     size_t max_backoff_ms,
     size_t max_tries)
 {
-    auto handle_exception = [&, this](std::exception_ptr exception_ptr, size_t try_no)
+    return doRetriesForLoadingPart<LoadPartResult>(
+        part_name,
+        [&]() { return loadDataPart(part_info, part_name, part_disk_ptr, to_state, part_loading_mutex); },
+        initial_backoff_ms,
+        max_backoff_ms,
+        max_tries,
+        log);
+}
+
+void MergeTreeData::markBrokenPartInLoadResult(LoadPartResult & load_result, std::exception_ptr exception,
+                                               const String & part_name, const DiskPtr & part_disk_ptr, const String & part_path) const
+{
+    tryLogException(exception, log, fmt::format("while loading part {} from path {}", part_name, part_path));
+
+    if (!load_result.part)
     {
-        if (try_no + 1 == max_tries)
-            throw;
-
-        String exception_message;
-        try
-        {
-            rethrow_exception(exception_ptr);
-        }
-        catch (const Exception & e)
-        {
-            exception_message = e.message();
-        }
-        #if USE_AZURE_BLOB_STORAGE
-        catch (const Azure::Core::RequestFailedException & e)
-        {
-             exception_message = e.Message;
-        }
-        #endif
-
-
-        LOG_DEBUG(log, "Failed to load data part {} at try {} with retryable error: {}. Will retry in {} ms",
-                  part_name, try_no, exception_message, initial_backoff_ms);
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(initial_backoff_ms));
-        initial_backoff_ms = std::min(initial_backoff_ms * 2, max_backoff_ms);
-    };
-
-    for (size_t try_no = 0; try_no < max_tries; ++try_no)
-    {
-        try
-        {
-            return loadDataPart(part_info, part_name, part_disk_ptr, to_state, part_loading_mutex);
-        }
-        catch (...)
-        {
-            if (isRetryableException(std::current_exception()))
-                handle_exception(std::current_exception(),try_no);
-            else
-                throw;
-        }
+        /// Build a fake part and mark it as broken in case of filesystem error.
+        /// If the error impacts part directory instead of single files,
+        /// an exception will be thrown during detach and silently ignored.
+        auto single_disk_volume = std::make_shared<SingleDiskVolume>("volume_" + part_name, part_disk_ptr, 0);
+        load_result.part = getDataPartBuilder(part_name, single_disk_volume, part_path)
+            .withPartStorageType(MergeTreeDataPartStorageType::Full)
+            .withPartType(MergeTreeDataPartType::Wide)
+            .build();
     }
-    UNREACHABLE();
+
+    load_result.is_broken = true;
+    load_result.size_of_part = calculatePartSizeSafe(load_result.part, log);
 }
 
 /// Wait for all tasks to finish and rethrow the first exception if any.
@@ -5287,19 +5306,23 @@ namespace
     }
 
     /// Keeps a temporary folder on one or multiple disks.
+    /// First we copy data parts from a backup to subdirectories in the "detached" folders, then we try to attach them.
     class TemporaryFolderForRestoredParts
     {
     public:
+        TemporaryFolderForRestoredParts(const MergeTreeData & storage_) : relative_data_path(storage_.getRelativeDataPath()) {}
+
         String getPath(const DiskPtr & disk)
         {
             std::lock_guard lock{mutex};
             auto it = temp_dirs.find(disk);
             if (it == temp_dirs.end())
-                it = temp_dirs.emplace(disk, std::make_shared<TemporaryFileOnDisk>(disk, "tmp/")).first;
-            return it->second->getRelativePath();
+                it = temp_dirs.emplace(disk, std::make_shared<TemporaryFileOnDisk>(disk, fs::path{relative_data_path} / "detached/from_backup_")).first;
+            return fs::relative(it->second->getRelativePath(), relative_data_path);
         }
 
     private:
+        const String relative_data_path;
         std::map<DiskPtr, std::shared_ptr<TemporaryFileOnDisk>> temp_dirs;
         mutable std::mutex mutex;
     };
@@ -5322,11 +5345,12 @@ namespace
 
         /// Example of these paths:
         /// part_path_in_backup = /data/test/table/0_1_1_0
-        /// temp_dir = tmp/1aaaaaa
-        /// temp_part_dir = tmp/1aaaaaa/data/test/table/0_1_1_0
+        /// temp_dir = detached/from_backup_<random_uuid>
+        /// temp_part_dir = detached/from_backup_<random_uuid>/data/test/table/0_1_1_0
         fs::path temp_dir = temporary_folder->getPath(disk);
         fs::path temp_part_dir = temp_dir / part_path_in_backup_fs.relative_path();
-        disk->createDirectories(temp_part_dir);
+        fs::path dest_dir = fs::path{storage.getRelativeDataPath()} / temp_part_dir;
+        disk->createDirectories(dest_dir);
 
         /// Subdirectories in the part's directory. It's used to restore projections.
         std::unordered_set<String> subdirs;
@@ -5339,7 +5363,7 @@ namespace
             {
                 String subdir = filename.substr(0, separator_pos);
                 if (subdirs.emplace(subdir).second)
-                    disk->createDirectories(temp_part_dir / subdir);
+                    disk->createDirectories(dest_dir / subdir);
             }
 
             /// We don't copy information about transactions this part had participated before it was written to the backup.
@@ -5347,107 +5371,11 @@ namespace
             if (filename.ends_with(IMergeTreeDataPart::TXN_VERSION_METADATA_FILE_NAME))
                 continue;
 
-            size_t file_size = backup.copyFileToDisk(part_path_in_backup_fs / filename, disk, temp_part_dir / filename);
+            size_t file_size = backup.copyFileToDisk(part_path_in_backup_fs / filename, disk, dest_dir / filename);
             reservation->update(reservation->getSize() - file_size);
         }
 
         return {disk, temp_part_dir};
-    }
-
-    MergeTreeMutableDataPartPtr loadPartCopiedFromBackup(const MergeTreeData & storage, const MergeTreePartInfo & part_info, const DiskPtr & disk, const String & part_dir, bool detach_if_broken)
-    {
-        MergeTreeMutableDataPartPtr part;
-
-        fs::path part_dir_fs{part_dir};
-        String part_path = part_dir_fs.parent_path();
-        String part_name = part_dir_fs.filename();
-        auto single_disk_volume = std::make_shared<SingleDiskVolume>(disk->getName(), disk, 0);
-
-        /// Load this part from the directory `part_dir`.
-        auto load_part = [&]
-        {
-            MergeTreeDataPartBuilder builder(storage, part_name, single_disk_volume, part_path, part_name);
-            builder.withPartFormatFromDisk().withPartInfo(part_info);
-            part = std::move(builder).build();
-            part->setName(part->getNewName(part_info));
-            part->version.setCreationTID(Tx::PrehistoricTID, nullptr);
-            part->loadColumnsChecksumsIndexes(/* require_columns_checksums= */ false, /* check_consistency= */ true);
-        };
-
-        /// Broken parts can appear in a backup sometimes.
-        auto mark_broken = [&](const std::exception_ptr error)
-        {
-            tryLogException(error, &Poco::Logger::get(storage.getLogName()),
-                            fmt::format("Part {} will be restored as detached because it's broken. You need to resolve this manually", part_name));
-            if (!part)
-            {
-                /// Make a fake data part only to copy its files to /detached/.
-                part = MergeTreeDataPartBuilder{storage, part_name, single_disk_volume, part_path, part_name}
-                        .withPartStorageType(MergeTreeDataPartStorageType::Full)
-                        .withPartType(MergeTreeDataPartType::Wide)
-                        .build();
-            }
-            part->renameToDetached("broken-from-backup");
-        };
-
-        /// Try to load this part multiple times.
-        auto backoff_ms = loading_parts_initial_backoff_ms;
-        for (size_t try_no = 0; try_no < loading_parts_max_tries; ++try_no)
-        {
-            std::exception_ptr error;
-            bool retryable = false;
-            try
-            {
-                load_part();
-            }
-            catch (const Poco::Net::NetException &)
-            {
-                error = std::current_exception();
-                retryable = true;
-            }
-            catch (const Poco::TimeoutException &)
-            {
-                error = std::current_exception();
-                retryable = true;
-            }
-            catch (...)
-            {
-                error = std::current_exception();
-                retryable = isRetryableException(std::current_exception());
-            }
-
-            if (!error)
-                return part;
-
-            if (!retryable && detach_if_broken)
-            {
-                mark_broken(error);
-                return nullptr;
-            }
-
-            if (!retryable)
-            {
-                LOG_ERROR(&Poco::Logger::get(storage.getLogName()),
-                          "Failed to restore part {} because it's broken. You can skip broken parts while restoring by setting "
-                          "'restore_broken_parts_as_detached = true'",
-                          part_name);
-            }
-
-            if (!retryable || (try_no + 1 == loading_parts_max_tries))
-            {
-                if (Exception * e = exception_cast<Exception *>(error))
-                    e->addMessage("while restoring part {} of table {}", part->name, storage.getStorageID());
-                std::rethrow_exception(error);
-            }
-
-            tryLogException(error, &Poco::Logger::get(storage.getLogName()),
-                            fmt::format("Failed to load part {} at try {} with a retryable error. Will retry in {} ms", part_name, try_no, backoff_ms));
-
-            std::this_thread::sleep_for(std::chrono::milliseconds(backoff_ms));
-            backoff_ms = std::min(backoff_ms * 2, loading_parts_max_backoff_ms);
-        }
-
-        UNREACHABLE();
     }
 
     /// Parts from a backup are collected before attaching them to the table to preserve the same order of parts.
@@ -5603,7 +5531,7 @@ void MergeTreeData::restoreDataFromBackup(RestorerFromBackup & restorer, const S
     /// Start reading and attaching parts (RestorerFromBackup will execute these tasks in parallel).
     if (!part_infos.empty())
     {
-        auto temporary_folder = std::make_shared<TemporaryFolderForRestoredParts>();
+        auto temporary_folder = std::make_shared<TemporaryFolderForRestoredParts>(*this);
 
         for (size_t i = 0; i != part_infos.size(); ++i)
         {
@@ -5616,11 +5544,12 @@ void MergeTreeData::restoreDataFromBackup(RestorerFromBackup & restorer, const S
                  parts_collector,
                  sink,
                  temporary_folder,
+                 local_context = restorer.getContext(),
                  restore_broken_parts_as_detached]
                 {
                     LOG_INFO(log, "Reading part {} from backup and rename it to {}", part_name_in_backup, part_info.getPartNameForLogs());
                     auto [part_disk, part_dir] = copyPartFromBackup(*this, *backup, fs::path{data_path_in_backup} / part_name_in_backup, temporary_folder);
-                    if (auto part = loadPartCopiedFromBackup(*this, part_info, part_disk, part_dir, restore_broken_parts_as_detached))
+                    if (auto part = loadPartCopiedFromBackup(part_info, part_disk, part_dir, restore_broken_parts_as_detached, local_context))
                     {
                         if (parts_collector)
                         {
@@ -5652,6 +5581,34 @@ void MergeTreeData::restoreDataFromBackup(RestorerFromBackup & restorer, const S
     }
 }
 
+MergeTreeMutableDataPartPtr MergeTreeData::loadPartCopiedFromBackup(const MergeTreePartInfo & part_info,
+                                                                    const DiskPtr & disk, const String & part_dir,
+                                                                    bool detach_if_broken, const ContextPtr & local_context) const
+{
+    String part_name = part_info.getPartNameForLogs();
+
+    auto res = tryLoadPartToAttachWithRetries(
+        part_name,
+        part_info,
+        disk,
+        part_dir,
+        local_context,
+        /* throw_if_part_is_broken= */ !detach_if_broken,
+        loading_parts_initial_backoff_ms,
+        loading_parts_max_backoff_ms,
+        loading_parts_max_tries);
+
+    if (res.is_broken)
+    {
+        chassert(detach_if_broken);
+        String destination_for_broken_part = fmt::format("detached/broken-from-backup_{}", part_name);
+        res.part->renameTo(destination_for_broken_part, /* remove_new_dir_if_exists= */ true);
+        LOG_ERROR(log, "Part {} was restored as detached because it's broken. You need to resolve this manually", part_name);
+        return nullptr;
+    }
+
+    return res.part;
+}
 
 String MergeTreeData::getPartitionIDFromQuery(const ASTPtr & ast, ContextPtr local_context, DataPartsLock * acquired_lock) const
 {
@@ -6198,17 +6155,73 @@ MergeTreeData::MutableDataPartsVector MergeTreeData::tryLoadPartsToAttach(const 
     {
         LOG_DEBUG(log, "Checking part {}", new_name);
 
-        auto single_disk_volume = std::make_shared<SingleDiskVolume>("volume_" + old_name, disk);
-        auto part = getDataPartBuilder(old_name, single_disk_volume, source_dir + new_name)
-            .withPartFormatFromDisk()
-            .build();
+        auto part = tryLoadPartToAttach(
+                        old_name, /* part_info= */ {}, disk, source_dir + new_name, local_context, /* throw_if_part_broken */ true)
+                        .part;
 
-        loadPartAndFixMetadataImpl(part, local_context, getInMemoryMetadataPtr()->getMetadataVersion(), getSettings()->fsync_after_insert);
-        loaded_parts.push_back(part);
+        loaded_parts.emplace_back(std::move(part));
     }
 
     return loaded_parts;
 }
+
+MergeTreeData::LoadPartResult MergeTreeData::tryLoadPartToAttach(const String & part_name,
+                                                                 const std::optional<MergeTreePartInfo> & part_info,
+                                                                 const DiskPtr & part_disk_ptr,
+                                                                 const String & part_path,
+                                                                 const ContextPtr & local_context,
+                                                                 bool throw_if_part_is_broken) const
+{
+    LoadPartResult res;
+    try
+    {
+        auto single_disk_volume = std::make_shared<SingleDiskVolume>("volume_" + part_name, part_disk_ptr);
+        auto builder = getDataPartBuilder(part_name, single_disk_volume, part_path).withPartFormatFromDisk();
+        if (part_info)
+            builder.withPartInfo(*part_info);
+        auto part = builder.build();
+        res.part = part;
+        if (part_info)
+            part->setName(part->getNewName(*part_info));
+        loadPartAndFixMetadataImpl(part, local_context, getInMemoryMetadataPtr()->getMetadataVersion(), getSettings()->fsync_after_insert);
+        return res;
+    }
+    catch (...)
+    {
+        if (throw_if_part_is_broken)
+            throw;
+
+        /// Don't count the part as broken if there was a retryalbe error
+        /// during loading, such as "not enough memory" or network error.
+        if (isRetryableException(std::current_exception()))
+            throw;
+
+        markBrokenPartInLoadResult(res, std::current_exception(), part_name, part_disk_ptr, part_path);
+        return res;
+    }
+}
+
+
+MergeTreeData::LoadPartResult MergeTreeData::tryLoadPartToAttachWithRetries(
+    const String & part_name,
+    const std::optional<MergeTreePartInfo> & part_info,
+    const DiskPtr & part_disk_ptr,
+    const String & part_path,
+    const ContextPtr & local_context,
+    bool throw_if_part_is_broken,
+    size_t initial_backoff_ms,
+    size_t max_backoff_ms,
+    size_t max_tries) const
+{
+    return doRetriesForLoadingPart<LoadPartResult>(
+        part_name,
+        [&]() { return tryLoadPartToAttach(part_name, part_info, part_disk_ptr, part_path, local_context, throw_if_part_is_broken); },
+        initial_backoff_ms,
+        max_backoff_ms,
+        max_tries,
+        log);
+}
+
 
 namespace
 {

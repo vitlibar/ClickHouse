@@ -26,7 +26,7 @@ ln -s "$SRC_BACKUP_DIR/$SRC_BACKUP_FILENAME" "$BACKUPS_DIR/$BACKUP_FILENAME"
 $CLICKHOUSE_CLIENT --query "DROP TABLE IF EXISTS tbl"
 
 # First try to restore with the setting `restore_broken_parts_as_detached` set to false.
-$CLICKHOUSE_CLIENT --query "RESTORE TABLE default.tbl AS tbl FROM $BACKUP_NAME" 2>&1 | grep -o -m 1 "data.bin doesn't exist: while restoring part all_2_2_0"
+$CLICKHOUSE_CLIENT --query "RESTORE TABLE default.tbl AS tbl FROM $BACKUP_NAME" 2>&1 | grep "from_backup" | grep -o -m 1 "all_2_2_0/data.bin doesn't exist"
 
 $CLICKHOUSE_CLIENT --query "DROP TABLE IF EXISTS tbl"
 

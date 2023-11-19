@@ -1576,6 +1576,26 @@ private:
 
     std::vector<LoadPartResult> loadDataPartsFromDisk(PartLoadingTreeNodes & parts_to_load);
 
+    /// Loads a data part for attaching it to the storage.
+    LoadPartResult tryLoadPartToAttach(const String & part_name, const std::optional<MergeTreePartInfo> & part_info,
+                                       const DiskPtr & part_disk_ptr, const String & part_path,
+                                       const ContextPtr & local_context, bool throw_if_part_is_broken) const;
+
+    /// Loads a data part for attaching it to the storage, with retries after failures.
+    LoadPartResult tryLoadPartToAttachWithRetries(const String & part_name, const std::optional<MergeTreePartInfo> & part_info,
+                                                  const DiskPtr & part_disk_ptr, const String & part_path,
+                                                  const ContextPtr & local_context, bool throw_if_part_is_broken,
+                                                  size_t initial_backoff_ms, size_t max_backoff_ms, size_t max_tries) const;
+
+    /// Loads a data part restored from a backup.
+    MergeTreeMutableDataPartPtr loadPartCopiedFromBackup(const MergeTreePartInfo & part_info,
+                                                         const DiskPtr & disk, const String & part_dir,
+                                                         bool detach_if_broken, const ContextPtr & local_context) const;
+
+    /// Marks this part as broken in `LoadPartResult`. The function doesn't modify the storage or the part.
+    void markBrokenPartInLoadResult(LoadPartResult & load_result, std::exception_ptr exception,
+                                    const String & part_name, const DiskPtr & part_disk_ptr, const String & part_path) const;
+
     /// Create zero-copy exclusive lock for part and disk. Useful for coordination of
     /// distributed operations which can lead to data duplication. Implemented only in ReplicatedMergeTree.
     virtual std::optional<ZeroCopyLock> tryCreateZeroCopyExclusiveLock(const String &, const DiskPtr &) { return std::nullopt; }

@@ -2399,6 +2399,7 @@ void StorageMergeTree::attachPartFromBackup(MutableDataPartPtr && part, std::sha
     /// It's important to create it outside of lock scope because
     /// otherwise it can lock parts in destructor and deadlock is possible.
     MergeTreeData::Transaction transaction(*this, NO_TRANSACTION_RAW);
+    part->version.setCreationTID(Tx::PrehistoricTID, nullptr);
 
     {
         auto lock = lockParts();
