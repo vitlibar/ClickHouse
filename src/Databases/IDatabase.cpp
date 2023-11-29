@@ -29,12 +29,46 @@ StoragePtr IDatabase::getTable(const String & name, ContextPtr context) const
         throw Exception(ErrorCodes::UNKNOWN_TABLE, "Table {}.{} does not exist. Maybe you meant {}?", backQuoteIfNeed(getDatabaseName()), backQuoteIfNeed(name), backQuoteIfNeed(names[0]));
 }
 
-std::vector<std::pair<ASTPtr, StoragePtr>> IDatabase::getTablesForBackup(const FilterByNameFunction &, const ContextPtr &) const
+std::vector<std::pair<ASTPtr, StoragePtr>> IDatabase::getTablesForBackup(const ContextPtr &, const FilterByNameFunction &, const std::optional<Strings> &, UInt32 &) const
 {
     /// Cannot backup any table because IDatabase doesn't own any tables.
     throw Exception(ErrorCodes::CANNOT_BACKUP_TABLE,
                     "Database engine {} does not support backups, cannot backup tables in database {}",
                     getEngineName(), backQuoteIfNeed(getDatabaseName()));
+}
+
+Tables IDatabase::getTables(const Strings & table_names, const ContextPtr & context) const
+{
+    Tables res;
+    for (const auto & table_name : table_names)
+        res.emplace(table_name, getTable(table_name));
+    return res;
+}
+
+Tables IDatabase::getTablesByFilter(const FilterByNameFunction & filter_by_table_name, const ContextPtr & context) const
+{
+    Tables res;
+    for (auto it = getTablesIterator(context); it->isValid(); it->next())
+    {
+        const auto & table_name = it->name();
+        const auto & storage = it->table();
+        if (!storage || !filter_by_name(table_name))
+            continue; /// Probably the table has been just dropped.
+
+        res.emplace(table_name, storage);
+    }
+    return res;
+}
+
+std::map<String, String> IDatabase::getConsistentMetadataSnapshot(const ContextPtr &, const Strings &, size_t, UInt32 &) const
+{
+    throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Database engine {} does not support consistent metadata snapshots", getEngineName());
+}
+
+std::map<String, String>
+IDatabase::getConsistentMetadataSnapshotByFilter(const ContextPtr &, const FilterByNameFunction &, size_t, UInt32 &) const
+{
+    throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Database engine {} does not support consistent metadata snapshots", getEngineName());
 }
 
 void IDatabase::createTableRestoredFromBackup(const ASTPtr & create_table_query, ContextMutablePtr, std::shared_ptr<IRestoreCoordination>, UInt64)

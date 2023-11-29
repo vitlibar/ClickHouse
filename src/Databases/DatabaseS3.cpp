@@ -290,14 +290,6 @@ DatabaseS3::Configuration DatabaseS3::parseArguments(ASTs engine_args, ContextPt
 }
 
 /**
- * Returns an empty vector because the database is read-only and no tables can be backed up
- */
-std::vector<std::pair<ASTPtr, StoragePtr>> DatabaseS3::getTablesForBackup(const FilterByNameFunction &, const ContextPtr &) const
-{
-    return {};
-}
-
-/**
  *
  * Returns an empty iterator because the database does not have its own tables
  * But only caches them for quick access

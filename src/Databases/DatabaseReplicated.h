@@ -76,7 +76,12 @@ public:
 
     void shutdown() override;
 
-    std::vector<std::pair<ASTPtr, StoragePtr>> getTablesForBackup(const FilterByNameFunction & filter, const ContextPtr & local_context) const override;
+    std::map<String, String> getConsistentMetadataSnapshot(
+        const Strings & table_names, const ContextPtr & context, size_t max_retries, UInt32 & out_snapshot_version) const override;
+
+    std::map<String, String> getConsistentMetadataSnapshotByFilter(
+        const FilterByNameFunction & filter_by_table_name, const ContextPtr & context, size_t max_retries, UInt32 & out_snapshot_version) const override;
+
     void createTableRestoredFromBackup(const ASTPtr & create_table_query, ContextMutablePtr local_context, std::shared_ptr<IRestoreCoordination> restore_coordination, UInt64 timeout_ms) override;
 
     bool shouldReplicateQuery(const ContextPtr & query_context, const ASTPtr & query_ptr) const override;
@@ -123,6 +128,10 @@ private:
 
     UInt64 getMetadataHash(const String & table_name) const;
     bool checkDigestValid(const ContextPtr & local_context, bool debug_check = true) const TSA_REQUIRES(metadata_mutex);
+
+    std::map<String, String> getConsistentMetadataSnapshotImpl(const ZooKeeperPtr & zookeeper, bool all_tables,
+                                                               const FilterByNameFunction & filter_by_table_name, const Strings & table_names,
+                                                               size_t max_retries, UInt32 & max_log_ptr) const;
 
     String zookeeper_path;
     String shard_name;

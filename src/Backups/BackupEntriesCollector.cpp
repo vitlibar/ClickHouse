@@ -69,16 +69,20 @@ namespace
         return tableNameWithTypeToString(table_name.database, table_name.table, first_upper);
     }
 
-    /// How long we should sleep after finding an inconsistency error.
-    std::chrono::milliseconds getSleepTimeAfterInconsistencyError(int attempt_no, unsigned int attempts_before_sleep, std::chrono::milliseconds min_sleep, std::chrono::milliseconds max_sleep)
+    Tables getTemporaryTables(const Strings & table_names, const ContextPtr & context)
     {
-        attempts_before_sleep = std::max(attempts_before_sleep, 1U);
-        if (((attempt_no + 1) % attempts_before_sleep) != 0)
-            return std::chrono::milliseconds::zero(); /// no sleep
+        return context->getExternalTables(table_names);
+    }
 
-        int sleep_counter = attempt_no / attempts_before_sleep;
-        std::chrono::milliseconds sleep_time = intExp2(std::min(sleep_counter, 10)) * min_sleep;
-        return std::min(sleep_time, max_sleep);
+    Tables findTemporaryTables(const FilterByNameFunction & filter_by_table_name, const ContextPtr & context)
+    {
+        return context->findExternalTables(filter_by_table_name);
+    }
+
+    ASTPtr getCreateTemporaryTableQuery(const String & table_name, const ContextPtr & context)
+    {
+        auto holder = context->getExternalTable(table_name);
+        return holder->temporary_tables->getCreateTableQuery(holder->getGlobalTableID().table_name);
     }
 }
 
@@ -133,7 +137,7 @@ BackupEntries BackupEntriesCollector::run()
     calculateRootPathInBackup();
 
     /// Find databases and tables which we're going to put to the backup.
-    gatherMetadataAndCheckConsistency();
+    collectMetadata();
 
     /// Make backup entries for the definitions of the found databases.
     makeBackupEntriesForDatabasesDefs();
@@ -200,9 +204,677 @@ void BackupEntriesCollector::calculateRootPathInBackup()
     LOG_TRACE(log, "Will use path in backup: {}", doubleQuoteString(String{root_path_in_backup}));
 }
 
-/// Finds databases and tables which we will put to the backup.
-void BackupEntriesCollector::gatherMetadataAndCheckConsistency()
+/// Finds databases and tables which we will put to the backup and collects their metadata.
+void BackupEntriesCollector::collectMetadata()
 {
+    /// Collect the metadata of databases and tables specified in the BACKUP query.
+    setStage(Stage::COLLECTING_METADATA);
+
+    /// Analyze the BACKUP query and collect related CREATE DATABASE queries.
+    collectDatabasesMetadata();
+
+    /// Collect CREATE TABLE queries for tables in replicated databases.
+    collectTablesMetadataInReplicatedDBs();
+
+    /// Collect CREATE TABLE queries for tables in non-replicated databases.
+    /// For replicated databases this function can be used here too, however collectTablesMetadataInReplicatedDBs() is more reliable.
+    collectTablesMetadataInOtherDBs();
+
+    /// We need to sync metadata we collected for tables in replicated databases.
+    setStage(Stage::COLLECTING_METADATA_SYNC);
+    collectTablesMetadataInReplicatedDBs_Sync();
+
+    /// Lock tables for reading.
+    lockTablesForReading();
+
+    /// Some tables or database could be dropped while we were collecting metadata,
+    /// so we can remove unnecessary infos.
+    checkRequiredDatabasesFound();
+    checkRequiredTablesFound();
+    removeDatabaseInfosForDroppedDatabases();
+    removeTableInfosForDroppedTables();
+
+    /// Calculates metadata_path_in_backup & data_path_in_backup for tables and databases.
+    calculateDatabasesPathsInBackup();
+    calculateTablesPathsInBackup();
+
+    /// Check that partitions are specified only for storages which support partitions.
+    checkStorageSupportForPartitions();
+
+    /// All hosts managed to gather metadata and everything is consistent, so we can go further to writing the backup.
+    LOG_INFO(log, "Will backup {} databases and {} tables", database_infos.size(), table_infos.size());
+}
+
+
+void BackupEntriesCollector::collectDatabasesMetadata()
+{
+    bool all_databases = false;
+    std::unordered_set<String> except_databases;
+    std::unordered_set<QualifiedTableName> except_tables;
+
+    /// Retrieve information from the BACKUP query about which databases and tables should be written to a backup.
+    for (const auto & element : backup_query_elements)
+    {
+        switch (element.type)
+        {
+            case ASTBackupQuery::ElementType::TABLE:
+            {
+                auto & database_info = database_infos[element.database_name];
+                database_info.table_names.emplace(element.table_name);
+                auto & table_info = table_infos[QualifiedTableName{element.database_name, element.table_name}];
+                table_info.throw_if_table_not_exists = true;
+                if (element.partitions)
+                {
+                    table_info.partitions.emplace();
+                    insertAtEnd(*table_params.partitions, *partitions);
+                }
+                break;
+            }
+
+            case ASTBackupQuery::ElementType::TEMPORARY_TABLE:
+            {
+                auto & database_info = database_infos[DatabaseCatalog::TEMPORARY_DATABASE];
+                database_info.table_names.emplace(element.table_name);
+                auto & table_info = table_infos[QualifiedTableName{DatabaseCatalog::TEMPORARY_DATABASE, element.table_name}];
+                table_info.throw_if_table_not_exists = true;
+                break;
+            }
+
+            case ASTBackupQuery::ElementType::DATABASE:
+            {
+                auto & database_info = database_infos[element.database_name];
+                database_info.throw_if_database_not_exists = true;
+                database_info.should_backup_create_database_query = true;
+                database_info.all_tables = true;
+                for (const auto & except_table_name : element.except_tables)
+                    database_info.except_tables.emplace(except_table_name.second);
+                break;
+            }
+
+            case ASTBackupQuery::ElementType::ALL:
+            {
+                all_databases = true;
+                except_databases.insert(element.except_databases.begin(), element.except_databases.end());
+                except_tables.insert(element.except_tables.begin(), element.except_tables.end());
+                break;
+            }
+        }
+    }
+
+    if (all_databases)
+    {
+        for (auto & [database_name, database_info] : database_infos)
+        {
+            if (!except_database.contains(database_name))
+            {
+                database_info.should_backup_create_database_query = true;
+                database_info.all_tables = true;
+                for (const auto & table_name : except_tables)
+                {
+                    if (table_name.first == database_name)
+                        database_info.except_tables.emplace(table_name.second);
+                }
+            }
+        }
+    }
+
+    /// Retrieve related databases from DatabaseCatalog.
+    Databases databases;
+    if (all_databases)
+    {
+        FilterByNameFunction filter_by_database_name = [&](const String & database_name)
+        { return database_infos.contains(database_name) || (all_databases && !except_database_names.contains(database_name)); };
+        databases = DatabaseCatalog::instance().getDatabases(filter_by_database_name);
+    }
+    else
+    {
+        Strings database_names{std::views::keys(database_infos)};
+        databases = DatabaseCatalog::instance().getDatabases(database_names);
+    }
+
+    for (const auto & [database_name, database] : databases)
+    {
+        auto [it, inserted] = database_infos.emplace(database_name);
+        DatabaseInfo & database_info = it->second;
+        if (inserted)
+        {
+            database_info.should_backup_create_database_query = true;
+            database_info.all_tables = true;
+            for (const auto & table_name : except_tables)
+            {
+                if (table_name.first == element.database_name)
+                    database_info.except_tables.emplace(table_name.second);
+            }
+        }
+        database_info.database = database;
+    }
+
+    checkRequiredDatabasesFound();
+
+    /// Check that we've found all databases that we need to find and retrieve their CREATE DATABASE queries.
+    for (auto & [database_name, database_info] : database_infos)
+    {
+        auto database = database_info.database;
+        if (!database)
+            continue; /// Database wasn't found.
+
+        if (const auto * replicated_database = dynamic_cast<const DatabaseReplicated *>(database.get()))
+        {
+            database_info.is_replicated_database = true;
+            database_info.replication_zk_path = replicated_database->getZooKeeperPath();
+        }
+
+        if (database_info.should_backup_create_database_query)
+            database_info.should_backup_create_database_query &= (database_name != DatabaseCatalog::TEMPORARY_DATABASE);
+
+        /// Get CREATE DATABASE query for this database.
+        ASTPtr create_database_query;
+        if (database_info.should_backup_create_database_query)
+        {
+            try
+            {
+                create_database_query = database->getCreateDatabaseQuery();
+            }
+            catch (...)
+            {
+                /// Failed to get the CREATE DATABASE query for this database.
+                /// Maybe this is because the database doesn't exist anymore.
+                if (checkIsDatabaseDropped(database_name))
+                    continue; /// This database has been dropped.
+                throw; /// The exception was not because this database was dropped, rethrowing.
+            }
+        }
+
+        /// Check CREATE DATABASE query and calculate the metadata path in backup.
+        if (create_database_query)
+        {
+            ASTCreateQuery * create_query = typeid_cast<ASTCreateQuery *>(create_database_query.get());
+            if (create_query->getDatabase() != database_name)
+            {
+                LOG_WARNING(log, "Got a create query with unexpected name {} for database {} : {}",
+                            backQuoteIfNeed(create.getDatabase()), backQuoteIfNeed(database_name), create_database_query);
+                create_database_query = create_database_query->clone();
+                create_query = typeid_cast<ASTCreateQuery *>(create_database_query.get());
+                create_query.setDatabase(database_name);
+            }
+            database_info.create_database_query = create_database_query;
+        }
+    }
+}
+
+bool BackupEntriesCollector::checkIsDatabaseDropped(const String & database_name)
+{
+    DatabaseInfo & database_info = database_infos.at(database_name);
+    auto database = database_info.database;
+    if (database)
+    {
+        bool database_exists;
+        if (database->getUUID() != UUIDHelpers::Nil)
+            database_exists = DatabaseCatalog::instance().tryGetDatabase(database->getUUID());
+        else
+            database_exists = (DatabaseCatalog::instance().tryGetDatabase(database_name) == database);
+        if (!database_exists)
+        {
+            database_info.database = nullptr;
+            database = nullptr;
+        }
+    }
+    return !database;
+}
+
+void BackupEntriesCollector::checkRequiredDatabasesFound()
+{
+    for (const auto & [database_name, database_info] : database_infos)
+    {
+        auto database = database_info.database;
+        if (!database && database_info.throw_if_database_not_exists)
+            throw Exception(ErrorCodes::UNKNOWN_DATABASE, "Database {} does not exist", backQuoteIfNeed(database_name));
+    }
+}
+
+void BackupEntriesCollector::removeDatabaseInfosForDroppedDatabases()
+{
+    boost::remove_erase_if(database_infos, [](const std::pair<String, DatabaseInfo> & database_name_and_info)
+    {
+        const auto & database_info = database_name_and_info.second;
+        return !database_info.database;
+    });
+}
+
+void BackupEntriesCollector::calculateDatabasesPathsInBackup()
+{
+    for (auto & [database_name, database_info] : database_infos)
+    {
+        String new_database_name = renaming_map.getNewDatabaseName(database_name);
+        database_info.metadata_path_in_backup = root_path_in_backup / "metadata" / (escapeForFileName(new_database_name) + ".sql");
+    }
+}
+
+void BackupEntriesCollector::collectTablesMetadataInOtherDBs()
+{
+    /// We search for tables two times because a table could be renamed during the first scan and
+    /// it would be sad not to put it into a backup for this reason.
+    /// In fact a table can be renamed during the second scan again, but doing scan for the third time seems too much.
+    /// So two scans must be enough for most cases, and for replicated databases we don't use this function anyway.
+    size_t num_scans = 2;
+    std::unordered_set<StoragePtr> table_ptrs;
+
+    for (size_t scan_no = 1; scan_no <= num_scans; ++scan_no)
+    {
+        for (const auto & [database_name, database_info] : database_infos)
+        {
+            if (!database_info.is_replicated_database)
+                collectTablesMetadataInOtherDBs_FindTables(database_name, table_ptrs);
+        }
+    }
+
+    /// We've found tables to put into a backup.
+    /// Now we retrieve their CREATE TABLE queries.
+    collectTablesMetadataInOtherDBs_GetCreateTableQueries();
+}
+
+void BackupEntriesCollector::collectTablesMetadataInOtherDBs_FindTables(
+    const String & database_name, std::unordered_set<StoragePtr> & table_ptrs)
+{
+    const auto & database_info = database_infos.at(database_name);
+    auto database = database_info.database;
+
+    /// Table could be dropped already, that's why we check it for nullptr here.
+    if (!database || !database->supportBackupTables())
+        return;
+
+    /// Get tables from this database.
+    Tables tables;
+    try
+    {
+        if (database_name == DatabaseCatalog::TEMPORARY_DATABASE)
+        {
+            if (database_info.all_tables)
+                tables = findTemporaryTables(makeTableNameFilter(database_info), context);
+            else
+                tables = getTemporaryTables(Strings{database_info.table_names}, context);
+        }
+        else
+        {
+            if (database_info.all_tables)
+                tables = database->findTablesByFilter(makeTableNameFilter(database_info), context);
+            else
+                tables = database->getTables(Strings{database_info.table_names}, context);
+        }
+    }
+    catch (...)
+    {
+        /// Failed to get tables for this database.
+        /// Maybe this is because this database has been just dropped.
+        if (checkIsDatabaseDropped(database_name))
+            return; /// This database has been just dropped, but it's not required so we can skip it.
+        throw; /// The exception wasn't because this database was dropped, rethrowing.
+    }
+
+    /// Add found tables to `table_infos`.
+    /// We also check here that this table hasn't been added before (even with a different name) because
+    /// we don't want to a backup the same table twice even if it was renamed while making the backup.
+    for (const auto & [table_name, table] : tables)
+    {
+        QualifiedTableName full_table_name{database_name, table_name};
+        if (!table_infos.contains(full_table_name) && !table_ptrs.contains(table))
+        {
+            table_ptrs.emplace(table);
+            auto & table_info = table_infos[full_table_name];
+            table_info.table_found = true;
+            table_info.table = table;
+            table_info.database = database;
+            table_info.is_replicated_database = database_info.is_replicated_database;
+        }
+    }
+}
+
+std::function<bool(const String &)> BackupEntriesCollector::makeTableNameFilter(const DatabaseInfo & database_info) const
+{
+    return [&database_info](const String & table_name)
+    {
+        return database_info.table_names.contains(table_name)
+            || (database_info.all_tables && !except_table_names.contains(table_name) && !table_name.starts_with(".inner.")
+                && !table_name.starts_with(".inner_id."));
+    };
+}
+
+void BackupEntriesCollector::collectTablesMetadataInOtherDBs_GetCreateTableQueries()
+{
+    for (const auto & [table_name, table_info] : table_infos)
+    {
+        if (!table_info.table_found)
+            continue; /// The table wasn't found, skipping.
+
+        ASTPtr create_table_query;
+        try
+        {
+            if (database_name == DatabaseCatalog::TEMPORARY_DATABASE)
+                create_table_query = getCreateTemporaryTableQuery(table_name.second, context);
+            else
+                create_table_query = table_info.database->getCreateTableQuery(table_name.second, context);
+        }
+        catch (...)
+        {
+            /// Failed to get the create database query for this database.
+            /// Maybe this is because it this table doesn't exist anymore.
+            if (checkIsTableDropped(table_name))
+                continue; /// This database has been just dropped.
+            throw; /// The issue was not because this database was dropped, rethrowing.
+        }
+
+        ASTCreateQuery * create_query = typeid_cast<ASTCreateQuery *>(create_table_query.get());
+        if ((create_query->getDatabase() != table_name.first) || (create_query->getTable() != table_name.second))
+        {
+            LOG_WARNING(log, "Got a create query with unexpected name {}.{} for {} : {}",
+                        backQuoteIfNeed(create.getDatabase()), backQuoteIfNeed(create.getTable()),
+                        tableNameWithTypeToString(table_name, false), create_table_query);
+            create_table_query = create_table_query->clone();
+            create_query = typeid_cast<ASTCreateQuery *>(create_table_query.get());
+            create_query->temporary = (table_name.first == DatabaseCatalog::TEMPORARY_DATABASE);
+            create_query->setDatabase((table_name.first != DatabaseCatalog::TEMPORARY_DATABASE) ? table_name.first : "");
+            create_query->setTable(table_name.second);
+        }
+        table_info.create_table_query = create_table_query;
+    }
+}
+
+bool BackupEntriesCollector::checkIsTableDropped(const QualifiedTableName & table_name)
+{
+    TableInfo & table_info = table_infos.at(table_name);
+    if (table_info.table_found && !table_info.is_replicated_database)
+    {
+        auto storage = table_info.storage;
+        if (storage)
+        {
+            bool table_exists;
+            if (table_name.first == DatabaseCatalog::)
+            if (storage->getUUID() != UUIDHelpers::Nil)
+                table_exists = DatabaseCatalog::instance().tryGetTable(storage->getUUID(), context);
+            else
+                table_exists = (DatabaseCatalog::instance().tryGetTable(table_name, context) == storage);
+            if (!table_exists)
+            {
+                table_info.storage = nullptr;
+                table_info.table_found = false;
+            }
+        }
+    }
+    return !table_info.table_found;
+}
+
+void BackupEntriesCollector::checkRequiredTablesFound()
+{
+    for (const auto & [table_name, table_info] : table_infos)
+    {
+        if (!table_info.table_found && table_info.throw_if_table_not_exists)
+            throw Exception(ErrorCodes::UNKNOWN_TABLE, "{} does not exist", tableNameWithTypeToString(table_name, true));
+    }
+}
+
+void BackupEntriesCollector::removeTableInfosForDroppedTables()
+{
+    boost::remove_erase_if(table_infos, [&](const std::pair<QualifiedTableName, TableInfo> & table_name_and_info)
+    {
+        const auto & table_name = table_name_and_info.first;
+        const auto & table_info = table_name_and_info.second;
+        return !table_info.table_found || !database_infos.contains(table_name.first);
+    });
+}
+
+void BackupEntriesCollector::calculateTablesPathsInBackup()
+{
+    for (auto & [table_name, table_info] : table_infos)
+    {
+        auto table_name_in_backup = renaming_map.getNewTableName({table_name.first, table_name.second});
+        if (table_name_in_backup.database == DatabaseCatalog::TEMPORARY_DATABASE)
+        {
+            table_info.metadata_path_in_backup = root_path_in_backup / "temporary_tables" / "metadata" / (escapeForFileName(table_name_in_backup.table) + ".sql");
+            table_info.data_path_in_backup = root_path_in_backup / "temporary_tables" / "data" / escapeForFileName(table_name_in_backup.table);
+        }
+        else
+        {
+            table_info.metadata_path_in_backup
+                = root_path_in_backup / "metadata" / escapeForFileName(table_name_in_backup.database) / (escapeForFileName(table_name_in_backup.table) + ".sql");
+            table_info.data_path_in_backup = root_path_in_backup / "data" / escapeForFileName(table_name_in_backup.database)
+                / escapeForFileName(table_name_in_backup.table);
+        }
+
+        if (table_info.partitions && !backup_settings.structure_only && table_info.storage && !table_info.storage->supportsBackupPartition())
+        {
+            throw Exception(
+                ErrorCodes::CANNOT_BACKUP_TABLE,
+                "Table engine {} doesn't support partitions, cannot backup {}",
+                storage->getName(),
+                tableNameWithTypeToString(database_name, table_name, false));
+        }
+    }
+}
+
+void BackupEntriesCollector::checkStorageSupportForPartitions() const
+{
+    if (backup_settings.structure_only)
+        return;
+
+    for (auto & [table_name, table_info] : table_infos)
+    {
+        if (table_info.partitions && table_info.storage && !table_info.storage->supportsBackupPartition())
+        {
+            throw Exception(
+                ErrorCodes::CANNOT_BACKUP_TABLE,
+                "Table engine {} doesn't support partitions, cannot backup {}",
+                storage->getName(),
+                tableNameWithTypeToString(database_name, table_name, false));
+        }
+    }
+}
+
+void BackupEntriesCollector::collectTablesMetadataInReplicatedDBs()
+{
+    for (const auto & [database_name, database_info] : database_infos)
+    {
+        if (database_info.is_replicated_database)
+            collectTablesMetadataInReplicatedDB(database_name);
+    }
+}
+
+void BackupEntriesCollector::collectTablesMetadataInReplicatedDB(const String & database_name)
+{
+    const auto & database_info = database_infos.at(database_name);
+    auto database = database_info.database;
+
+    /// Table could be dropped already, that's why we check it for nullptr here.
+    if (!database || !database->supportBackupTables())
+        return;
+
+    /// Get a metadata snapshot from this database.
+    std::map<String, String> metadata_snapshot;
+    UInt32 snapshot_version;
+    try
+    {
+        /// Database or table could be replicated - so may use ZooKeeper. We need to retry.
+        auto zookeeper_retries_info = global_zookeeper_retries_info;
+        ZooKeeperRetriesControl retries_ctl("collectTablesMetadataInReplicatedDB", zookeeper_retries_info, nullptr);
+        retries_ctl.retryLoop([&]()
+        {
+            if (database_info.all_tables)
+                metadata_snapshot = database->getConsistentMetadataSnapshotByFilter(makeTableNameFilter(database_info), context, /* max_retries= */ 10, snapshot_version);
+            else
+                metadata_snapshot = database->getConsistentMetadataSnapshot(Strings{database_info.table_names}, context, /* max_retries= */ 10, snapshot_version);
+        });
+    }
+    catch (...)
+    {
+        /// Failed to get tables for this database.
+        /// Maybe this is because this database has been just dropped.
+        if (checkIsDatabaseDropped(database_name))
+            return; /// This database has been just dropped, but it's not required so we can skip it.
+        throw; /// The exception wasn't because this database was dropped, rethrowing.
+    }
+
+    backup_coordination->addReplicatedDatabaseMetadataSnapshot(database_info.replication_zk_path, metadata_snapshot, snapshot_version);
+}
+
+void BackupEntriesCollector::collectTablesMetadataInReplicatedDBs_Sync()
+{
+    for (const auto & [database_name, database_info] : database_infos)
+    {
+        if (database_info.is_replicated_database)
+            collectTablesMetadataInReplicatedDB_Sync(database_name);
+    }
+}
+
+void BackupEntriesCollector::collectTablesMetadataInReplicatedDB_Sync(const String & database_name)
+{
+    const auto & database_info = database_infos.at(database_name);
+    auto database = database_info.database;
+
+    /// Table could be dropped already, that's why we check it for nullptr here.
+    if (!database || !database->supportBackupTables())
+        return;
+
+    auto metadata_snapshot = backup_coordination->getReplicatedDatabaseMetadataSnapshot(database_info.replication_zk_path);
+
+    for (const auto & [table_name, table_metadata] : metadata_snapshot)
+    {
+        ParserCreateQuery parser;
+        ASTPtr create_table_query = parseQuery(parser, table_metadata, 0, context->getSettingsRef().max_parser_depth);
+
+        auto & create_query = create_table_query->as<ASTCreateQuery &>();
+        create_query.attach = false;
+        create_query.setTable(table_name);
+        create_query.setDatabase(database_name);
+
+        /// `storage` is allowed to be null here. In this case it means that this storage exists on other replicas
+        /// but it has not been created on this replica yet.
+        StoragePtr storage;
+        if (create_query.uuid != UUIDHelpers::Nil)
+            storage = DatabaseCatalog::instance().tryGetByUUID(create.uuid).second;
+
+        QualifiedTableName full_name{database_name, table_name};
+        auto & table_info = table_infos[full_name];
+        table_info.table_found = true;
+        table_info.database = database;
+        table_info.storage = storage;
+        table_info.is_replicated_database = database_info.is_replicated_database;
+        table_info.create_table_query = create_table_query;
+    }
+}
+
+void BackupEntriesCollector::lockTablesForReading()
+{
+    for (auto & [table_name, table_info] : table_infos)
+    {
+        auto storage = table_info.storage;
+        if (!storage)
+            continue;
+        
+        try
+        {
+            table_info.table_lock = storage->tryLockForShare(context->getInitialQueryId(), context->getSettingsRef().lock_acquire_timeout);
+        }
+        catch (...)
+        {
+            /// Failed to get tables for this database.
+            /// Maybe this is because this database has been just dropped.
+            if (checkIsDatabaseDropped(database_name))
+                return; /// This database has been just dropped, but it's not required so we can skip it.
+            throw; /// The exception wasn't because this database was dropped, rethrowing.
+        }
+    }
+}
+
+
+
+
+
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+void BackupEntriesCollector::collectMetadataForTablesInNonReplicatedDatabases()
+{
+    std::unordered_map<StoragePtr, std::pair<String, bool /* throw_if_table_not_exists */>> storages;
+
+    for (int step = 0; step != 2; ++step)
+    {
+        for (const auto & [database_name, database_info] : database_infos)
+        {
+            std::unordered_set<String> table_names;
+            bool all_tables = false;
+            std::unordered_set<String> except_table_names;
+
+            for (const auto & element : backup_query_elements)
+            {
+                switch (element.type)
+                {
+                    case ASTBackupQuery::ElementType::TABLE:
+                    {
+                        if (element.database_name == database_name)
+                            table_names.emplace(element.table_name);
+                        break;
+                    }
+
+                    case ASTBackupQuery::ElementType::TEMPORARY_TABLE:
+                    {
+                        if (DatabaseCatalog::TEMPORARY_DATABASE == database_name)
+                            table_names.emplace(element.table_name);
+                        break;
+                    }
+
+                    case ASTBackupQuery::ElementType::DATABASE:
+                    {
+                        if (element.database_name == database_name)
+                            all_tables = true;
+                        break;
+                    }
+
+                    case ASTBackupQuery::ElementType::ALL:
+                    {
+                        if (!element.except_databases)
+                        all_tables = true;
+                        except_database_names = element.except_tables;
+                        break;
+                    }
+                }
+            }
+        }
+
+        auto throw_if_table_not_exists = [&](const String & database_name) { return database_names.contains(database_name); };
+
+        Tables tables;
+        if (all_tables)
+        {
+            FilterByNameFunction filter_by_database_name
+                = [database_names_ = std::move(database_names),
+                all_databases,
+                except_database_names_ = std::move(except_database_names)](
+                    const String & database_name) mutable
+            {
+                return database_names_.contains(database_name) || (all_databases && !except_database_names.contains(database_name));
+            };
+
+            tables = DatabaseCatalog::instance().getDatabases(filter_by_database_name);
+
+            for (auto database_names : database_names)
+            {
+                if (!databases.contains(database_name))
+                    throw Exception(ErrorCodes::UNKNOWN_DATABASE, "Database {} does not exist", backQuoteIfNeed(database_name));
+            }
+        }
+        else
+        {
+            tables = DatabaseCatalog::instance().getDatabases(Strings(std::views::keys(database_names)));
+        }
+    }
+
+
+    for ()
+
+
+
+
     /// With the default values the metadata collecting works in the following way:
     /// 1) it tries to collect the metadata for the first time; then
     /// 2) it tries to collect it again, and compares the results from the first and the second collecting; if they match, it's done; otherwise
@@ -213,9 +885,7 @@ void BackupEntriesCollector::gatherMetadataAndCheckConsistency()
     /// and so on, the sleep time is doubled each time until it reaches 5000 milliseconds.
     /// And such attempts will be continued until 600000 milliseconds pass.
 
-    setStage(Stage::formatGatheringMetadata(0));
-
-    collect_metadata_end_time = std::chrono::steady_clock::now() + collect_metadata_timeout;
+    setStage(Stage::GATHERING_METADATA);
 
     for (int attempt_no = 0;; ++attempt_no)
     {

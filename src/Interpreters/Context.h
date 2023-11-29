@@ -674,7 +674,10 @@ public:
     StorageID resolveStorageIDImpl(StorageID storage_id, StorageNamespace where, std::optional<Exception> * exception) const;
 
     Tables getExternalTables() const;
+    Tables getExternalTables(const Strings & table_names) const;
+    Tables findExternalTables(const FilterByNameFunction & filter_by_table_name) const;
     void addExternalTable(const String & table_name, TemporaryTableHolder && temporary_table);
+    std::shared_ptr<TemporaryTableHolder> getExternalTable(const String & table_name) const;
     std::shared_ptr<TemporaryTableHolder> findExternalTable(const String & table_name) const;
     std::shared_ptr<TemporaryTableHolder> removeExternalTable(const String & table_name);
 

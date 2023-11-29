@@ -26,6 +26,9 @@ public:
     virtual Strings waitForStage(const String & stage_to_wait) = 0;
     virtual Strings waitForStage(const String & stage_to_wait, std::chrono::milliseconds timeout) = 0;
 
+    void addReplicatedDatabaseMetadataSnapshot(const String & zookeeper_path, const std::vector<std::pair<ASTPtr, StoragePtr>> & snapshot, UInt64 metadata_version) override;
+    std::vector<std::pair<ASTPtr, StoragePtr>> getReplicatedDatabaseMetadataSnapshot(const String & zookeeper_path) const override;
+
     struct PartNameAndChecksum
     {
         String part_name;

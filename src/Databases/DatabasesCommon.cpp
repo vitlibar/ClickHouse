@@ -337,36 +337,6 @@ StoragePtr DatabaseWithOwnTablesBase::getTableUnlocked(const String & table_name
                     backQuote(database_name), backQuote(table_name));
 }
 
-std::vector<std::pair<ASTPtr, StoragePtr>> DatabaseWithOwnTablesBase::getTablesForBackup(const FilterByNameFunction & filter, const ContextPtr & local_context) const
-{
-    std::vector<std::pair<ASTPtr, StoragePtr>> res;
-
-    for (auto it = getTablesIterator(local_context, filter); it->isValid(); it->next())
-    {
-        auto storage = it->table();
-        if (!storage)
-            continue; /// Probably the table has been just dropped.
-
-        auto create_table_query = tryGetCreateTableQuery(it->name(), local_context);
-        if (!create_table_query)
-            throw Exception(ErrorCodes::INCONSISTENT_METADATA_FOR_BACKUP,
-                            "Couldn't get a create query for table {}.{}",
-                            backQuoteIfNeed(getDatabaseName()), backQuoteIfNeed(it->name()));
-
-        const auto & create = create_table_query->as<const ASTCreateQuery &>();
-        if (create.getTable() != it->name())
-            throw Exception(ErrorCodes::INCONSISTENT_METADATA_FOR_BACKUP,
-                            "Got a create query with unexpected name {} for table {}.{}",
-                            backQuoteIfNeed(create.getTable()),
-                            backQuoteIfNeed(getDatabaseName()), backQuoteIfNeed(it->name()));
-
-        storage->adjustCreateQueryForBackup(create_table_query);
-        res.emplace_back(create_table_query, storage);
-    }
-
-    return res;
-}
-
 void DatabaseWithOwnTablesBase::createTableRestoredFromBackup(const ASTPtr & create_table_query, ContextMutablePtr local_context, std::shared_ptr<IRestoreCoordination>, UInt64)
 {
     /// Creates a table by executing a "CREATE TABLE" query.

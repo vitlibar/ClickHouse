@@ -39,6 +39,9 @@ public:
     Strings waitForStage(const String & stage_to_wait) override;
     Strings waitForStage(const String & stage_to_wait, std::chrono::milliseconds timeout) override;
 
+    void addReplicatedDatabaseMetadataSnapshot(const String & zookeeper_path, const std::map<String, String> & snapshot, UInt32 snapshot_version) override;
+    std::map<String, String> getReplicatedDatabaseMetadataSnapshot(const String & zookeeper_path) const override;
+
     void addReplicatedPartNames(
         const String & table_shared_id,
         const String & table_name_for_logs,

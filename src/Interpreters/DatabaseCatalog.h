@@ -201,6 +201,10 @@ public:
     /// Same as getDatabase(const String & database_name), but if database_name is empty, current database of local_context is used
     DatabasePtr getDatabase(const String & database_name, ContextPtr local_context) const;
 
+    /// Returns multiple databases at once.
+    Databases getDatabases(const Strings & database_names) const;
+    Databases findDatabases(const FilterByNameFunction & filter_by_database_name) const;
+
     /// For all of the following methods database_name in table_id must be not empty (even for temporary tables).
     void assertTableDoesntExist(const StorageID & table_id, ContextPtr context) const;
     bool isTableExist(const StorageID & table_id, ContextPtr context) const;

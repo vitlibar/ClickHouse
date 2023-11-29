@@ -1414,6 +1414,69 @@ const Block * Context::tryGetSpecialScalar(const String & name) const
 
 Tables Context::getExternalTables() const
 {
+    return findExternalTablesImpl(true, {}, {});
+}
+
+Tables Context::getExternalTables(const Strings & table_names) const
+{
+    Tables res = findExternalTablesImpl(false, {}, table_names);
+    if (res.size() < table_names.size())
+    {
+        for (const String & table_name : table_names)
+            if (!res.contains(table_name))
+                throw Exception(ErrorCodes::TABLE_ALREADY_EXISTS, "Temporary table {} already exists.", backQuoteIfNeed(table_name));
+    }
+    return res;
+}
+
+Tables Context::findExternalTables(const FilterByNameFunction & filter_by_table_name) const
+{
+    return findExternalTablesImpl(false, filter_by_table_name, {});
+}
+
+Tables Context::findExternalTablesImpl(bool all_tables, const FilterByNameFunction & filter_by_table_name, const Strings & table_names) const
+{
+    if (isGlobalContext())
+        throw Exception(ErrorCodes::LOGICAL_ERROR, "Global context cannot have external tables");
+
+    SharedLockGuard lock(mutex);
+
+    Tables res;
+    if (all_tables)
+    {
+        for (const auto & table : external_tables_mapping)
+            res[table.first] = table.second->getTable();
+    }
+    else if (filter_by_table_name)
+    {
+        for (const auto & table : external_tables_mapping)
+            if (filter_by_table_name(table.first))
+                res[table.first] = table.second->getTable();
+    }
+    else
+    {
+        for (const auto & table_name : table_names)
+            if (auto it = external_tables_mapping.find(table_name))
+                res[table_name] = it->second->getTable();
+    }
+
+    auto query_context_ptr = query_context.lock();
+    auto session_context_ptr = session_context.lock();
+    if (query_context_ptr && query_context_ptr.get() != this)
+    {
+        Tables buf = query_context_ptr->findExternalTablesImpl(all_tables, filter_by_table_name, table_names);
+        res.insert(buf.begin(), buf.end());
+    }
+    else if (session_context_ptr && session_context_ptr.get() != this)
+    {
+        Tables buf = session_context_ptr->findExternalTablesImpl(all_tables, filter_by_table_name, table_names);
+        res.insert(buf.begin(), buf.end());
+    }
+    return res;
+}
+
+Tables Context::getExternalTables() const
+{
     if (isGlobalContext())
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Global context cannot have external tables");
 
@@ -1438,7 +1501,6 @@ Tables Context::getExternalTables() const
     return res;
 }
 
-
 void Context::addExternalTable(const String & table_name, TemporaryTableHolder && temporary_table)
 {
     if (isGlobalContext())
@@ -1455,14 +1517,34 @@ std::shared_ptr<TemporaryTableHolder> Context::findExternalTable(const String & 
     if (isGlobalContext())
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Global context cannot have external tables");
 
-    std::shared_ptr<TemporaryTableHolder> holder;
     {
         SharedLockGuard lock(mutex);
         auto iter = external_tables_mapping.find(table_name);
-        if (iter == external_tables_mapping.end())
-            return {};
-        holder = iter->second;
+        if (iter != external_tables_mapping.end())
+            return iter->second;
     }
+
+    auto query_context_ptr = query_context.lock();
+    auto session_context_ptr = session_context.lock();
+    if (query_context_ptr && query_context_ptr.get() != this)
+    {
+        if (auto res = query_context_ptr->findExternalTable(table_name))
+            return res;
+    }
+    else if (session_context_ptr && session_context_ptr.get() != this)
+    {
+        if (auto res = session_context_ptr->findExternalTable(table_name))
+            return res;
+    }
+
+    return nullptr;
+}
+
+std::shared_ptr<TemporaryTableHolder> Context::getExternalTable(const String & table_name) const
+{
+    auto holder = findExternalTable(table_name);
+    if (!holder)
+        throw Exception(ErrorCodes::UNKNOWN_TABLE, "External table {} does not exist", backQuoteIfNeed(table_name));
     return holder;
 }
 

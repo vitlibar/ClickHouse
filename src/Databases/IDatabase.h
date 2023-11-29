@@ -352,7 +352,18 @@ public:
     }
 
     /// Returns CREATE TABLE queries and corresponding tables prepared for writing to a backup.
-    virtual std::vector<std::pair<ASTPtr, StoragePtr>> getTablesForBackup(const FilterByNameFunction & filter, const ContextPtr & context) const;
+    virtual Tables getTables(const Strings & table_names, const ContextPtr & context) const;
+
+    virtual Tables findTablesByFilter(const FilterByNameFunction & filter_by_table_name, const ContextPtr & context) const;
+
+    virtual std::map<String, String> getConsistentMetadataSnapshot(
+        const Strings & table_names, const ContextPtr & context, size_t max_retries, UInt32 & out_snapshot_version) const;
+
+    virtual std::map<String, String> getConsistentMetadataSnapshotByFilter(
+        const FilterByNameFunction & filter_by_table_name, const ContextPtr & context, size_t max_retries, UInt32 & out_snapshot_version) const;
+
+    /// Whether tables of this database can be stored to a backup?
+    virtual bool supportsBackupTables() const { return false; }
 
     /// Creates a table restored from backup.
     virtual void createTableRestoredFromBackup(const ASTPtr & create_table_query, ContextMutablePtr context, std::shared_ptr<IRestoreCoordination> restore_coordination, UInt64 timeout_ms);

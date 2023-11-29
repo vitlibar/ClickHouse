@@ -702,6 +702,32 @@ Databases DatabaseCatalog::getDatabases() const
     return databases;
 }
 
+Databases DatabaseCatalog::getDatabases(const Strings & database_names) const
+{
+    Databases res;
+    std::lock_guard lock{databases_mutex};
+    for (const auto & database_name : database_names)
+    {
+        auto it = databases.find(database_name);
+        if (it == databases.end())
+            throw Exception(ErrorCodes::UNKNOWN_DATABASE, "Database {} does not exist", backQuoteIfNeed(database_name));
+        res.emplace(database_name, it->second);
+    }
+    return res;
+}
+
+Databases DatabaseCatalog::findDatabases(const FilterByNameFunction & filter_by_database_name) const
+{
+    Databases res;
+    std::lock_guard lock{databases_mutex};
+    for (const auto & [database_name, database] : databases)
+    {
+        if (filter_by_database_name(database_name))
+            res.emplace(database_name, database);
+    }
+    return res;
+}
+
 bool DatabaseCatalog::isTableExist(const DB::StorageID & table_id, ContextPtr context_) const
 {
     if (table_id.hasUUID())

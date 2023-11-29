@@ -64,27 +64,26 @@ public:
 private:
     void calculateRootPathInBackup();
 
-    void gatherMetadataAndCheckConsistency();
-
-    void tryGatherMetadataAndCompareWithPrevious(int attempt_no, std::optional<Exception> & inconsistency_error, bool & need_another_attempt);
-    void syncMetadataGatheringWithOtherHosts(int attempt_no, std::optional<Exception> & inconsistency_error, bool & need_another_attempt);
-
-    void gatherDatabasesMetadata();
-
-    void gatherDatabaseMetadata(
-        const String & database_name,
-        bool throw_if_database_not_found,
-        bool backup_create_database_query,
-        const std::optional<String> & table_name,
-        bool throw_if_table_not_found,
-        const std::optional<ASTs> & partitions,
-        bool all_tables,
-        const std::set<DatabaseAndTableName> & except_table_names);
-
-    void gatherTablesMetadata();
-    std::vector<std::pair<ASTPtr, StoragePtr>> findTablesInDatabase(const String & database_name) const;
+    void collectMetadata();
+    void collectDatabasesMetadata();
+    void collectTablesMetadataInOtherDBs();
+    void collectTablesMetadataInOtherDBs_FindTables(const String & database_name, std::unordered_set<StoragePtr> & table_ptrs);
+    void collectTablesMetadataInOtherDBs_GetCreateTableQueries();
+    void collectTablesMetadataInReplicatedDBs();
+    void collectTablesMetadataInReplicatedDB(const String & database_name);
+    void collectTablesMetadataInReplicatedDBs_Sync();
+    void collectTablesMetadataInReplicatedDB_Sync(const String & database_name);
+    static std::function<bool(const String &)> makeTableNameFilter(const DatabaseInfo & database_info) const;
+    void checkRequiredDatabasesFound();
+    void checkRequiredTablesFound();
+    void removeDatabaseInfosForDroppedDatabases();
+    void removeTableInfosForDroppedTables();
+    void calculateDatabasesPathsInBackup();
+    void calculateTablesPathsInBackup();
+    bool checkIsDatabaseDropped(const String & database_name);
+    bool checkIsTableDropped(const QualifiedTableName & table_name);
+    void checkStorageSupportForPartitions();
     void lockTablesForReading();
-    bool compareWithPrevious(String & mismatch_description);
 
     void makeBackupEntriesForDatabasesDefs();
     void makeBackupEntriesForTablesDefs();
@@ -107,21 +106,6 @@ private:
     /// This setting is similar to `distributed_ddl_task_timeout`.
     const std::chrono::milliseconds on_cluster_first_sync_timeout;
 
-    /// The time a BACKUP command will try to collect the metadata of tables & databases.
-    const std::chrono::milliseconds collect_metadata_timeout;
-
-    /// The number of attempts to collect the metadata before sleeping.
-    const unsigned int attempts_to_collect_metadata_before_sleep;
-
-    /// The minimum time clickhouse will wait after unsuccessful attempt before trying to collect the metadata again.
-    const std::chrono::milliseconds min_sleep_before_next_attempt_to_collect_metadata;
-
-    /// The maximum time clickhouse will wait after unsuccessful attempt before trying to collect the metadata again.
-    const std::chrono::milliseconds max_sleep_before_next_attempt_to_collect_metadata;
-
-    /// Whether we should collect the metadata after a successful attempt one more time and check that nothing has changed.
-    const bool compare_collected_metadata;
-
     Poco::Logger * log;
     /// Unfortunately we can use ZooKeeper for collecting information for backup
     /// and we need to retry...
@@ -133,26 +117,27 @@ private:
 
     struct DatabaseInfo
     {
+        bool throw_if_database_not_exists = false;
         DatabasePtr database;
+        bool is_replicated_database = false;
+        String replication_zk_path;
         ASTPtr create_database_query;
+        bool should_backup_create_database_query = false;
         String metadata_path_in_backup;
-
-        struct TableParams
-        {
-            bool throw_if_table_not_found = false;
-            std::optional<ASTs> partitions;
-        };
-
-        std::unordered_map<String, TableParams> tables;
-
+        std::unordered_set<String> table_names;
         bool all_tables = false;
-        std::unordered_set<String> except_table_names;
+        std::unordered_set<String> except_tables;
     };
+
+    std::unordered_set<StoragePtr> tables_by_ptr;
 
     struct TableInfo
     {
+        bool throw_if_table_not_exists = false;
         DatabasePtr database;
+        bool is_replicated_database = false;
         StoragePtr storage;
+        bool table_found = false;
         TableLockHolder table_lock;
         ASTPtr create_table_query;
         String metadata_path_in_backup;
@@ -163,12 +148,8 @@ private:
 
     String current_stage;
 
-    std::chrono::steady_clock::time_point collect_metadata_end_time;
-
     std::unordered_map<String, DatabaseInfo> database_infos;
     std::unordered_map<QualifiedTableName, TableInfo> table_infos;
-    std::vector<std::pair<String, String>> previous_databases_metadata;
-    std::vector<std::pair<QualifiedTableName, String>> previous_tables_metadata;
 
     BackupEntries backup_entries;
     std::queue<std::function<void()>> post_tasks;
