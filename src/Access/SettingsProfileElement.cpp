@@ -133,7 +133,11 @@ std::shared_ptr<ASTSettingsProfileElements> SettingsProfileElements::toAST() con
 {
     auto res = std::make_shared<ASTSettingsProfileElements>();
     for (const auto & element : *this)
-        res->elements.push_back(element.toAST());
+    {
+        auto element_ast = element.toAST();
+        if (!element_ast->empty())
+            res->elements.push_back(element_ast);
+    }
     return res;
 }
 
@@ -141,7 +145,11 @@ std::shared_ptr<ASTSettingsProfileElements> SettingsProfileElements::toASTWithNa
 {
     auto res = std::make_shared<ASTSettingsProfileElements>();
     for (const auto & element : *this)
-        res->elements.push_back(element.toASTWithNames(access_control));
+    {
+        auto element_ast = element.toASTWithNames(access_control);
+        if (!element_ast->empty())
+            res->elements.push_back(element_ast);
+    }
     return res;
 }
 
@@ -250,6 +258,187 @@ bool SettingsProfileElements::isAllowBackupSetting(const String & setting_name)
 {
     static constexpr std::string_view ALLOW_BACKUP_SETTING_NAME = "allow_backup";
     return Settings::Traits::resolveName(setting_name) == ALLOW_BACKUP_SETTING_NAME;
+}
+
+
+AlterSettingsProfileElements::AlterSettingsProfileElements(const SettingsProfileElements & ast)
+{
+    drop_all_settings = true;
+    drop_all_profiles = true;
+    add_settings = ast;
+}
+
+AlterSettingsProfileElements::AlterSettingsProfileElements(const ASTSettingsProfileElements & ast)
+    : AlterSettingsProfileElements(SettingsProfileElements{ast})
+{
+}
+
+AlterSettingsProfileElements::AlterSettingsProfileElements(const ASTSettingsProfileElements & ast, const AccessControl & access_control)
+    : AlterSettingsProfileElements(SettingsProfileElements{ast, access_control})
+{
+}
+
+AlterSettingsProfileElements::AlterSettingsProfileElements(const ASTAlterSettingsProfileElements & ast)
+{
+    drop_all_settings = ast.drop_all_settings;
+    drop_all_profiles = ast.drop_all_profiles;
+
+    if (ast.add_settings)
+        add_settings = SettingsProfileElements{*ast.add_settings};
+
+    if (ast.modify_settings)
+        modify_settings = SettingsProfileElements{*ast.modify_settings};
+
+    if (ast.drop_settings)
+        drop_settings = SettingsProfileElements{*ast.drop_settings};
+}
+
+AlterSettingsProfileElements::AlterSettingsProfileElements(const ASTAlterSettingsProfileElements & ast, const AccessControl & access_control)
+{
+    drop_all_settings = ast.drop_all_settings;
+    drop_all_profiles = ast.drop_all_profiles;
+
+    if (ast.add_settings)
+        add_settings = SettingsProfileElements{*ast.add_settings, access_control};
+
+    if (ast.modify_settings)
+        modify_settings = SettingsProfileElements{*ast.modify_settings, access_control};
+
+    if (ast.drop_settings)
+        drop_settings = SettingsProfileElements{*ast.drop_settings, access_control};
+}
+
+void SettingsProfileElements::applyChanges(const AlterSettingsProfileElements & changes)
+{
+    /// 1. First drop profiles and settings which should be dropped.
+    if (changes.drop_all_profiles)
+    {
+        for (auto & element : *this)
+            element.parent_profile.reset(); /// This makes the element empty if it's a "profile" element.
+    }
+
+    if (changes.drop_all_settings)
+    {
+        for (auto & element : *this)
+        {
+            /// This makes the element empty if it's a "setting" element.
+            /// Empty elements will be removed later at the end of this function.
+            element.setting_name.clear();
+            element.value.reset();
+            element.min_value.reset();
+            element.max_value.reset();
+            element.writability.reset();
+        }
+    }
+
+    auto apply_drop_profile = [&](const UUID & profile_id)
+    {
+        for (auto & element : *this)
+        {
+            if (element.parent_profile == profile_id)
+                element.parent_profile.reset(); /// This makes the element empty if it corresponds to that profile.
+        }
+    };
+
+    auto apply_drop_setting = [&](const String & setting_name, size_t end_index = -1)
+    {
+        if (end_index == static_cast<size_t>(-1))
+            end_index = this->size();
+        for (size_t i = 0; i != end_index; ++i)
+        {
+            auto & element = (*this)[i];
+            if (element.setting_name == setting_name)
+            {
+                /// This makes the element empty if it corresponds to that setting.
+                /// Empty elements will be removed later at the end of this function.
+                element.setting_name.clear();
+                element.value.reset();
+                element.min_value.reset();
+                element.max_value.reset();
+                element.writability.reset();
+            }
+        }
+    };
+
+    for (const auto & drop : changes.drop_settings)
+    {
+        if (drop.parent_profile)
+            apply_drop_profile(*drop.parent_profile);
+        if (!drop.setting_name.empty())
+            apply_drop_setting(drop.setting_name);
+    }
+
+    /// 2. Then add profiles which should be added.
+    auto apply_add_profile = [&](const UUID & profile_id, bool check_if_exists = true)
+    {
+        if (check_if_exists)
+            apply_drop_profile(profile_id);
+        SettingsProfileElement new_element;
+        new_element.parent_profile = profile_id;
+        push_back(new_element);
+    };
+
+    for (const auto & add : changes.add_settings)
+    {
+        if (add.parent_profile)
+            apply_add_profile(*add.parent_profile);
+    }
+
+    /// 3. Then add settings which should be added.
+    auto apply_add_setting = [&](const SettingsProfileElement & add, bool check_if_exists = true)
+    {
+        if (check_if_exists)
+            apply_drop_setting(add.setting_name);
+        SettingsProfileElement new_element;
+        new_element.setting_name = add.setting_name;
+        new_element.value = add.value;
+        new_element.min_value = add.min_value;
+        new_element.max_value = add.max_value;
+        new_element.writability = add.writability;
+        push_back(new_element);
+    };
+
+    for (const auto & add : changes.add_settings)
+    {
+        if (!add.setting_name.empty())
+            apply_add_setting(add);
+    }
+
+    /// 4. After that modify settings which should be modified.
+    auto apply_modify_setting = [&](const SettingsProfileElement & modify, bool check_if_exists = true)
+    {
+        if (check_if_exists && !this->empty())
+        {
+            for (int i = static_cast<int>(this->size()) - 1; i >= 0; --i)
+            {
+                auto & element = (*this)[i];
+                if (element.setting_name == modify.setting_name)
+                {
+                    if (modify.value)
+                        element.value = modify.value;
+                    if (modify.min_value)
+                        element.min_value = modify.min_value;
+                    if (modify.max_value)
+                        element.max_value = modify.max_value;
+                    if (modify.writability)
+                        element.writability = modify.writability;
+                    apply_drop_setting(modify.setting_name, i);
+                    return;
+                }
+            }
+        }
+        apply_add_setting(modify, /* check_if_exists= */ false);
+    };
+
+    for (const auto & modify : changes.modify_settings)
+    {
+        chassert(!modify.parent_profile); /// There is no such thing as "MODIFY PROFILE".
+        if (!modify.setting_name.empty())
+            apply_modify_setting(modify);
+    }
+
+    /// 5. Finally remove empty elements from the result list of elements.
+    std::erase_if(*this, [](const SettingsProfileElement & element) { return element.empty(); });
 }
 
 }
