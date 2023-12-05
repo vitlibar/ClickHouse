@@ -42,12 +42,10 @@ public:
     /// Allocates block numbers to restore a ReplicatedMergeTree table.
     /// The function also corrects block numbers in specified part infos and mutation infos.
     /// A returned `scope_guard` must be kept to protect currently restoring parts from merges and mutations.
-    /// `zookeeper_path_for_checking_` is set to some path which can be used to check later that this allocation is still valid.
     scope_guard allocateBlockNumbers(
         std::vector<MergeTreePartInfo> & part_infos_,
         std::vector<MutationInfoFromBackup> & mutation_infos_,
         bool check_table_is_empty_,
-        String & zookeeper_path_for_checking_,
         const ContextPtr & context_);
 
     /// Rereads information about currently restoring parts from ZooKeeper.

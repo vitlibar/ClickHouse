@@ -8,7 +8,6 @@
 #include <Backups/WithRetries.h>
 #include <base/insertAtEnd.h>
 
-#include <Poco/UUIDGenerator.h>
 #include <boost/algorithm/string/join.hpp>
 
 
@@ -602,7 +601,6 @@ public:
     scope_guard addEntry(
         const std::vector<MergeTreePartInfo> & part_infos_,
         const std::vector<MutationInfoFromBackup> & mutation_infos_,
-        String & zookeeper_path_for_checking_,
         const ZooKeeperWithFaultInjectionPtr & zookeeper_,
         const WithRetries::KeeperSettings & keeper_settings_)
     {
@@ -615,7 +613,6 @@ public:
             entry.mutation_names.insert(mutation_info.name);
 
         entry.replica_name = storage.replica_name;
-        entry.writing_to_zookeeper = true;
 
         String entry_id = generateEntryID();
         String entry_as_string = entryToString(entry);
@@ -630,11 +627,14 @@ public:
                                     keeper_fault_injection_probability = keeper_settings_.keeper_fault_injection_probability,
                                     keeper_fault_injection_seed = keeper_settings_.keeper_fault_injection_seed]
         {
+            LOG_INFO(log, "Removing info about currently restoring parts ({})", entry_id);
+
             {
-                /// Remove from memory.
-                LOG_INFO(log, "Removing info about currently restoring parts");
+                /// Mark that the entry should be removed.
                 std::lock_guard lock{mutex};
-                entries.erase(entry_id);
+                auto it = entries.find(entry_id);
+                if (it != entries.end())
+                    it->second.removed = true;
             }
 
             try
@@ -642,20 +642,26 @@ public:
                 /// Remove from ZooKeeper.
                 auto zookeeper = ZooKeeperWithFaultInjection::createInstance(
                     keeper_fault_injection_probability, keeper_fault_injection_seed, storage.tryGetZooKeeper(), log->name(), log);
-                tryRemoveEntryFromZookeeper(serialization_paths, zookeeper);
+                removeNodesFromZookeeper(serialization_paths, zookeeper);
             }
             catch (...)
             {
-                tryLogCurrentException(log,
-                                       fmt::format("Failed to remove info about currently restoring parts from ZooKeeper from {}",
-                                                   boost::algorithm::join(serialization_paths, ", ")));
+                tryLogCurrentException(log, fmt::format("Failed to remove info about currently restoring parts from ZooKeeper ({})", entry_id));
+                return;
+            }
+
+            {
+                /// Remove from memory.
+                std::lock_guard lock{mutex};
+                entries.erase(entry_id);
             }
         };
 
         {
-            /// Store the entry in memory.
-            LOG_INFO(log, "Storing info about currently restoring parts");
+            /// Store the entry in memory, the entry is temporary until we write it to ZooKeeper.
+            LOG_INFO(log, "Storing info about currently restoring parts ({})", entry_id);
             std::lock_guard lock{mutex};
+            chassert(entry.temporary && !entry.removed);
             entries.emplace(entry_id, std::move(entry));
         }
 
@@ -663,15 +669,12 @@ public:
         saveEntryToZookeeper(serialization_paths, entry_as_string_parts, zookeeper_);
 
         {
-            /// Mark that the entry was written to ZooKeeper.
+            /// The entry is not temporary anymore.
             std::lock_guard lock{mutex};
             auto it = entries.find(entry_id);
             if (it != entries.end())
-                it->second.writing_to_zookeeper = false;
+                it->second.temporary = false;
         }
-
-        /// A path in ZooKeeper which can be used to check if the parts and mutations are restored or should be restored.
-        zookeeper_path_for_checking_ = serialization_paths.front();
 
         return remove_entry;
     }
@@ -688,26 +691,26 @@ public:
         /// Then we compare `update_infos` (those paths parsed) with `entries` (i.e. we compare entries in ZooKeeper and entries in memory).
         auto update_infos = readUpdateInfos(zookeeper, watch_callback);
 
+        Strings entry_ids_to_remove;
         Strings nodes_to_remove;
         std::vector<std::pair<String, UpdateInfo>> update_infos_with_new_entries;
 
         {
             std::lock_guard lock{mutex};
 
-            Strings entry_ids_to_remove;
-            for (const auto & [entry_id, entry] : entries)
+            for (auto & [entry_id, entry] : entries)
             {
-                if (!entry.writing_to_zookeeper && !update_infos.contains(entry_id))
+                if (!entry.temporary && !update_infos.contains(entry_id))
                 {
-                    LOG_INFO(log, "Info about currently restoring parts was removed from ZooKeeper, removing it from memory too");
-                    entry_ids_to_remove.emplace_back(entry_id);
+                    LOG_INFO(log, "Info about currently restoring parts was removed from ZooKeeper, removing it from memory too ({})", entry_id);
+                    entry.removed = true;
+                }
+                if (entry.removed)
+                {
+                    entry_ids_to_remove.push_back(entry_id);
+                    insertAtEnd(nodes_to_remove, entry.serialization_paths);
                 }
             }
-
-            /// If an entry exists in memory but it doesn't exist in ZooKeeper then probably it was removed by another replica so
-            /// we need to remove it from memory.
-            for (const auto & entry_id : entry_ids_to_remove)
-                entries.erase(entry_id);
 
             for (const auto & [entry_id, update_info] : update_infos)
             {
@@ -715,12 +718,13 @@ public:
                 {
                     if (update_info.replica_name == storage.replica_name)
                     {
-                        LOG_INFO(log, "Info about currently restoring parts was removed from memory, removing it from ZooKeeper too");
+                        LOG_INFO(log, "Info about currently restoring parts was removed from memory, removing it from ZooKeeper too ({})", entry_id);
+                        entry_ids_to_remove.push_back(entry_id);
                         insertAtEnd(nodes_to_remove, update_info.serialization_paths);
                     }
                     else if (update_info.complete)
                     {
-                        LOG_INFO(log, "Found new info about currently restoring parts in ZooKeeper, loading it to memory");
+                        LOG_INFO(log, "Found new info about currently restoring parts in ZooKeeper, loading it to memory ({})", entry_id);
                         update_infos_with_new_entries.emplace_back(entry_id, update_info);
                     }
                 }
@@ -730,7 +734,7 @@ public:
         /// If an entry for this replica exists in ZooKeeper but it doesn't exist in memory there was an error and so the entry wasn't removed
         /// from ZooKeeper because of that error. So we can try to remove it from ZooKeeper now.
         if (!nodes_to_remove.empty())
-            tryRemoveEntryFromZookeeper(nodes_to_remove, zookeeper);
+            removeNodesFromZookeeper(nodes_to_remove, zookeeper);
 
         /// If an entry for another replica exists in ZooKeeper but it doesn't exist in memory then it was written by another replica so
         /// we need to read it from ZooKeeper.
@@ -745,6 +749,11 @@ public:
 
         {
             std::lock_guard lock{mutex};
+            /// If an entry exists in memory but it doesn't exist in ZooKeeper then probably it was removed by another replica so
+            /// we need to remove it from memory.
+            for (const auto & entry_id : entry_ids_to_remove)
+                entries.erase(entry_id);
+
             for (auto & [entry_id, entry] : new_entries)
                 entries.emplace(entry_id, std::move(entry));
         }
@@ -761,22 +770,20 @@ private:
         std::set<MergeTreePartInfo> part_infos;
         std::unordered_set<String> mutation_names;
         String replica_name;
-        bool writing_to_zookeeper = false;
         Strings serialization_paths;
+        bool temporary = true; /// entry is temporary if it's not written to ZooKeeper yet
+        bool removed = false;
     };
 
     std::unordered_map<String, Entry> entries TSA_GUARDED_BY(mutex);
     mutable std::mutex mutex;
 
-    std::mutex update_mutex;
+    std::mutex update_mutex; /// used to ensure updates are never simultaneous.
 
     /// Generates a random string.
     static String generateEntryID()
     {
-        UUID random_uuid;
-        static Poco::UUIDGenerator generator;
-        generator.createRandom().copyTo(reinterpret_cast<char *>(&random_uuid));
-        return toString(random_uuid);
+        return toString(UUIDHelpers::generateV4());
     }
 
     /// Converts an entry to string so it can be written to ZooKeeper.
@@ -902,11 +909,12 @@ private:
     }
 
     /// Tries to remove an entry from ZooKeeper.
-    void tryRemoveEntryFromZookeeper(const Strings & serialization_paths, const ZooKeeperWithFaultInjectionPtr & zookeeper) const
+    void removeNodesFromZookeeper(const Strings & serialization_paths, const ZooKeeperWithFaultInjectionPtr & zookeeper) const
     {
         LOG_INFO(log, "Removing info about currently restoring parts from ZooKeeper from {}", boost::algorithm::join(serialization_paths, ", "));
         TemporaryZookeeperNodes temp_nodes{zookeeper};
         temp_nodes.addPaths(serialization_paths);
+        temp_nodes.removeNodes();
     }
 
     struct UpdateInfo
@@ -1075,7 +1083,6 @@ scope_guard ReplicatedMergeTreeCurrentlyRestoringFromBackup::allocateBlockNumber
     std::vector<MergeTreePartInfo> & part_infos_,
     std::vector<MutationInfoFromBackup> & mutation_infos_,
     bool check_table_is_empty_,
-    String & zookeeper_path_for_checking_,
     const ContextPtr & context_)
 {
     auto check_for_no_parts_reason = MergeTreeCurrentlyRestoringFromBackup::getCheckForNoPartsReason(check_table_is_empty_, !mutation_infos_.empty());
@@ -1113,7 +1120,7 @@ scope_guard ReplicatedMergeTreeCurrentlyRestoringFromBackup::allocateBlockNumber
             part_infos_, mutation_infos_, check_for_no_parts_reason, zookeeper, context_);
 
         /// Store in memory and ZooKeeper the information about parts and mutations we're going to restore.
-        remove_entry = currently_restoring_info->addEntry(part_infos_, mutation_infos_, zookeeper_path_for_checking_, zookeeper, keeper_settings);
+        remove_entry = currently_restoring_info->addEntry(part_infos_, mutation_infos_, zookeeper, keeper_settings);
 
         /// Remove temporary nodes (the destructor of `temp_nodes` could do that too, but removeNodes() is better here because it checks errors).
         LOG_INFO(log, "Removing ephemeral nodes creates to allocate block numbers and mutation numbers");

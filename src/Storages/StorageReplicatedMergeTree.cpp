@@ -10382,9 +10382,7 @@ scope_guard StorageReplicatedMergeTree::allocateBlockNumbersForRestoringFromBack
         return {};
     }
 
-    String zookeeper_path_for_checking;
-    return currently_restoring_from_backup->allocateBlockNumbers(
-        part_infos, mutation_infos, check_table_is_empty, zookeeper_path_for_checking, local_context);
+    return currently_restoring_from_backup->allocateBlockNumbers(part_infos, mutation_infos, check_table_is_empty, local_context);
 }
 
 void StorageReplicatedMergeTree::checkTableIsEmptyBeforeRestoringParts()
