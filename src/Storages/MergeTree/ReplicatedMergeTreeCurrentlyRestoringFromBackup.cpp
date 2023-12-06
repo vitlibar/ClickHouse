@@ -33,7 +33,12 @@ namespace
     {
     public:
         TemporaryZookeeperNodes() = default;
-        explicit TemporaryZookeeperNodes(const ZooKeeperWithFaultInjectionPtr & zookeeper_) : zookeeper(zookeeper_) { }
+
+        explicit TemporaryZookeeperNodes(const ZooKeeperWithFaultInjectionPtr & zookeeper_, size_t max_multi_size_ = zkutil::MULTI_BATCH_SIZE)
+            : zookeeper(zookeeper_), max_multi_size(max_multi_size_)
+        {
+        }
+
         TemporaryZookeeperNodes(TemporaryZookeeperNodes && src) noexcept { *this = std::move(src); }
         ~TemporaryZookeeperNodes() { tryRemoveNodesNoThrow(); }
 
@@ -70,30 +75,24 @@ namespace
                 return;
 
             if (!zookeeper)
-                    throw Exception(ErrorCodes::NO_ZOOKEEPER, "Cannot get ZooKeeper");
-
-            std::vector<zkutil::ZooKeeper::FutureMulti> futures;
+                throw Exception(ErrorCodes::LOGICAL_ERROR, "No ZooKeeper");
 
             size_t pos = 0;
             while (pos < paths.size())
             {
-                size_t count = std::min(paths.size() - pos, zkutil::MULTI_BATCH_SIZE);
+                size_t count = std::min(paths.size() - pos, max_multi_size);
                 Coordination::Requests ops;
                 for (size_t i = 0; i != count; ++i)
                     ops.push_back(zkutil::makeRemoveRequest(paths[pos++], -1));
-
-                futures.emplace_back(zookeeper->asyncMulti(ops));
+                zookeeper->multi(ops);
             }
-
-            for (auto & future : futures)
-                future.get();
 
             paths.clear();
         }
 
         void tryRemoveNodesNoThrow() noexcept
         {
-            if (paths.empty() || !zookeeper)
+            if (paths.empty())
                 return;
 
             try
@@ -117,6 +116,7 @@ namespace
     private:
         std::vector<String> paths;
         ZooKeeperWithFaultInjectionPtr zookeeper;
+        size_t max_multi_size;
     };
 }
 
@@ -276,74 +276,61 @@ private:
         if (!num_partitions)
             return {};
 
+        size_t num_ready_partitions = 0;
+
         std::vector<TemporaryZookeeperNodes> res;
         res.reserve(num_partitions);
         for (size_t i = 0; i != num_partitions; ++i)
             res.emplace_back(TemporaryZookeeperNodes{zookeeper});
 
-        Coordination::Requests ops;
-        std::vector<size_t> indices;
-        std::vector<std::future<Coordination::MultiResponse>> futures;
-        indices.reserve(num_partitions);
-        futures.reserve(num_partitions);
-
         /// There can be many block numbers in many partitions.
-        /// For better performance we use asyncMulti() to create up to 100 block numbers in each partition,
-        /// then we wait for those operations to complete, and after that we repeat.
+        Coordination::Requests ops;
 
-        do
+        const auto flush_create_requests = [&]
         {
-            indices.clear();
-            futures.clear();
+            /// Check that table is not being dropped ("host" is the first node that is removed on replica drop)
+            ops.push_back(zkutil::makeCheckRequest(fs::path(storage.replica_path) / "host", -1));
 
-            /// Start asyncMulti() for each partitions we still need block numbers.
-            for (size_t i = 0; i != num_partitions; ++i)
+            Coordination::Responses responses;
+
+            responses = zookeeper->multi(ops);
+
+            if (responses.size() < 2)
+                throw Exception(ErrorCodes::LOGICAL_ERROR, "Number of responses for the multi request must >= 2");
+
+            size_t num_create_requests = responses.size() - 1; /// the last request is a check request
+            for (size_t j = 0; j != num_create_requests; ++j)
             {
-                const String & partition_id = partitions_and_num_block_numbers[i].partition_id;
-                size_t num_block_numbers = partitions_and_num_block_numbers[i].num_block_numbers;
+                const auto * response = dynamic_cast<const Coordination::CreateResponse *>(responses[j].get());
+                if (!response)
+                    throw Exception(ErrorCodes::LOGICAL_ERROR, "Response for a create request must have type CreateResponse");
 
-                num_block_numbers -= res[i].size();
-                num_block_numbers = std::min(num_block_numbers, zkutil::MULTI_BATCH_SIZE - 1);
+                while (res[num_ready_partitions].size() == partitions_and_num_block_numbers[num_ready_partitions].num_block_numbers)
+                    ++num_ready_partitions;
 
-                if (!num_block_numbers)
-                    continue;
-
-                indices.emplace_back(i);
-
-                String full_prefix = path_part_before_partition_id + partition_id + path_part_after_partition_id;
-
-                ops.clear();
-                ops.reserve(num_block_numbers + 1); /// the last request is a check request
-
-                for (size_t j = 0; j != num_block_numbers; ++j)
-                    ops.push_back(zkutil::makeCreateRequest(full_prefix, "", zkutil::CreateMode::EphemeralSequential));
-
-                /// Check that table is not being dropped ("host" is the first node that is removed on replica drop)
-                ops.push_back(zkutil::makeCheckRequest(fs::path(storage.replica_path) / "host", -1));
-
-                futures.emplace_back(zookeeper->asyncMulti(ops));
+                /// Collect the created paths.
+                temp_nodes[num_ready_partitions].addPath(response->path_created);
             }
 
-            /// Wait for asyncMulti() operations to complete, collect the created paths.
-            for (size_t i = 0; i != futures.size(); ++i)
+            ops.clear();
+        };
+
+        for (size_t i = 0; i != num_partitions; ++i)
+        {
+            const String & partition_id = partitions_and_num_block_numbers[i].partition_id;
+            size_t num_block_numbers = partitions_and_num_block_numbers[i].num_block_numbers;
+            String full_prefix = path_part_before_partition_id + partition_id + path_part_after_partition_id;
+
+            for (size_t j = 0; j != num_block_numbers; ++j)
             {
-                const auto & responses = futures[i].get().responses;
-                auto & temp_nodes = res[indices[i]];
-
-                if (responses.size() < 2)
-                    throw Exception(ErrorCodes::UNEXPECTED_ZOOKEEPER_ERROR, "Number of responses for the multi request must >= 2");
-
-                size_t num_create_requests = responses.size() - 1; /// the last request is a check request
-                for (size_t j = 0; j != num_create_requests; ++j)
-                {
-                    const auto * response = dynamic_cast<const Coordination::CreateResponse *>(responses[j].get());
-                    if (!response)
-                        throw Exception(ErrorCodes::UNEXPECTED_ZOOKEEPER_ERROR, "Response for a create request must have type CreateResponse");
-
-                    temp_nodes.addPath(response->path_created);
-                }
+                ops.push_back(zkutil::makeCreateRequest(full_prefix, "", zkutil::CreateMode::EphemeralSequential));
+                if (ops.size() + 1 >= zkutil::MULTI_BATCH_SIZE)
+                    flush_create_requests();
             }
-        } while (!futures.empty());
+        }
+
+        if (!ops.empty())
+            flush_create_requests();
 
         /// No partition needs more block numbers, everything is ready.
         return res;
