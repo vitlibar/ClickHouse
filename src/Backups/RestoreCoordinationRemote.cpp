@@ -40,16 +40,13 @@ RestoreCoordinationRemote::RestoreCoordinationRemote(
         (WithRetries::FaultyKeeper & zk)
         {
             /// Recreate this ephemeral node to signal that we are alive.
-            if (my_is_internal)
-            {
-                String alive_node_path = my_zookeeper_path + "/stage/alive|" + my_current_host;
+            String alive_node_path = my_zookeeper_path + "/stage/alive|" + my_current_host;
 
-                /// Delete the ephemeral node from the previous connection so we don't have to wait for keeper to do it automatically.
-                zk->tryRemove(alive_node_path);
+            /// Delete the ephemeral node from the previous connection so we don't have to wait for keeper to do it automatically.
+            zk->tryRemove(alive_node_path);
 
-                zk->createAncestors(alive_node_path);
-                zk->create(alive_node_path, "", zkutil::CreateMode::Ephemeral);
-            }
+            zk->createAncestors(alive_node_path);
+            zk->create(alive_node_path, "", zkutil::CreateMode::Ephemeral);
         })
 {
     createRootNodes();

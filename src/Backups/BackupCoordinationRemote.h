@@ -103,9 +103,10 @@ private:
     const bool is_internal;
     Poco::Logger * const log;
 
-    /// The order of these two fields matters, because stage_sync holds a reference to with_retries object
+    /// The order of these fields matters, because `stage_sync` & `concurrency_finder` hold a reference to with_retries object.
     mutable WithRetries with_retries;
     std::optional<BackupCoordinationStageSync> stage_sync;
+    std::optional<BackupCoordinationRemoteConcurrencyFinder> concurrency_finder;
 
     mutable std::optional<BackupCoordinationReplicatedTables> TSA_GUARDED_BY(replicated_tables_mutex) replicated_tables;
     mutable std::optional<BackupCoordinationReplicatedAccess> TSA_GUARDED_BY(replicated_access_mutex) replicated_access;
