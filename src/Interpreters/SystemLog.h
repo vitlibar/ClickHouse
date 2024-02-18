@@ -142,8 +142,7 @@ private:
     /* Saving thread data */
     const StorageID table_id;
     const String storage_def;
-    const String create_query;
-    String old_create_query;
+    const ASTPtr create_query;
     bool is_prepared = false;
 
     /** Creates new table if it does not exist.

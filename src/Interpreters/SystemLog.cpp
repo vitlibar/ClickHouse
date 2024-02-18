@@ -5,7 +5,6 @@
 #include <Interpreters/CrashLog.h>
 #include <Interpreters/InterpreterCreateQuery.h>
 #include <Interpreters/InterpreterInsertQuery.h>
-#include <Interpreters/InterpreterRenameQuery.h>
 #include <Interpreters/MetricLog.h>
 #include <Interpreters/OpenTelemetrySpanLog.h>
 #include <Interpreters/PartLog.h>
@@ -23,13 +22,12 @@
 #include <Interpreters/S3QueueLog.h>
 #include <Interpreters/ZooKeeperLog.h>
 #include <Interpreters/BackupLog.h>
+#include <Interpreters/getOrCreateSystemFilledTable.h>
 #include <Parsers/ASTCreateQuery.h>
 #include <Parsers/ASTFunction.h>
 #include <Parsers/ASTIndexDeclaration.h>
 #include <Parsers/ASTInsertQuery.h>
-#include <Parsers/ASTRenameQuery.h>
 #include <Parsers/ParserCreateQuery.h>
-#include <Parsers/formatAST.h>
 #include <Parsers/parseQuery.h>
 #include <Processors/Executors/PushingPipelineExecutor.h>
 #include <Storages/IStorage.h>
@@ -49,13 +47,7 @@ namespace DB
 namespace ErrorCodes
 {
     extern const int BAD_ARGUMENTS;
-    extern const int LOGICAL_ERROR;
     extern const int NOT_IMPLEMENTED;
-}
-
-namespace ActionLocks
-{
-    extern const StorageActionBlockType PartsMerge;
 }
 
 namespace
@@ -256,19 +248,6 @@ std::shared_ptr<TSystemLog> createSystemLog(
     return std::make_shared<TSystemLog>(context, log_settings);
 }
 
-
-/// returns CREATE TABLE query, but with removed UUID
-/// That way it can be used to compare with the SystemLog::getCreateTableQuery()
-ASTPtr getCreateTableQueryClean(const StorageID & table_id, ContextPtr context)
-{
-    DatabasePtr database = DatabaseCatalog::instance().getDatabase(table_id.database_name);
-    ASTPtr old_ast = database->getCreateTableQuery(table_id.table_name, context);
-    auto & old_create_query_ast = old_ast->as<ASTCreateQuery &>();
-    /// Reset UUID
-    old_create_query_ast.uuid = UUIDHelpers::Nil;
-    return old_ast;
-}
-
 }
 
 
@@ -398,7 +377,7 @@ SystemLog<LogElement>::SystemLog(
     , log(getLogger("SystemLog (" + settings_.queue_settings.database + "." + settings_.queue_settings.table + ")"))
     , table_id(settings_.queue_settings.database, settings_.queue_settings.table)
     , storage_def(settings_.engine)
-    , create_query(serializeAST(*getCreateTableQuery()))
+    , create_query(getCreateTableQuery())
 {
     assert(settings_.queue_settings.database == DatabaseCatalog::SYSTEM_DATABASE);
 }
@@ -540,91 +519,15 @@ void SystemLog<LogElement>::flushImpl(const std::vector<LogElement> & to_flush, 
 template <typename LogElement>
 void SystemLog<LogElement>::prepareTable()
 {
-    String description = table_id.getNameForLogs();
+    bool check_create_query_if_exists = !is_prepared;
+    auto table_created = getOrCreateSystemFilledTable(getContext(), create_query, check_create_query_if_exists).second;
 
-    auto table = DatabaseCatalog::instance().tryGetTable(table_id, getContext());
-    if (table)
-    {
-        if (old_create_query.empty())
-        {
-            old_create_query = serializeAST(*getCreateTableQueryClean(table_id, getContext()));
-            if (old_create_query.empty())
-                throw Exception(ErrorCodes::LOGICAL_ERROR, "Empty CREATE QUERY for {}", backQuoteIfNeed(table_id.table_name));
-        }
-
-        if (old_create_query != create_query)
-        {
-            /// TODO: Handle altering comment, because otherwise all table will be renamed.
-
-            /// Rename the existing table.
-            int suffix = 0;
-            while (DatabaseCatalog::instance().isTableExist(
-                {table_id.database_name, table_id.table_name + "_" + toString(suffix)}, getContext()))
-                ++suffix;
-
-            auto rename = std::make_shared<ASTRenameQuery>();
-            ASTRenameQuery::Element elem
-            {
-                ASTRenameQuery::Table
-                {
-                    table_id.database_name.empty() ? nullptr : std::make_shared<ASTIdentifier>(table_id.database_name),
-                    std::make_shared<ASTIdentifier>(table_id.table_name)
-                },
-                ASTRenameQuery::Table
-                {
-                    table_id.database_name.empty() ? nullptr : std::make_shared<ASTIdentifier>(table_id.database_name),
-                    std::make_shared<ASTIdentifier>(table_id.table_name + "_" + toString(suffix))
-                }
-            };
-
-            LOG_DEBUG(
-                log,
-                "Existing table {} for system log has obsolete or different structure. Renaming it to {}.\nOld: {}\nNew: {}\n.",
-                description,
-                backQuoteIfNeed(elem.to.getTable()),
-                old_create_query,
-                create_query);
-
-            rename->elements.emplace_back(std::move(elem));
-
-            ActionLock merges_lock;
-            if (DatabaseCatalog::instance().getDatabase(table_id.database_name)->getUUID() == UUIDHelpers::Nil)
-                merges_lock = table->getActionLock(ActionLocks::PartsMerge);
-
-            auto query_context = Context::createCopy(context);
-            /// As this operation is performed automatically we don't want it to fail because of user dependencies on log tables
-            query_context->setSetting("check_table_dependencies", Field{false});
-            query_context->setSetting("check_referential_table_dependencies", Field{false});
-            query_context->makeQueryContext();
-            InterpreterRenameQuery(rename, query_context).execute();
-
-            /// The required table will be created.
-            table = nullptr;
-        }
-        else if (!is_prepared)
-            LOG_DEBUG(log, "Will use existing table {} for {}", description, LogElement::name());
-    }
-
-    if (!table)
-    {
-        /// Create the table.
-        LOG_DEBUG(log, "Creating new table {} for {}", description, LogElement::name());
-
-        auto query_context = Context::createCopy(context);
-        query_context->makeQueryContext();
-
-        auto create_query_ast = getCreateTableQuery();
-        InterpreterCreateQuery interpreter(create_query_ast, query_context);
-        interpreter.setInternal(true);
-        interpreter.execute();
-
-        table = DatabaseCatalog::instance().getTable(table_id, getContext());
-
-        old_create_query.clear();
-    }
+    if (!is_prepared && !table_created)
+        LOG_DEBUG(log, "Will use existing table {}", table_id.getNameForLogs());
 
     is_prepared = true;
 }
+
 
 template <typename LogElement>
 ASTPtr SystemLog<LogElement>::getCreateTableQuery()
