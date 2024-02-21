@@ -66,6 +66,7 @@
 #include <Storages/System/attachInformationSchemaTables.h>
 #include <Storages/Cache/ExternalDataSourceCache.h>
 #include <Storages/Cache/registerRemoteFileMetadatas.h>
+#include <Storages/Prometheus/PrometheusStorages.h>
 #include <Common/NamedCollections/NamedCollectionUtils.h>
 #include <AggregateFunctions/registerAggregateFunctions.h>
 #include <Functions/UserDefined/IUserDefinedSQLObjectsStorage.h>
@@ -1490,6 +1491,8 @@ try
             NamedCollectionUtils::reloadFromConfig(*config);
 
             FileCacheFactory::instance().updateSettingsFromConfig(*config);
+
+            PrometheusStorages::instance().reloadConfiguration(*config);
 
             ProfileEvents::increment(ProfileEvents::MainConfigLoads);
 
