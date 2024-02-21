@@ -98,6 +98,7 @@
 #include <Server/KeeperReadinessHandler.h>
 #include <Server/HTTP/HTTPServer.h>
 #include <Interpreters/AsynchronousInsertQueue.h>
+#include <Prometheus/PrometheusStorages.h>
 #include <Core/ServerSettings.h>
 #include <filesystem>
 #include <unordered_set>
@@ -1490,6 +1491,8 @@ try
             NamedCollectionUtils::reloadFromConfig(*config);
 
             FileCacheFactory::instance().updateSettingsFromConfig(*config);
+
+            PrometheusStorages::instance().reloadConfiguration(*config);
 
             ProfileEvents::increment(ProfileEvents::MainConfigLoads);
 
