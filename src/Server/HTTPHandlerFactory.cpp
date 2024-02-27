@@ -11,6 +11,7 @@
 #include "ReplicasStatusHandler.h"
 #include "InterserverIOHTTPHandler.h"
 #include "PrometheusRequestHandler.h"
+#include "PrometheusApiRequestHandler.h"
 #include "WebUIRequestHandler.h"
 
 
@@ -65,6 +66,8 @@ static inline auto createHandlersFactoryFromConfig(
                 main_handler_factory->addHandler(createPredefinedHandlerFactory(server, config, prefix + "." + key));
             else if (handler_type == "prometheus")
                 main_handler_factory->addHandler(createPrometheusHandlerFactory(server, config, async_metrics, prefix + "." + key));
+            else if (handler_type == "prometheus_storage")
+                main_handler_factory->addHandler(createPrometheusApiHandlerFactory(server, config, prefix + "." + key));
             else if (handler_type == "replicas_status")
                 main_handler_factory->addHandler(createReplicasStatusHandlerFactory(server, config, prefix + "." + key));
             else
@@ -114,6 +117,8 @@ HTTPRequestHandlerFactoryPtr createHandlerFactory(IServer & server, const Poco::
         return createInterserverHTTPHandlerFactory(server, name);
     else if (name == "PrometheusHandler-factory")
         return createPrometheusMainHandlerFactory(server, config, async_metrics, name);
+    else if (name == "PrometheusApiHandler-factory")
+        return createPrometheusApiMainHandlerFactory(server, config, name);
 
     throw Exception(ErrorCodes::LOGICAL_ERROR, "LOGICAL ERROR: Unknown HTTP handler factory name.");
 }

@@ -55,6 +55,7 @@ bool ServerType::shouldStart(Type server_type, const std::string & server_custom
             case Type::GRPC:
             case Type::POSTGRESQL:
             case Type::PROMETHEUS:
+            case Type::PROMETHEUS_API:
             case Type::INTERSERVER_HTTP:
             case Type::INTERSERVER_HTTPS:
                 return true;
@@ -127,6 +128,9 @@ bool ServerType::shouldStop(const std::string & port_name) const
 
     else if (port_name == "prometheus.port")
         port_type = Type::PROMETHEUS;
+
+    else if (port_name == "prometheus.api.port")
+        port_type = Type::PROMETHEUS_API;
 
     else if (port_name == "interserver_http_port")
         port_type = Type::INTERSERVER_HTTP;

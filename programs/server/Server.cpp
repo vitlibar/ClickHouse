@@ -160,6 +160,8 @@ namespace ProfileEvents
     extern const Event InterfaceHTTPReceiveBytes;
     extern const Event InterfacePrometheusSendBytes;
     extern const Event InterfacePrometheusReceiveBytes;
+    extern const Event InterfacePrometheusApiSendBytes;
+    extern const Event InterfacePrometheusApiReceiveBytes;
     extern const Event InterfaceInterserverSendBytes;
     extern const Event InterfaceInterserverReceiveBytes;
     extern const Event InterfaceMySQLSendBytes;
@@ -2107,6 +2109,10 @@ std::unique_ptr<TCPProtocolStackFactory> Server::buildProtocolStackFromConfig(
             return TCPServerConnectionFactory::Ptr(
                 new HTTPServerConnectionFactory(httpContext(), http_params, createHandlerFactory(*this, config, async_metrics, "PrometheusHandler-factory"), ProfileEvents::InterfacePrometheusReceiveBytes, ProfileEvents::InterfacePrometheusSendBytes)
             );
+        if (type == "prometheus_api")
+            return TCPServerConnectionFactory::Ptr(
+                new HTTPServerConnectionFactory(httpContext(), http_params, createPrometheusApiHandlerFactory(*this, config, conf_name), ProfileEvents::InterfacePrometheusApiReceiveBytes, ProfileEvents::InterfacePrometheusApiSendBytes)
+            );
         if (type == "interserver")
             return TCPServerConnectionFactory::Ptr(
                 new HTTPServerConnectionFactory(httpContext(), http_params, createHandlerFactory(*this, config, async_metrics, "InterserverIOHTTPHandler-factory"), ProfileEvents::InterfaceInterserverReceiveBytes, ProfileEvents::InterfaceInterserverSendBytes)
@@ -2406,6 +2412,25 @@ void Server::createServers(
                     "Prometheus: http://" + address.toString(),
                     std::make_unique<HTTPServer>(
                         httpContext(), createHandlerFactory(*this, config, async_metrics, "PrometheusHandler-factory"), server_pool, socket, http_params, ProfileEvents::InterfacePrometheusReceiveBytes, ProfileEvents::InterfacePrometheusSendBytes));
+            });
+        }
+
+        if (server_type.shouldStart(ServerType::Type::PROMETHEUS_API))
+        {
+            /// Prometheus (if defined and not setup yet with http_port)
+            port_name = "prometheus.api.port";
+            createServer(config, listen_host, port_name, listen_try, start_servers, servers, [&](UInt16 port) -> ProtocolServerAdapter
+            {
+                Poco::Net::ServerSocket socket;
+                auto address = socketBindListen(config, socket, listen_host, port);
+                socket.setReceiveTimeout(settings.http_receive_timeout);
+                socket.setSendTimeout(settings.http_send_timeout);
+                return ProtocolServerAdapter(
+                    listen_host,
+                    port_name,
+                    "PrometheusApi: http://" + address.toString(),
+                    std::make_unique<HTTPServer>(
+                        httpContext(), createHandlerFactory(*this, config, async_metrics, "PrometheusApiHandler-factory"), server_pool, socket, http_params, ProfileEvents::InterfacePrometheusApiReceiveBytes, ProfileEvents::InterfacePrometheusApiSendBytes));
             });
         }
     }

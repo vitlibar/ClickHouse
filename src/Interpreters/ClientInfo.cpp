@@ -253,6 +253,8 @@ String toString(ClientInfo::Interface interface)
             return "LOCAL";
         case ClientInfo::Interface::TCP_INTERSERVER:
             return "TCP_INTERSERVER";
+        case ClientInfo::Interface::PROMETHEUS_API:
+            return "PROMETHEUS_API";
     }
 
     return std::format("Unknown {}!\n", static_cast<int>(interface));

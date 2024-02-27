@@ -20,6 +20,7 @@ public:
         GRPC,
         POSTGRESQL,
         PROMETHEUS,
+        PROMETHEUS_API,
         CUSTOM,
         INTERSERVER_HTTP,
         INTERSERVER_HTTPS,

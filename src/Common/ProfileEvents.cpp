@@ -608,6 +608,8 @@ The server successfully detected this situation and will download merged part fr
     M(InterfaceNativeReceiveBytes, "Number of bytes received through native interfaces") \
     M(InterfacePrometheusSendBytes, "Number of bytes sent through Prometheus interfaces") \
     M(InterfacePrometheusReceiveBytes, "Number of bytes received through Prometheus interfaces") \
+    M(InterfacePrometheusApiSendBytes, "Number of bytes sent through Prometheus HTTP API, Remote Read, Remote Write interfaces") \
+    M(InterfacePrometheusApiReceiveBytes, "Number of bytes received through Prometheus HTTP API, Remote Read, Remote Write interfaces") \
     M(InterfaceInterserverSendBytes, "Number of bytes sent through interserver interfaces") \
     M(InterfaceInterserverReceiveBytes, "Number of bytes received through interserver interfaces") \
     M(InterfaceMySQLSendBytes, "Number of bytes sent through MySQL interfaces") \
