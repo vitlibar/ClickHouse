@@ -39,7 +39,8 @@ public:
     /// This method is called right before the query execution.
     virtual void customizeContext(HTTPServerRequest & /* request */, ContextMutablePtr /* context */, ReadBuffer & /* body */) {}
 
-    virtual bool customizeQueryParam(ContextMutablePtr context, const std::string & key, const std::string & value) = 0;
+    virtual bool canCustomizeQueryParam(const std::string & /* key */) const { return false; }
+    virtual void customizeQueryParam(ContextMutablePtr /* context */, const std::string & /* key */, const std::string & /* value */) {}
 
     virtual std::string getQuery(HTTPServerRequest & request, HTMLForm & params, ContextMutablePtr context) = 0;
 
@@ -160,7 +161,8 @@ public:
 
     std::string getQuery(HTTPServerRequest & request, HTMLForm & params, ContextMutablePtr context) override;
 
-    bool customizeQueryParam(ContextMutablePtr context, const std::string &key, const std::string &value) override;
+    bool canCustomizeQueryParam(const std::string & key) const override;
+    void customizeQueryParam(ContextMutablePtr context, const std::string & key, const std::string & value) override;
 };
 
 class PredefinedQueryHandler : public HTTPHandler
@@ -180,7 +182,8 @@ public:
 
     std::string getQuery(HTTPServerRequest & request, HTMLForm & params, ContextMutablePtr context) override;
 
-    bool customizeQueryParam(ContextMutablePtr context, const std::string & key, const std::string & value) override;
+    bool canCustomizeQueryParam(const std::string & key) const override;
+    void customizeQueryParam(ContextMutablePtr context, const std::string & key, const std::string & value) override;
 };
 
 }
