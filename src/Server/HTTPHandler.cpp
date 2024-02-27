@@ -1,8 +1,6 @@
 #include <Server/HTTPHandler.h>
 
-#include <Access/Authentication.h>
 #include <Access/Credentials.h>
-#include <Access/ExternalAuthenticators.h>
 #include <Compression/CompressedReadBuffer.h>
 #include <Compression/CompressedWriteBuffer.h>
 #include <Core/ExternalTable.h>
@@ -35,27 +33,16 @@
 #include <base/getFQDNOrHostName.h>
 #include <base/scope_guard.h>
 #include <Server/HTTP/HTTPResponse.h>
+#include <Server/HTTP/authenticateUserByHTTP.h>
 #include <Server/HTTP/exceptionCodeToHTTPStatus.h>
+#include <Server/HTTP/getSettingsOverridesFromHTTPQuery.h>
 
 #include "config.h"
-
-#include <Poco/Base64Decoder.h>
-#include <Poco/Base64Encoder.h>
-#include <Poco/Net/HTTPBasicCredentials.h>
-#include <Poco/Net/HTTPStream.h>
-#include <Poco/MemoryStream.h>
-#include <Poco/StreamCopier.h>
-#include <Poco/String.h>
-#include <Poco/Net/SocketAddress.h>
 
 #include <algorithm>
 #include <chrono>
 #include <memory>
 #include <sstream>
-
-#if USE_SSL
-#include <Poco/Net/X509Certificate.h>
-#endif
 
 
 namespace DB
@@ -163,26 +150,6 @@ void processOptionsRequest(HTTPServerResponse & response, const Poco::Util::Laye
 }
 }
 
-static String base64Decode(const String & encoded)
-{
-    String decoded;
-    Poco::MemoryInputStream istr(encoded.data(), encoded.size());
-    Poco::Base64Decoder decoder(istr);
-    Poco::StreamCopier::copyToString(decoder, decoded);
-    return decoded;
-}
-
-static String base64Encode(const String & decoded)
-{
-    std::ostringstream ostr; // STYLE_CHECK_ALLOW_STD_STRING_STREAM
-    ostr.exceptions(std::ios::failbit);
-    Poco::Base64Encoder encoder(ostr);
-    encoder.rdbuf()->setLineLength(0);
-    encoder << decoded;
-    encoder.close();
-    return ostr.str();
-}
-
 static std::chrono::steady_clock::duration parseSessionTimeout(
     const Poco::Util::AbstractConfiguration & config,
     const HTMLForm & params)
@@ -259,204 +226,9 @@ HTTPHandler::HTTPHandler(IServer & server_, const std::string & name, const std:
 HTTPHandler::~HTTPHandler() = default;
 
 
-bool HTTPHandler::authenticateUser(
-    HTTPServerRequest & request,
-    HTMLForm & params,
-    HTTPServerResponse & response)
+bool HTTPHandler::authenticateUser(HTTPServerRequest & request, HTMLForm & params, HTTPServerResponse & response)
 {
-    using namespace Poco::Net;
-
-    /// The user and password can be passed by headers (similar to X-Auth-*),
-    /// which is used by load balancers to pass authentication information.
-    std::string user = request.get("X-ClickHouse-User", "");
-    std::string password = request.get("X-ClickHouse-Key", "");
-    std::string quota_key = request.get("X-ClickHouse-Quota", "");
-
-    /// The header 'X-ClickHouse-SSL-Certificate-Auth: on' enables checking the common name
-    /// extracted from the SSL certificate used for this connection instead of checking password.
-    bool has_ssl_certificate_auth = (request.get("X-ClickHouse-SSL-Certificate-Auth", "") == "on");
-    bool has_auth_headers = !user.empty() || !password.empty() || !quota_key.empty() || has_ssl_certificate_auth;
-
-    /// User name and password can be passed using HTTP Basic auth or query parameters
-    /// (both methods are insecure).
-    bool has_http_credentials = request.hasCredentials();
-    bool has_credentials_in_query_params = params.has("user") || params.has("password") || params.has("quota_key");
-
-    std::string spnego_challenge;
-    std::string certificate_common_name;
-
-    if (has_auth_headers)
-    {
-        /// It is prohibited to mix different authorization schemes.
-        if (has_http_credentials)
-            throw Exception(ErrorCodes::AUTHENTICATION_FAILED,
-                            "Invalid authentication: it is not allowed "
-                            "to use SSL certificate authentication and Authorization HTTP header simultaneously");
-        if (has_credentials_in_query_params)
-            throw Exception(ErrorCodes::AUTHENTICATION_FAILED,
-                            "Invalid authentication: it is not allowed "
-                            "to use SSL certificate authentication and authentication via parameters simultaneously simultaneously");
-
-        if (has_ssl_certificate_auth)
-        {
-#if USE_SSL
-            if (!password.empty())
-                throw Exception(ErrorCodes::AUTHENTICATION_FAILED,
-                                "Invalid authentication: it is not allowed "
-                                "to use SSL certificate authentication and authentication via password simultaneously");
-
-            if (request.havePeerCertificate())
-                certificate_common_name = request.peerCertificate().commonName();
-
-            if (certificate_common_name.empty())
-                throw Exception(ErrorCodes::AUTHENTICATION_FAILED,
-                                "Invalid authentication: SSL certificate authentication requires nonempty certificate's Common Name");
-#else
-            throw Exception(ErrorCodes::SUPPORT_IS_DISABLED,
-                            "SSL certificate authentication disabled because ClickHouse was built without SSL library");
-#endif
-        }
-    }
-    else if (has_http_credentials)
-    {
-        /// It is prohibited to mix different authorization schemes.
-        if (has_credentials_in_query_params)
-            throw Exception(ErrorCodes::AUTHENTICATION_FAILED,
-                            "Invalid authentication: it is not allowed "
-                            "to use Authorization HTTP header and authentication via parameters simultaneously");
-
-        std::string scheme;
-        std::string auth_info;
-        request.getCredentials(scheme, auth_info);
-
-        if (Poco::icompare(scheme, "Basic") == 0)
-        {
-            HTTPBasicCredentials credentials(auth_info);
-            user = credentials.getUsername();
-            password = credentials.getPassword();
-        }
-        else if (Poco::icompare(scheme, "Negotiate") == 0)
-        {
-            spnego_challenge = auth_info;
-
-            if (spnego_challenge.empty())
-                throw Exception(ErrorCodes::AUTHENTICATION_FAILED, "Invalid authentication: SPNEGO challenge is empty");
-        }
-        else
-        {
-            throw Exception(ErrorCodes::AUTHENTICATION_FAILED, "Invalid authentication: '{}' HTTP Authorization scheme is not supported", scheme);
-        }
-
-        quota_key = params.get("quota_key", "");
-    }
-    else
-    {
-        /// If the user name is not set we assume it's the 'default' user.
-        user = params.get("user", "default");
-        password = params.get("password", "");
-        quota_key = params.get("quota_key", "");
-    }
-
-    if (!certificate_common_name.empty())
-    {
-        if (!request_credentials)
-            request_credentials = std::make_unique<SSLCertificateCredentials>(user, certificate_common_name);
-
-        auto * certificate_credentials = dynamic_cast<SSLCertificateCredentials *>(request_credentials.get());
-        if (!certificate_credentials)
-            throw Exception(ErrorCodes::AUTHENTICATION_FAILED, "Invalid authentication: expected SSL certificate authorization scheme");
-    }
-    else if (!spnego_challenge.empty())
-    {
-        if (!request_credentials)
-            request_credentials = server.context()->makeGSSAcceptorContext();
-
-        auto * gss_acceptor_context = dynamic_cast<GSSAcceptorContext *>(request_credentials.get());
-        if (!gss_acceptor_context)
-            throw Exception(ErrorCodes::AUTHENTICATION_FAILED, "Invalid authentication: unexpected 'Negotiate' HTTP Authorization scheme expected");
-
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wunreachable-code"
-        const auto spnego_response = base64Encode(gss_acceptor_context->processToken(base64Decode(spnego_challenge), log));
-#pragma clang diagnostic pop
-
-        if (!spnego_response.empty())
-            response.set("WWW-Authenticate", "Negotiate " + spnego_response);
-
-        if (!gss_acceptor_context->isFailed() && !gss_acceptor_context->isReady())
-        {
-            if (spnego_response.empty())
-                throw Exception(ErrorCodes::AUTHENTICATION_FAILED, "Invalid authentication: 'Negotiate' HTTP Authorization failure");
-
-            response.setStatusAndReason(HTTPResponse::HTTP_UNAUTHORIZED);
-            response.send();
-            return false;
-        }
-    }
-    else // I.e., now using user name and password strings ("Basic").
-    {
-        if (!request_credentials)
-            request_credentials = std::make_unique<BasicCredentials>();
-
-        auto * basic_credentials = dynamic_cast<BasicCredentials *>(request_credentials.get());
-        if (!basic_credentials)
-            throw Exception(ErrorCodes::AUTHENTICATION_FAILED, "Invalid authentication: expected 'Basic' HTTP Authorization scheme");
-
-        basic_credentials->setUserName(user);
-        basic_credentials->setPassword(password);
-    }
-
-    /// Set client info. It will be used for quota accounting parameters in 'setUser' method.
-
-    ClientInfo::HTTPMethod http_method = ClientInfo::HTTPMethod::UNKNOWN;
-    if (request.getMethod() == HTTPServerRequest::HTTP_GET)
-        http_method = ClientInfo::HTTPMethod::GET;
-    else if (request.getMethod() == HTTPServerRequest::HTTP_POST)
-        http_method = ClientInfo::HTTPMethod::POST;
-
-    session->setHttpClientInfo(http_method, request.get("User-Agent", ""), request.get("Referer", ""));
-    session->setForwardedFor(request.get("X-Forwarded-For", ""));
-    session->setQuotaClientKey(quota_key);
-
-    /// Extract the last entry from comma separated list of forwarded_for addresses.
-    /// Only the last proxy can be trusted (if any).
-    String forwarded_address = session->getClientInfo().getLastForwardedFor();
-    try
-    {
-        if (!forwarded_address.empty() && server.config().getBool("auth_use_forwarded_address", false))
-            session->authenticate(*request_credentials, Poco::Net::SocketAddress(forwarded_address, request.clientAddress().port()));
-        else
-            session->authenticate(*request_credentials, request.clientAddress());
-    }
-    catch (const Authentication::Require<BasicCredentials> & required_credentials)
-    {
-        request_credentials = std::make_unique<BasicCredentials>();
-
-        if (required_credentials.getRealm().empty())
-            response.set("WWW-Authenticate", "Basic");
-        else
-            response.set("WWW-Authenticate", "Basic realm=\"" + required_credentials.getRealm() + "\"");
-
-        response.setStatusAndReason(HTTPResponse::HTTP_UNAUTHORIZED);
-        response.send();
-        return false;
-    }
-    catch (const Authentication::Require<GSSAcceptorContext> & required_credentials)
-    {
-        request_credentials = server.context()->makeGSSAcceptorContext();
-
-        if (required_credentials.getRealm().empty())
-            response.set("WWW-Authenticate", "Negotiate");
-        else
-            response.set("WWW-Authenticate", "Negotiate realm=\"" + required_credentials.getRealm() + "\"");
-
-        response.setStatusAndReason(HTTPResponse::HTTP_UNAUTHORIZED);
-        response.send();
-        return false;
-    }
-
-    request_credentials.reset();
-    return true;
+    return authenticateUserByHTTP(request, params, response, *session, request_credentials, server.context(), log);
 }
 
 
@@ -629,65 +401,9 @@ void HTTPHandler::processQuery(
 
     std::unique_ptr<ReadBuffer> in;
 
-    static const NameSet reserved_param_names{"compress", "decompress", "user", "password", "quota_key", "query_id", "stacktrace",
-        "buffer_size", "wait_end_of_query", "session_id", "session_timeout", "session_check", "client_protocol_version", "close_session"};
-
-    Names reserved_param_suffixes;
-
-    auto param_could_be_skipped = [&] (const String & name)
-    {
-        /// Empty parameter appears when URL like ?&a=b or a=b&&c=d. Just skip them for user's convenience.
-        if (name.empty())
-            return true;
-
-        if (reserved_param_names.contains(name))
-            return true;
-
-        for (const String & suffix : reserved_param_suffixes)
-        {
-            if (endsWith(name, suffix))
-                return true;
-        }
-
-        return false;
-    };
-
-    /// Settings can be overridden in the query.
-    /// Some parameters (database, default_format, everything used in the code above) do not
-    /// belong to the Settings class.
-
-    /// 'readonly' setting values mean:
-    /// readonly = 0 - any query is allowed, client can change any setting.
-    /// readonly = 1 - only readonly queries are allowed, client can't change settings.
-    /// readonly = 2 - only readonly queries are allowed, client can change any setting except 'readonly'.
-
-    /// In theory if initially readonly = 0, the client can change any setting and then set readonly
-    /// to some other value.
-    const auto & settings = context->getSettingsRef();
-
-    /// Anything else beside HTTP POST should be readonly queries.
-    if (request.getMethod() != HTTPServerRequest::HTTP_POST)
-    {
-        if (settings.readonly == 0)
-            context->setSetting("readonly", 2);
-    }
-
-    bool has_external_data = startsWith(request.getContentType(), "multipart/form-data");
-
-    if (has_external_data)
-    {
-        /// Skip unneeded parameters to avoid confusing them later with context settings or query parameters.
-        reserved_param_suffixes.reserve(3);
-        /// It is a bug and ambiguity with `date_time_input_format` and `low_cardinality_allow_in_native_format` formats/settings.
-        reserved_param_suffixes.emplace_back("_format");
-        reserved_param_suffixes.emplace_back("_types");
-        reserved_param_suffixes.emplace_back("_structure");
-    }
-
     std::string database = request.get("X-ClickHouse-Database", "");
     std::string default_format = request.get("X-ClickHouse-Format", "");
 
-    SettingsChanges settings_changes;
     for (const auto & [key, value] : params)
     {
         if (key == "database")
@@ -700,14 +416,9 @@ void HTTPHandler::processQuery(
             if (default_format.empty())
                 default_format = value;
         }
-        else if (param_could_be_skipped(key))
+        else if (canCustomizeQueryParam(key))
         {
-        }
-        else
-        {
-            /// Other than query parameters are treated as settings.
-            if (!customizeQueryParam(context, key, value))
-                settings_changes.push_back({key, value});
+            customizeQueryParam(context, key, value);
         }
     }
 
@@ -717,7 +428,38 @@ void HTTPHandler::processQuery(
     if (!default_format.empty())
         context->setDefaultFormat(default_format);
 
-    /// For external data we also want settings
+    const auto & settings = context->getSettingsRef();
+    bool has_external_data = startsWith(request.getContentType(), "multipart/form-data");
+
+    /// Settings can be overridden in the query.
+    auto can_query_param_be_setting = [&](const String & key)
+    {
+        /// Some parameters (database, default_format, everything used in the code above) do not
+        /// belong to the Settings class.
+        static const NameSet reserved_param_names{"compress", "decompress", "user", "password", "quota_key", "query_id", "stacktrace",
+            "buffer_size", "wait_end_of_query", "session_id", "session_timeout", "session_check", "client_protocol_version", "close_session",
+            "database", "default_format"};
+
+        if (reserved_param_names.contains(key))
+            return false;
+
+        /// For external data we also want settings.
+        if (has_external_data)
+        {
+            /// Skip unneeded parameters to avoid confusing them later with context settings or query parameters.
+            /// It is a bug and ambiguity with `date_time_input_format` and `low_cardinality_allow_in_native_format` formats/settings.
+            static const Names reserved_param_suffixes = {"_format", "_types", "_structure"};
+            for (const String & suffix : reserved_param_suffixes)
+            {
+                if (endsWith(key, suffix))
+                    return false;
+            }
+        }
+
+        return !canCustomizeQueryParam(key);
+    };
+
+    auto settings_changes = getSettingsOverridesFromHTTPQuery(request, params, settings, can_query_param_be_setting);
     context->checkSettingsConstraints(settings_changes, SettingSource::QUERY);
     context->applySettingsChanges(settings_changes);
 
@@ -1053,10 +795,15 @@ DynamicQueryHandler::DynamicQueryHandler(IServer & server_, const std::string & 
 {
 }
 
-bool DynamicQueryHandler::customizeQueryParam(ContextMutablePtr context, const std::string & key, const std::string & value)
+bool DynamicQueryHandler::canCustomizeQueryParam(const std::string & key) const
+{
+    return (key == param_name) || startsWith(key, QUERY_PARAMETER_NAME_PREFIX);
+}
+
+void DynamicQueryHandler::customizeQueryParam(ContextMutablePtr context, const std::string & key, const std::string & value)
 {
     if (key == param_name)
-        return true;    /// do nothing
+        return; /// do nothing
 
     if (startsWith(key, QUERY_PARAMETER_NAME_PREFIX))
     {
@@ -1065,10 +812,7 @@ bool DynamicQueryHandler::customizeQueryParam(ContextMutablePtr context, const s
 
         if (!context->getQueryParameters().contains(parameter_name))
             context->setQueryParameter(parameter_name, value);
-        return true;
     }
-
-    return false;
 }
 
 std::string DynamicQueryHandler::getQuery(HTTPServerRequest & request, HTMLForm & params, ContextMutablePtr context)
@@ -1119,12 +863,17 @@ PredefinedQueryHandler::PredefinedQueryHandler(
 {
 }
 
-bool PredefinedQueryHandler::customizeQueryParam(ContextMutablePtr context, const std::string & key, const std::string & value)
+bool PredefinedQueryHandler::canCustomizeQueryParam(const std::string & key) const
+{
+    return receive_params.contains(key) || startsWith(key, QUERY_PARAMETER_NAME_PREFIX);
+}
+
+void PredefinedQueryHandler::customizeQueryParam(ContextMutablePtr context, const std::string & key, const std::string & value)
 {
     if (receive_params.contains(key))
     {
         context->setQueryParameter(key, value);
-        return true;
+        return;
     }
 
     if (startsWith(key, QUERY_PARAMETER_NAME_PREFIX))
@@ -1134,10 +883,7 @@ bool PredefinedQueryHandler::customizeQueryParam(ContextMutablePtr context, cons
 
         if (receive_params.contains(parameter_name))
             context->setQueryParameter(parameter_name, value);
-        return true;
     }
-
-    return false;
 }
 
 void PredefinedQueryHandler::customizeContext(HTTPServerRequest & request, ContextMutablePtr context, ReadBuffer & body)
