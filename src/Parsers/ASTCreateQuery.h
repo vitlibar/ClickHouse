@@ -47,6 +47,19 @@ public:
 };
 
 
+class ASTStorageWithComment : public IAST
+{
+public:
+    ASTPtr storage;
+    ASTPtr comment;
+
+    String getID(char) const override { return "Storage with comment definition"; }
+
+    ASTPtr clone() const override;
+    void formatImpl(const FormatSettings & s, FormatState & state, FormatStateStacked frame) const override;
+};
+
+
 class ASTExpressionList;
 
 class ASTColumns : public IAST

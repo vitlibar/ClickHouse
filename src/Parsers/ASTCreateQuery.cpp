@@ -81,6 +81,24 @@ bool ASTStorage::isExtendedStorageDefinition() const
 }
 
 
+ASTPtr ASTStorageWithComment::clone() const
+{
+    return std::make_shared<ASTStorageWithComment>(*this);
+}
+
+void ASTStorageWithComment::formatImpl(const FormatSettings & s, FormatState & state, FormatStateStacked frame) const
+{
+    if (storage)
+        storage->formatImpl(s, state, frame);
+
+    if (comment)
+    {
+        s.ostr << (s.hilite ? hilite_keyword : "") << s.nl_or_ws << "COMMENT  " << (s.hilite ? hilite_none : "");
+        comment->formatImpl(s, state, frame);
+    }
+}
+
+
 class ASTColumnsElement : public IAST
 {
 public:

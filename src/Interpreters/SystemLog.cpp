@@ -52,56 +52,6 @@ namespace ErrorCodes
 
 namespace
 {
-    class StorageWithComment : public IAST
-    {
-    public:
-        ASTPtr storage;
-        ASTPtr comment;
-
-        String getID(char) const override { return "Storage with comment definition"; }
-
-        ASTPtr clone() const override
-        {
-            throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Method clone is not supported");
-        }
-
-        void formatImpl(const FormatSettings &, FormatState &, FormatStateStacked) const override
-        {
-            throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Method formatImpl is not supported");
-        }
-    };
-
-    class ParserStorageWithComment : public IParserBase
-    {
-    protected:
-        const char * getName() const override { return "storage definition with comment"; }
-        bool parseImpl(Pos & pos, ASTPtr & node, Expected & expected) override
-        {
-            ParserStorage storage_p{ParserStorage::TABLE_ENGINE};
-            ASTPtr storage;
-
-            if (!storage_p.parse(pos, storage, expected))
-                return false;
-
-            ParserKeyword s_comment("COMMENT");
-            ParserStringLiteral string_literal_parser;
-            ASTPtr comment;
-
-            if (s_comment.ignore(pos, expected))
-                string_literal_parser.parse(pos, comment, expected);
-
-            auto storage_with_comment = std::make_shared<StorageWithComment>();
-            storage_with_comment->storage = std::move(storage);
-            storage_with_comment->comment = std::move(comment);
-
-            node = storage_with_comment;
-            return true;
-        }
-    };
-}
-
-namespace
-{
 
 constexpr size_t DEFAULT_METRIC_LOG_COLLECT_INTERVAL_MILLISECONDS = 1000;
 
@@ -209,7 +159,7 @@ std::shared_ptr<TSystemLog> createSystemLog(
     }
 
     /// Validate engine definition syntax to prevent some configuration errors.
-    ParserStorageWithComment storage_parser;
+    ParserStorageWithComment storage_parser{ParserStorage::TABLE_ENGINE};
 
     parseQuery(storage_parser, log_settings.engine.data(), log_settings.engine.data() + log_settings.engine.size(),
             "Storage to create table for " + config_prefix, 0, DBMS_DEFAULT_MAX_PARSER_DEPTH);
@@ -546,13 +496,13 @@ ASTPtr SystemLog<LogElement>::getCreateTableQuery()
 
     create->set(create->columns_list, new_columns_list);
 
-    ParserStorageWithComment storage_parser;
+    ParserStorageWithComment storage_parser{ParserStorage::TABLE_ENGINE};
 
     ASTPtr storage_with_comment_ast = parseQuery(
         storage_parser, storage_def.data(), storage_def.data() + storage_def.size(),
         "Storage to create table for " + LogElement::name(), 0, DBMS_DEFAULT_MAX_PARSER_DEPTH);
 
-    StorageWithComment & storage_with_comment = storage_with_comment_ast->as<StorageWithComment &>();
+    const auto & storage_with_comment = storage_with_comment_ast->as<const ASTStorageWithComment &>();
 
     create->set(create->storage, storage_with_comment.storage);
     create->set(create->comment, storage_with_comment.comment);

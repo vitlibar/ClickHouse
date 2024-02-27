@@ -589,6 +589,35 @@ bool ParserStorage::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
 }
 
 
+bool ParserStorageWithComment::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
+{
+    ParserStorage storage_p{engine_kind};
+    ASTPtr storage;
+
+    if (!storage_p.parse(pos, storage, expected))
+        return false;
+
+    auto pos_before_comment = pos;
+
+    ParserKeyword s_comment("COMMENT");
+    ParserStringLiteral string_literal_parser;
+    ASTPtr comment;
+
+    if (s_comment.ignore(pos, expected))
+    {
+        if (!string_literal_parser.parse(pos, comment, expected))
+            pos = pos_before_comment;
+    }
+
+    auto storage_with_comment = std::make_shared<ASTStorageWithComment>();
+    storage_with_comment->storage = std::move(storage);
+    storage_with_comment->comment = std::move(comment);
+
+    node = storage_with_comment;
+    return true;
+}
+
+
 bool ParserCreateTableQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
 {
     ParserKeyword s_create("CREATE");
