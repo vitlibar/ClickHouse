@@ -10,6 +10,7 @@
 #include <Common/CurrentMetrics.h>
 #include <Common/Exception.h>
 #include <Common/ProfileEvents.h>
+#include <Common/Config/tryGetFromConfiguration.h>
 
 #include <Poco/Util/LayeredConfiguration.h>
 
@@ -41,8 +42,7 @@ PrometheusApiRequestHandler::PrometheusApiRequestHandler(
     : server(server_)
     , config(config_)
     , default_settings(server.context()->getSettingsRef())
-    , prometheus_storage(PrometheusStorages::instance().getPrometheusStorage(config.prometheus_storage_id))
-    , log(getLogger("PrometheusApiRequestHandler(" + config.prometheus_storage_id + ")"))
+    , log(getLogger("PrometheusApiRequestHandler(" + config.log_name + ")"))
 {
 }
 
@@ -65,17 +65,21 @@ void PrometheusApiRequestHandler::handleRequest(HTTPServerRequest & request, HTT
         if (params.getParsed<bool>("stacktrace", false) && server.config().getBool("enable_http_stacktrace", true))
             with_stacktrace = true;
 
-        if (!config.remote_write.empty() && (request.getURI() == config.remote_write))
+        if (config.metrics && (request.getURI() == config.metrics->path))
+        {
+            handleMetrics(request, params, response);
+        }
+        if (config.remote_write && (request.getURI() == config.remote_write->path))
         {
             handleRemoteWrite(request, params, response);
         }
-        else if (!config.remote_read.empty() && (request.getURI() == config.remote_read))
+        else if (config.remote_read && (request.getURI() == config.remote_read->path))
         {
             handleRemoteRead(request, params, response);
         }
-        else if (!config.instant_query.empty() && (request.getURI() == config.instant_query))
+        else if (config.query && (request.getURI() == config.query->path))
         {
-            handleInstantQuery(request, params, response);
+            handleQuery(request, params, response);
         }
         else
         {
@@ -95,8 +99,40 @@ void PrometheusApiRequestHandler::handleRequest(HTTPServerRequest & request, HTT
 }
 
 
+void PrometheusApiRequestHandler::handleMetrics(HTTPServerRequest &, const HTMLForm &, HTTPServerResponse &)
+{
+    LOG_INFO(log, "Handling metrics request");
+
+    PrometheusMetricsWriter metrics_writer{async_metrics, config.metrics->send_system_events, 
+        config.metrics->send_system_metrics, config.metrics->send_system_asynchronous_metrics,
+        config.metrics->send_system_errors};
+
+    /// In order to make keep-alive works.
+    if (request.getVersion() == HTTPServerRequest::HTTP_1_1)
+        response.setChunkedTransferEncoding(true);
+
+    auto keep_alive_timeout = server.config().getUInt("keep_alive_timeout", DEFAULT_HTTP_KEEP_ALIVE_TIMEOUT);
+    setResponseDefaultHeaders(response, keep_alive_timeout);
+
+    response.setContentType("text/plain; version=0.0.4; charset=UTF-8");
+
+    WriteBufferFromHTTPServerResponse wb(response, request.getMethod() == Poco::Net::HTTPRequest::HTTP_HEAD, keep_alive_timeout, write_event);
+    try
+    {
+        metrics_writer.write(wb);
+        wb.finalize();
+    }
+    catch (...)
+    {
+        wb.finalize();
+    }
+}
+
+
 void PrometheusApiRequestHandler::handleRemoteWrite(HTTPServerRequest & request, const HTMLForm & params, HTTPServerResponse & response)
 {
+    LOG_INFO(log, "Handling remote write to {}", config.remote_write->storage);
+
     if (!authenticateUserAndMakeSession(request, params, response))
         return;
 
@@ -116,6 +152,8 @@ void PrometheusApiRequestHandler::handleRemoteWrite(HTTPServerRequest & request,
             "PrometheusApiRequestHandler::handleRequest: request: key={}, value={}", k, v);
 
     /// method=POST, content_type=application/x-protobuf, context_length=5985
+
+    auto prometheus_storage = PrometheusStorages::instance().getPrometheusStorage(config.remote_write->storage);
 
     LOG_INFO(&Poco::Logger::get("!!!"), "Reading & uncompressing data");
     ProtobufZeroCopyInputStreamFromReadBuffer zero_copy_input_stream{std::make_unique<SnappyReadBuffer>(wrapReadBufferReference(request.getStream()))};
@@ -140,13 +178,15 @@ void PrometheusApiRequestHandler::handleRemoteWrite(HTTPServerRequest & request,
 
 void PrometheusApiRequestHandler::handleRemoteRead(HTTPServerRequest &, const HTMLForm &, HTTPServerResponse &)
 {
+    LOG_INFO(log, "Handling remote read to {}", config.remote_read->storage);
     throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Remote read not implemented");
 }
 
 
-void PrometheusApiRequestHandler::handleInstantQuery(HTTPServerRequest &, const HTMLForm &, HTTPServerResponse &)
+void PrometheusApiRequestHandler::handleQuery(HTTPServerRequest &, const HTMLForm &, HTTPServerResponse &)
 {
-    throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Instant queries not implemented");
+    LOG_INFO(log, "Handling query to {}", config.query->storage);
+    throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Queries not implemented");
 }
 
 
@@ -215,21 +255,111 @@ void PrometheusApiRequestHandler::trySendExceptionToClient(const std::string & s
 }
 
 
+namespace
+{
+    PrometheusApiRequestHandler::Configuration loadPrometheusConfig(const Poco::Util::AbstractConfiguration & config,
+                                                                    const std::string & config_prefix)
+    {
+        PrometheusApiRequestHandler::Configuration prometheus_config;
+        if (config.has(config_prefix + ".remote_write"))
+        {
+            /// <prometheus>
+            ///     <port>9363</port>
+            ///     <remote_write>
+            ///         <path>/write</path>
+            ///         <storage>prometheus_1</storage>
+            ///     </remote_write>
+            /// </prometheus>
+            prometheus_config.remote_write.emplace();
+            prometheus_config.remote_write->path = config.getString(config_prefix + ".remote_write.path", "/write");
+            prometheus_config.remote_write->storage = config.getString(config_prefix + ".remote_write.storage");
+        }
+
+        if (config.has(config_prefix + ".remote_read"))
+        {
+            /// <prometheus>
+            ///     <port>9363</port>
+            ///     <remote_read>
+            ///         <path>/read</path>
+            ///         <storage>prometheus_1</storage>
+            ///     </remote_read>
+            /// </prometheus>
+            prometheus_config.remote_read.emplace();
+            prometheus_config.remote_read->path = config.getString(config_prefix + ".remote_read.path", "/read");
+            prometheus_config.remote_read->storage = config.getString(config_prefix + ".remote_read.storage");
+        }
+
+        if (config.has(config_prefix + ".query"))
+        {
+            /// <prometheus>
+            ///     <port>9363</port>
+            ///     <query>
+            ///         <path>/query</path>
+            ///         <storage>prometheus_1</storage>
+            ///     </query>
+            /// </prometheus>
+            prometheus_config.query.emplace();
+            prometheus_config.query->path = config.getString(config_prefix + ".query.path", "/read");
+            prometheus_config.query->storage = config.getString(config_prefix + ".query.storage");
+        }
+
+        LOG_INFO(&Poco::Logger::get("!!!"), "X = {}", config.has(config_prefix + ".metrics"));
+        LOG_INFO(&Poco::Logger::get("!!!"), "Y = '{}'", canGetBoolFromConfiguration(config, config_prefix + ".metrics"));
+
+        if (config.has(config_prefix + ".metrics") && !canGetBoolFromConfiguration(config, config_prefix + ".metrics"))
+        {
+            /// New format for metrics:
+            /// <prometheus>
+            ///     <port>9363</port>
+            ///     <metrics>
+            ///         <path>/metrics</path>
+            ///         <send_system_metrics>true</send_system_metrics>
+            ///         <send_system_events>true</send_system_events>
+            ///         <send_system_asynchronous_metrics>true</send_system_asynchronous_metrics>
+            ///         <send_system_errors>true</send_system_errors>
+            ///     </metrics>
+            /// </prometheus>
+            prometheus_config.metrics.emplace();
+            prometheus_config.metrics->path = config.getString(config_prefix + ".metrics.path", "/metrics");
+            prometheus_config.metrics->send_system_metrics = config.getBool(config_prefix + ".metrics.send_system_metrics", true);
+            prometheus_config.metrics->send_system_events = config.getBool(config_prefix + ".metrics.send_system_events", true);
+            prometheus_config.metrics->send_system_asynchronous_metrics = config.getBool(config_prefix + ".metrics.send_system_asynchronous_metrics", true);
+            prometheus_config.metrics->send_system_errors = config.getBool(config_prefix + ".metrics.send_system_errors", true);
+        }
+
+        if (config.has(config_prefix + ".endpoint") || canGetBoolFromConfiguration(config, config_prefix + ".metrics")
+            || (!prometheus_config.metrics && !prometheus_config.remote_write && !prometheus_config.remote_read
+                && !prometheus_config.query))
+        {
+            /// Old format for metrics:
+            /// <prometheus>
+            ///     <port>9363</port>
+            ///     <endpoint>/metrics</endpoint>
+            ///     <metrics>true</metrics>
+            ///     <events>true</events>
+            ///     <asynchronous_metrics>true</asynchronous_metrics>
+            ///     <errors>true</errors>
+            /// </prometheus>
+            prometheus_config.metrics.emplace();
+            prometheus_config.metrics->path = config.getString(config_prefix + ".metrics.endpoint", "/metrics");
+            prometheus_config.metrics->send_system_metrics = config.getBool(config_prefix + ".metrics", true);
+            prometheus_config.metrics->send_system_events = config.getBool(config_prefix + ".events", true);
+            prometheus_config.metrics->send_system_asynchronous_metrics = config.getBool(config_prefix + ".asynchronous_metrics", true);
+            prometheus_config.metrics->send_system_errors = config.getBool(config_prefix + ".errors", true);
+        }
+
+        prometheus_config.log_name = config_prefix;
+        return prometheus_config;
+    }
+}
+
+
 HTTPRequestHandlerFactoryPtr createPrometheusApiHandlerFactory(
     IServer & server,
     const Poco::Util::AbstractConfiguration & config,
     const std::string & config_prefix)
 {
-    if (!config.has(config_prefix + ".storage"))
-        throw Exception(ErrorCodes::NO_ELEMENTS_IN_CONFIG,
-                        "Prometheus storage is not specified for {} (no element {} in the configuration)",
-                        config_prefix, config_prefix + ".storage");
-
-    PrometheusApiRequestHandler::Configuration prometheus_config;
-    prometheus_config.prometheus_storage_id = config.getString(config_prefix + ".storage");
-    prometheus_config.remote_write = config.getString(config_prefix + ".remote_write", "");
-    prometheus_config.remote_read = config.getString(config_prefix + ".remote_read", "");
-    prometheus_config.instant_query = config.getString(config_prefix + ".instant_query", "");
+    PrometheusApiRequestHandler::Configuration prometheus_config = loadPrometheusConfig(config, config_prefix);
 
     auto creator = [&server, prometheus_config]() -> std::unique_ptr<PrometheusApiRequestHandler>
     {
@@ -241,15 +371,18 @@ HTTPRequestHandlerFactoryPtr createPrometheusApiHandlerFactory(
     auto filter = [prometheus_config](const HTTPServerRequest & request) -> bool
     {
         auto method = request.getMethod();
-        if ((method == Poco::Net::HTTPRequest::HTTP_GET) || (method == Poco::Net::HTTPRequest::HTTP_POST))
-        {
-            if (!prometheus_config.remote_write.empty() && (request.getURI() == prometheus_config.remote_write))
-                return (method == Poco::Net::HTTPRequest::HTTP_POST);
-            if (!prometheus_config.remote_read.empty() && (request.getURI() == prometheus_config.remote_read))
-                return true;
-            if (!prometheus_config.instant_query.empty() && (request.getURI() == prometheus_config.instant_query))
-                return true;
-        }
+        bool is_get = (method == Poco::Net::HTTPRequest::HTTP_GET);
+        bool is_post = (method == Poco::Net::HTTPRequest::HTTP_POST);
+
+        if (prometheus_config.metrics && (request.getURI() == prometheus_config.metrics->path))
+            return is_get;
+        if (prometheus_config.remote_write && (request.getURI() == prometheus_config.remote_write->path))
+            return is_post;
+        if (prometheus_config.remote_read && (request.getURI() == prometheus_config.remote_read->path))
+            return is_get || is_post;
+        if (prometheus_config.query && (request.getURI() == prometheus_config.query->path))
+            return is_get || is_post;
+
         return false;
     };
 
@@ -262,7 +395,7 @@ HTTPRequestHandlerFactoryPtr createPrometheusApiMainHandlerFactory(
     IServer & server, const Poco::Util::AbstractConfiguration & config, const std::string & name)
 {
     auto factory = std::make_shared<HTTPRequestHandlerFactoryMain>(name);
-    factory->addHandler(createPrometheusApiHandlerFactory(server, config, "prometheus.api"));
+    factory->addHandler(createPrometheusApiHandlerFactory(server, config, "prometheus"));
     return factory;
 }
 

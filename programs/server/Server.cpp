@@ -2396,7 +2396,7 @@ void Server::createServers(
             });
         }
 #endif
-        if (server_type.shouldStart(ServerType::Type::PROMETHEUS))
+        /*if (server_type.shouldStart(ServerType::Type::PROMETHEUS))
         {
             /// Prometheus (if defined and not setup yet with http_port)
             port_name = "prometheus.port";
@@ -2413,12 +2413,12 @@ void Server::createServers(
                     std::make_unique<HTTPServer>(
                         httpContext(), createHandlerFactory(*this, config, async_metrics, "PrometheusHandler-factory"), server_pool, socket, http_params, ProfileEvents::InterfacePrometheusReceiveBytes, ProfileEvents::InterfacePrometheusSendBytes));
             });
-        }
+        }*/
 
         if (server_type.shouldStart(ServerType::Type::PROMETHEUS_API))
         {
             /// Prometheus (if defined and not setup yet with http_port)
-            port_name = "prometheus.api.port";
+            port_name = "prometheus.port";
             createServer(config, listen_host, port_name, listen_try, start_servers, servers, [&](UInt16 port) -> ProtocolServerAdapter
             {
                 Poco::Net::ServerSocket socket;
