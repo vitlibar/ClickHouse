@@ -33,6 +33,7 @@
 #include <Server/HTTP/HTTPServer.h>
 #include <Server/TCPServer.h>
 #include <Server/HTTPHandlerFactory.h>
+#include <Server/Prometheus/PrometheusHandlerFactory.h>
 #include <Server/KeeperReadinessHandler.h>
 
 #include "Core/Defines.h"
@@ -493,7 +494,7 @@ try
                 port_name,
                 "Prometheus: http://" + address.toString(),
                 std::make_unique<HTTPServer>(
-                    std::move(my_http_context), createPrometheusMainHandlerFactory(*this, config_getter(), async_metrics, "PrometheusHandler-factory"), server_pool, socket, http_params));
+                    std::move(my_http_context), createPrometheusMainHandlerFactory(*this, config_getter(), "PrometheusHandler-factory", async_metrics), server_pool, socket, http_params));
         });
 
         /// HTTP control endpoints

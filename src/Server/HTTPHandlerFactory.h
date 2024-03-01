@@ -124,18 +124,6 @@ HTTPRequestHandlerFactoryPtr createReplicasStatusHandlerFactory(IServer & server
     const Poco::Util::AbstractConfiguration & config,
     const std::string & config_prefix);
 
-HTTPRequestHandlerFactoryPtr
-createPrometheusHandlerFactory(IServer & server,
-    const Poco::Util::AbstractConfiguration & config,
-    AsynchronousMetrics & async_metrics,
-    const std::string & config_prefix);
-
-HTTPRequestHandlerFactoryPtr
-createPrometheusMainHandlerFactory(IServer & server,
-    const Poco::Util::AbstractConfiguration & config,
-    AsynchronousMetrics & async_metrics,
-    const std::string & name);
-
 /// @param server - used in handlers to check IServer::isCancelled()
 /// @param config - not the same as server.config(), since it can be newer
 /// @param async_metrics - used for prometheus (in case of prometheus.asynchronous_metrics=true)

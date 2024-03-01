@@ -1,6 +1,7 @@
-#include "PrometheusMetricsWriter.h"
+#include <Server/Prometheus/PrometheusMetricsWriter.h>
 
 #include <IO/WriteHelpers.h>
+#include <Common/AsynchronousMetrics.h>
 #include <Common/re2.h>
 #include <algorithm>
 
@@ -45,13 +46,12 @@ namespace DB
 {
 
 PrometheusMetricsWriter::PrometheusMetricsWriter(
-    const Poco::Util::AbstractConfiguration & config, const std::string & config_name,
-    const AsynchronousMetrics & async_metrics_)
-    : async_metrics(async_metrics_)
-    , send_events(config.getBool(config_name + ".events", true))
-    , send_metrics(config.getBool(config_name + ".metrics", true))
-    , send_asynchronous_metrics(config.getBool(config_name + ".asynchronous_metrics", true))
-    , send_errors(config.getBool(config_name + ".errors", true))
+    bool send_metrics_, bool send_asynchronous_metrics_, bool send_events_, bool send_errors_, const AsynchronousMetrics & async_metrics_)
+    : send_metrics(send_metrics_)
+    , send_asynchronous_metrics(send_asynchronous_metrics_)
+    , send_events(send_events_)
+    , send_errors(send_errors_)
+    , async_metrics(async_metrics_)
 {
 }
 

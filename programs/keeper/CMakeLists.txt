@@ -63,8 +63,10 @@ if (BUILD_STANDALONE_KEEPER)
         ${CMAKE_CURRENT_SOURCE_DIR}/../../src/Server/NotFoundHandler.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../../src/Server/ProtocolServerAdapter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../../src/Server/CertificateReloader.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../src/Server/PrometheusRequestHandler.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../src/Server/PrometheusMetricsWriter.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../src/Server/Prometheus/PrometheusBaseHandler.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../src/Server/Prometheus/PrometheusMetricsHandler.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../src/Server/Prometheus/PrometheusMetricsWriter.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../src/Server/Prometheus/PrometheusHandlerFactory.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../../src/Server/waitServersToFinish.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../../src/Server/ServerType.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../../src/Server/HTTPRequestHandlerFactoryMain.cpp
@@ -76,6 +78,7 @@ if (BUILD_STANDALONE_KEEPER)
         ${CMAKE_CURRENT_SOURCE_DIR}/../../src/Server/HTTP/HTTPServerResponse.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../../src/Server/HTTP/HTTPServerConnectionFactory.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../../src/Server/HTTP/WriteBufferFromHTTPServerResponse.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../src/Server/HTTP/exceptionCodeToHTTPStatus.cpp
 
         ${CMAKE_CURRENT_SOURCE_DIR}/../../src/Compression/CachedCompressedReadBuffer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../../src/Compression/CheckingCompressedReadBuffer.cpp
