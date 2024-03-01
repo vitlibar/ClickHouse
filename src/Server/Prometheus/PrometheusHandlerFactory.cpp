@@ -2,7 +2,13 @@
 
 #include <Server/HTTPHandlerFactory.h>
 #include <Server/Prometheus/PrometheusBaseHandler.h>
+
+#ifdef CLICKHOUSE_KEEPER_STANDALONE_BUILD
 #include <Server/Prometheus/PrometheusMetricsHandler.h>
+#else
+#include <Server/Prometheus/PrometheusHandler.h>
+#endif
+
 
 
 namespace DB
@@ -17,12 +23,15 @@ HTTPRequestHandlerFactoryPtr createPrometheusHandlerFactory(
     PrometheusBaseHandler::Configuration prometheus_config;
     prometheus_config.loadConfig(config, config_prefix);
 
-    auto creator = [&server, prometheus_config, &async_metrics]()
-    {
-        return std::make_unique<PrometheusMetricsHandler>(server, prometheus_config, async_metrics);
-    };
-
-    auto factory = std::make_shared<HandlingRuleHTTPHandlerFactory<PrometheusMetricsHandler>>(std::move(creator));
+#ifdef CLICKHOUSE_KEEPER_STANDALONE_BUILD
+    auto factory = std::make_shared<HandlingRuleHTTPHandlerFactory<PrometheusMetricsHandler>>(
+        [&server, prometheus_config, &async_metrics]()
+        { return std::make_unique<PrometheusMetricsHandler>(server, prometheus_config, async_metrics); });
+#else
+    auto factory = std::make_shared<HandlingRuleHTTPHandlerFactory<PrometheusHandler>>(
+        [&server, prometheus_config, &async_metrics]()
+        { return std::make_unique<PrometheusHandler>(server, prometheus_config, async_metrics); });
+#endif
 
     auto filter = [prometheus_config](const HTTPServerRequest & request) -> bool { return prometheus_config.filterRequest(request); };
     factory->addFilter(filter);
