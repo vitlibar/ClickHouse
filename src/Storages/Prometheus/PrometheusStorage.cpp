@@ -11,12 +11,18 @@
 #include <Interpreters/Context.h>
 #include <Interpreters/InterpreterCreateQuery.h>
 #include <Interpreters/InterpreterInsertQuery.h>
+#include <Interpreters/InterpreterSelectQuery.h>
 #include <Interpreters/getOrCreateSystemFilledTable.h>
 #include <Parsers/ASTCreateQuery.h>
 #include <Parsers/ASTInsertQuery.h>
 #include <Parsers/ParserCreateQuery.h>
 #include <Parsers/formatAST.h>
 #include <Parsers/parseQuery.h>
+#include <Parsers/ASTIdentifier.h>
+#include <Parsers/makeASTForLogicalFunction.h>
+#include <Parsers/ASTSelectQuery.h>
+#include <Parsers/ASTTablesInSelectQuery.h>
+#include <Processors/Executors/PullingPipelineExecutor.h>
 #include <Processors/Executors/PushingPipelineExecutor.h>
 #include <Storages/IStorage.h>
 #include <Storages/MergeTree/MergeTreeSettings.h>
@@ -30,6 +36,7 @@ namespace ErrorCodes
 {
     extern const int PROMETHEUS_STORAGE_NOT_FOUND;
     extern const int INVALID_PROMETHEUS_LABELS;
+    extern const int BAD_REQUEST_PARAMETER;
     extern const int LOGICAL_ERROR;
 }
 
@@ -180,6 +187,26 @@ namespace
         return sip_hash.get128();
     }
 
+    void sortLabels(std::vector<std::pair<std::string_view, std::string_view>> & labels)
+    {
+        auto less_by_label_name = [](const std::pair<std::string_view, std::string_view> & left, const std::pair<std::string_view, std::string_view> & right)
+        {
+            return left.first < right.first;
+        };
+
+        std::sort(labels.begin(), labels.end(), less_by_label_name);
+    }
+
+    void sortTimeSeries(std::vector<std::pair<Int64, Float64>> & time_series)
+    {
+        auto less_by_timestamp = [](const std::pair<Int64, Float64> & left, const std::pair<Int64, Float64> & right)
+        {
+            return left.first < right.first;
+        };
+
+        std::sort(time_series.begin(), time_series.end(), less_by_timestamp);
+    }
+
     std::string_view metricTypeToString(prometheus::MetricMetadata::MetricType metric_type)
     {
         using namespace std::literals;
@@ -197,6 +224,154 @@ namespace
         }
         return "";
     }
+
+    /// Makes an AST for condition `timestamp >= start_timestamp_ms`
+    ASTPtr makeASTFilterForMinTimestamp(Int64 start_timestamp_ms)
+    {
+        return makeASTFunction("greaterOrEquals", std::make_shared<ASTIdentifier>("timestamp"),
+                               std::make_shared<ASTLiteral>(Field{DecimalField{DateTime64{start_timestamp_ms}, 3}}));
+    }
+
+    /// Makes an AST for condition `timestamp <= end_timestamp_ms`
+    ASTPtr makeASTFilterForMaxTimestamp(Int64 end_timestamp_ms)
+    {
+        return makeASTFunction("lessOrEquals", std::make_shared<ASTIdentifier>("timestamp"),
+                               std::make_shared<ASTLiteral>(Field{DecimalField{DateTime64{end_timestamp_ms}, 3}}));
+    }
+
+    ASTPtr makeASTForLabelName(const String & label_name)
+    {
+        if (label_name == "__name__")
+            return std::make_shared<ASTIdentifier>("metric_name");
+        else
+            return makeASTFunction("arrayElement", std::make_shared<ASTIdentifier>("labels"), std::make_shared<ASTLiteral>(label_name));
+    }
+
+    /// Makes an AST for the label matcher, for example `metric_name == 'value'` or `NOT match(labels['label_name'], 'regexp')`.
+    ASTPtr makeASTFilterForLabelMatcher(const prometheus::LabelMatcher & label_matcher)
+    {
+        const auto & label_name = label_matcher.name();
+        const auto & label_value = label_matcher.value();
+        auto type = label_matcher.type();
+
+        if (type == prometheus::LabelMatcher::EQ)
+            return makeASTFunction("equals", makeASTForLabelName(label_name), std::make_shared<ASTLiteral>(label_value));
+        else if (type == prometheus::LabelMatcher::NEQ)
+            return makeASTFunction("notEquals", makeASTForLabelName(label_name), std::make_shared<ASTLiteral>(label_value));
+        else if (type == prometheus::LabelMatcher::RE)
+            return makeASTFunction("match", makeASTForLabelName(label_name), std::make_shared<ASTLiteral>(label_value));
+        else if (type == prometheus::LabelMatcher::NRE)
+            return makeASTFunction("not", makeASTFunction("match", makeASTForLabelName(label_name), std::make_shared<ASTLiteral>(label_value)));
+        else
+            throw Exception(ErrorCodes::BAD_REQUEST_PARAMETER, "Unexpected type of label matcher: {}", type);
+    }
+
+    ASTPtr makeASTFilterForReadingTimeSeries(Int64 start_timestamp_ms,
+                                             Int64 end_timestamp_ms,
+                                             const google::protobuf::RepeatedPtrField<prometheus::LabelMatcher> & label_matcher)
+    {
+        ASTs filters;
+
+        if (start_timestamp_ms)
+            filters.push_back(makeASTFilterForMinTimestamp(start_timestamp_ms));
+
+        if (end_timestamp_ms)
+            filters.push_back(makeASTFilterForMaxTimestamp(end_timestamp_ms));
+
+        for (const auto & label_matcher_element : label_matcher)
+            filters.push_back(makeASTFilterForLabelMatcher(label_matcher_element));
+
+        if (filters.empty())
+            return nullptr;
+        
+        return makeASTForLogicalAnd(std::move(filters));
+    }
+
+    /// Makes the following AST:
+    /// SELECT any(metric_name), any(labels), groupArray((timestamp, value))
+    /// FROM prometheus.time_series
+    /// SEMI LEFT JOIN prometheus.labels ON prometheus.time_series.labels_hash = prometheus.labels.labels_hash
+    /// WHERE <filter>
+    /// GROUP BY labels_hash
+    ASTPtr buildSelectQueryForReadingTimeSeriesImpl(const StorageID & time_series_table_id,
+                                                    const StorageID & labels_table_id,
+                                                    Int64 start_timestamp_ms,
+                                                    Int64 end_timestamp_ms,
+                                                    const google::protobuf::RepeatedPtrField<prometheus::LabelMatcher> & label_matcher)
+    {
+        auto select_query = std::make_shared<ASTSelectQuery>();
+
+        /// SELECT any(metric_name), any(labels), groupArray((timestamp, value))
+        {
+            auto exp_list = std::make_shared<ASTExpressionList>();
+
+            exp_list->children.push_back(
+                makeASTFunction("any",
+                                std::make_shared<ASTIdentifier>("metric_name")));
+
+            exp_list->children.push_back(
+                makeASTFunction("any",
+                                std::make_shared<ASTIdentifier>("labels")));
+
+            exp_list->children.push_back(
+                makeASTFunction("groupArray",
+                                makeASTFunction("tuple",
+                                                std::make_shared<ASTIdentifier>("timestamp"), std::make_shared<ASTIdentifier>("value"))));
+
+            select_query->setExpression(ASTSelectQuery::Expression::SELECT, exp_list);
+        }
+
+        /// FROM prometheus.time_series
+        auto tables = std::make_shared<ASTTablesInSelectQuery>();
+
+        {
+            auto table = std::make_shared<ASTTablesInSelectQueryElement>();
+            auto table_exp = std::make_shared<ASTTableExpression>();
+            table_exp->database_and_table_name = std::make_shared<ASTTableIdentifier>(time_series_table_id);
+            table_exp->children.emplace_back(table_exp->database_and_table_name);
+
+            table->table_expression = table_exp;
+            tables->children.push_back(table);
+        }
+
+        /// SEMI LEFT JOIN prometheus.labels ON prometheus.time_series.labels_hash = prometheus.labels.labels_hash
+        {
+            auto table = std::make_shared<ASTTablesInSelectQueryElement>();
+
+            auto table_join = std::make_shared<ASTTableJoin>();
+            table_join->kind = JoinKind::Left;
+            table_join->strictness = JoinStrictness::Semi;
+
+            table_join->on_expression =
+                makeASTFunction("equals",
+                                std::make_shared<ASTIdentifier>(Strings{time_series_table_id.database_name, time_series_table_id.table_name, "labels_hash"}),
+                                std::make_shared<ASTIdentifier>(Strings{labels_table_id.database_name, labels_table_id.table_name, "labels_hash"}));
+            table->table_join = table_join;
+
+            auto table_exp = std::make_shared<ASTTableExpression>();
+            table_exp->database_and_table_name = std::make_shared<ASTTableIdentifier>(labels_table_id);
+            table_exp->children.emplace_back(table_exp->database_and_table_name);
+
+            table->table_expression = table_exp;
+            tables->children.push_back(table);
+
+            select_query->setExpression(ASTSelectQuery::Expression::TABLES, tables);
+        }
+
+        /// WHERE <filter>
+        if (auto where = makeASTFilterForReadingTimeSeries(start_timestamp_ms, end_timestamp_ms, label_matcher))
+            select_query->setExpression(ASTSelectQuery::Expression::WHERE, std::move(where));
+
+        /// GROUP BY labels_hash
+        {
+            auto exp_list = std::make_shared<ASTExpressionList>();
+            exp_list->children.push_back(std::make_shared<ASTIdentifier>("labels_hash"));
+            select_query->setExpression(ASTSelectQuery::Expression::GROUP_BY, exp_list);
+        }
+
+        return select_query;
+    }
+
 }
 
 
@@ -375,23 +550,23 @@ struct PrometheusStorage::BlocksToInsert
 
 void PrometheusStorage::writeTimeSeries(const google::protobuf::RepeatedPtrField<prometheus::TimeSeries> & time_series, ContextPtr context)
 {
-    LOG_TRACE(log, "Writing time series");
+    LOG_TRACE(log, "Writing {} time series", time_series.size());
 
     prepareTables(context->getGlobalContext());
     insertToTables(toBlocks(time_series), context);
 
-    LOG_TRACE(log, "Time series have been written");
+    LOG_TRACE(log, "{} time series have been written", time_series.size());
 }
 
 
 void PrometheusStorage::writeMetricsMetadata(const google::protobuf::RepeatedPtrField<prometheus::MetricMetadata> & metrics_metadata, ContextPtr context)
 {
-    LOG_TRACE(log, "Writing metrics metadata");
+    LOG_TRACE(log, "Writing {} metrics metadata", metrics_metadata.size());
 
     prepareTables(context->getGlobalContext());
     insertToTables(toBlocks(metrics_metadata), context);
 
-    LOG_TRACE(log, "Metrics metadata has been written");
+    LOG_TRACE(log, "{} metrics metadata has been written", metrics_metadata.size());
 }
 
 
@@ -572,6 +747,139 @@ void PrometheusStorage::insertToTables(BlocksToInsert && blocks, ContextPtr cont
             executor.start();
             executor.push(std::move(block));
             executor.finish();
+        }
+    }
+}
+
+
+void PrometheusStorage::readTimeSeries(google::protobuf::RepeatedPtrField<prometheus::TimeSeries> & result_time_series,
+                                       Int64 start_timestamp_ms,
+                                       Int64 end_timestamp_ms,
+                                       const google::protobuf::RepeatedPtrField<prometheus::LabelMatcher> & label_matchers,
+                                       const prometheus::ReadHints & read_hints,
+                                       ContextPtr context)
+{
+    LOG_TRACE(log, "Reading time series");
+
+    result_time_series.Clear();
+
+    prepareTables(context->getGlobalContext());
+
+    ASTPtr select_query = buildSelectQueryForReadingTimeSeries(start_timestamp_ms, end_timestamp_ms, label_matchers, read_hints);
+
+    LOG_TRACE(log, "Executing query {}", select_query);
+
+    ContextMutablePtr select_context = Context::createCopy(context);
+    select_context->setCurrentQueryId("");
+    CurrentThread::QueryScope query_scope{select_context};
+
+    InterpreterSelectQuery interpreter(select_query, select_context, SelectQueryOptions{});
+    BlockIO io = interpreter.execute();
+    PullingPipelineExecutor executor(io.pipeline);
+
+    Block block;
+    while (executor.pull(block))
+    {
+        LOG_INFO(&Poco::Logger::get("!!!"), "readTimeSeries: pulled block with {} columns and {} rows", block.columns(), block.rows());
+        if (block)
+            appendBlockToTimeSeries(result_time_series, std::move(block));
+    }
+
+    LOG_TRACE(log, "{} time series have been read", result_time_series.size());
+}
+
+
+ASTPtr PrometheusStorage::buildSelectQueryForReadingTimeSeries(
+    Int64 start_timestamp_ms,
+    Int64 end_timestamp_ms,
+    const google::protobuf::RepeatedPtrField<prometheus::LabelMatcher> & label_matchers,
+    const prometheus::ReadHints &)
+{
+    StorageID time_series_table_id = StorageID::createEmpty();
+    StorageID labels_table_id = StorageID::createEmpty();
+    {
+        std::lock_guard lock{mutex};
+        time_series_table_id = table_ids[static_cast<size_t>(TableKind::TIME_SERIES)];
+        labels_table_id = table_ids[static_cast<size_t>(TableKind::LABELS)];
+    }
+    return buildSelectQueryForReadingTimeSeriesImpl(time_series_table_id, labels_table_id, start_timestamp_ms, end_timestamp_ms, label_matchers);
+}
+
+
+void PrometheusStorage::appendBlockToTimeSeries(google::protobuf::RepeatedPtrField<prometheus::TimeSeries> & result_time_series, Block && block)
+{
+    ColumnString * column_metric_name = nullptr;
+
+    ColumnMap * column_labels = nullptr;
+    ColumnString * column_labels_label_name = nullptr;
+    ColumnString * column_labels_label_value = nullptr;
+    ColumnArray::Offsets * column_labels_offset = nullptr;
+
+    ColumnArray * column_time_series = nullptr;
+    ColumnDecimal<DateTime64> * column_time_series_timestamp = nullptr;
+    ColumnFloat64 * column_time_series_value;
+    ColumnArray::Offsets * column_time_series_offset = nullptr;
+
+    auto assign_column_var = [](auto * & dest_column_ptr, const ColumnPtr & src_column)
+    {
+        dest_column_ptr = typeid_cast<std::remove_cvref_t<decltype(dest_column_ptr)>>(&src_column->assumeMutableRef());
+    };
+
+    auto assign_column_var_from_block = [&](auto * & dest_column_ptr, size_t column_pos)
+    {
+        assign_column_var(dest_column_ptr, block.getByPosition(column_pos).column);
+    };
+
+    assign_column_var_from_block(column_metric_name, 0);
+    assign_column_var_from_block(column_labels, 1);
+    assign_column_var_from_block(column_time_series, 2);
+
+    assign_column_var(column_labels_label_name, column_labels->getNestedData().getColumnPtr(0));
+    assign_column_var(column_labels_label_value, column_labels->getNestedData().getColumnPtr(1));
+    column_labels_offset = &column_labels->getNestedColumn().getOffsets();
+
+    assign_column_var(column_time_series_timestamp, typeid_cast<ColumnTuple &>(column_time_series->getData()).getColumnPtr(0));
+    assign_column_var(column_time_series_value, typeid_cast<ColumnTuple &>(column_time_series->getData()).getColumnPtr(1));
+    column_time_series_offset = &column_time_series->getOffsets();
+
+    size_t num_rows = block.rows();
+
+    std::vector<std::pair<std::string_view, std::string_view>> labels;
+    std::vector<std::pair<Int64, Float64>> time_series;
+
+    for (size_t i = 0; i != num_rows; ++i)
+    {
+        labels.clear();
+        size_t labels_start_offset = (*column_labels_offset)[i - 1];
+        size_t labels_end_offset = (*column_labels_offset)[i];
+        labels.reserve(labels_end_offset - labels_start_offset + 1);
+        labels.emplace_back("__name__", column_metric_name->getDataAt(i));
+        for (size_t j = labels_start_offset; j != labels_end_offset; ++j)
+            labels.emplace_back(column_labels_label_name->getDataAt(j), column_labels_label_value->getDataAt(j));
+        sortLabels(labels);
+
+        time_series.clear();
+        size_t time_series_start_offset = (*column_time_series_offset)[i - 1];
+        size_t time_series_end_offset = (*column_time_series_offset)[i];
+        time_series.reserve(time_series_end_offset - time_series_start_offset);
+        for (size_t j = time_series_start_offset; j != time_series_end_offset; ++j)
+            time_series.emplace_back(column_time_series_timestamp->getElement(j), column_time_series_value->getElement(j));
+        sortTimeSeries(time_series);
+
+        auto & new_time_series = *result_time_series.Add();
+
+        for (const auto & [label_name, label_value] : labels)
+        {
+            auto & new_label = *new_time_series.add_labels();
+            new_label.set_name(label_name);
+            new_label.set_value(label_value);
+        }
+        
+        for (const auto & [timestamp, value] : time_series)
+        {
+            auto & new_sample = *new_time_series.add_samples();
+            new_sample.set_timestamp(timestamp);
+            new_sample.set_value(value);
         }
     }
 }

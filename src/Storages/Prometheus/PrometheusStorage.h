@@ -29,6 +29,14 @@ public:
     /// Insert time series received by remote write protocol to our tables.
     void writeTimeSeries(const google::protobuf::RepeatedPtrField<prometheus::TimeSeries> & time_series, ContextPtr context);
 
+    /// Extracts time series from our tables in order to send them via remote read protocol.
+    void readTimeSeries(google::protobuf::RepeatedPtrField<prometheus::TimeSeries> & result_time_series,
+                        Int64 start_timestamp_ms,
+                        Int64 end_timestamp_ms,
+                        const google::protobuf::RepeatedPtrField<prometheus::LabelMatcher> & label_matcher,
+                        const prometheus::ReadHints & read_hints,
+                        ContextPtr context);
+
     /// Insert metrics metadata received by remote write protocol to our tables.
     void writeMetricsMetadata(const google::protobuf::RepeatedPtrField<prometheus::MetricMetadata> & metrics_metadata, ContextPtr context);
 
@@ -74,6 +82,14 @@ private:
 
     /// Inserts blocks into our tables.
     void insertToTables(BlocksToInsert && blocks, ContextPtr context);
+
+    ASTPtr buildSelectQueryForReadingTimeSeries(
+        Int64 start_timestamp_ms,
+        Int64 end_timestamp_ms,
+        const google::protobuf::RepeatedPtrField<prometheus::LabelMatcher> & label_matchers,
+        const prometheus::ReadHints & read_hints);
+
+    void appendBlockToTimeSeries(google::protobuf::RepeatedPtrField<prometheus::TimeSeries> & result_time_series, Block && block);
 
     const String prometheus_storage_id;
     const LoggerPtr log;

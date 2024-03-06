@@ -9,7 +9,9 @@
 #include <Interpreters/Context.h>
 #include <Interpreters/Session.h>
 #include <IO/Protobuf/ProtobufZeroCopyInputStreamFromReadBuffer.h>
+#include <IO/Protobuf/ProtobufZeroCopyOutputStreamFromWriteBuffer.h>
 #include <IO/SnappyReadBuffer.h>
+#include <IO/SnappyWriteBuffer.h>
 #include <Storages/Prometheus/PrometheusStorage.h>
 #include <Storages/Prometheus/PrometheusStorages.h>
 #include <Poco/Util/LayeredConfiguration.h>
@@ -66,6 +68,11 @@ void PrometheusHandler::handleRemoteWrite(HTTPServerRequest & request, HTTPServe
     handleWrapper(request, response, /* authenticate= */ true, [&] { handleRemoteWriteImpl(request, response); });
 }
 
+void PrometheusHandler::handleRemoteRead(HTTPServerRequest & request, HTTPServerResponse & response)
+{
+    handleWrapper(request, response, /* authenticate= */ true, [&] { handleRemoteReadImpl(request, response); });
+}
+
 void PrometheusHandler::handleRemoteWriteImpl(HTTPServerRequest & request, HTTPServerResponse & response)
 {
     LOG_INFO(log, "Handling remote write request from {}", request.get("User-Agent", ""));
@@ -78,7 +85,7 @@ void PrometheusHandler::handleRemoteWriteImpl(HTTPServerRequest & request, HTTPS
     ProtobufZeroCopyInputStreamFromReadBuffer zero_copy_input_stream{std::make_unique<SnappyReadBuffer>(wrapReadBufferReference(request.getStream()))};
 
     prometheus::WriteRequest write_request;
-    if (!write_request.ParsePartialFromZeroCopyStream(&zero_copy_input_stream))
+    if (!write_request.ParseFromZeroCopyStream(&zero_copy_input_stream))
         throw Exception(ErrorCodes::BAD_ARGUMENTS, "Cannot parse WriteRequest");
 
     if (write_request.timeseries_size())
@@ -89,6 +96,45 @@ void PrometheusHandler::handleRemoteWriteImpl(HTTPServerRequest & request, HTTPS
 
     response.setContentType("text/plain; charset=UTF-8");
     response.send();
+}
+
+
+void PrometheusHandler::handleRemoteReadImpl(HTTPServerRequest & request, HTTPServerResponse & response)
+{
+    LOG_INFO(log, "Handling remote read request from {}", request.get("User-Agent", ""));
+
+    checkHTTPHeaderSetToValue(request, "Content-Type", "application/x-protobuf");
+    checkHTTPHeaderSetToValue(request, "Content-Encoding", "snappy");
+
+    auto prometheus_storage = PrometheusStorages::instance().getPrometheusStorage(config.remote_write->storage);
+
+    ProtobufZeroCopyInputStreamFromReadBuffer zero_copy_input_stream{std::make_unique<SnappyReadBuffer>(wrapReadBufferReference(request.getStream()))};
+
+    prometheus::ReadRequest read_request;
+    if (!read_request.ParseFromZeroCopyStream(&zero_copy_input_stream))
+        throw Exception(ErrorCodes::BAD_ARGUMENTS, "Cannot parse ReadRequest");
+
+    prometheus::ReadResponse read_response;
+
+    size_t num_queries = read_request.queries_size();
+    for (size_t i = 0; i != num_queries; ++i)
+    {
+        const auto & query = read_request.queries(static_cast<int>(i));
+        auto & new_query_result = *read_response.add_results();
+
+        prometheus_storage->readTimeSeries(*new_query_result.mutable_timeseries(),
+                                           query.start_timestamp_ms(), query.end_timestamp_ms(), query.matchers(), query.hints(),
+                                           context);
+    }
+
+    LOG_INFO(&Poco::Logger::get("!!!"), "ReadResponse = {}", read_response.DebugString());
+
+    response.setContentType("application/x-protobuf");
+    response.set("Content-Encoding", "snappy");
+
+    ProtobufZeroCopyOutputStreamFromWriteBuffer zero_copy_output_stream{std::make_unique<SnappyWriteBuffer>(getOutputStream(response))};
+    read_response.SerializeToZeroCopyStream(&zero_copy_output_stream);
+    zero_copy_output_stream.finalize();
 }
 
 
