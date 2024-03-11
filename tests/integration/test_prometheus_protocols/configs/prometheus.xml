@@ -1,0 +1,25 @@
+<clickhouse>
+    <prometheus>
+        <storages>
+            <prometheus_1>
+                <time_series>
+                    <database>prometheus</database>
+                    <table>time_series</table>
+                </time_series>
+                <labels>
+                    <database>prometheus</database>
+                    <table>labels</table>
+                </labels>
+            </prometheus_1>
+        </storages>
+        <port>9092</port>
+        <remote_write>
+            <path>/write</path>
+            <storage>prometheus_1</storage>
+        </remote_write>
+        <remote_read>
+            <path>/read</path>
+            <storage>prometheus_1</storage>
+        </remote_read>
+    </prometheus>
+</clickhouse>
