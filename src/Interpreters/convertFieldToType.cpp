@@ -64,12 +64,14 @@ Field convertNumericTypeImpl(const Field & from)
 template <typename To>
 Field convertNumericType(const Field & from, const IDataType & type)
 {
-    if (from.getType() == Field::Types::UInt64 || from.getType() == Field::Types::Bool)
+    if (from.getType() == Field::Types::UInt64)
         return convertNumericTypeImpl<UInt64, To>(from);
     if (from.getType() == Field::Types::Int64)
         return convertNumericTypeImpl<Int64, To>(from);
     if (from.getType() == Field::Types::Float64)
         return convertNumericTypeImpl<Float64, To>(from);
+    if (from.getType() == Field::Types::Bool)
+        return convertNumericTypeImpl<bool, To>(from);
     if (from.getType() == Field::Types::UInt128)
         return convertNumericTypeImpl<UInt128, To>(from);
     if (from.getType() == Field::Types::Int128)
@@ -213,6 +215,7 @@ Field convertFieldToTypeImpl(const Field & src, const IDataType & type, const ID
     }
     else if (type.isValueRepresentedByNumber() && src.getType() != Field::Types::String)
     {
+        if (isBool(type)) return convertNumericType<bool>(src, type);
         if (which_type.isUInt8()) return convertNumericType<UInt8>(src, type);
         if (which_type.isUInt16()) return convertNumericType<UInt16>(src, type);
         if (which_type.isUInt32()) return convertNumericType<UInt32>(src, type);

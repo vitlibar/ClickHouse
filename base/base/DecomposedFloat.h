@@ -95,7 +95,7 @@ struct DecomposedFloat
     /// Infinities are compared correctly. NaNs are treat similarly to infinities, so they can be less than all numbers.
     /// (note that we need total order)
     /// Returns -1, 0 or 1.
-    template <typename Int>
+    template <typename Int, typename = std::enable_if_t<!std::is_same_v<Int, bool>>>
     int compare(Int rhs) const
     {
         if (rhs == 0)
@@ -174,6 +174,12 @@ struct DecomposedFloat
         else
             /// Float has fractional part means its abs value is larger.
             return isNegative() ? -1 : 1;
+    }
+
+    /// Comparison against bool is handled like a comparison against either 0 or 1.
+    int compare(bool rhs) const
+    {
+        return !!sign() - static_cast<int>(rhs);
     }
 
 

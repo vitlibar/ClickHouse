@@ -267,7 +267,7 @@ template <> struct NearestFieldTypeImpl<Array> { using Type = Array; };
 template <> struct NearestFieldTypeImpl<Tuple> { using Type = Tuple; };
 template <> struct NearestFieldTypeImpl<Map> { using Type = Map; };
 template <> struct NearestFieldTypeImpl<Object> { using Type = Object; };
-template <> struct NearestFieldTypeImpl<bool> { using Type = UInt64; };
+template <> struct NearestFieldTypeImpl<bool> { using Type = bool; };
 template <> struct NearestFieldTypeImpl<Null> { using Type = Null; };
 
 template <> struct NearestFieldTypeImpl<AggregateFunctionStateData> { using Type = AggregateFunctionStateData; };
@@ -292,9 +292,8 @@ decltype(auto) castToNearestFieldType(T && x)
 }
 
 template <typename T>
-concept not_field_or_bool_or_stringlike
-    = (!std::is_same_v<std::decay_t<T>, Field> && !std::is_same_v<std::decay_t<T>, bool>
-       && !std::is_same_v<NearestFieldType<std::decay_t<T>>, String>);
+concept not_field_or_stringlike
+    = (!std::is_same_v<std::decay_t<T>, Field> && !std::is_same_v<NearestFieldType<std::decay_t<T>>, String>);
 
 /** 32 is enough. Round number is used for alignment and for better arithmetic inside std::vector.
   * NOTE: Actually, sizeof(std::string) is 32 when using libc++, so Field is 40 bytes.
@@ -374,13 +373,8 @@ public:
     }
 
     template <typename T>
-    requires not_field_or_bool_or_stringlike<T>
+    requires not_field_or_stringlike<T>
     Field(T && rhs); /// NOLINT
-
-    Field(bool rhs) : Field(castToNearestFieldType(rhs)) /// NOLINT
-    {
-        which = Types::Bool;
-    }
 
     /// Create a string inplace.
     Field(std::string_view str) { create(str.data(), str.size()); } /// NOLINT
@@ -430,16 +424,9 @@ public:
     /// 1. float <--> int needs explicit cast
     /// 2. customized types needs explicit cast
     template <typename T>
-    requires not_field_or_bool_or_stringlike<T>
+    requires not_field_or_stringlike<T>
     Field & /// NOLINT
     operator=(T && rhs);
-
-    Field & operator= (bool rhs)
-    {
-        *this = castToNearestFieldType(rhs);
-        which = Types::Bool;
-        return *this;
-    }
 
     Field & operator= (std::string_view str);
     Field & operator= (const String & str) { return *this = std::string_view{str}; }
@@ -495,6 +482,11 @@ public:
 
     template <typename T> auto & safeGet();
 
+    /// Tries to get the value assuming this Field contains either a bool or an integer.
+    /// NOTE: This function is different from `tryGet<bool>()` because `tryGet<bool>()` works only if this Field contains a bool.
+    bool tryGetAsBool(bool & result) const;
+    bool getAsBool() const;
+
     bool operator< (const Field & rhs) const
     {
         if (which < rhs.which)
@@ -504,8 +496,8 @@ public:
 
         switch (which)
         {
-            case Types::Null:    return get<Null>() < rhs.get<Null>();
-            case Types::Bool:    [[fallthrough]];
+            case Types::Null:    return get<Null>()    < rhs.get<Null>();
+            case Types::Bool:    return get<bool>()    < rhs.get<bool>();
             case Types::UInt64:  return get<UInt64>()  < rhs.get<UInt64>();
             case Types::UInt128: return get<UInt128>() < rhs.get<UInt128>();
             case Types::UInt256: return get<UInt256>() < rhs.get<UInt256>();
@@ -548,8 +540,8 @@ public:
 
         switch (which)
         {
-            case Types::Null:    return get<Null>() <= rhs.get<Null>();
-            case Types::Bool: [[fallthrough]];
+            case Types::Null:    return get<Null>()    <= rhs.get<Null>();
+            case Types::Bool:    return get<bool>()    <= rhs.get<bool>();
             case Types::UInt64:  return get<UInt64>()  <= rhs.get<UInt64>();
             case Types::UInt128: return get<UInt128>() <= rhs.get<UInt128>();
             case Types::UInt256: return get<UInt256>() <= rhs.get<UInt256>();
@@ -597,10 +589,10 @@ public:
 
         switch (which)
         {
-            case Types::Null: return get<Null>() == rhs.get<Null>();
-            case Types::Bool: [[fallthrough]];
-            case Types::UInt64: return get<UInt64>() == rhs.get<UInt64>();
-            case Types::Int64:   return get<Int64>() == rhs.get<Int64>();
+            case Types::Null:    return get<Null>()    == rhs.get<Null>();
+            case Types::Bool:    return get<bool>()    == rhs.get<bool>();
+            case Types::UInt64:  return get<UInt64>()  == rhs.get<UInt64>();
+            case Types::Int64:   return get<Int64>()   == rhs.get<Int64>();
             case Types::Float64:
                 static constexpr int nan_direction_hint = 1; /// Put NaN at the end
                 return FloatCompareHelper<Float64>::equals(get<Float64>(), rhs.get<Float64>(), nan_direction_hint);
@@ -640,6 +632,7 @@ public:
         switch (field.which)
         {
             case Types::Null:    return f(field.template get<Null>());
+            case Types::Bool:    return f(field.template get<bool>());
             case Types::UInt64:  return f(field.template get<UInt64>());
             case Types::UInt128: return f(field.template get<UInt128>());
             case Types::UInt256: return f(field.template get<UInt256>());
@@ -654,11 +647,6 @@ public:
             case Types::Array:   return f(field.template get<Array>());
             case Types::Tuple:   return f(field.template get<Tuple>());
             case Types::Map:     return f(field.template get<Map>());
-            case Types::Bool:
-            {
-                bool value = bool(field.template get<UInt64>());
-                return f(value);
-            }
             case Types::Object:     return f(field.template get<Object>());
             case Types::Decimal32:  return f(field.template get<DecimalField<Decimal32>>());
             case Types::Decimal64:  return f(field.template get<DecimalField<Decimal64>>());
@@ -676,7 +664,7 @@ public:
 
 private:
     std::aligned_union_t<DBMS_MIN_FIELD_SIZE - sizeof(Types::Which),
-        Null, UInt64, UInt128, UInt256, Int64, Int128, Int256, UUID, IPv4, IPv6, Float64, String, Array, Tuple, Map,
+        Null, bool, UInt64, UInt128, UInt256, Int64, Int128, Int256, UUID, IPv4, IPv6, Float64, String, Array, Tuple, Map,
         DecimalField<Decimal32>, DecimalField<Decimal64>, DecimalField<Decimal128>, DecimalField<Decimal256>,
         AggregateFunctionStateData, CustomType
         > storage;
@@ -853,19 +841,12 @@ template <> struct Field::EnumToType<Field::Types::Decimal128> { using Type = De
 template <> struct Field::EnumToType<Field::Types::Decimal256> { using Type = DecimalField<Decimal256>; };
 template <> struct Field::EnumToType<Field::Types::AggregateFunctionState> { using Type = AggregateFunctionStateData; };
 template <> struct Field::EnumToType<Field::Types::CustomType> { using Type = CustomType; };
-template <> struct Field::EnumToType<Field::Types::Bool> { using Type = UInt64; };
+template <> struct Field::EnumToType<Field::Types::Bool> { using Type = bool; };
 
 inline constexpr bool isInt64OrUInt64FieldType(Field::Types::Which t)
 {
     return t == Field::Types::Int64
         || t == Field::Types::UInt64;
-}
-
-inline constexpr bool isInt64OrUInt64orBoolFieldType(Field::Types::Which t)
-{
-    return t == Field::Types::Int64
-        || t == Field::Types::UInt64
-        || t == Field::Types::Bool;
 }
 
 // Field value getter with type checking in debug builds.
@@ -883,8 +864,11 @@ NearestFieldType<std::decay_t<T>> & Field::get()
 #ifndef NDEBUG
     // Disregard signedness when converting between int64 types.
     constexpr Field::Types::Which target = TypeToEnum<StoredType>::value;
-    if (target != which
-           && (!isInt64OrUInt64orBoolFieldType(target) || !isInt64OrUInt64orBoolFieldType(which)) && target != Field::Types::IPv4)
+    bool is_ref_allowed =
+        (target == which) ||
+        (isInt64OrUInt64FieldType(target) && isInt64OrUInt64FieldType(which)) ||
+        (target == Field::Types::IPv4);
+    if (!is_ref_allowed)
         throw Exception(ErrorCodes::LOGICAL_ERROR,
             "Invalid Field get from type {} to type {}", which, target);
 #endif
@@ -908,8 +892,38 @@ auto & Field::safeGet()
 }
 
 
+inline bool Field::tryGetAsBool(bool & result) const
+{
+    if (which == Types::Bool)
+    {
+        result = get<bool>();
+        return true;
+    }
+    else if (which == Types::UInt64)
+    {
+        result = static_cast<bool>(get<UInt64>());
+        return true;
+    }
+    else if (which == Types::Int64)
+    {
+        result = static_cast<bool>(get<Int64>());
+        return true;
+    }
+    else
+        return false;
+}
+
+inline bool Field::getAsBool() const
+{
+    bool result;
+    if (tryGetAsBool(result))
+        return result;
+    throw Exception(ErrorCodes::BAD_GET, "Bad get: has {}, requested a bool-like value", getTypeName());
+}
+
+
 template <typename T>
-requires not_field_or_bool_or_stringlike<T>
+requires not_field_or_stringlike<T>
 Field::Field(T && rhs)
 {
     auto && val = castToNearestFieldType(std::forward<T>(rhs));
@@ -917,7 +931,7 @@ Field::Field(T && rhs)
 }
 
 template <typename T>
-requires not_field_or_bool_or_stringlike<T>
+requires not_field_or_stringlike<T>
 Field & /// NOLINT
 Field::operator=(T && rhs)
 {

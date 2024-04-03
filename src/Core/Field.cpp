@@ -638,4 +638,5 @@ template class DecimalField<Decimal64>;
 template class DecimalField<Decimal128>;
 template class DecimalField<Decimal256>;
 template class DecimalField<DateTime64>;
+
 }
