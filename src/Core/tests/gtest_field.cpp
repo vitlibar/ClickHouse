@@ -3,36 +3,110 @@
 
 using namespace DB;
 
-GTEST_TEST(Field, FromBool)
+GTEST_TEST(Field, GetAsBool)
 {
+    /// false to Field
     {
         Field f{false};
         ASSERT_EQ(f.getType(), Field::Types::Bool);
-        ASSERT_EQ(f.get<UInt64>(), 0);
         ASSERT_EQ(f.get<bool>(), false);
-    }
-
-    {
-        Field f{true};
-        ASSERT_EQ(f.getType(), Field::Types::Bool);
-        ASSERT_EQ(f.get<UInt64>(), 1);
-        ASSERT_EQ(f.get<bool>(), true);
+        ASSERT_EQ(f.getAsBool(), false);
     }
 
     {
         Field f;
         f = false;
         ASSERT_EQ(f.getType(), Field::Types::Bool);
-        ASSERT_EQ(f.get<UInt64>(), 0);
         ASSERT_EQ(f.get<bool>(), false);
+        ASSERT_EQ(f.getAsBool(), false);
+    }
+
+    /// true to Field
+    {
+        Field f{true};
+        ASSERT_EQ(f.getType(), Field::Types::Bool);
+        ASSERT_EQ(f.get<bool>(), true);
+        ASSERT_EQ(f.getAsBool(), true);
     }
 
     {
         Field f;
         f = true;
         ASSERT_EQ(f.getType(), Field::Types::Bool);
-        ASSERT_EQ(f.get<UInt64>(), 1);
         ASSERT_EQ(f.get<bool>(), true);
+        ASSERT_EQ(f.getAsBool(), true);
+    }
+
+    /// 0u to Field
+    {
+        Field f{0u};
+        ASSERT_EQ(f.getType(), Field::Types::UInt64);
+        ASSERT_EQ(f.get<UInt64>(), 0);
+        ASSERT_EQ(f.get<Int64>(), 0);
+        ASSERT_EQ(f.getAsBool(), false);
+    }
+
+    {
+        Field f;
+        f = 0u;
+        ASSERT_EQ(f.getType(), Field::Types::UInt64);
+        ASSERT_EQ(f.get<UInt64>(), 0);
+        ASSERT_EQ(f.get<Int64>(), 0);
+        ASSERT_EQ(f.getAsBool(), false);
+    }
+
+    /// 1u to Field
+    {
+        Field f{1u};
+        ASSERT_EQ(f.getType(), Field::Types::UInt64);
+        ASSERT_EQ(f.get<UInt64>(), 1);
+        ASSERT_EQ(f.get<Int64>(), 1);
+        ASSERT_EQ(f.getAsBool(), true);
+    }
+
+    {
+        Field f;
+        f = 1u;
+        ASSERT_EQ(f.getType(), Field::Types::UInt64);
+        ASSERT_EQ(f.get<UInt64>(), 1);
+        ASSERT_EQ(f.get<Int64>(), 1);
+        ASSERT_EQ(f.getAsBool(), true);
+    }
+
+    /// 0 to Field
+    {
+        Field f{0};
+        ASSERT_EQ(f.getType(), Field::Types::Int64);
+        ASSERT_EQ(f.get<Int64>(), 0);
+        ASSERT_EQ(f.get<UInt64>(), 0);
+        ASSERT_EQ(f.getAsBool(), false);
+    }
+
+    {
+        Field f;
+        f = 0;
+        ASSERT_EQ(f.getType(), Field::Types::Int64);
+        ASSERT_EQ(f.get<Int64>(), 0);
+        ASSERT_EQ(f.get<UInt64>(), 0);
+        ASSERT_EQ(f.getAsBool(), false);
+    }
+
+    /// 1 to Field
+    {
+        Field f{1};
+        ASSERT_EQ(f.getType(), Field::Types::Int64);
+        ASSERT_EQ(f.get<Int64>(), 1);
+        ASSERT_EQ(f.get<UInt64>(), 1);
+        ASSERT_EQ(f.getAsBool(), true);
+    }
+
+    {
+        Field f;
+        f = 1;
+        ASSERT_EQ(f.getType(), Field::Types::Int64);
+        ASSERT_EQ(f.get<Int64>(), 1);
+        ASSERT_EQ(f.get<UInt64>(), 1);
+        ASSERT_EQ(f.getAsBool(), true);
     }
 }
 
