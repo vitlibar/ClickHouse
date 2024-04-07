@@ -203,8 +203,7 @@ std::optional<bool> tryExtractConstantFromConditionNode(const QueryTreeNodePtr &
     if (value.isNull())
         return false;
 
-    UInt8 predicate_value = value.safeGet<UInt8>();
-    return predicate_value > 0;
+    return value.getAsBool();
 }
 
 static ASTPtr convertIntoTableExpressionAST(const QueryTreeNodePtr & table_expression_node)

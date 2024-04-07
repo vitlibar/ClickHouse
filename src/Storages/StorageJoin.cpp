@@ -343,7 +343,7 @@ void registerStorageJoin(StorageFactory & factory)
                     disk_name = setting.value.get<String>();
                 else if (setting.name == "persistent")
                 {
-                    persistent = setting.value.get<bool>();
+                    persistent = setting.value.getAsBool();
                 }
                 else
                     throw Exception(ErrorCodes::BAD_ARGUMENTS, "Unknown setting {} for storage {}", setting.name, args.engine_name);

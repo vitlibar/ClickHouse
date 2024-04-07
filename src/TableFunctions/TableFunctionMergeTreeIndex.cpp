@@ -75,10 +75,7 @@ void TableFunctionMergeTreeIndex::parseArguments(const ASTPtr & ast_function, Co
                 throw Exception(ErrorCodes::BAD_ARGUMENTS,
                     "Table function '{}' expected bool flag for 'with_marks' argument", getName());
 
-            if (value.getType() == Field::Types::Bool)
-                with_marks = value.get<bool>();
-            else
-                with_marks = value.get<UInt64>();
+            with_marks = value.getAsBool();
         }
 
         if (!params.empty())

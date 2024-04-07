@@ -624,8 +624,7 @@ std::optional<bool> tryEvaluateConstCondition(ASTPtr expr, ContextPtr context)
     if (eval_res.isNull())
         return false;
 
-    UInt8 res = eval_res.template safeGet<UInt8>();
-    return res > 0;
+    return eval_res.getAsBool();
 }
 
 bool tryJoinOnConst(TableJoin & analyzed_join, const ASTPtr & on_expression, ContextPtr context)

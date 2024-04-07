@@ -497,7 +497,7 @@ bool MergeTreeIndexConditionSet::checkDAGUseless(const ActionsDAG::Node & node, 
     {
         Field literal;
         node.column->get(0, literal);
-        return !atomic && literal.safeGet<bool>();
+        return !atomic && literal.getAsBool();
     }
     else if (node.type == ActionsDAG::ActionType::FUNCTION)
     {
@@ -666,7 +666,7 @@ bool MergeTreeIndexConditionSet::checkASTUseless(const ASTPtr & node, bool atomi
                 [this](const auto & arg) { return checkASTUseless(arg, true); });
     }
     else if (const auto * literal = node->as<ASTLiteral>())
-        return !atomic && literal->value.safeGet<bool>();
+        return !atomic && literal->value.getAsBool();
     else if (const auto * identifier = node->as<ASTIdentifier>())
         return !key_columns.contains(identifier->getColumnName());
     else
