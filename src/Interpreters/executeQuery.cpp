@@ -670,7 +670,7 @@ void validateAnalyzerSettings(ASTPtr ast, bool context_value)
         {
             if (auto * value = set_query->changes.tryGet("allow_experimental_analyzer"))
             {
-                if (top_level != value->getAsBool())
+                if (top_level != value->safeGet<bool>())
                     throw Exception(ErrorCodes::INCORRECT_QUERY, "Setting 'allow_experimental_analyzer' is changed in the subquery. Top level value: {}", top_level);
             }
         }

@@ -295,6 +295,16 @@ template <typename T>
 concept not_field_or_stringlike
     = (!std::is_same_v<std::decay_t<T>, Field> && !std::is_same_v<NearestFieldType<std::decay_t<T>>, String>);
 
+/// Field::safeGet<T>() can returns either a value or a const reference depending on type `T`.
+template <typename T>
+concept safe_get_returns_value
+    = (std::is_same_v<NearestFieldType<std::decay_t<T>>, Int64> || std::is_same_v<NearestFieldType<std::decay_t<T>>, UInt64>
+       || std::is_same_v<NearestFieldType<std::decay_t<T>>, bool> || std::is_same_v<NearestFieldType<std::decay_t<T>>, IPv4>
+       || std::is_same_v<NearestFieldType<std::decay_t<T>>, Null>);
+
+template <typename T>
+concept safe_get_returns_ref = (!safe_get_returns_value<T>);
+
 /** 32 is enough. Round number is used for alignment and for better arithmetic inside std::vector.
   * NOTE: Actually, sizeof(std::string) is 32 when using libc++, so Field is 40 bytes.
   */
@@ -444,6 +454,10 @@ public:
     std::string_view getTypeName() const;
 
     bool isNull() const { return which == Types::Null; }
+
+    bool isNegativeInfinity() const { return which == Types::Null && get<Null>().isNegativeInfinity(); }
+    bool isPositiveInfinity() const { return which == Types::Null && get<Null>().isPositiveInfinity(); }
+
     template <typename T>
     NearestFieldType<std::decay_t<T>> & get();
 
@@ -454,38 +468,15 @@ public:
         return mutable_this->get<T>();
     }
 
-    bool isNegativeInfinity() const { return which == Types::Null && get<Null>().isNegativeInfinity(); }
-    bool isPositiveInfinity() const { return which == Types::Null && get<Null>().isPositiveInfinity(); }
+    template <typename T> bool tryGet(T & result) const;
 
-    template <typename T> bool tryGet(T & result)
-    {
-        const Types::Which requested = TypeToEnum<std::decay_t<T>>::value;
-        if (which != requested)
-            return false;
-        result = get<T>();
-        return true;
-    }
+    template <typename T>
+    requires safe_get_returns_value<T>
+    std::decay_t<T> safeGet() const;
 
-    template <typename T> bool tryGet(T & result) const
-    {
-        const Types::Which requested = TypeToEnum<std::decay_t<T>>::value;
-        if (which != requested)
-            return false;
-        result = get<T>();
-        return true;
-    }
-
-    template <typename T> auto & safeGet() const
-    {
-        return const_cast<Field *>(this)->safeGet<T>();
-    }
-
-    template <typename T> auto & safeGet();
-
-    /// Tries to get the value assuming this Field contains either a bool or an integer.
-    /// NOTE: This function is different from `tryGet<bool>()` because `tryGet<bool>()` works only if this Field contains a bool.
-    bool tryGetAsBool(bool & result) const;
-    bool getAsBool() const;
+    template <typename T>
+    requires safe_get_returns_ref<T>
+    const std::decay_t<T> & safeGet() const;
 
     bool operator< (const Field & rhs) const
     {
@@ -862,12 +853,8 @@ NearestFieldType<std::decay_t<T>> & Field::get()
     using StoredType = NearestFieldType<std::decay_t<T>>;
 
 #ifndef NDEBUG
-    // Disregard signedness when converting between int64 types.
     constexpr Field::Types::Which target = TypeToEnum<StoredType>::value;
-    bool is_ref_allowed =
-        (target == which) ||
-        (isInt64OrUInt64FieldType(target) && isInt64OrUInt64FieldType(which)) ||
-        (target == Field::Types::IPv4);
+    bool is_ref_allowed = (target == which);
     if (!is_ref_allowed)
         throw Exception(ErrorCodes::LOGICAL_ERROR,
             "Invalid Field get from type {} to type {}", which, target);
@@ -880,45 +867,54 @@ NearestFieldType<std::decay_t<T>> & Field::get()
 
 
 template <typename T>
-auto & Field::safeGet()
+bool Field::tryGet(T & result) const
 {
-    const Types::Which requested = TypeToEnum<NearestFieldType<std::decay_t<T>>>::value;
+    constexpr Types::Which requested = TypeToEnum<NearestFieldType<std::decay_t<T>>>::value;
+    if (which == requested)
+    {
+        result = static_cast<T>(get<T>());
+        return true;
+    }
 
-    if (which != requested)
-        throw Exception(ErrorCodes::BAD_GET,
-            "Bad get: has {}, requested {}", getTypeName(), requested);
+    if constexpr (std::is_integral_v<std::decay_t<T>>)
+    {
+        // Disregard signedness when converting between int64 types and allow converting bool <-> int64 types.
+        switch (which)
+        {
+            case Types::Int64:  result = static_cast<T>(get<Int64>());  return true;
+            case Types::UInt64: result = static_cast<T>(get<UInt64>()); return true;
+            case Types::Bool:   result = static_cast<T>(get<bool>());   return true;
+            default: break;
+        }
+    }
 
+    return false;
+}
+
+
+template <typename T>
+requires safe_get_returns_value<T>
+NearestFieldType<std::decay_t<T>> Field::safeGet() const
+{
+    NearestFieldType<std::decay_t<T>> value;
+    if (tryGet(value))
+        return value;
+
+    constexpr Field::Types::Which target = TypeToEnum<StoredType>::value;
+    throw Exception(
+        ErrorCodes::BAD_GET, "Bad get: has {}, requested {}", getTypeName(), target);
+}
+
+template <typename T>
+requires safe_get_returns_ref<T>
+const NearestFieldType<std::decay_t<T>> & Field::safeGet() const
+{
+    constexpr Field::Types::Which target = TypeToEnum<NearestFieldType<std::decay_t<T>>>::value;
+    bool is_ref_allowed = (target == which);
+    if (!is_ref_allowed)
+        throw Exception(
+            ErrorCodes::BAD_GET, "Bad get: has {}, requested {}", getTypeName(), target);
     return get<T>();
-}
-
-
-inline bool Field::tryGetAsBool(bool & result) const
-{
-    if (which == Types::Bool)
-    {
-        result = get<bool>();
-        return true;
-    }
-    else if (which == Types::UInt64)
-    {
-        result = static_cast<bool>(get<UInt64>());
-        return true;
-    }
-    else if (which == Types::Int64)
-    {
-        result = static_cast<bool>(get<Int64>());
-        return true;
-    }
-    else
-        return false;
-}
-
-inline bool Field::getAsBool() const
-{
-    bool result;
-    if (tryGetAsBool(result))
-        return result;
-    throw Exception(ErrorCodes::BAD_GET, "Bad get: has {}, requested a bool-like value", getTypeName());
 }
 
 

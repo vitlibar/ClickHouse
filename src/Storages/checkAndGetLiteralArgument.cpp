@@ -26,12 +26,13 @@ T checkAndGetLiteralArgument(const ASTPtr & arg, const String & arg_name)
 template <typename T>
 T checkAndGetLiteralArgument(const ASTLiteral & arg, const String & arg_name)
 {
+    /// tryGetAsBool() is used to allow using 0 or 1 as booleans too.
+    if (arg.value.tryGetAs<T>(value))
+        return value;
+
     T value;
     if constexpr (std::is_same_v<T, bool>)
     {
-        /// tryGetAsBool() is used to allow using 0 or 1 as booleans too.
-        if (arg.value.tryGetAsBool(value))
-            return value;
     }
     else
     {
