@@ -463,23 +463,25 @@ Float32 ColumnVector<T>::getFloat32(size_t n [[maybe_unused]]) const
 template <typename T>
 bool ColumnVector<T>::tryInsert(const DB::Field & x)
 {
-    NearestFieldType<T> value;
-    if (!x.tryGet<NearestFieldType<T>>(value))
+    T value;
+    if (x.tryGet(value))
     {
-        if constexpr (std::is_same_v<T, UInt8>)
-        {
-            /// It's also possible to insert boolean values into UInt8 column.
-            bool boolean_value;
-            if (x.tryGet<bool>(boolean_value))
-            {
-                data.push_back(static_cast<T>(boolean_value));
-                return true;
-            }
-        }
-        return false;
+        data.push_back(static_cast<T>(value));
+        return true;
     }
-    data.push_back(static_cast<T>(value));
-    return true;
+
+    if constexpr (std::is_same_v<T, UInt8>)
+    {
+        /// It's also possible to insert boolean values into UInt8 column.
+        bool boolean_value;
+        if (x.tryGet<bool>(boolean_value))
+        {
+            data.push_back(static_cast<T>(boolean_value));
+            return true;
+        }
+    }
+
+    return false;
 }
 
 template <typename T>

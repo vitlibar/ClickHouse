@@ -221,6 +221,16 @@ public:
 
     void insert(const Field & x) override
     {
+        if constexpr (std::is_same_v<T, UInt8>)
+        {
+            /// It's also possible to insert boolean values into UInt8 column.
+            bool boolean_value;
+            if (x.tryGet(boolean_value))
+            {
+                data.push_back(static_cast<T>(boolean_value));
+                return;
+            }
+        }
         data.push_back(static_cast<T>(x.get<T>()));
     }
 
