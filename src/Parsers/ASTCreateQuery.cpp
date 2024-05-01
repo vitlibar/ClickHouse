@@ -240,12 +240,12 @@ ASTPtr ASTCreateQuery::clone() const
         res->set(res->columns_list, columns_list->clone());
     if (storage)
         res->set(res->storage, storage->clone());
-    if (inner_storage)
-        res->set(res->inner_storage, inner_storage->clone());
     if (select)
         res->set(res->select, select->clone());
     if (table_overrides)
         res->set(res->table_overrides, table_overrides->clone());
+    if (target_tables)
+        res->set(res->target_tables, target_tables->clone());
 
     if (dictionary)
     {
@@ -388,20 +388,11 @@ void ASTCreateQuery::formatQueryImpl(const FormatSettings & settings, FormatStat
         refresh_strategy->formatImpl(settings, state, frame);
     }
 
-    if (to_table_id)
+    if (target_tables)
     {
-        assert((is_materialized_view || is_window_view) && to_inner_uuid == UUIDHelpers::Nil);
-        settings.ostr
-            << (settings.hilite ? hilite_keyword : "") << " TO " << (settings.hilite ? hilite_none : "")
-            << (!to_table_id.database_name.empty() ? backQuoteIfNeed(to_table_id.database_name) + "." : "")
-            << backQuoteIfNeed(to_table_id.table_name);
-    }
-
-    if (to_inner_uuid != UUIDHelpers::Nil)
-    {
-        assert(is_materialized_view && !to_table_id);
-        settings.ostr << (settings.hilite ? hilite_keyword : "") << " TO INNER UUID " << (settings.hilite ? hilite_none : "")
-                      << quoteString(toString(to_inner_uuid));
+        target_tables->formatHelper(settings, state, frame,
+                                    TargetTableKind::kTarget, TargetTableKind::kTarget,
+                                    /* show_table_id= */ true, /* show_storage= */ false, /* show_inner_uuid= */ true);
     }
 
     if (!as_table.empty())
@@ -450,17 +441,24 @@ void ASTCreateQuery::formatQueryImpl(const FormatSettings & settings, FormatStat
 
     frame.expression_list_always_start_on_new_line = false;
 
-    if (inner_storage)
-    {
-        settings.ostr << (settings.hilite ? hilite_keyword : "") << " INNER" << (settings.hilite ? hilite_none : "");
-        inner_storage->formatImpl(settings, state, frame);
-    }
-
     if (storage)
         storage->formatImpl(settings, state, frame);
 
     if (dictionary)
         dictionary->formatImpl(settings, state, frame);
+
+    if (target_tables)
+    {
+        target_tables->formatHelper(settings, state, frame,
+                                    TargetTableKind::kIntermediate, TargetTableKind::kIntermediate);
+
+        target_tables->formatHelper(settings, state, frame,
+                                    TargetTableKind::kTarget, TargetTableKind::kTarget,
+                                    /* show_table_id= */ false, /* show_storage= */ true, /* show_inner_uuid= */ false);
+
+        target_tables->formatHelper(settings, state, frame,
+                                    TargetTableKind::kData, TargetTableKind::kMetrics);
+    }
 
     if (is_watermark_strictly_ascending)
     {
@@ -517,48 +515,19 @@ bool ASTCreateQuery::isParameterizedView() const
 }
 
 
-ASTCreateQuery::UUIDs::UUIDs(const ASTCreateQuery & query)
-    : uuid(query.uuid)
-    , to_inner_uuid(query.to_inner_uuid)
+const ASTTargetTables::Target & ASTCreateQuery::getTarget(TargetTableKind target_table_kind) const
 {
+    if (target_tables)
+        return target_tables->getTarget(target_table_kind);
+    return ASTTargetTables::Target::getEmpty(target_table_kind);
 }
 
-String ASTCreateQuery::UUIDs::toString() const
+const StorageID & ASTCreateQuery::getTargetTableId(TargetTableKind target_table_kind) const
 {
-    WriteBufferFromOwnString out;
-    out << "{" << uuid << "," << to_inner_uuid << "}";
-    return out.str();
-}
-
-ASTCreateQuery::UUIDs ASTCreateQuery::UUIDs::fromString(const String & str)
-{
-    ReadBufferFromString in{str};
-    ASTCreateQuery::UUIDs res;
-    in >> "{" >> res.uuid >> "," >> res.to_inner_uuid >> "}";
-    return res;
-}
-
-ASTCreateQuery::UUIDs ASTCreateQuery::generateRandomUUID(bool always_generate_new_uuid)
-{
-    if (always_generate_new_uuid)
-        setUUID({});
-
-    if (uuid == UUIDHelpers::Nil)
-        uuid = UUIDHelpers::generateV4();
-
-    /// If destination table (to_table_id) is not specified for materialized view,
-    /// then MV will create inner table. We should generate UUID of inner table here.
-    bool need_uuid_for_inner_table = !attach && is_materialized_view && !to_table_id;
-    if (need_uuid_for_inner_table && (to_inner_uuid == UUIDHelpers::Nil))
-        to_inner_uuid = UUIDHelpers::generateV4();
-
-    return UUIDs{*this};
-}
-
-void ASTCreateQuery::setUUID(const UUIDs & uuids)
-{
-    uuid = uuids.uuid;
-    to_inner_uuid = uuids.to_inner_uuid;
+    if (target_tables)
+        return target_tables->getTableId(target_table_kind);
+    static StorageID empty_storage_id = StorageID::createEmpty();
+    return empty_storage_id;
 }
 
 }
