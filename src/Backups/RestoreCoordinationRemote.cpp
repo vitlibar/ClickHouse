@@ -3,6 +3,7 @@
 #include <Backups/RestoreCoordinationRemote.h>
 #include <Backups/BackupCoordinationStageSync.h>
 #include <Parsers/ASTCreateQuery.h>
+#include <Parsers/CreateQueryUUIDs.h>
 #include <Parsers/formatAST.h>
 #include <Functions/UserDefined/UserDefinedSQLObjectType.h>
 #include <Common/ZooKeeper/KeeperException.h>
@@ -269,7 +270,7 @@ bool RestoreCoordinationRemote::acquireInsertingDataForKeeperMap(const String & 
 void RestoreCoordinationRemote::generateUUIDForTable(ASTCreateQuery & create_query)
 {
     String query_str = serializeAST(create_query);
-    String new_uuids_str = create_query.generateRandomUUID(/* always_generate_new_uuid= */ true).toString();
+    String new_uuids_str = create_query.generateRandomUUIDs(/* always_generate_new_uuids= */ true).toString();
 
     auto holder = with_retries.createRetriesControlHolder("generateUUIDForTable");
     holder.retries_ctl.retryLoop(
@@ -285,7 +286,7 @@ void RestoreCoordinationRemote::generateUUIDForTable(ASTCreateQuery & create_que
 
             if (res == Coordination::Error::ZNODEEXISTS)
             {
-                create_query.setUUID(ASTCreateQuery::UUIDs::fromString(zk->get(path)));
+                create_query.setUUIDs(CreateQueryUUIDs::fromString(zk->get(path)));
                 return;
             }
 
