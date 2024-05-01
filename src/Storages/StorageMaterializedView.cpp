@@ -109,8 +109,12 @@ StorageMaterializedView::StorageMaterializedView(
         throw Exception(ErrorCodes::INCORRECT_QUERY, "SELECT query is not specified for {}", getName());
 
     /// If the destination table is not set, use inner table
-    has_inner_table = query.to_table_id.empty();
-    if (has_inner_table && !query.storage)
+    const auto & target = query.getTarget();
+    const auto & to_table_id = target.table_id;
+    const auto & to_inner_uuid = target.inner_uuid;
+    has_inner_table = to_table_id.empty();
+
+    if (has_inner_table && !target.inner_storage)
         throw Exception(ErrorCodes::INCORRECT_QUERY,
                         "You must specify where to save results of a MaterializedView query: "
                         "either ENGINE or an existing table in a TO clause");
@@ -134,25 +138,25 @@ StorageMaterializedView::StorageMaterializedView(
 
     setInMemoryMetadata(storage_metadata);
 
-    bool point_to_itself_by_uuid = has_inner_table && query.to_inner_uuid != UUIDHelpers::Nil
-                                                   && query.to_inner_uuid == table_id_.uuid;
-    bool point_to_itself_by_name = !has_inner_table && query.to_table_id.database_name == table_id_.database_name
-                                                    && query.to_table_id.table_name == table_id_.table_name;
+    bool point_to_itself_by_uuid = has_inner_table && to_inner_uuid != UUIDHelpers::Nil
+                                                   && to_inner_uuid == table_id_.uuid;
+    bool point_to_itself_by_name = !has_inner_table && to_table_id.database_name == table_id_.database_name
+                                                    && to_table_id.table_name == table_id_.table_name;
     if (point_to_itself_by_uuid || point_to_itself_by_name)
         throw Exception(ErrorCodes::BAD_ARGUMENTS, "Materialized view {} cannot point to itself", table_id_.getFullTableName());
 
     if (!has_inner_table)
     {
-        target_table_id = query.to_table_id;
+        target_table_id = to_table_id;
     }
     else if (LoadingStrictnessLevel::ATTACH <= mode)
     {
         /// If there is an ATTACH request, then the internal table must already be created.
-        target_table_id = StorageID(getStorageID().database_name, generateInnerTableName(getStorageID()), query.to_inner_uuid);
+        target_table_id = StorageID(getStorageID().database_name, generateInnerTableName(getStorageID()), to_inner_uuid);
     }
     else
     {
-        const String & engine = query.storage->engine->name;
+        const String & engine = target.inner_storage->engine->name;
         const auto & storage_features = StorageFactory::instance().getStorageFeatures(engine);
 
         /// We will create a query to create an internal table.
@@ -160,7 +164,7 @@ StorageMaterializedView::StorageMaterializedView(
         auto manual_create_query = std::make_shared<ASTCreateQuery>();
         manual_create_query->setDatabase(getStorageID().database_name);
         manual_create_query->setTable(generateInnerTableName(getStorageID()));
-        manual_create_query->uuid = query.to_inner_uuid;
+        manual_create_query->uuid = to_inner_uuid;
 
         auto new_columns_list = std::make_shared<ASTColumns>();
         new_columns_list->set(new_columns_list->columns, query.columns_list->columns->ptr());
@@ -182,7 +186,9 @@ StorageMaterializedView::StorageMaterializedView(
         }
 
         manual_create_query->set(manual_create_query->columns_list, new_columns_list);
-        manual_create_query->set(manual_create_query->storage, query.storage->ptr());
+
+        if (target.inner_storage)
+            manual_create_query->set(manual_create_query->storage, target.inner_storage->ptr());
 
         InterpreterCreateQuery create_interpreter(manual_create_query, create_context);
         create_interpreter.setInternal(true);
