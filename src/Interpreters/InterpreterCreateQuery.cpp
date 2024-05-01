@@ -31,6 +31,7 @@
 #include <Parsers/ASTLiteral.h>
 #include <Parsers/ASTInsertQuery.h>
 #include <Parsers/ParserCreateQuery.h>
+#include <Parsers/CreateQueryUUIDs.h>
 #include <Parsers/formatAST.h>
 #include <Parsers/parseQuery.h>
 
@@ -947,7 +948,7 @@ namespace
             throw Exception(ErrorCodes::INCORRECT_QUERY, "Temporary tables cannot be created with Replicated, Shared or KeeperMap table engines");
     }
 
-    void setDefaultTableEngine(ASTStorage &storage, DefaultTableEngine engine)
+    void setDefaultTableEngine(ASTStorage & storage, DefaultTableEngine engine)
     {
         if (engine == DefaultTableEngine::None)
             throw Exception(ErrorCodes::ENGINE_REQUIRED, "Table engine is not specified in CREATE query");
@@ -965,9 +966,6 @@ void InterpreterCreateQuery::setEngine(ASTCreateQuery & create) const
         return;
 
     if (create.is_dictionary || create.is_ordinary_view || create.is_live_view || create.is_window_view)
-        return;
-
-    if (create.is_materialized_view && create.to_table_id)
         return;
 
     if (create.temporary)
@@ -989,6 +987,24 @@ void InterpreterCreateQuery::setEngine(ASTCreateQuery & create) const
         }
 
         checkTemporaryTableEngineName(create.storage->engine->name);
+        return;
+    }
+
+    if (create.is_materialized_view)
+    {
+        bool is_materialized_view_with_external_table = create.hasTargetTableID();
+        if (is_materialized_view_with_external_table)
+            return;
+
+        if (!create.targets)
+            create.set(create.targets, std::make_shared<ASTViewTargets>());
+
+        if (!create.targets->getTableEngine())
+            create.targets->setTableEngine(std::make_shared<ASTStorage>());
+
+        if (!create.targets->getTableEngine()->engine)
+            setDefaultTableEngine(*create.targets->getTableEngine(), getContext()->getSettingsRef().default_table_engine.value);
+
         return;
     }
 
@@ -1015,12 +1031,19 @@ void InterpreterCreateQuery::setEngine(ASTCreateQuery & create) const
         if (as_create.is_ordinary_view)
             throw Exception(ErrorCodes::INCORRECT_QUERY, "Cannot CREATE a table AS {}, it is a View", qualified_name);
 
-        if (as_create.is_materialized_view && as_create.to_table_id)
-            throw Exception(
-                ErrorCodes::INCORRECT_QUERY,
-                "Cannot CREATE a table AS {}, it is a Materialized View without storage. Use \"AS `{}`\" instead",
-                qualified_name,
-                as_create.to_table_id.getQualifiedName());
+        if (as_create.is_materialized_view)
+        {
+            if (as_create.hasTargetTableID())
+            {
+                throw Exception(
+                    ErrorCodes::INCORRECT_QUERY,
+                    "Cannot CREATE a table AS {}, it is a Materialized View without storage. Use \"AS {}\" instead",
+                    qualified_name,
+                    as_create.getTargetTableID().getFullTableName());
+            }
+            create.set(create.storage, as_create.getTargetTableEngine());
+            return;
+        }
 
         if (as_create.is_live_view)
             throw Exception(ErrorCodes::INCORRECT_QUERY, "Cannot CREATE a table AS {}, it is a Live View", qualified_name);
@@ -1084,12 +1107,11 @@ void InterpreterCreateQuery::assertOrSetUUID(ASTCreateQuery & create, const Data
                             kind_upper, create.table);
         }
 
-        create.generateRandomUUID();
+        create.setUUIDs(create.generateRandomUUIDs());
     }
     else
     {
-        bool has_uuid = create.uuid != UUIDHelpers::Nil || create.to_inner_uuid != UUIDHelpers::Nil;
-        if (has_uuid && !is_on_cluster && !internal)
+        if (!is_on_cluster && !internal && CreateQueryUUIDs{create})
         {
             /// We don't show the following error message either
             /// 1) if it's a secondary query (an initiator of a CREATE TABLE ON CLUSTER query
@@ -1103,8 +1125,7 @@ void InterpreterCreateQuery::assertOrSetUUID(ASTCreateQuery & create, const Data
         /// The database doesn't support UUID so we'll ignore it. The UUID could be set here because of either
         /// a) the initiator of `ON CLUSTER` query generated it to ensure the same UUIDs are used on different hosts; or
         /// b) `RESTORE from backup` query generated it to ensure the same UUIDs are used on different hosts.
-        create.uuid = UUIDHelpers::Nil;
-        create.to_inner_uuid = UUIDHelpers::Nil;
+        create.resetUUIDs();
     }
 }
 
@@ -1223,8 +1244,9 @@ BlockIO InterpreterCreateQuery::createTable(ASTCreateQuery & create)
 
     if (!create.temporary && !create.database)
         create.setDatabase(current_database);
-    if (create.to_table_id && create.to_table_id.database_name.empty())
-        create.to_table_id.database_name = current_database;
+
+    if (create.targets)
+        create.targets->setCurrentDatabase(current_database);
 
     if (create.select && create.isView())
     {
@@ -1258,12 +1280,10 @@ BlockIO InterpreterCreateQuery::createTable(ASTCreateQuery & create)
     TableProperties properties = getTablePropertiesAndNormalizeCreateQuery(create, mode);
 
     /// Check type compatible for materialized dest table and select columns
-    if (create.select && create.is_materialized_view && create.to_table_id && mode <= LoadingStrictnessLevel::CREATE)
+    bool is_materialized_view_with_external_table = create.is_materialized_view && create.hasTargetTableID();
+    if (is_materialized_view_with_external_table && create.select && mode <= LoadingStrictnessLevel::CREATE)
     {
-        if (StoragePtr to_table = DatabaseCatalog::instance().tryGetTable(
-            {create.to_table_id.database_name, create.to_table_id.table_name, create.to_table_id.uuid},
-            getContext()
-        ))
+        if (StoragePtr to_table = DatabaseCatalog::instance().tryGetTable(create.getTargetTableID(), getContext()))
         {
             Block input_block;
 
@@ -1760,7 +1780,7 @@ void InterpreterCreateQuery::prepareOnClusterQuery(ASTCreateQuery & create, Cont
 
     /// For CREATE query generate UUID on initiator, so it will be the same on all hosts.
     /// It will be ignored if database does not support UUIDs.
-    create.generateRandomUUID();
+    create.setUUIDs(create.generateRandomUUIDs());
 
     /// For cross-replication cluster we cannot use UUID in replica path.
     String cluster_name_expanded = local_context->getMacros()->expand(cluster_name);
@@ -1882,8 +1902,15 @@ AccessRightsElements InterpreterCreateQuery::getRequiredAccess() const
         }
     }
 
-    if (create.to_table_id)
-        required_access.emplace_back(AccessType::SELECT | AccessType::INSERT, create.to_table_id.database_name, create.to_table_id.table_name);
+    if (create.targets)
+    {
+        for (const auto & target : create.targets->targets)
+        {
+            const auto & target_id = target.table_id;
+            if (target_id)
+                required_access.emplace_back(AccessType::SELECT | AccessType::INSERT, target_id.database_name, target_id.table_name);
+        }
+    }
 
     if (create.storage && create.storage->engine)
         required_access.emplace_back(AccessType::TABLE_ENGINE, create.storage->engine->name);
