@@ -39,6 +39,7 @@
 #include <Storages/StorageInMemoryMetadata.h>
 #include <Storages/WindowView/StorageWindowView.h>
 #include <Storages/StorageReplicatedMergeTree.h>
+#include <Storages/StorageTimeSeries.h>
 
 #include <Interpreters/Context.h>
 #include <Interpreters/executeDDLQueryOnCluster.h>
@@ -880,6 +881,10 @@ InterpreterCreateQuery::TableProperties InterpreterCreateQuery::getTableProperti
     else if (!StorageFactory::instance().getStorageFeatures(create.storage->engine->name).supports_schema_inference)
         throw Exception(ErrorCodes::INCORRECT_QUERY, "Incorrect CREATE query: required list of column descriptions or AS section or SELECT.");
 
+    /// If this is a TimeSeries table then we need to normalize list of columns (add missing columns and reorder), and also set inner table engines.
+    if (create.is_time_series_table)
+        StorageTimeSeries::normalizeTableDefinition(create, properties.columns, getContext());
+
     /// Even if query has list of columns, canonicalize it (unfold Nested columns).
     if (!create.columns_list)
         create.set(create.columns_list, std::make_shared<ASTColumns>());
@@ -1066,6 +1071,7 @@ void InterpreterCreateQuery::setEngine(ASTCreateQuery & create) const
         else if (as_create.storage)
         {
             storage_def = typeid_cast<std::shared_ptr<ASTStorage>>(as_create.storage->ptr());
+            create.is_time_series_table = as_create.is_time_series_table;
         }
         else
         {
