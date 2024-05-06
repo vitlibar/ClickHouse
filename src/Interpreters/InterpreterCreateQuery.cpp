@@ -39,6 +39,7 @@
 #include <Storages/StorageInMemoryMetadata.h>
 #include <Storages/WindowView/StorageWindowView.h>
 #include <Storages/StorageReplicatedMergeTree.h>
+#include <Storages/StorageTimeSeries.h>
 
 #include <Interpreters/Context.h>
 #include <Interpreters/executeDDLQueryOnCluster.h>
@@ -879,6 +880,10 @@ InterpreterCreateQuery::TableProperties InterpreterCreateQuery::getTableProperti
     /// supports schema inference (will determine table structure in it's constructor).
     else if (!StorageFactory::instance().getStorageFeatures(create.storage->engine->name).supports_schema_inference)
         throw Exception(ErrorCodes::INCORRECT_QUERY, "Incorrect CREATE query: required list of column descriptions or AS section or SELECT.");
+
+    /// If this is a TimeSeries table then we need to correct the list of columns (add missing columns and reorder).
+    if (create.is_time_series_table)
+        StorageTimeSeries::validateTableStructure(properties.columns, create);
 
     /// Even if query has list of columns, canonicalize it (unfold Nested columns).
     if (!create.columns_list)
