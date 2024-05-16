@@ -1,5 +1,6 @@
 #include <Server/PrometheusMetricsOnlyRequestHandler.h>
 
+#include <Common/logger_useful.h>
 #include <Server/PrometheusMetricsWriter.h>
 
 
@@ -13,8 +14,10 @@ PrometheusMetricsOnlyRequestHandler::PrometheusMetricsOnlyRequestHandler(
 {
 }
 
-void PrometheusMetricsOnlyRequestHandler::handleMetrics(HTTPServerRequest & /* request */, HTTPServerResponse & response)
+void PrometheusMetricsOnlyRequestHandler::handleMetrics(HTTPServerRequest & request, HTTPServerResponse & response)
 {
+    LOG_INFO(log, "Handling metrics request from {}", request.get("User-Agent"));
+
     auto metrics_writer = createMetricsWriter();
 
     response.setContentType("text/plain; version=0.0.4; charset=UTF-8");
