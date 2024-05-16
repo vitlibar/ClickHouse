@@ -11,6 +11,7 @@ void PrometheusRequestHandlerConfig::loadConfig(const Poco::Util::AbstractConfig
 {
     *this = PrometheusRequestHandlerConfig{};
 
+    /// We support two ways to setup the configuration for sending metrics:
     /// <prometheus>
     ///     <port>9363</port>
     ///     <endpoint>/metrics</endpoint>
@@ -19,11 +20,35 @@ void PrometheusRequestHandlerConfig::loadConfig(const Poco::Util::AbstractConfig
     ///     <asynchronous_metrics>true</asynchronous_metrics>
     ///     <errors>true</errors>
     /// </prometheus>
-    metrics.endpoint = config_.getString(config_prefix + ".endpoint", "/metrics");
-    metrics.send_metrics = config_.getBool(config_prefix + ".metrics", true);
-    metrics.send_asynchronous_metrics = config_.getBool(config_prefix + ".asynchronous_metrics", true);
-    metrics.send_events = config_.getBool(config_prefix + ".events", true);
-    metrics.send_errors = config_.getBool(config_prefix + ".errors", true);
+    ///
+    /// -and-
+    ///
+    /// <prometheus>
+    ///     <port>9363</port>
+    ///     <expose>
+    ///         <endpoint>/metrics</endpoint>
+    ///         <metrics>true</metrics>
+    ///         <events>true</events>
+    ///         <asynchronous_metrics>true</asynchronous_metrics>
+    ///         <errors>true</errors>
+    ///     </expose>
+    /// </prometheus>
+    if (config_.has(config_prefix + ".expose"))
+    {
+        metrics.endpoint = config_.getString(config_prefix + ".expose.endpoint", "/metrics");
+        metrics.send_metrics = config_.getBool(config_prefix + ".expose.metrics", true);
+        metrics.send_asynchronous_metrics = config_.getBool(config_prefix + ".expose.asynchronous_metrics", true);
+        metrics.send_events = config_.getBool(config_prefix + ".expose.events", true);
+        metrics.send_errors = config_.getBool(config_prefix + ".expose.errors", true);
+    }
+    else
+    {
+        metrics.endpoint = config_.getString(config_prefix + ".endpoint", "/metrics");
+        metrics.send_metrics = config_.getBool(config_prefix + ".metrics", true);
+        metrics.send_asynchronous_metrics = config_.getBool(config_prefix + ".asynchronous_metrics", true);
+        metrics.send_events = config_.getBool(config_prefix + ".events", true);
+        metrics.send_errors = config_.getBool(config_prefix + ".errors", true);
+    }
 
     keep_alive_timeout = config_.getUInt("keep_alive_timeout", DEFAULT_HTTP_KEEP_ALIVE_TIMEOUT);
 }
