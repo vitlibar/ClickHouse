@@ -54,6 +54,15 @@ void PrometheusRequestHandlerConfig::loadConfig(const Poco::Util::AbstractConfig
                                           config_.getBool(config_prefix + ".errors",
                                           true));
 
+    if (!config_.getString(config_prefix + ".remote_write.table", "").empty())
+    {
+        remote_write.emplace();
+        remote_write->table_name.table = config_.getString(config_prefix + ".remote_write.table");
+        remote_write->table_name.database = config_.getString(config_prefix + ".remote_write.database", "default");
+        remote_write->endpoint = config_.getString(config_prefix + ".remote_write.endpoint", "/write");
+    }
+
+    is_stacktrace_enabled = config_.getBool(config_prefix + ".enable_stacktrace", true)
     keep_alive_timeout = config_.getUInt("keep_alive_timeout", DEFAULT_HTTP_KEEP_ALIVE_TIMEOUT);
 }
 
@@ -64,6 +73,9 @@ bool PrometheusRequestHandlerConfig::filterRequest(const HTTPServerRequest & req
 
     if (path == metrics.endpoint)
         return (method == Poco::Net::HTTPRequest::HTTP_GET) || (method == Poco::Net::HTTPRequest::HTTP_HEAD);
+
+    if (remote_write && (path == remote_write->endpoint))
+        return (method == Poco::Net::HTTPRequest::HTTP_POST);
 
     return false;
 }

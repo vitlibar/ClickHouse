@@ -22,6 +22,9 @@ protected:
     /// Writes the current metrics to the response in the Prometheus format.
     virtual void handleMetrics(HTTPServerRequest & request, HTTPServerResponse & response) { handlerNotFound(request, response); }
 
+    /// Handles the remote write protocol - parses data from request and writes to a TimeSeries table.
+    virtual void handleRemoteWrite(HTTPServerRequest & request, HTTPServerResponse & response) { handlerNotFound(request, response); }
+
     /// Throws an exception that there is no handler for that path.
     void handlerNotFound(HTTPServerRequest & request, HTTPServerResponse & response);
 
@@ -30,6 +33,9 @@ protected:
 
     /// Writes the current exception to the response.
     void trySendExceptionToClient(const String & s, int exception_code, HTTPServerRequest & request, HTTPServerResponse & response);
+
+    /// Sets whether a exception (if any) should be sent to the client with its stacktrace.
+    void setSendStacktraceToClient(bool send_stacktrace_);
 
     IServer & server;
     const PrometheusRequestHandlerConfig config;
@@ -40,6 +46,7 @@ private:
     std::unique_ptr<WriteBufferFromHTTPServerResponse> out;
     ProfileEvents::Event write_event;
     bool exception_is_written = false;
+    bool send_stacktrace = false;
 };
 
 }
