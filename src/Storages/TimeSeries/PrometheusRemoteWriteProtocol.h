@@ -9,6 +9,7 @@ namespace DB
 {
 class StorageTimeSeries;
 
+/// Helper class to support the prometheus remote write protocol.
 class PrometheusRemoteWriteProtocol
 {
 public:
@@ -19,11 +20,11 @@ public:
     void writeTimeSeries(const google::protobuf::RepeatedPtrField<prometheus::TimeSeries> & time_series);
 
     /// Insert metrics metadata received by remote write protocol to our table.
-    void writeMetadata(const google::protobuf::RepeatedPtrField<prometheus::MetricMetadata> & metrics_metadata);
+    void writeMetricsMetadata(const google::protobuf::RepeatedPtrField<prometheus::MetricMetadata> & metrics_metadata);
 
 private:
     std::shared_ptr<StorageTimeSeries> time_series_storage;
-    ContextPtr insert_context;
+    ContextPtr context;
     Poco::LoggerPtr log;
 };
 

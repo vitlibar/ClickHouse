@@ -61,15 +61,8 @@ void PrometheusBaseRequestHandler::handleRequest(HTTPServerRequest & request, HT
     {
         tryLogCurrentException(log);
 
-        try
-        {
-            ExecutionStatus status = ExecutionStatus::fromCurrentException("", send_stacktrace);
-            sendExceptionToHTTPClient(status.message, status.code, request, response, getOutputStream());
-        }
-        catch (...)
-        {
-            tryLogCurrentException(log, "Couldn't send exception to client");
-        }
+        ExecutionStatus status = ExecutionStatus::fromCurrentException("", send_stacktrace);
+        trySendExceptionToClient(status.message, status.code, request, response);
 
         try
         {
@@ -99,41 +92,44 @@ WriteBuffer & PrometheusBaseRequestHandler::getOutputStream(HTTPServerResponse &
     return *out;
 }
 
-void sendExceptionToHTTPClient(
-    const String & s,
-    int exception_code,
-    HTTPServerRequest & request,
-    HTTPServerResponse & response,
-    WriteBuffer & out)
+namespace
 {
-    response.set("X-ClickHouse-Exception-Code", toString<int>(exception_code));
-    response.setStatusAndReason(exceptionCodeToHTTPStatus(exception_code));
-
-    /// If HTTP method is POST and Keep-Alive is turned on, we should read the whole request body
-    /// to avoid reading part of the current request body in the next request.
-    if (request.getMethod() == Poco::Net::HTTPRequest::HTTP_POST && response.getKeepAlive()
-        && exception_code != ErrorCodes::HTTP_LENGTH_REQUIRED && !request.getStream().eof())
+    void sendExceptionToHTTPClient(
+        const String & s,
+        int exception_code,
+        HTTPServerRequest & request,
+        HTTPServerResponse & response,
+        WriteBuffer & out)
     {
-        request.getStream().ignoreAll();
+        response.set("X-ClickHouse-Exception-Code", toString<int>(exception_code));
+        response.setStatusAndReason(exceptionCodeToHTTPStatus(exception_code));
+
+        /// If HTTP method is POST and Keep-Alive is turned on, we should read the whole request body
+        /// to avoid reading part of the current request body in the next request.
+        if (request.getMethod() == Poco::Net::HTTPRequest::HTTP_POST && response.getKeepAlive()
+            && exception_code != ErrorCodes::HTTP_LENGTH_REQUIRED && !request.getStream().eof())
+        {
+            request.getStream().ignoreAll();
+        }
+
+        /// Note that the error message will possibly be sent after some data.
+        /// Also HTTP code 200 could have already been sent.
+
+        /// If buffer has data, and that data wasn't sent yet, then no need to send that data
+        out.position() = out.buffer().begin();
+
+        writeString(s, out);
+        writeChar('\n', out);
+
+        out.finalize();
     }
-
-    /// Note that the error message will possibly be sent after some data.
-    /// Also HTTP code 200 could have already been sent.
-
-    /// If buffer has data, and that data wasn't sent yet, then no need to send that data
-    out.position() = out.buffer().begin();
-
-    writeString(s, out);
-    writeChar('\n', out);
-
-    out.finalize();
 }
 
 void PrometheusBaseRequestHandler::trySendExceptionToClient(const String & s, int exception_code, HTTPServerRequest & request, HTTPServerResponse & response)
 {
     try
     {
-        sendExceptionToHTTPClient(s, exception_code, request, response, getOutputStream());
+        sendExceptionToHTTPClient(s, exception_code, request, response, getOutputStream(response));
     }
     catch (...)
     {

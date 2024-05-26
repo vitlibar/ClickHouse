@@ -1,10 +1,16 @@
 #pragma once
 
+#include <Core/Settings.h>
+#include <Interpreters/Context_fwd.h>
 #include <Server/PrometheusMetricsOnlyRequestHandler.h>
 
 
 namespace DB
 {
+class HTMLForm;
+class Session;
+class Credentials;
+
 
 /// Handles requests from Prometheus including both metrics ("/metrics") and API protocols (remote write, remote read, query).
 class PrometheusRequestHandler : public PrometheusMetricsOnlyRequestHandler
@@ -19,9 +25,9 @@ protected:
     void onException() override;
 
 private:
-    bool authenticateUserAndMakeSession(HTTPServerRequest & request, HTTPServerResponse & response);
+    bool authenticateUserAndMakeContext(HTTPServerRequest & request, HTTPServerResponse & response);
     bool authenticateUser(HTTPServerRequest & request, HTTPServerResponse & response);
-    void makeSessionContext(HTTPServerRequest & request);
+    void makeContext(HTTPServerRequest & request);
 
     void wrapHandler(HTTPServerRequest & request, HTTPServerResponse & response, bool authenticate, std::function<void()> && func);
     void handleRemoteWriteImpl(HTTPServerRequest & request, HTTPServerResponse & response);
@@ -30,7 +36,7 @@ private:
     std::unique_ptr<HTMLForm> params;
     std::unique_ptr<Session> session;
     std::unique_ptr<Credentials> request_credentials;
-    ContextPtr context;
+    ContextMutablePtr context;
 };
 
 }

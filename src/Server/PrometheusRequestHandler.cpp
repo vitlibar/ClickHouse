@@ -1,11 +1,28 @@
 #include <Server/PrometheusRequestHandler.h>
 
+#include <IO/Protobuf/ProtobufZeroCopyInputStreamFromReadBuffer.h>
+#include <Server/HTTP/checkHTTPHeader.h>
+#include <Server/HTTP/HTMLForm.h>
+#include <Server/HTTP/authenticateUserByHTTP.h>
+#include <Server/HTTP/setReadOnlyIfHTTPMethodIdempotent.h>
+#include <Server/IServer.h>
+#include <Common/logger_useful.h>
+#include <IO/SnappyReadBuffer.h>
+#include <Interpreters/Context.h>
+#include <Interpreters/DatabaseCatalog.h>
+#include <Interpreters/Session.h>
+#include <Storages/TimeSeries/PrometheusRemoteWriteProtocol.h>
+#include <Common/CurrentThread.h>
+#include <Access/Credentials.h>
+
+
 
 namespace DB
 {
 
 PrometheusRequestHandler::PrometheusRequestHandler(IServer & server_, const PrometheusRequestHandlerConfig & config_, const AsynchronousMetrics & async_metrics_)
     : PrometheusMetricsOnlyRequestHandler(server_, config_, async_metrics_)
+    , default_settings(server_.context()->getSettingsRef())
 {
 }
 
@@ -26,7 +43,6 @@ void PrometheusRequestHandler::handleRemoteWrite(HTTPServerRequest & request, HT
 void PrometheusRequestHandler::wrapHandler(HTTPServerRequest & request, HTTPServerResponse & response, bool authenticate, std::function<void()> && func)
 {
     SCOPE_EXIT({
-        query_scope.reset();
         context.reset();
         session.reset();
         params.reset();
@@ -35,10 +51,15 @@ void PrometheusRequestHandler::wrapHandler(HTTPServerRequest & request, HTTPServ
     params = std::make_unique<HTMLForm>(default_settings, request);
     setSendStacktraceToClient(config.is_stacktrace_enabled && params->getParsed<bool>("stacktrace", false));
 
+    std::optional<CurrentThread::QueryScope> query_scope;
+
     if (authenticate)
     {
         if (!authenticateUserAndMakeContext(request, response))
             return;
+
+        /// Initialize query scope.
+        query_scope.emplace(context);
     }
 
     std::move(func)();
@@ -58,7 +79,7 @@ void PrometheusRequestHandler::handleRemoteWriteImpl(HTTPServerRequest & request
     if (!write_request.ParsePartialFromZeroCopyStream(&zero_copy_input_stream))
         throw Exception(ErrorCodes::BAD_ARGUMENTS, "Cannot parse WriteRequest");
 
-    auto table = DatabaseCatalog::instance().getTable(config.remote_write->table_name, context);
+    auto table = DatabaseCatalog::instance().getTable(StorageID{config.remote_write->table_name}, context);
     PrometheusRemoteWriteProtocol protocol{table, context};
 
     if (write_request.timeseries_size())
@@ -129,10 +150,6 @@ void PrometheusRequestHandler::makeContext(HTTPServerRequest & request)
 
     /// Set the query id supplied by the user, if any, and also update the OpenTelemetry fields.
     context->setCurrentQueryId(params->get("query_id", request.get("X-ClickHouse-Query-Id", "")));
-
-    /// Initialize query scope, once query_id is initialized.
-    /// (To track as much allocations as possible)
-    query_scope.emplace(context);
 }
 
 

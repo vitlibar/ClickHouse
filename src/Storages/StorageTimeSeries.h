@@ -3,11 +3,11 @@
 #include <Parsers/ASTSelectQuery.h>
 #include <Parsers/IAST_fwd.h>
 #include <Storages/IStorage.h>
-#include <Storages/TimeSeries/TimeSeriesSettings.h>
 
 
 namespace DB
 {
+struct TimeSeriesSettings;
 
 /// Represents a table engine to keep time series received by Prometheus protocols.
 /// Examples of using this table engine:
@@ -26,9 +26,12 @@ public:
     StorageTimeSeries(const StorageID & table_id, const ContextPtr & local_context, LoadingStrictnessLevel mode,
                       const ASTCreateQuery & query, const ColumnsDescription & columns, const String & comment);
 
+    ~StorageTimeSeries() override;
+
     std::string getName() const override { return "TimeSeries"; }
 
-    const TimeSeriesSettings & getStorageSettings() const { return storage_settings; }
+    TimeSeriesSettings getStorageSettings() const;
+    std::shared_ptr<const TimeSeriesSettings> getStorageSettingsPtr() const { return storage_settings; }
 
     StorageID getTargetTableId(TargetTableKind target_kind) const;
     StoragePtr getTargetTable(TargetTableKind target_kind, const ContextPtr & local_context) const;
@@ -78,7 +81,7 @@ public:
     Strings getDataPaths() const override;
 
 private:
-    TimeSeriesSettings storage_settings;
+    std::shared_ptr<const TimeSeriesSettings> storage_settings;
 
     struct Target
     {

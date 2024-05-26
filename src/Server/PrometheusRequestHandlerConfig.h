@@ -32,7 +32,7 @@ struct PrometheusRequestHandlerConfig
     std::optional<EndpointAndTableName> remote_write;
 
     size_t keep_alive_timeout;
-    bool enable_stacktrace = true;
+    bool is_stacktrace_enabled = true;
 
     void loadConfig(const Poco::Util::AbstractConfiguration & config, const String & config_prefix);
     bool filterRequest(const HTTPServerRequest & request) const;

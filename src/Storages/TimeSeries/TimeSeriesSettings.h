@@ -11,6 +11,7 @@ class ASTStorage;
 /// Algorithm used to calculate id from the metric name and tag names and values.
 enum class TimeSeriesIdAlgorithm
 {
+    SipHash64,
     SipHash128,
 };
 
