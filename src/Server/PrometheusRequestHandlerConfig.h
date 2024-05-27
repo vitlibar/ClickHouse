@@ -1,6 +1,6 @@
 #pragma once
 
-#include <base/types.h>
+#include <Core/QualifiedTableName.h>
 
 
 namespace Poco::Util { class AbstractConfiguration; }
@@ -23,7 +23,16 @@ struct PrometheusRequestHandlerConfig
 
     Metrics metrics;
 
+    struct EndpointAndTableName
+    {
+        String endpoint;
+        QualifiedTableName table_name;
+    };
+
+    std::optional<EndpointAndTableName> remote_write;
+
     size_t keep_alive_timeout;
+    bool is_stacktrace_enabled = true;
 
     void loadConfig(const Poco::Util::AbstractConfiguration & config, const String & config_prefix);
     bool filterRequest(const HTTPServerRequest & request) const;
