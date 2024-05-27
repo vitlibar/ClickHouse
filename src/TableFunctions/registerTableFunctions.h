@@ -74,6 +74,8 @@ void registerTableFunctionFormat(TableFunctionFactory & factory);
 
 void registerTableFunctionExplain(TableFunctionFactory & factory);
 
+void registerTableFunctionTimeSeries(TableFunctionFactory & factory);
+
 #if USE_AZURE_BLOB_STORAGE
 void registerTableFunctionAzureBlobStorage(TableFunctionFactory & factory);
 void registerTableFunctionAzureBlobStorageCluster(TableFunctionFactory & factory);

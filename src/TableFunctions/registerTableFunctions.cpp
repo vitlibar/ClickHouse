@@ -76,13 +76,12 @@ void registerTableFunctions()
 
     registerTableFunctionFormat(factory);
     registerTableFunctionExplain(factory);
+    registerTableFunctionTimeSeries(factory);
 
 #if USE_AZURE_BLOB_STORAGE
     registerTableFunctionAzureBlobStorage(factory);
     registerTableFunctionAzureBlobStorageCluster(factory);
 #endif
-
-
 }
 
 }
