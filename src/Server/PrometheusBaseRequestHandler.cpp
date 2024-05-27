@@ -36,6 +36,8 @@ void PrometheusBaseRequestHandler::handleRequest(HTTPServerRequest & request, HT
 
         if (path == config.metrics.endpoint)
             handleMetrics(request, response);
+        else if (config.remote_write && (path == config.remote_write->endpoint))
+            handleRemoteWrite(request, response);
         else
             handlerNotFound(request, response);
 
