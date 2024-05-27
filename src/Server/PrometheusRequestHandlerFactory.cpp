@@ -2,6 +2,7 @@
 
 #include <Server/HTTPHandlerFactory.h>
 #include <Server/PrometheusMetricsOnlyRequestHandler.h>
+#include <Server/PrometheusRequestHandler.h>
 
 
 namespace DB

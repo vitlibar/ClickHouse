@@ -583,6 +583,29 @@ SinkToStoragePtr StorageTimeSeries::write(const ASTPtr & query, const StorageMet
 }
 
 
+std::shared_ptr<StorageTimeSeries> storagePtrToTimeSeries(StoragePtr storage)
+{
+    if (auto res = typeid_cast<std::shared_ptr<StorageTimeSeries>>(storage))
+        return res;
+
+    throw Exception(
+        ErrorCodes::UNEXPECTED_TABLE_ENGINE,
+        "This operation can be executed on a TimeSeries table only, the engine of table {} is not TimeSeries",
+        storage->getStorageID().getNameForLogs());
+}
+
+std::shared_ptr<const StorageTimeSeries> storagePtrToTimeSeries(ConstStoragePtr storage)
+{
+    if (auto res = typeid_cast<std::shared_ptr<const StorageTimeSeries>>(storage))
+        return res;
+
+    throw Exception(
+        ErrorCodes::UNEXPECTED_TABLE_ENGINE,
+        "This operation can be executed on a TimeSeries table only, the engine of table {} is not TimeSeries",
+        storage->getStorageID().getNameForLogs());
+}
+
+
 void registerStorageTimeSeries(StorageFactory & factory)
 {
     factory.registerStorage("TimeSeries", [](const StorageFactory::Arguments & args)
