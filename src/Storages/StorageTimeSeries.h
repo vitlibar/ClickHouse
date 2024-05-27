@@ -2,6 +2,7 @@
 
 #include <Parsers/ASTSelectQuery.h>
 #include <Parsers/IAST_fwd.h>
+#include <Storages/IStorage_fwd.h>
 #include <Storages/IStorage.h>
 
 
@@ -9,6 +10,8 @@ namespace DB
 {
 struct TimeSeriesSettings;
 using TimeSeriesSettingsPtr = std::shared_ptr<const TimeSeriesSettings>;
+class ITimeSeriesIDCalculator;
+using TimeSeriesIDCalculatorPtr = std::shared_ptr<ITimeSeriesIDCalculator>;
 
 /// Represents a table engine to keep time series received by Prometheus protocols.
 /// Examples of using this table engine:
@@ -39,6 +42,8 @@ public:
 
     TimeSeriesSettings getStorageSettings() const;
     TimeSeriesSettingsPtr getStorageSettingsPtr() const { return storage_settings; }
+
+    TimeSeriesIDCalculatorPtr getIDCalculatorPtr() const { return id_calculator; }
 
     StorageID getTargetTableId(TargetTableKind target_kind) const;
     StoragePtr getTargetTable(TargetTableKind target_kind, const ContextPtr & local_context) const;
@@ -89,6 +94,7 @@ public:
 
 private:
     TimeSeriesSettingsPtr storage_settings;
+    TimeSeriesIDCalculatorPtr id_calculator;
 
     struct Target
     {
@@ -101,5 +107,8 @@ private:
     std::vector<Target> targets;
     bool has_inner_tables = false;
 };
+
+std::shared_ptr<StorageTimeSeries> storagePtrToTimeSeries(StoragePtr storage);
+std::shared_ptr<const StorageTimeSeries> storagePtrToTimeSeries(ConstStoragePtr storage);
 
 }
