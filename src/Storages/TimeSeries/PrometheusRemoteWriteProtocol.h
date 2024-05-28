@@ -13,7 +13,7 @@ class StorageTimeSeries;
 class PrometheusRemoteWriteProtocol
 {
 public:
-    PrometheusRemoteWriteProtocol(StoragePtr time_series_storage_, const ContextPtr & insert_context_);
+    PrometheusRemoteWriteProtocol(StoragePtr time_series_storage_, const ContextPtr & context_);
     ~PrometheusRemoteWriteProtocol();
 
     /// Insert time series received by remote write protocol to our table.

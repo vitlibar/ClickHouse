@@ -62,6 +62,14 @@ void PrometheusRequestHandlerConfig::loadConfig(const Poco::Util::AbstractConfig
         remote_write->endpoint = config_.getString(config_prefix + ".remote_write.endpoint", "/write");
     }
 
+    if (!config_.getString(config_prefix + ".remote_read.table", "").empty())
+    {
+        remote_read.emplace();
+        remote_read->table_name.table = config_.getString(config_prefix + ".remote_read.table");
+        remote_read->table_name.database = config_.getString(config_prefix + ".remote_read.database", "default");
+        remote_read->endpoint = config_.getString(config_prefix + ".remote_read.endpoint", "/write");
+    }
+
     is_stacktrace_enabled = config_.getBool(config_prefix + ".enable_stacktrace", true);
     keep_alive_timeout = config_.getUInt("keep_alive_timeout", DEFAULT_HTTP_KEEP_ALIVE_TIMEOUT);
 }
