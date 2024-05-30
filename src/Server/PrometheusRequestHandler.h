@@ -21,6 +21,7 @@ public:
 protected:
     void handleMetrics(HTTPServerRequest & request, HTTPServerResponse & response) override;
     void handleRemoteWrite(HTTPServerRequest & request, HTTPServerResponse & response) override;
+    void handleRemoteRead(HTTPServerRequest & request, HTTPServerResponse & response) override;
     void onException() override;
 
 private:
@@ -30,6 +31,7 @@ private:
 
     void wrapHandler(HTTPServerRequest & request, HTTPServerResponse & response, bool authenticate, std::function<void()> && func);
     void handleRemoteWriteImpl(HTTPServerRequest & request, HTTPServerResponse & response);
+    void handleRemoteReadImpl(HTTPServerRequest & request, HTTPServerResponse & response);
 
     const Settings & default_settings;
     std::unique_ptr<HTMLForm> params;
