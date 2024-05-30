@@ -24,6 +24,7 @@ namespace DB
 
 namespace ErrorCodes
 {
+    extern const int ILLEGAL_COLUMN;
     extern const int INCOMPATIBLE_COLUMNS;
     extern const int INCORRECT_QUERY;
     extern const int THERE_IS_NO_COLUMN;
@@ -461,11 +462,25 @@ void TimeSeriesDefinitionNormalizer::validateColumnForMetricName(const ColumnDes
     validateColumnForTagValue(column);
 }
 
+void TimeSeriesDefinitionNormalizer::validateColumnForMetricName(const ColumnWithTypeAndName & column) const
+{
+    validateColumnForTagValue(column);
+}
+
 void TimeSeriesDefinitionNormalizer::validateColumnForTagValue(const ColumnDescription & column) const
 {
     if (!isString(removeLowCardinalityAndNullable(column.type)))
     {
         throw Exception(ErrorCodes::INCOMPATIBLE_COLUMNS, "{}: Column {} has illegal data type {}, expected String or LowCardinality(String)",
+                        storage_id.getNameForLogs(), column.name, column.type->getName());
+    }
+}
+
+void TimeSeriesDefinitionNormalizer::validateColumnForTagValue(const ColumnWithTypeAndName & column) const
+{
+    if (!isString(removeLowCardinalityAndNullable(column.type)))
+    {
+        throw Exception(ErrorCodes::ILLEGAL_COLUMN, "{}: Column {} has illegal data type {}, expected String or LowCardinality(String)",
                         storage_id.getNameForLogs(), column.name, column.type->getName());
     }
 }
@@ -477,6 +492,17 @@ void TimeSeriesDefinitionNormalizer::validateColumnForTagsMap(const ColumnDescri
         || !isString(removeLowCardinality(typeid_cast<const DataTypeMap &>(*column.type).getValueType())))
     {
         throw Exception(ErrorCodes::INCOMPATIBLE_COLUMNS, "{}: Column {} has illegal data type {}, expected Map(String, String) or Map(LowCardinality(String), String)",
+                        storage_id.getNameForLogs(), column.name, column.type->getName());
+    }
+}
+
+void TimeSeriesDefinitionNormalizer::validateColumnForTagsMap(const ColumnWithTypeAndName & column) const
+{
+    if (!isMap(column.type)
+        || !isString(removeLowCardinality(typeid_cast<const DataTypeMap &>(*column.type).getKeyType()))
+        || !isString(removeLowCardinality(typeid_cast<const DataTypeMap &>(*column.type).getValueType())))
+    {
+        throw Exception(ErrorCodes::ILLEGAL_COLUMN, "{}: Column {} has illegal data type {}, expected Map(String, String) or Map(LowCardinality(String), String)",
                         storage_id.getNameForLogs(), column.name, column.type->getName());
     }
 }

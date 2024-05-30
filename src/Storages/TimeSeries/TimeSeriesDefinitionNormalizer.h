@@ -40,6 +40,10 @@ public:
     void validateColumnForTagValue(const ColumnDescription & column) const;
     void validateColumnForTagsMap(const ColumnDescription & column) const;
 
+    void validateColumnForMetricName(const ColumnWithTypeAndName & column) const;
+    void validateColumnForTagValue(const ColumnWithTypeAndName & column) const;
+    void validateColumnForTagsMap(const ColumnWithTypeAndName & column) const;
+
     void validateColumnForMetricFamilyName(const ColumnDescription & column) const;
     void validateColumnForType(const ColumnDescription & column) const;
     void validateColumnForUnit(const ColumnDescription & column) const;
