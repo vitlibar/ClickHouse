@@ -21,16 +21,6 @@ struct TimeSeriesColumnNames
     static constexpr const char * kType = "type";
     static constexpr const char * kUnit = "unit";
     static constexpr const char * kHelp = "help";
-
-    /// Generated columns of the main table.
-    //static constexpr const char * kID = "id";
-    //static constexpr const char * kMetricName = "metric_name";
-    //static constexpr const char * kMetricFamilyName = "metric_family_name";
-    //static constexpr const char * kType = "type";
-    //static constexpr const char * kUnit = "unit";
-    //static constexpr const char * kTags = "tags";
-    static constexpr const char * kTimeSeries = "time_series";
-    //static constexpr const char * kHelp = "help";
 };
 
 }

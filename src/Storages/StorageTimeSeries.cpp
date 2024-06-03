@@ -1,10 +1,5 @@
 #include <Storages/StorageTimeSeries.h>
 
-#include <DataTypes/DataTypeArray.h>
-#include <DataTypes/DataTypeFactory.h>
-#include <DataTypes/DataTypeMap.h>
-#include <DataTypes/DataTypeString.h>
-#include <DataTypes/DataTypeTuple.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/DatabaseCatalog.h>
 #include <Interpreters/InterpreterCreateQuery.h>
@@ -13,7 +8,6 @@
 #include <Parsers/ASTFunction.h>
 #include <Parsers/ASTIdentifier.h>
 #include <Parsers/ASTTargetTables.h>
-#include <Parsers/parseQuery.h>
 #include <Storages/AlterCommands.h>
 #include <Storages/StorageFactory.h>
 #include <Storages/TimeSeries/TimeSeriesColumnNames.h>
@@ -29,8 +23,8 @@ namespace DB
 
 namespace ErrorCodes
 {
-    extern const int UNEXPECTED_TABLE_ENGINE;
     extern const int INCORRECT_QUERY;
+    extern const int UNEXPECTED_TABLE_ENGINE;
 }
 
 
@@ -38,39 +32,8 @@ namespace
 {
     namespace fs = std::filesystem;
 
-    /// Makes description of the columns which can be read from a TimeSeries table.
-    /// A TimeSeries table generates such columns by combining data read from its target tables.
-    ColumnsDescription getColumnsDescription(const TimeSeriesSettings & storage_settings)
-    {
-        auto id_type = DataTypeFactory::instance().get(storage_settings.id_type);
-        auto timestamp_type = DataTypeFactory::instance().get(storage_settings.timestamp_type);
-        auto value_type = DataTypeFactory::instance().get(storage_settings.value_type);
-        auto string_type = std::make_shared<DataTypeString>();
-
-        ColumnsDescription columns;
-        columns.add(ColumnDescription{TimeSeriesColumnNames::kID,               id_type});
-        columns.add(ColumnDescription{TimeSeriesColumnNames::kMetricName,       string_type});
-        columns.add(ColumnDescription{TimeSeriesColumnNames::kMetricFamilyName, string_type});
-        columns.add(ColumnDescription{TimeSeriesColumnNames::kType,             string_type});
-        columns.add(ColumnDescription{TimeSeriesColumnNames::kUnit,             string_type});
-
-        const Map & tags_to_columns = storage_settings.tags_to_columns;
-        for (const auto & tag_name_and_column_name : tags_to_columns)
-        {
-            const auto & tuple = tag_name_and_column_name.safeGet<const Tuple &>();
-            const auto & column_name = tuple.at(1).safeGet<String>();
-            columns.add(ColumnDescription{column_name, string_type});
-        }
-
-        columns.add(ColumnDescription{TimeSeriesColumnNames::kTags,       std::make_shared<DataTypeMap>(string_type, string_type)});
-        columns.add(ColumnDescription{TimeSeriesColumnNames::kTimeSeries, std::make_shared<DataTypeArray>(std::make_shared<DataTypeTuple>(DataTypes{timestamp_type, value_type}))});
-        columns.add(ColumnDescription{TimeSeriesColumnNames::kHelp,       string_type});
-
-        return columns;
-    };
-
     /// Loads the TimeSeries storage settings from a create query.
-    std::shared_ptr<const TimeSeriesSettings> loadStorageSettingsFromQuery(const ASTCreateQuery & query)
+    std::shared_ptr<const TimeSeriesSettings> getTimeSeriesSettingsFromQuery(const ASTCreateQuery & query)
     {
         auto storage_settings = std::make_shared<TimeSeriesSettings>();
         if (query.storage)
@@ -91,71 +54,67 @@ namespace
         return res;
     }
 
-    /// Parses a compression codec.
-    ASTPtr parseCodec(const String & codec)
-    {
-        if (codec.empty())
-            return nullptr;
-        ParserCodec codec_parser;
-        return parseQuery(codec_parser, "(" + codec + ")", 0, DBMS_DEFAULT_MAX_PARSER_DEPTH, DBMS_DEFAULT_MAX_PARSER_BACKTRACKS);
-    }
-
     /// Makes description of the columns of an inner target table.
-    ColumnsDescription getInnerTableColumnsDescription(TargetTableKind inner_table_kind, const TimeSeriesSettings & storage_settings)
+    ColumnsDescription getInnerTableColumnsDescription(
+        TargetTableKind inner_table_kind, const ColumnsDescription & time_series_columns, const TimeSeriesSettings & time_series_settings)
     {
+        ColumnsDescription columns;
+
         switch (inner_table_kind)
         {
             case TargetTableKind::kData:
             {
-                auto id_type = DataTypeFactory::instance().get(storage_settings.id_type);
-                auto timestamp_type = DataTypeFactory::instance().get(storage_settings.timestamp_type);
-                auto value_type = DataTypeFactory::instance().get(storage_settings.value_type);
-
-                ColumnsDescription columns;
-                columns.add(ColumnDescription{TimeSeriesColumnNames::kID,        id_type,        parseCodec(storage_settings.id_codec),        ""});
-                columns.add(ColumnDescription{TimeSeriesColumnNames::kTimestamp, timestamp_type, parseCodec(storage_settings.timestamp_codec), ""});
-                columns.add(ColumnDescription{TimeSeriesColumnNames::kValue,     value_type,     parseCodec(storage_settings.value_codec),     ""});
-                return columns;
+                columns.add(time_series_columns.get(TimeSeriesColumnNames::kID));
+                columns.add(time_series_columns.get(TimeSeriesColumnNames::kTimestamp));
+                columns.add(time_series_columns.get(TimeSeriesColumnNames::kValue));
+                break;
             }
 
             case TargetTableKind::kTags:
             {
-                auto id_type = DataTypeFactory::instance().get(storage_settings.id_type);
-                auto string_type = std::make_shared<DataTypeString>();
-
-                ColumnsDescription columns;
-                columns.add(ColumnDescription{TimeSeriesColumnNames::kID,         id_type});
-                columns.add(ColumnDescription{TimeSeriesColumnNames::kMetricName, string_type});
+                columns.add(time_series_columns.get(TimeSeriesColumnNames::kID));
+                columns.add(time_series_columns.get(TimeSeriesColumnNames::kMetricName));
 
                 /// We put known tags to the columns specified in the storage settings.
-                const Map & tags_to_columns = storage_settings.tags_to_columns;
+                const Map & tags_to_columns = time_series_settings.tags_to_columns;
                 for (const auto & tag_name_and_column_name : tags_to_columns)
                 {
                     const auto & tuple = tag_name_and_column_name.safeGet<const Tuple &>();
                     const auto & column_name = tuple.at(1).safeGet<String>();
-                    columns.add(ColumnDescription{column_name, string_type});
+                    columns.add(time_series_columns.get(column_name));
                 }
 
                 /// We put other tags to "tags" column.
-                columns.add(ColumnDescription{TimeSeriesColumnNames::kTags, std::make_shared<DataTypeMap>(string_type, string_type)});
-                return columns;
+                columns.add(time_series_columns.get(TimeSeriesColumnNames::kTags));
+                break;
             }
 
             case TargetTableKind::kMetrics:
             {
-                auto string_type = std::make_shared<DataTypeString>();
-
-                return ColumnsDescription{
-                    { TimeSeriesColumnNames::kMetricFamilyName, string_type },
-                    { TimeSeriesColumnNames::kType,             string_type },
-                    { TimeSeriesColumnNames::kUnit,             string_type },
-                    { TimeSeriesColumnNames::kHelp,             string_type },
-                };
+                columns.add(time_series_columns.get(TimeSeriesColumnNames::kMetricFamilyName));
+                columns.add(time_series_columns.get(TimeSeriesColumnNames::kType));
+                columns.add(time_series_columns.get(TimeSeriesColumnNames::kUnit));
+                columns.add(time_series_columns.get(TimeSeriesColumnNames::kHelp));
+                break;
             }
 
             default:
                 chassert(false);
         }
+
+        {
+            const Map & extra_columns = time_series_settings.extra_columns;
+            for (const auto & column_name_and_table : extra_columns)
+            {
+                const auto & tuple = column_name_and_table.safeGet<const Tuple &>();
+                const auto & column_name = tuple.at(0).safeGet<String>();
+                const auto & inner_target = tuple.at(1).safeGet<String>();
+                if (inner_target == toString(inner_table_kind))
+                    columns.add(time_series_columns.get(column_name));
+            }
+        }
+
+        return columns;
     }
 
     /// Makes description of the default table engine of an inner target table.
@@ -205,7 +164,8 @@ namespace
     /// Generates a CREATE query for creating an inner target table.
     std::shared_ptr<ASTCreateQuery> getCreateQueryForInnerTable(
         const StorageID & time_series_storage_id,
-        const TimeSeriesSettings & storage_settings,
+        const ColumnsDescription & time_series_columns,
+        const TimeSeriesSettings & time_series_settings,
         TargetTableKind inner_table_kind,
         const UUID & inner_uuid,
         const ASTStorage * inner_storage)
@@ -218,8 +178,11 @@ namespace
         create->uuid = inner_table_id.uuid;
 
         auto new_columns_list = std::make_shared<ASTColumns>();
-        new_columns_list->set(new_columns_list->columns, InterpreterCreateQuery::formatColumns(getInnerTableColumnsDescription(inner_table_kind, storage_settings)));
         create->set(create->columns_list, new_columns_list);
+        new_columns_list->set(
+            new_columns_list->columns,
+            InterpreterCreateQuery::formatColumns(
+                getInnerTableColumnsDescription(inner_table_kind, time_series_columns, time_series_settings)));
 
         if (inner_storage)
         {
@@ -245,41 +208,43 @@ namespace
 
     /// Creates an inner target table or just makes its storage ID.
     /// This function is used by the constructor of StorageTimeSeries to find (or create) its target tables.
-    void initTarget(
+    std::pair<StorageID, bool /* inner */> initTarget(
         TargetTableKind target_kind,
         const ASTCreateQuery & query,
         const StorageID & time_series_storage_id,
-        const TimeSeriesSettings & storage_settings,
+        const ColumnsDescription & time_series_columns,
+        const TimeSeriesSettings & time_series_settings,
         const ContextPtr & context,
-        LoadingStrictnessLevel mode,
-        StorageID & out_table_id,
-        bool & out_has_inner_table)
+        LoadingStrictnessLevel mode)
     {
         const auto & target = query.getTarget(target_kind);
-        out_has_inner_table = target.table_id.empty();
+        bool inner = target.table_id.empty();
+        StorageID res = StorageID::createEmpty();
 
-        if (!out_has_inner_table)
+        if (!inner)
         {
-            out_table_id = target.table_id;
+            res = target.table_id;
         }
         else if (LoadingStrictnessLevel::ATTACH <= mode)
         {
             /// If there is an ATTACH request, then the internal table must already be created.
-            out_table_id = generateInnerTableId(time_series_storage_id, target_kind, target.inner_uuid);
+            res = generateInnerTableId(time_series_storage_id, target_kind, target.inner_uuid);
         }
         else
         {
             /// We will create a query to create an internal table.
             auto create_context = Context::createCopy(context);
 
-            auto manual_create_query = getCreateQueryForInnerTable(time_series_storage_id, storage_settings, target_kind, target.inner_uuid, target.storage);
+            auto manual_create_query = getCreateQueryForInnerTable(time_series_storage_id, time_series_columns, time_series_settings, target_kind, target.inner_uuid, target.storage);
 
             InterpreterCreateQuery create_interpreter(manual_create_query, create_context);
             create_interpreter.setInternal(true);
             create_interpreter.execute();
 
-            out_table_id = DatabaseCatalog::instance().getTable({manual_create_query->getDatabase(), manual_create_query->getTable()}, context)->getStorageID();
+            res = DatabaseCatalog::instance().getTable({manual_create_query->getDatabase(), manual_create_query->getTable()}, context)->getStorageID();
         }
+
+        return {res, inner};
     }
 }
 
@@ -294,25 +259,22 @@ StorageTimeSeries::StorageTimeSeries(
     : IStorage(table_id)
     , WithContext(local_context->getGlobalContext())
 {
-    if (!columns.empty())
-        throw Exception{ErrorCodes::INCORRECT_QUERY, "The {} table engine doesn't allow specifying custom columns in the CREATE query", getName()};
-
-    storage_settings = loadStorageSettingsFromQuery(query);
-
-    id_calculator = TimeSeriesIDCalculatorFactory::instance().create(storage_settings->id_algorithm);
+    storage_settings = getTimeSeriesSettingsFromQuery(query);
 
     StorageInMemoryMetadata storage_metadata;
-    storage_metadata.setColumns(getColumnsDescription(*storage_settings));
+    storage_metadata.setColumns(columns);
     if (!comment.empty())
         storage_metadata.setComment(comment);
     setInMemoryMetadata(storage_metadata);
+
+    id_calculator = TimeSeriesIDCalculatorFactory::instance().create(storage_settings->id_algorithm);
 
     has_inner_tables = false;
 
     for (auto target_kind : {TargetTableKind::kData, TargetTableKind::kTags, TargetTableKind::kMetrics})
     {
         auto & target = targets.emplace_back(target_kind);
-        initTarget(target_kind, query, getStorageID(), *storage_settings, local_context, mode, target.table_id, target.has_inner_table);
+        std::tie(target.table_id, target.has_inner_table) = initTarget(target_kind, query, getStorageID(), columns, *storage_settings, local_context, mode);
         has_inner_tables |= target.has_inner_table;
     }
 }

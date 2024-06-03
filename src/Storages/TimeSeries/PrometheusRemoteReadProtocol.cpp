@@ -10,6 +10,7 @@
 #include <Columns/ColumnsNumber.h>
 #include <Core/Block.h>
 #include <Core/Field.h>
+#include <DataTypes/DataTypeMap.h>
 #include <Interpreters/InterpreterSelectQuery.h>
 #include <Interpreters/StorageID.h>
 #include <Parsers/ASTFunction.h>
@@ -32,6 +33,7 @@ namespace DB
 namespace ErrorCodes
 {
     extern const int BAD_REQUEST_PARAMETER;
+    extern const int ILLEGAL_COLUMN;
 }
 
 
@@ -153,7 +155,7 @@ namespace
     {
         auto select_query = std::make_shared<ASTSelectQuery>();
 
-            /// SELECT any(tags_table.tag_column1), ... any(tags_table.tag_columnN), any(tags_table.tags),
+            /// SELECT tags_table.metric_name, any(tags_table.tag_column1), ... any(tags_table.tag_columnN), any(tags_table.tags),
             ///        groupArray(data_table.timestamp, data_table.value)
             {
             auto exp_list = std::make_shared<ASTExpressionList>();
@@ -269,6 +271,7 @@ namespace
     void convertBlockToProtobuf(
         Block && block,
         google::protobuf::RepeatedPtrField<prometheus::TimeSeries> & out_time_series,
+        const StorageID & time_series_storage_id,
         const TimeSeriesSettings & time_series_settings)
     {
         size_t num_rows = block.rows();
@@ -277,7 +280,21 @@ namespace
 
         size_t column_index = 0;
 
-        const auto & metric_name_column = *(block.getByPosition(column_index++).column);
+        auto get_next_column_with_type = [&] -> const ColumnWithTypeAndName & { return block.getByPosition(column_index++); };
+        auto get_next_column = [&] -> const IColumn & { return *(get_next_column_with_type().column); };
+
+        auto get_next_string_column = [&] -> const IColumn &
+        {
+            const auto & column_with_type = get_next_column_with_type();
+            if (!isString(removeLowCardinalityAndNullable(column_with_type.type)))
+            {
+                throw Exception(ErrorCodes::ILLEGAL_COLUMN, "{}: The '{}' column in the tags table has wrong data type {}, expected String or LowCardinality(String)",
+                                time_series_storage_id.getNameForLogs(), column_with_type.name, column_with_type.type->getName());
+            }
+            return *(column_with_type.column);
+        };
+
+        const auto & metric_name_column = get_next_string_column();
 
         std::unordered_map<String, const IColumn *> column_by_tag_name;
         const Map & tags_to_columns = time_series_settings.tags_to_columns;
@@ -285,15 +302,24 @@ namespace
         {
             const auto & tuple = tag_name_and_column_name.safeGet<const Tuple &>();
             const auto & tag_name = tuple.at(0).safeGet<String>();
-            column_by_tag_name[tag_name] = block.getByPosition(column_index++).column.get();
+            column_by_tag_name[tag_name] = &get_next_string_column();
         }
 
-        const auto & other_tags_column = typeid_cast<const ColumnMap &>(*block.getByPosition(column_index++).column);
+        auto other_tags_column_with_type = get_next_column_with_type();
+        auto other_tags_column_type = other_tags_column_with_type.type;
+        if (!isMap(other_tags_column_type)
+            || !isString(removeLowCardinalityAndNullable(typeid_cast<const DataTypeMap &>(*other_tags_column_type).getKeyType()))
+            || !isString(removeLowCardinalityAndNullable(typeid_cast<const DataTypeMap &>(*other_tags_column_type).getValueType())))
+        {
+            throw Exception(ErrorCodes::ILLEGAL_COLUMN, "{}: The '{}' column in the tags table has wrong data type {}, expected Map(String, String) or Map(LowCardinality(String), String)",
+                            time_series_storage_id.getNameForLogs(), TimeSeriesColumnNames::kTags, other_tags_column_type->getName());
+        }
+        const auto & other_tags_column = typeid_cast<const ColumnMap &>(*other_tags_column_with_type.column);
         const auto & other_tags_names = other_tags_column.getNestedData().getColumn(0);
         const auto & other_tags_values = other_tags_column.getNestedData().getColumn(1);
         const auto & other_tags_offsets = other_tags_column.getNestedColumn().getOffsets();
 
-        const auto & time_series_column = typeid_cast<const ColumnArray &>(*block.getByPosition(column_index++).column);
+        const auto & time_series_column = typeid_cast<const ColumnArray &>(get_next_column());
         const auto & time_series_timestamps = typeid_cast<const ColumnDecimal<DateTime64> &>(typeid_cast<const ColumnTuple &>(time_series_column.getData()).getColumn(0));
         const auto & time_series_values = typeid_cast<const ColumnFloat64 &>(typeid_cast<const ColumnTuple &>(time_series_column.getData()).getColumn(1));
         const auto & time_series_offsets = time_series_column.getOffsets();
@@ -307,7 +333,7 @@ namespace
 
             for (const auto & [_, column] : column_by_tag_name)
             {
-                if (!column->getDataAt(i).empty())
+                if (!column->isNullAt(i) && !column->getDataAt(i).empty())
                     ++num_labels;
             }
 
@@ -322,12 +348,20 @@ namespace
 
             for (const auto & [tag_name, column] : column_by_tag_name)
             {
-                if (!column->getDataAt(i).empty())
+                if (!column->isNullAt(i) && !column->getDataAt(i).empty())
                     labels.emplace_back(tag_name, column->getDataAt(i));
             }
 
             for (size_t j = other_tags_start_offset; j != other_tags_end_offset; ++j)
-                labels.emplace_back(other_tags_names.getDataAt(j), other_tags_values.getDataAt(j));
+            {
+                if (!other_tags_names.isNullAt(j) && !other_tags_values.isNullAt(j))
+                {
+                    std::string_view tag_name{other_tags_names.getDataAt(j)};
+                    std::string_view tag_value{other_tags_values.getDataAt(j)};
+                    if (!tag_name.empty() && !tag_value.empty())
+                        labels.emplace_back(tag_name, tag_value);
+                }
+            }
 
             size_t time_series_start_offset = time_series_offsets[i - 1];
             size_t time_series_end_offset = time_series_offsets[i];
@@ -401,7 +435,7 @@ void PrometheusRemoteReadProtocol::readTimeSeries(google::protobuf::RepeatedPtrF
                   time_series_storage_id.getNameForLogs(), block.columns(), block.rows());
 
         if (block)
-            convertBlockToProtobuf(std::move(block), out_time_series, *time_series_settings);
+            convertBlockToProtobuf(std::move(block), out_time_series, time_series_storage_id, *time_series_settings);
     }
 
     LOG_TRACE(log, "{}: {} time series read",
