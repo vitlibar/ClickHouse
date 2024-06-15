@@ -99,3 +99,5 @@ def test_simplest_query():
     for step in range(0, 10):
         time.sleep(step != 0)
         compare_query_results("up")
+    print(node.query("SELECT * FROM timeSeriesTags(prometheus) ORDER by id"))
+    assert False
