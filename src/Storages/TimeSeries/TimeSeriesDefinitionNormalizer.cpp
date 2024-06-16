@@ -43,7 +43,7 @@ bool TimeSeriesDefinitionNormalizer::areColumnsValid(const ColumnsDescription & 
     if (it->name == TimeSeriesColumnNames::ID)
     {
         std::optional<ColumnDescription> new_column;
-        validateColumnForIDAndAddDefault(*it, new_column);
+        validateColumnForIDAndAddDefault(*it, time_series_settings, new_column);
         if (new_column.has_value())
             return false;
     }
@@ -82,17 +82,23 @@ bool TimeSeriesDefinitionNormalizer::areColumnsValid(const ColumnsDescription & 
             return false;
     }
 
-    ++it;
-    if (it->name == TimeSeriesColumnNames::Tags)
-        validateColumnForTagsMap(*it);
-    else
-        return false;
+    if (time_series_settings.store_other_tags_as_map)
+    {
+        ++it;
+        if (it->name == TimeSeriesColumnNames::Tags)
+            validateColumnForTagsMap(*it);
+        else
+            return false;
+    }
 
-    ++it;
-    if (it->name == TimeSeriesColumnNames::AllTags)
-        validateColumnForTagsMap(*it);
-    else
-        return false;
+    if (time_series_settings.enable_column_all_tags)
+    {
+        ++it;
+        if (it->name == TimeSeriesColumnNames::AllTags)
+            validateColumnForTagsMap(*it);
+        else
+            return false;
+    }
 
     ++it;
     if (it->name == TimeSeriesColumnNames::MetricFamilyName)
@@ -132,7 +138,7 @@ ColumnsDescription TimeSeriesDefinitionNormalizer::validateColumns(const Columns
         if (const auto * column = columns.tryGet(TimeSeriesColumnNames::ID))
         {
             std::optional<ColumnDescription> new_column;
-            validateColumnForIDAndAddDefault(*column, new_column);
+            validateColumnForIDAndAddDefault(*column, time_series_settings, new_column);
             if (new_column)
                 res.add(std::move(*new_column));
             else
@@ -141,7 +147,7 @@ ColumnsDescription TimeSeriesDefinitionNormalizer::validateColumns(const Columns
         else
         {
             ColumnDescription new_column{TimeSeriesColumnNames::ID, std::make_shared<DataTypeUUID>()};
-            new_column.default_desc.expression = chooseIDAlgorithm(new_column);
+            new_column.default_desc.expression = chooseIDAlgorithm(new_column, time_series_settings);
             res.add(std::move(new_column));
         }
     }
@@ -203,6 +209,7 @@ ColumnsDescription TimeSeriesDefinitionNormalizer::validateColumns(const Columns
     }
 
     /// Column `tags`.
+    if (time_series_settings.store_other_tags_as_map)
     {
         if (const auto * column = columns.tryGet(TimeSeriesColumnNames::Tags))
         {
@@ -219,6 +226,7 @@ ColumnsDescription TimeSeriesDefinitionNormalizer::validateColumns(const Columns
     }
 
     /// Column `all_tags`.
+    if (time_series_settings.enable_column_all_tags)
     {
         if (const auto * column = columns.tryGet(TimeSeriesColumnNames::AllTags))
         {
@@ -229,8 +237,7 @@ ColumnsDescription TimeSeriesDefinitionNormalizer::validateColumns(const Columns
         {
             res.add(ColumnDescription{
                 TimeSeriesColumnNames::AllTags,
-                std::make_shared<DataTypeMap>(
-                    std::make_shared<DataTypeLowCardinality>(std::make_shared<DataTypeString>()), std::make_shared<DataTypeString>())});
+                std::make_shared<DataTypeMap>(std::make_shared<DataTypeString>(), std::make_shared<DataTypeString>())});
         }
     }
 
@@ -305,11 +312,27 @@ ColumnsDescription TimeSeriesDefinitionNormalizer::validateColumns(const Columns
 }
 
 /// Generates a formulae for calculating the identifier of a time series from the metric name and all the tags.
-ASTPtr TimeSeriesDefinitionNormalizer::chooseIDAlgorithm(const ColumnDescription & id_description) const
+ASTPtr TimeSeriesDefinitionNormalizer::chooseIDAlgorithm(const ColumnDescription & id_description, const TimeSeriesSettings & time_series_settings) const
 {
     ASTs arguments_for_hash_function;
     arguments_for_hash_function.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::MetricName));
-    arguments_for_hash_function.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::AllTags));
+
+    if (time_series_settings.enable_column_all_tags)
+    {
+        arguments_for_hash_function.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::AllTags));
+    }
+    else
+    {
+        const Map & tags_to_columns = time_series_settings.tags_to_columns;
+        for (const auto & tag_name_and_column_name : tags_to_columns)
+        {
+            const auto & tuple = tag_name_and_column_name.safeGet<const Tuple &>();
+            const auto & column_name = tuple.at(1).safeGet<String>();
+            arguments_for_hash_function.push_back(std::make_shared<ASTIdentifier>(column_name));
+        }
+        if (time_series_settings.store_other_tags_as_map)
+            arguments_for_hash_function.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Tags));
+    }
 
     auto make_hash_function = [&](const String & function_name)
     {
@@ -389,7 +412,8 @@ void TimeSeriesDefinitionNormalizer::validateTargetColumns(TargetKind target_kin
                 validateColumnForTagValue(get_column_description(column_name));
             }
 
-            validateColumnForTagsMap(get_column_description(TimeSeriesColumnNames::Tags));
+            if (time_series_settings.store_other_tags_as_map)
+                validateColumnForTagsMap(get_column_description(TimeSeriesColumnNames::Tags));
 
             break;
         }
@@ -418,13 +442,13 @@ void TimeSeriesDefinitionNormalizer::validateColumnForID(const ColumnDescription
                     storage_id.getNameForLogs(), column.name, column.name, column.type->getName());
 }
 
-void TimeSeriesDefinitionNormalizer::validateColumnForIDAndAddDefault(const ColumnDescription & column, std::optional<ColumnDescription> & out_column_with_default) const
+void TimeSeriesDefinitionNormalizer::validateColumnForIDAndAddDefault(const ColumnDescription & column, const TimeSeriesSettings & time_series_settings, std::optional<ColumnDescription> & out_column_with_default) const
 {
     if (column.default_desc.expression)
         return;
 
     out_column_with_default = column;
-    out_column_with_default->default_desc.expression = chooseIDAlgorithm(column);
+    out_column_with_default->default_desc.expression = chooseIDAlgorithm(column, time_series_settings);
 }
 
 void TimeSeriesDefinitionNormalizer::validateColumnForTimestamp(const ColumnDescription & column) const

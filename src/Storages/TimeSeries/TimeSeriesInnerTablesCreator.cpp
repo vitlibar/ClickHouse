@@ -1,5 +1,7 @@
 #include <Storages/TimeSeries/TimeSeriesInnerTablesCreator.h>
 
+#include <DataTypes/DataTypeMap.h>
+#include <DataTypes/DataTypeString.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/DatabaseCatalog.h>
 #include <Interpreters/InterpreterCreateQuery.h>
@@ -51,7 +53,12 @@ namespace
             case TargetKind::Tags:
             {
                 /// Column "id".
-                columns.add(time_series_columns.get(TimeSeriesColumnNames::ID));
+                {
+                    auto id_column = time_series_columns.get(TimeSeriesColumnNames::ID);
+                    if (!time_series_settings.copy_id_default_to_tags_table)
+                        id_column.default_desc = {};
+                    columns.add(std::move(id_column));
+                }
 
                 /// Column "metric_name".
                 columns.add(time_series_columns.get(TimeSeriesColumnNames::MetricName));
@@ -66,18 +73,26 @@ namespace
                 }
 
                 /// Column "tags".
-                columns.add(time_series_columns.get(TimeSeriesColumnNames::Tags));
+                if (time_series_settings.store_other_tags_as_map)
+                    columns.add(time_series_columns.get(TimeSeriesColumnNames::Tags));
 
                 /// Column "all_tags".
-                auto all_tags_column = time_series_columns.get(TimeSeriesColumnNames::AllTags);
-                /// Column "all_tags" is here only to calculate the identifier of a time series for the "id" column, so it can be ephemeral.
-                all_tags_column.default_desc.kind = ColumnDefaultKind::Ephemeral;
-                if (!all_tags_column.default_desc.expression)
+                if (time_series_settings.create_ephemeral_all_tags_in_tags_table)
                 {
-                    all_tags_column.default_desc.ephemeral_default = true;
-                    all_tags_column.default_desc.expression = makeASTFunction("defaultValueOfTypeName", std::make_shared<ASTLiteral>(all_tags_column.type->getName()));
+                    ColumnDescription all_tags_column;
+                    if (const auto * existing_column = time_series_columns.tryGet(TimeSeriesColumnNames::AllTags))
+                        all_tags_column = *existing_column;
+                    else
+                        all_tags_column = ColumnDescription{TimeSeriesColumnNames::AllTags, std::make_shared<DataTypeMap>(std::make_shared<DataTypeString>(), std::make_shared<DataTypeString>())};
+                    /// Column "all_tags" is here only to calculate the identifier of a time series for the "id" column, so it can be ephemeral.
+                    all_tags_column.default_desc.kind = ColumnDefaultKind::Ephemeral;
+                    if (!all_tags_column.default_desc.expression)
+                    {
+                        all_tags_column.default_desc.ephemeral_default = true;
+                        all_tags_column.default_desc.expression = makeASTFunction("defaultValueOfTypeName", std::make_shared<ASTLiteral>(all_tags_column.type->getName()));
+                    }
+                    columns.add(std::move(all_tags_column));
                 }
-                columns.add(std::move(all_tags_column));
 
                 break;
             }
