@@ -409,7 +409,8 @@ void TimeSeriesColumnsValidator::validateTargetColumns(TargetKind target_kind, c
                 validateColumnForTagValue(get_column_description(column_name));
             }
 
-            validateColumnForTagsMap(get_column_description(TimeSeriesColumnNames::Tags));
+            if (time_series_settings.use_column_tags_for_other_tags)
+                validateColumnForTagsMap(get_column_description(TimeSeriesColumnNames::Tags));
             break;
         }
 
