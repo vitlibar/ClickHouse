@@ -97,6 +97,18 @@ bool TimeSeriesColumnsValidator::areColumnsValid(const ColumnsDescription & colu
             return false;
     }
 
+    if (time_series_settings.store_min_time_and_max_time)
+    {
+        for (const auto & column_name : {TimeSeriesColumnNames::MinTime, TimeSeriesColumnNames::MaxTime})
+        {
+            ++it;
+            if (it->name == column_name)
+                validateColumnForTimestamp(*it);
+            else
+                return false;
+        }
+    }
+
     ++it;
     if (it->name == TimeSeriesColumnNames::MetricFamilyName)
         validateColumnForMetricFamilyName(*it);
@@ -184,7 +196,7 @@ ColumnsDescription TimeSeriesColumnsValidator::doValidateColumns(const ColumnsDe
         }
         else
         {
-            res.add(ColumnDescription{TimeSeriesColumnNames::MetricName, std::make_shared<DataTypeString>()});
+            res.add(ColumnDescription{TimeSeriesColumnNames::MetricName, std::make_shared<DataTypeLowCardinality>(std::make_shared<DataTypeString>())});
         }
     }
 
@@ -235,6 +247,32 @@ ColumnsDescription TimeSeriesColumnsValidator::doValidateColumns(const ColumnsDe
             res.add(ColumnDescription{
                 TimeSeriesColumnNames::AllTags,
                 std::make_shared<DataTypeMap>(std::make_shared<DataTypeString>(), std::make_shared<DataTypeString>())});
+        }
+    }
+
+    /// Columns `min_time` and `max_time`.
+    if (time_series_settings.store_min_time_and_max_time)
+    {
+        for (const auto & column_name : {TimeSeriesColumnNames::MinTime, TimeSeriesColumnNames::MaxTime})
+        {
+            if (const auto * column = columns.tryGet(column_name))
+            {
+                validateColumnForTimestamp(*column);
+                res.add(*column);
+            }
+            else if (const auto * timestamp_column = columns.tryGet(TimeSeriesColumnNames::Timestamp))
+            {
+                auto new_column = *timestamp_column;
+                new_column.name = column_name;
+                validateColumnForTimestamp(new_column);
+                res.add(new_column);
+            }
+            else
+            {
+                /// A nullable type is better for storing min_time / max_time because we want to allow time series in the 'tags' table
+                /// which have no timestamps.
+                res.add(ColumnDescription{column_name, std::make_shared<DataTypeNullable>(std::make_shared<DataTypeDateTime64>(3))});
+            }
         }
     }
 
@@ -411,6 +449,14 @@ void TimeSeriesColumnsValidator::validateTargetColumns(TargetKind target_kind, c
 
             if (time_series_settings.use_column_tags_for_other_tags)
                 validateColumnForTagsMap(get_column_description(TimeSeriesColumnNames::Tags));
+
+            if (time_series_settings.store_min_time_and_max_time)
+            {
+                /// Here we check only existence of columns "min_time" and "max_time" here because otherwise it would be difficult
+                /// (those columns can be defined with using SimpleAggregateFunction).
+                for (const auto & column_name : {TimeSeriesColumnNames::MinTime, TimeSeriesColumnNames::MaxTime})
+                    get_column_description(column_name);
+            }
             break;
         }
 
@@ -449,19 +495,19 @@ void TimeSeriesColumnsValidator::validateColumnForID(const ColumnDescription & c
 
 void TimeSeriesColumnsValidator::validateColumnForTimestamp(const ColumnDescription & column) const
 {
-    if (!isDateTime64(removeLowCardinalityAndNullable(column.type)))
+    if (!isDateTime64(removeNullable(column.type)))
     {
-        throw Exception(ErrorCodes::INCOMPATIBLE_COLUMNS, "{}: Column {} has illegal data type {}, expected DateTime64(s)",
+        throw Exception(ErrorCodes::INCOMPATIBLE_COLUMNS, "{}: Column {} has illegal data type {}, expected DateTime64",
                         storage_id.getNameForLogs(), column.name, column.type->getName());
     }
 }
 
 void TimeSeriesColumnsValidator::validateColumnForTimestamp(const ColumnDescription & column, UInt32 & out_scale) const
 {
-    auto maybe_datetime64_type = removeLowCardinalityAndNullable(column.type);
+    auto maybe_datetime64_type = removeNullable(column.type);
     if (!isDateTime64(maybe_datetime64_type))
     {
-        throw Exception(ErrorCodes::INCOMPATIBLE_COLUMNS, "{}: Column {} has illegal data type {}, expected DateTime64(s)",
+        throw Exception(ErrorCodes::INCOMPATIBLE_COLUMNS, "{}: Column {} has illegal data type {}, expected DateTime64",
                         storage_id.getNameForLogs(), column.name, column.type->getName());
     }
     const auto & datetime64_type = typeid_cast<const DataTypeDateTime64 &>(*maybe_datetime64_type);
@@ -470,7 +516,7 @@ void TimeSeriesColumnsValidator::validateColumnForTimestamp(const ColumnDescript
 
 void TimeSeriesColumnsValidator::validateColumnForValue(const ColumnDescription & column) const
 {
-    if (!isFloat(removeLowCardinalityAndNullable(column.type)))
+    if (!isFloat(removeNullable(column.type)))
     {
         throw Exception(ErrorCodes::INCOMPATIBLE_COLUMNS, "{}: Column {} has illegal data type {}, expected Float32 or Float64",
                         storage_id.getNameForLogs(), column.name, column.type->getName());
@@ -508,8 +554,8 @@ void TimeSeriesColumnsValidator::validateColumnForTagValue(const ColumnWithTypeA
 void TimeSeriesColumnsValidator::validateColumnForTagsMap(const ColumnDescription & column) const
 {
     if (!isMap(column.type)
-        || !isString(removeLowCardinalityAndNullable(typeid_cast<const DataTypeMap &>(*column.type).getKeyType()))
-        || !isString(removeLowCardinalityAndNullable(typeid_cast<const DataTypeMap &>(*column.type).getValueType())))
+        || !isString(removeLowCardinality(typeid_cast<const DataTypeMap &>(*column.type).getKeyType()))
+        || !isString(removeLowCardinality(typeid_cast<const DataTypeMap &>(*column.type).getValueType())))
     {
         throw Exception(ErrorCodes::INCOMPATIBLE_COLUMNS, "{}: Column {} has illegal data type {}, expected Map(String, String) or Map(LowCardinality(String), String)",
                         storage_id.getNameForLogs(), column.name, column.type->getName());
@@ -519,8 +565,8 @@ void TimeSeriesColumnsValidator::validateColumnForTagsMap(const ColumnDescriptio
 void TimeSeriesColumnsValidator::validateColumnForTagsMap(const ColumnWithTypeAndName & column) const
 {
     if (!isMap(column.type)
-        || !isString(removeLowCardinalityAndNullable(typeid_cast<const DataTypeMap &>(*column.type).getKeyType()))
-        || !isString(removeLowCardinalityAndNullable(typeid_cast<const DataTypeMap &>(*column.type).getValueType())))
+        || !isString(removeLowCardinality(typeid_cast<const DataTypeMap &>(*column.type).getKeyType()))
+        || !isString(removeLowCardinality(typeid_cast<const DataTypeMap &>(*column.type).getValueType())))
     {
         throw Exception(ErrorCodes::ILLEGAL_COLUMN, "{}: Column {} has illegal data type {}, expected Map(String, String) or Map(LowCardinality(String), String)",
                         storage_id.getNameForLogs(), column.name, column.type->getName());

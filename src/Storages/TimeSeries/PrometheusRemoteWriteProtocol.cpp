@@ -165,6 +165,23 @@ namespace
             return timestamp_ms / DecimalUtils::scaleMultiplier<DateTime64>(3 - scale);
     }
 
+    /// Finds min time and max time in a time series.
+    std::pair<Int64, Int64> findMinTimeAndMaxTime(const google::protobuf::RepeatedPtrField<prometheus::Sample> & samples)
+    {
+        chassert(!samples.empty());
+        Int64 min_time = std::numeric_limits<Int64>::max();
+        Int64 max_time = std::numeric_limits<Int64>::min();
+        for (const auto & sample : samples)
+        {
+            Int64 timestamp = sample.timestamp();
+            if (timestamp < min_time)
+                min_time = timestamp;
+            if (timestamp > max_time)
+                max_time = timestamp;
+        }
+        return {min_time, max_time};
+    }
+
     struct BlocksToInsert
     {
         std::vector<std::pair<TargetKind, Block>> blocks;
@@ -285,6 +302,23 @@ namespace
             all_tags_offsets = &all_tags_column.getNestedColumn().getOffsets();
         }
 
+        /// Columns "min_time" and "max_time".
+        IColumn * min_time_column = nullptr;
+        IColumn * max_time_column = nullptr;
+        UInt32 min_time_scale = 0;
+        UInt32 max_time_scale = 0;
+        if (time_series_settings.store_min_time_and_max_time)
+        {
+            const auto & min_time_description = get_column_description(TimeSeriesColumnNames::MinTime);
+            const auto & max_time_description = get_column_description(TimeSeriesColumnNames::MaxTime);
+            validator.validateColumnForTimestamp(min_time_description, min_time_scale);
+            validator.validateColumnForTimestamp(max_time_description, max_time_scale);
+            min_time_column = &make_column_for_data_block(min_time_description);
+            max_time_column = &make_column_for_data_block(max_time_description);
+            columns_to_fill_in_tags_table.emplace_back(min_time_column);
+            columns_to_fill_in_tags_table.emplace_back(max_time_column);
+        }
+
         /// Prepare a block for inserting into the "tags" table.
         for (size_t i = 0; i != static_cast<size_t>(time_series.size()); ++i)
         {
@@ -336,6 +370,20 @@ namespace
 
             if (time_series_settings.use_column_tags_for_other_tags)
                 tags_offsets->push_back(tags_names->size());
+
+            if (time_series_settings.store_min_time_and_max_time)
+            {
+                if (element.sample_size())
+                {
+                    auto [min_time, max_time] = findMinTimeAndMaxTime(element.samples());
+                    min_time_column->insert(scaleTimestamp(min_time, min_time_scale));
+                    max_time_column->insert(scaleTimestamp(max_time, max_time_scale));
+                }
+                else if (!is_min_time_nullable || !is_max_time_nullable))
+                {
+                    throw Exception(ErrorCodes::INCOMPATIBLE_COLUMNS, "{}: Cannot insert a time series without samples");
+                }
+            }
 
             size_t current_num_tags_rows = i + 1;
             for (auto * column : columns_to_fill_in_tags_table)
