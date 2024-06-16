@@ -97,6 +97,18 @@ bool TimeSeriesColumnsValidator::areColumnsValid(const ColumnsDescription & colu
             return false;
     }
 
+    if (time_series_settings.store_min_time_and_max_time)
+    {
+        for (const auto & column_name : {TimeSeriesColumnNames::MinTime, TimeSeriesColumnNames::MaxTime})
+        {
+            ++it;
+            if (it->name == column_name)
+                validateColumnForTimestamp(*it);
+            else
+                return false;
+        }
+    }
+
     ++it;
     if (it->name == TimeSeriesColumnNames::MetricFamilyName)
         validateColumnForMetricFamilyName(*it);
@@ -235,6 +247,32 @@ ColumnsDescription TimeSeriesColumnsValidator::doValidateColumns(const ColumnsDe
             res.add(ColumnDescription{
                 TimeSeriesColumnNames::AllTags,
                 std::make_shared<DataTypeMap>(std::make_shared<DataTypeString>(), std::make_shared<DataTypeString>())});
+        }
+    }
+
+    /// Columns `min_time` and `max_time`.
+    if (time_series_settings.store_min_time_and_max_time)
+    {
+        for (const auto & column_name : {TimeSeriesColumnNames::MinTime, TimeSeriesColumnNames::MaxTime})
+        {
+            if (const auto * column = columns.tryGet(column_name))
+            {
+                validateColumnForTimestamp(*column);
+                res.add(*column);
+            }
+            else if (const auto * timestamp_column = columns.tryGet(TimeSeriesColumnNames::Timestamp))
+            {
+                auto new_column = *timestamp_column;
+                new_column.name = column_name;
+                validateColumnForTimestamp(new_column);
+                res.add(new_column);
+            }
+            else
+            {
+                /// A nullable type is better for storing min_time / max_time because we want to allow time series in the 'tags' table
+                /// which have no timestamps.
+                res.add(ColumnDescription{column_name, std::make_shared<DataTypeNullable>(std::make_shared<DataTypeDateTime64>(3))});
+            }
         }
     }
 
@@ -411,6 +449,14 @@ void TimeSeriesColumnsValidator::validateTargetColumns(TargetKind target_kind, c
 
             if (time_series_settings.store_other_tags_as_map)
                 validateColumnForTagsMap(get_column_description(TimeSeriesColumnNames::Tags));
+
+            if (time_series_settings.store_min_time_and_max_time)
+            {
+                /// Here we check only existence of columns "min_time" and "max_time" here because otherwise it would be difficult
+                /// (those columns can be defined with using SimpleAggregateFunction).
+                for (const auto & column_name : {TimeSeriesColumnNames::MinTime, TimeSeriesColumnNames::MaxTime})
+                    get_column_description(column_name);
+            }
 
             break;
         }

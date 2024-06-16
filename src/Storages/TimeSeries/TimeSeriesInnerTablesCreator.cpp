@@ -1,5 +1,8 @@
 #include <Storages/TimeSeries/TimeSeriesInnerTablesCreator.h>
 
+#include <AggregateFunctions/AggregateFunctionFactory.h>
+#include <DataTypes/DataTypeCustomSimpleAggregateFunction.h>
+#include <DataTypes/DataTypeFactory.h>
 #include <DataTypes/DataTypeMap.h>
 #include <DataTypes/DataTypeString.h>
 #include <Interpreters/Context.h>
@@ -94,6 +97,26 @@ namespace
                     columns.add(std::move(all_tags_column));
                 }
 
+                /// Columns "min_time" and "max_time".
+                if (time_series_settings.store_min_time_and_max_time)
+                {
+                    auto min_time_column = time_series_columns.get(TimeSeriesColumnNames::MinTime);
+                    auto max_time_column = time_series_columns.get(TimeSeriesColumnNames::MaxTime);
+                    if (time_series_settings.aggregate_min_time_and_max_time)
+                    {
+                        AggregateFunctionProperties properties;
+                        auto min_function = AggregateFunctionFactory::instance().get("min", NullsAction::EMPTY, {min_time_column.type}, {}, properties);
+                        auto custom_name = std::make_unique<DataTypeCustomSimpleAggregateFunction>(min_function, DataTypes{min_time_column.type}, Array{});
+                        min_time_column.type = DataTypeFactory::instance().getCustom(std::make_unique<DataTypeCustomDesc>(std::move(custom_name)));
+
+                        auto max_function = AggregateFunctionFactory::instance().get("max", NullsAction::EMPTY, {max_time_column.type}, {}, properties);
+                        custom_name = std::make_unique<DataTypeCustomSimpleAggregateFunction>(max_function, DataTypes{max_time_column.type}, Array{});
+                        max_time_column.type = DataTypeFactory::instance().getCustom(std::make_unique<DataTypeCustomDesc>(std::move(custom_name)));
+                    }
+                    columns.add(std::move(min_time_column));
+                    columns.add(std::move(max_time_column));
+                }
+
                 break;
             }
 
@@ -114,7 +137,7 @@ namespace
     }
 
     /// Makes description of the default table engine of an inner target table.
-    std::shared_ptr<ASTStorage> getDefaultEngineForInnerTable(TargetKind inner_table_kind)
+    std::shared_ptr<ASTStorage> getDefaultEngineForInnerTable(TargetKind inner_table_kind, const TimeSeriesSettings & time_series_settings)
     {
         auto storage = std::make_shared<ASTStorage>();
         switch (inner_table_kind)
@@ -132,16 +155,35 @@ namespace
             }
             case TargetKind::Tags:
             {
-                storage->set(storage->engine, makeASTFunction("ReplacingMergeTree"));
+                String engine_name;
+                if (time_series_settings.aggregate_min_time_and_max_time)
+                    engine_name = "AggregatingMergeTree";
+                else
+                    engine_name = "ReplacingMergeTree";
+
+                storage->set(storage->engine, makeASTFunction(engine_name));
                 storage->engine->no_empty_args = false;
 
                 storage->set(storage->primary_key,
                              std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::MetricName));
 
-                storage->set(storage->order_by,
-                             makeASTFunction("tuple",
-                                             std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::MetricName),
-                                             std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::ID)));
+                ASTs order_by_list;
+                order_by_list.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::MetricName));
+                order_by_list.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::ID));
+
+                if (time_series_settings.store_min_time_and_max_time && !time_series_settings.aggregate_min_time_and_max_time)
+                {
+                    order_by_list.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::MinTime));
+                    order_by_list.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::MaxTime));
+                }
+
+                auto order_by_tuple = std::make_shared<ASTFunction>();
+                order_by_tuple->name = "tuple";
+                auto arguments_list = std::make_shared<ASTExpressionList>();
+                arguments_list->children = std::move(order_by_list);
+                order_by_tuple->arguments = arguments_list;
+                storage->set(storage->order_by, order_by_tuple);
+
                 break;
             }
             case TargetKind::Metrics:
@@ -198,7 +240,7 @@ std::shared_ptr<ASTCreateQuery> TimeSeriesInnerTablesCreator::generateCreateQuer
         /// Set ORDER BY if not set.
         if (!create->storage->order_by && !create->storage->primary_key && create->storage->engine && create->storage->engine->name.ends_with("MergeTree"))
         {
-            auto default_engine = getDefaultEngineForInnerTable(inner_table_info.kind);
+            auto default_engine = getDefaultEngineForInnerTable(inner_table_info.kind, time_series_settings);
             if (default_engine->order_by)
                 create->storage->set(create->storage->order_by, default_engine->order_by->clone());
             if (default_engine->primary_key)
@@ -207,7 +249,7 @@ std::shared_ptr<ASTCreateQuery> TimeSeriesInnerTablesCreator::generateCreateQuer
     }
     else
     {
-        create->set(create->storage, getDefaultEngineForInnerTable(inner_table_info.kind));
+        create->set(create->storage, getDefaultEngineForInnerTable(inner_table_info.kind, time_series_settings));
     }
 
     return create;
