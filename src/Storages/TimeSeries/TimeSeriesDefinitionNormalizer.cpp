@@ -100,6 +100,18 @@ bool TimeSeriesDefinitionNormalizer::areColumnsValid(const ColumnsDescription & 
             return false;
     }
 
+    if (time_series_settings.store_min_time_and_max_time)
+    {
+        for (const auto & column_name : {TimeSeriesColumnNames::MinTime, TimeSeriesColumnNames::MaxTime})
+        {
+            ++it;
+            if (it->name == column_name)
+                validateColumnForTimestamp(*it);
+            else
+                return false;
+        }
+    }
+
     ++it;
     if (it->name == TimeSeriesColumnNames::MetricFamilyName)
         validateColumnForMetricFamilyName(*it);
@@ -238,6 +250,32 @@ ColumnsDescription TimeSeriesDefinitionNormalizer::validateColumns(const Columns
             res.add(ColumnDescription{
                 TimeSeriesColumnNames::AllTags,
                 std::make_shared<DataTypeMap>(std::make_shared<DataTypeString>(), std::make_shared<DataTypeString>())});
+        }
+    }
+
+    /// Columns `min_time` and `max_time`.
+    if (time_series_settings.store_min_time_and_max_time)
+    {
+        for (const auto & column_name : {TimeSeriesColumnNames::MinTime, TimeSeriesColumnNames::MaxTime})
+        {
+            if (const auto * column = columns.tryGet(column_name))
+            {
+                validateColumnForTimestamp(*column);
+                res.add(*column);
+            }
+            else if (const auto * timestamp_column = columns.tryGet(TimeSeriesColumnNames::Timestamp))
+            {
+                auto new_column = *timestamp_column;
+                new_column.name = column_name;
+                validateColumnForTimestamp(new_column);
+                res.add(new_column);
+            }
+            else
+            {
+                /// A nullable type is better for storing min_time / max_time because we want to allow time series in the 'tags' table
+                /// which have no timestamps.
+                res.add(ColumnDescription{column_name, std::make_shared<DataTypeNullable>(std::make_shared<DataTypeDateTime64>(3))});
+            }
         }
     }
 
@@ -414,6 +452,14 @@ void TimeSeriesDefinitionNormalizer::validateTargetColumns(TargetKind target_kin
 
             if (time_series_settings.store_other_tags_as_map)
                 validateColumnForTagsMap(get_column_description(TimeSeriesColumnNames::Tags));
+
+            if (time_series_settings.store_min_time_and_max_time)
+            {
+                /// Here we check only existence of columns "min_time" and "max_time" here because otherwise it would be difficult
+                /// (those columns can be defined with using SimpleAggregateFunction).
+                for (const auto & column_name : {TimeSeriesColumnNames::MinTime, TimeSeriesColumnNames::MaxTime})
+                    get_column_description(column_name);
+            }
 
             break;
         }
@@ -638,7 +684,13 @@ void TimeSeriesDefinitionNormalizer::setInnerTableDefaultEngine(ASTStorage & inn
 
         case TargetKind::Tags:
         {
-            inner_storage_def.set(inner_storage_def.engine, makeASTFunction("ReplacingMergeTree"));
+            String engine_name;
+            if (time_series_settings.aggregate_min_time_and_max_time)
+                engine_name = "AggregatingMergeTree";
+            else
+                engine_name = "ReplacingMergeTree";
+
+            inner_storage_def.set(inner_storage_def.engine, makeASTFunction(engine_name));
             inner_storage_def.engine->no_empty_args = false;
 
             if (!inner_storage_def.order_by && !inner_storage_def.primary_key && inner_storage_def.engine->name.ends_with("MergeTree"))
@@ -649,6 +701,12 @@ void TimeSeriesDefinitionNormalizer::setInnerTableDefaultEngine(ASTStorage & inn
                 ASTs order_by_list;
                 order_by_list.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::MetricName));
                 order_by_list.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::ID));
+
+                if (time_series_settings.store_min_time_and_max_time && !time_series_settings.aggregate_min_time_and_max_time)
+                {
+                    order_by_list.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::MinTime));
+                    order_by_list.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::MaxTime));
+                }
 
                 auto order_by_tuple = std::make_shared<ASTFunction>();
                 order_by_tuple->name = "tuple";
