@@ -32,6 +32,7 @@ namespace ErrorCodes
 {
     extern const int ILLEGAL_TIME_SERIES_TAGS;
     extern const int ILLEGAL_COLUMN;
+    extern const int INCOMPATIBLE_COLUMNS;
 }
 
 
@@ -257,20 +258,32 @@ namespace
         }
 
         /// Column "tags".
-        const auto & tags_description = get_column_description(TimeSeriesColumnNames::Tags);
-        validator.validateColumnForTagsMap(tags_description);
-        auto & tags_column = typeid_cast<ColumnMap &>(make_column_for_tags_block(tags_description));
-        IColumn & tags_names = tags_column.getNestedData().getColumn(0);
-        IColumn & tags_values = tags_column.getNestedData().getColumn(1);
-        auto & tags_offsets = tags_column.getNestedColumn().getOffsets();
+        IColumn * tags_names = nullptr;
+        IColumn * tags_values = nullptr;
+        IColumn::Offsets * tags_offsets = nullptr;
+        if (time_series_settings.use_column_tags_for_other_tags)
+        {
+            const auto & tags_description = get_column_description(TimeSeriesColumnNames::Tags);
+            validator.validateColumnForTagsMap(tags_description);
+            auto & tags_column = typeid_cast<ColumnMap &>(make_column_for_tags_block(tags_description));
+            tags_names = &tags_column.getNestedData().getColumn(0);
+            tags_values = &tags_column.getNestedData().getColumn(1);
+            tags_offsets = &tags_column.getNestedColumn().getOffsets();
+        }
 
         /// Column "all_tags".
-        const auto & all_tags_description = get_column_description(TimeSeriesColumnNames::AllTags);
-        validator.validateColumnForTagsMap(all_tags_description);
-        auto & all_tags_column = typeid_cast<ColumnMap &>(make_column_for_tags_block(all_tags_description));
-        IColumn & all_tags_names = all_tags_column.getNestedData().getColumn(0);
-        IColumn & all_tags_values = all_tags_column.getNestedData().getColumn(1);
-        auto & all_tags_offsets = all_tags_column.getNestedColumn().getOffsets();
+        IColumn * all_tags_names = nullptr;
+        IColumn * all_tags_values = nullptr;
+        IColumn::Offsets * all_tags_offsets = nullptr;
+        if (time_series_settings.enable_column_all_tags)
+        {
+            const auto & all_tags_description = get_column_description(TimeSeriesColumnNames::AllTags);
+            validator.validateColumnForTagsMap(all_tags_description);
+            auto & all_tags_column = typeid_cast<ColumnMap &>(make_column_for_tags_block(all_tags_description));
+            all_tags_names = &all_tags_column.getNestedData().getColumn(0);
+            all_tags_values = &all_tags_column.getNestedData().getColumn(1);
+            all_tags_offsets = &all_tags_column.getNestedColumn().getOffsets();
+        }
 
         /// Prepare a block for inserting into the "tags" table.
         for (size_t i = 0; i != static_cast<size_t>(time_series.size()); ++i)
@@ -292,8 +305,11 @@ namespace
                 }
                 else
                 {
-                    all_tags_names.insertData(tag_name.data(), tag_name.length());
-                    all_tags_values.insertData(tag_value.data(), tag_value.length());
+                    if (time_series_settings.enable_column_all_tags)
+                    {
+                        all_tags_names->insertData(tag_name.data(), tag_name.length());
+                        all_tags_values->insertData(tag_value.data(), tag_value.length());
+                    }
 
                     auto it = columns_by_tag_name.find(tag_name);
                     bool has_column_for_tag_value = (it != columns_by_tag_name.end());
@@ -302,16 +318,24 @@ namespace
                         auto * column = it->second;
                         column->insertData(tag_value.data(), tag_value.length());
                     }
+                    else if (time_series_settings.use_column_tags_for_other_tags)
+                    {
+                        tags_names->insertData(tag_name.data(), tag_name.length());
+                        tags_values->insertData(tag_value.data(), tag_value.length());
+                    }
                     else
                     {
-                        tags_names.insertData(tag_name.data(), tag_name.length());
-                        tags_values.insertData(tag_value.data(), tag_value.length());
+                        throw Exception(ErrorCodes::INCOMPATIBLE_COLUMNS, "{}: Cannot insert a tag named {} to the table",
+                                        time_series_storage_id.getNameForLogs(), tag_name);
                     }
                 }
             }
 
-            all_tags_offsets.push_back(all_tags_names.size());
-            tags_offsets.push_back(tags_names.size());
+            if (time_series_settings.enable_column_all_tags)
+                all_tags_offsets->push_back(all_tags_names->size());
+
+            if (time_series_settings.use_column_tags_for_other_tags)
+                tags_offsets->push_back(tags_names->size());
 
             size_t current_num_tags_rows = i + 1;
             for (auto * column : columns_to_fill_in_tags_table)

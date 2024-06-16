@@ -40,7 +40,7 @@ bool TimeSeriesColumnsValidator::areColumnsValid(const ColumnsDescription & colu
     if (it->name == TimeSeriesColumnNames::ID)
     {
         std::optional<ColumnDescription> new_column;
-        validateColumnForID(*it, /* check_default= */ true, new_column);
+        validateColumnForID(*it, /* check_default= */ true, time_series_settings, new_column);
         if (new_column.has_value())
             return false;
     }
@@ -79,17 +79,23 @@ bool TimeSeriesColumnsValidator::areColumnsValid(const ColumnsDescription & colu
             return false;
     }
 
-    ++it;
-    if (it->name == TimeSeriesColumnNames::Tags)
-        validateColumnForTagsMap(*it);
-    else
-        return false;
+    if (time_series_settings.use_column_tags_for_other_tags)
+    {
+        ++it;
+        if (it->name == TimeSeriesColumnNames::Tags)
+            validateColumnForTagsMap(*it);
+        else
+            return false;
+    }
 
-    ++it;
-    if (it->name == TimeSeriesColumnNames::AllTags)
-        validateColumnForTagsMap(*it);
-    else
-        return false;
+    if (time_series_settings.enable_column_all_tags)
+    {
+        ++it;
+        if (it->name == TimeSeriesColumnNames::AllTags)
+            validateColumnForTagsMap(*it);
+        else
+            return false;
+    }
 
     ++it;
     if (it->name == TimeSeriesColumnNames::MetricFamilyName)
@@ -129,7 +135,7 @@ ColumnsDescription TimeSeriesColumnsValidator::doValidateColumns(const ColumnsDe
         if (const auto * column = columns.tryGet(TimeSeriesColumnNames::ID))
         {
             std::optional<ColumnDescription> new_column;
-            validateColumnForID(*column, /* check_default= */ true, new_column);
+            validateColumnForID(*column, /* check_default= */ true, time_series_settings, new_column);
             if (new_column)
                 res.add(std::move(*new_column));
             else
@@ -138,7 +144,7 @@ ColumnsDescription TimeSeriesColumnsValidator::doValidateColumns(const ColumnsDe
         else
         {
             ColumnDescription new_column{TimeSeriesColumnNames::ID, std::make_shared<DataTypeUUID>()};
-            new_column.default_desc.expression = chooseIDAlgorithm(new_column);
+            new_column.default_desc.expression = chooseIDAlgorithm(new_column, time_series_settings);
             res.add(std::move(new_column));
         }
     }
@@ -200,6 +206,7 @@ ColumnsDescription TimeSeriesColumnsValidator::doValidateColumns(const ColumnsDe
     }
 
     /// Column `tags`.
+    if (time_series_settings.use_column_tags_for_other_tags)
     {
         if (const auto * column = columns.tryGet(TimeSeriesColumnNames::Tags))
         {
@@ -216,6 +223,7 @@ ColumnsDescription TimeSeriesColumnsValidator::doValidateColumns(const ColumnsDe
     }
 
     /// Column `all_tags`.
+    if (time_series_settings.enable_column_all_tags)
     {
         if (const auto * column = columns.tryGet(TimeSeriesColumnNames::AllTags))
         {
@@ -226,8 +234,7 @@ ColumnsDescription TimeSeriesColumnsValidator::doValidateColumns(const ColumnsDe
         {
             res.add(ColumnDescription{
                 TimeSeriesColumnNames::AllTags,
-                std::make_shared<DataTypeMap>(
-                    std::make_shared<DataTypeLowCardinality>(std::make_shared<DataTypeString>()), std::make_shared<DataTypeString>())});
+                std::make_shared<DataTypeMap>(std::make_shared<DataTypeString>(), std::make_shared<DataTypeString>())});
         }
     }
 
@@ -302,11 +309,27 @@ ColumnsDescription TimeSeriesColumnsValidator::doValidateColumns(const ColumnsDe
 }
 
 /// Generates a formulae for calculating the identifier of a time series from the metric name and all the tags.
-ASTPtr TimeSeriesColumnsValidator::chooseIDAlgorithm(const ColumnDescription & id_description) const
+ASTPtr TimeSeriesColumnsValidator::chooseIDAlgorithm(const ColumnDescription & id_description, const TimeSeriesSettings & time_series_settings) const
 {
     ASTs arguments_for_hash_function;
     arguments_for_hash_function.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::MetricName));
-    arguments_for_hash_function.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::AllTags));
+
+    if (time_series_settings.enable_column_all_tags)
+    {
+        arguments_for_hash_function.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::AllTags));
+    }
+    else
+    {
+        const Map & tags_to_columns = time_series_settings.tags_to_columns;
+        for (const auto & tag_name_and_column_name : tags_to_columns)
+        {
+            const auto & tuple = tag_name_and_column_name.safeGet<const Tuple &>();
+            const auto & column_name = tuple.at(1).safeGet<String>();
+            arguments_for_hash_function.push_back(std::make_shared<ASTIdentifier>(column_name));
+        }
+        if (time_series_settings.use_column_tags_for_other_tags)
+            arguments_for_hash_function.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Tags));
+    }
 
     auto make_hash_function = [&](const String & function_name)
     {
@@ -414,13 +437,13 @@ void TimeSeriesColumnsValidator::validateColumnForID(const ColumnDescription & c
                     storage_id.getNameForLogs(), column.name, column.name, column.type->getName());
 }
 
-void TimeSeriesColumnsValidator::validateColumnForID(const ColumnDescription & column, bool check_default, std::optional<ColumnDescription> & out_corrected_version) const
+void TimeSeriesColumnsValidator::validateColumnForID(const ColumnDescription & column, bool check_default, const TimeSeriesSettings & time_series_settings, std::optional<ColumnDescription> & out_corrected_version) const
 {
     if (!check_default || column.default_desc.expression)
         return;
 
     out_corrected_version = column;
-    out_corrected_version->default_desc.expression = chooseIDAlgorithm(column);
+    out_corrected_version->default_desc.expression = chooseIDAlgorithm(column, time_series_settings);
 }
 
 void TimeSeriesColumnsValidator::validateColumnForTimestamp(const ColumnDescription & column) const

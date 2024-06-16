@@ -29,7 +29,7 @@ public:
 
     /// Each of the following functions validates a specific column type.
     void validateColumnForID(const ColumnDescription & column, bool check_default = true) const;
-    void validateColumnForID(const ColumnDescription & column, bool check_default, std::optional<ColumnDescription> & out_corrected_version) const;
+    void validateColumnForID(const ColumnDescription & column, bool check_default, const TimeSeriesSettings & time_series_settings, std::optional<ColumnDescription> & out_corrected_version) const;
     void validateColumnForTimestamp(const ColumnDescription & column) const;
     void validateColumnForTimestamp(const ColumnDescription & column, UInt32 & out_scale) const;
     void validateColumnForValue(const ColumnDescription & column) const;
@@ -57,7 +57,7 @@ private:
     ColumnsDescription doValidateColumns(const ColumnsDescription & columns, const TimeSeriesSettings & time_series_settings) const;
 
     /// Generates a formulae for calculating the identifier of a time series from the metric name and all the tags.
-    ASTPtr chooseIDAlgorithm(const ColumnDescription & id_description) const;
+    ASTPtr chooseIDAlgorithm(const ColumnDescription & id_description, const TimeSeriesSettings & time_series_settings) const;
 
     StorageID storage_id;
 };

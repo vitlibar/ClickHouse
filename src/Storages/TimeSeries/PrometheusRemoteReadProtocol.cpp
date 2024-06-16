@@ -175,8 +175,11 @@ namespace
                     makeASTColumn(tags_table_id, column_name));
             }
 
-            exp_list->children.push_back(
-                makeASTColumn(tags_table_id, TimeSeriesColumnNames::Tags));
+            if (time_series_settings.use_column_tags_for_other_tags)
+            {
+                exp_list->children.push_back(
+                    makeASTColumn(tags_table_id, TimeSeriesColumnNames::Tags));
+            }
 
             exp_list->children.push_back(
                 makeASTFunction("groupArray",
@@ -243,7 +246,9 @@ namespace
                     makeASTColumn(tags_table_id, column_name));
             }
 
-            exp_list->children.push_back(makeASTColumn(tags_table_id, TimeSeriesColumnNames::Tags));
+            if (time_series_settings.use_column_tags_for_other_tags)
+                exp_list->children.push_back(makeASTColumn(tags_table_id, TimeSeriesColumnNames::Tags));
+
             select_query->setExpression(ASTSelectQuery::Expression::GROUP_BY, exp_list);
         }
 
@@ -307,12 +312,18 @@ namespace
         }
 
         /// Column "tags".
-        const auto & tags_column_with_type = get_next_column_with_type();
-        validator.validateColumnForTagsMap(tags_column_with_type);
-        const auto & tags_column = checkAndGetColumn<ColumnMap>(*tags_column_with_type.column);
-        const auto & tags_names = tags_column.getNestedData().getColumn(0);
-        const auto & tags_values = tags_column.getNestedData().getColumn(1);
-        const auto & tags_offsets = tags_column.getNestedColumn().getOffsets();
+        const IColumn * tags_names = nullptr;
+        const IColumn * tags_values = nullptr;
+        const IColumn::Offsets * tags_offsets = nullptr;
+        if (time_series_settings.use_column_tags_for_other_tags)
+        {
+            const auto & tags_column_with_type = get_next_column_with_type();
+            validator.validateColumnForTagsMap(tags_column_with_type);
+            const auto & tags_column = checkAndGetColumn<ColumnMap>(*tags_column_with_type.column);
+            tags_names = &tags_column.getNestedData().getColumn(0);
+            tags_values = &tags_column.getNestedData().getColumn(1);
+            tags_offsets = &tags_column.getNestedColumn().getOffsets();
+        }
 
         /// Column containing time series: groupArray(CAST(data_table.timestamp, 'DateTime64(3)'), CAST(data_table.value, 'Float64'))
         const auto & time_series_column = checkAndGetColumn<ColumnArray>(get_next_column());
@@ -335,9 +346,14 @@ namespace
                     ++num_labels;
             }
 
-            size_t tags_start_offset = tags_offsets[i - 1];
-            size_t tags_end_offset = tags_offsets[i];
-            num_labels += tags_end_offset - tags_start_offset;
+            size_t tags_start_offset = 0;
+            size_t tags_end_offset = 0;
+            if (time_series_settings.use_column_tags_for_other_tags)
+            {
+                tags_start_offset = (*tags_offsets)[i - 1];
+                tags_end_offset = (*tags_offsets)[i];
+                num_labels += tags_end_offset - tags_start_offset;
+            }
 
             labels.clear();
             labels.reserve(num_labels);
@@ -350,14 +366,17 @@ namespace
                     labels.emplace_back(tag_name, column->getDataAt(i));
             }
 
-            for (size_t j = tags_start_offset; j != tags_end_offset; ++j)
+            if (time_series_settings.use_column_tags_for_other_tags)
             {
-                if (!tags_names.isNullAt(j) && !tags_values.isNullAt(j))
+                for (size_t j = tags_start_offset; j != tags_end_offset; ++j)
                 {
-                    std::string_view tag_name{tags_names.getDataAt(j)};
-                    std::string_view tag_value{tags_values.getDataAt(j)};
-                    if (!tag_name.empty() && !tag_value.empty())
-                        labels.emplace_back(tag_name, tag_value);
+                    if (!tags_names->isNullAt(j) && !tags_values->isNullAt(j))
+                    {
+                        std::string_view tag_name{tags_names->getDataAt(j)};
+                        std::string_view tag_value{tags_values->getDataAt(j)};
+                        if (!tag_name.empty() && !tag_value.empty())
+                            labels.emplace_back(tag_name, tag_value);
+                    }
                 }
             }
 
