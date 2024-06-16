@@ -50,7 +50,7 @@ public:
     void validateColumnForHelp(const ColumnDescription & column) const;
 
     /// Sets the engines of target tables if they're inner
-    void setInnerTablesEngines(ASTCreateQuery & create_query, const ContextPtr & context) const;
+    void setInnerTablesEngines(ASTCreateQuery & create_query, const TimeSeriesSettings & time_series_settings, const ContextPtr & context) const;
 
 private:
     /// Returns true if the columns are complete and ordered in the proper way. Returns false if some columns are missing or the need to be reordered.
@@ -65,7 +65,7 @@ private:
     ASTPtr chooseIDAlgorithm(const ColumnDescription & id_description, const TimeSeriesSettings & time_series_settings) const;
 
     /// Sets the engine of an inner table by default.
-    void setInnerTableDefaultEngine(ASTStorage & inner_storage_def, TargetKind inner_table_kind) const;
+    void setInnerTableDefaultEngine(ASTStorage & inner_storage_def, TargetKind inner_table_kind, const TimeSeriesSettings & time_series_settings) const;
 
     StorageID storage_id;
 };
