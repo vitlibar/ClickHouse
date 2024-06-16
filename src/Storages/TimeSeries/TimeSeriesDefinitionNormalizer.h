@@ -31,7 +31,7 @@ public:
 
     /// Each of the following functions validates a specific column type.
     void validateColumnForID(const ColumnDescription & column, bool check_default = true) const;
-    void validateColumnForIDAndAddDefault(const ColumnDescription & column, std::optional<ColumnDescription> & out_column_with_default) const;
+    void validateColumnForIDAndAddDefault(const ColumnDescription & column, const TimeSeriesSettings & time_series_settings, std::optional<ColumnDescription> & out_column_with_default) const;
     void validateColumnForTimestamp(const ColumnDescription & column) const;
     void validateColumnForTimestamp(const ColumnDescription & column, UInt32 & out_scale) const;
     void validateColumnForValue(const ColumnDescription & column) const;
@@ -62,7 +62,7 @@ private:
     ColumnsDescription validateColumns(const ColumnsDescription & columns, const TimeSeriesSettings & time_series_settings) const;
 
     /// Generates a formulae for calculating the identifier of a time series from the metric name and all the tags.
-    ASTPtr chooseIDAlgorithm(const ColumnDescription & id_description) const;
+    ASTPtr chooseIDAlgorithm(const ColumnDescription & id_description, const TimeSeriesSettings & time_series_settings) const;
 
     /// Sets the engine of an inner table by default.
     void setInnerTableDefaultEngine(ASTStorage & inner_storage_def, TargetKind inner_table_kind) const;
