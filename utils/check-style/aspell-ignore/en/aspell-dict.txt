@@ -2638,6 +2638,10 @@ themself
 threadpool
 throwIf
 timeDiff
+TimeSeries
+timeSeriesData
+timeSeriesMetrics
+timeSeriesTags
 timeSlot
 timeSlots
 timeZone
