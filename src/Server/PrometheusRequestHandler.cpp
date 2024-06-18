@@ -183,6 +183,9 @@ void PrometheusRequestHandler::makeContext(HTTPServerRequest & request)
 {
     context = session->makeQueryContext();
 
+    /// Anything else beside HTTP POST should be readonly queries.
+    setReadOnlyIfHTTPMethodIdempotent(context, request.getMethod());
+
     auto roles = params->getAll("role");
     if (!roles.empty())
         context->setCurrentRoles(roles);
@@ -209,9 +212,6 @@ void PrometheusRequestHandler::makeContext(HTTPServerRequest & request)
             settings_changes.push_back({key, value});
         }
     }
-
-    /// Anything else beside HTTP POST should be readonly queries.
-    setReadOnlyIfHTTPMethodIdempotent(settings_changes, context->getSettingsRef(), request.getMethod());
 
     context->checkSettingsConstraints(settings_changes, SettingSource::QUERY);
     context->applySettingsChanges(settings_changes);

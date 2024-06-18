@@ -552,4 +552,5 @@ const ASTStorage * ASTCreateQuery::getTargetInnerStorage(ViewTarget::Kind kind) 
 {
     return getTarget(kind).inner_storage;
 }
+
 }

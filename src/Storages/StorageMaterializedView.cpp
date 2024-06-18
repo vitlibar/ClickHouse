@@ -34,6 +34,7 @@
 
 #include <Backups/BackupEntriesCollector.h>
 
+
 namespace DB
 {
 
@@ -92,11 +93,6 @@ StorageMaterializedView::StorageMaterializedView(
 {
     StorageInMemoryMetadata storage_metadata;
     storage_metadata.setColumns(columns_);
-    auto * storage_def = query.storage;
-    if (storage_def && storage_def->primary_key)
-        storage_metadata.primary_key = KeyDescription::getKeyFromAST(storage_def->primary_key->ptr(),
-                                                                     storage_metadata.columns,
-                                                                     local_context->getGlobalContext());
 
     if (query.sql_security)
         storage_metadata.setSQLSecurity(query.sql_security->as<ASTSQLSecurity &>());
@@ -118,6 +114,11 @@ StorageMaterializedView::StorageMaterializedView(
         throw Exception(ErrorCodes::INCORRECT_QUERY,
                         "You must specify where to save results of a MaterializedView query: "
                         "either ENGINE or an existing table in a TO clause");
+
+    if (target.inner_storage && target.inner_storage->primary_key)
+        storage_metadata.primary_key = KeyDescription::getKeyFromAST(target.inner_storage->primary_key->ptr(),
+                                                                     storage_metadata.columns,
+                                                                     local_context->getGlobalContext());
 
     auto select = SelectQueryDescription::getSelectQueryFromASTForMatView(query.select->clone(), query.refresh_strategy != nullptr, local_context);
     if (select.select_table_id)

@@ -119,6 +119,16 @@ void ASTViewTargets::setInnerStorage(Kind kind, ASTPtr inner_storage_)
         set(targets.emplace_back(kind).inner_storage, inner_storage_);
 }
 
+ASTStorage * ASTViewTargets::getInnerStorage(Kind kind)
+{
+    for (auto & target : targets)
+    {
+        if (target.kind == kind)
+            return target.inner_storage;
+    }
+    return nullptr;
+}
+
 const ViewTarget & ASTViewTargets::getTarget(Kind kind) const
 {
     for (const auto & target : targets)

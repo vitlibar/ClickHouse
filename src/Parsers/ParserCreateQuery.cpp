@@ -1626,18 +1626,6 @@ bool ParserCreateViewQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expec
         }
     }
 
-    std::shared_ptr<ASTViewTargets> targets;
-    if (to_table || to_inner_uuid || storage)
-    {
-        targets = std::make_shared<ASTViewTargets>();
-        if (to_table)
-            targets->setTableId(to_table->as<ASTTableIdentifier>()->getTableId());
-        if (to_inner_uuid)
-            targets->setInnerUUID(parseFromString<UUID>(to_inner_uuid->as<ASTLiteral>()->value.safeGet<String>()));
-        if (storage)
-            targets->setInnerStorage(storage);
-    }
-
     if (!sql_security)
         sql_security_p.parse(pos, sql_security, expected);
 
@@ -1684,24 +1672,35 @@ bool ParserCreateViewQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expec
     if (query->columns_list && query->columns_list->primary_key)
     {
         /// If engine is not set will use default one
-        if (!query->storage)
-            query->set(query->storage, std::make_shared<ASTStorage>());
-        else if (query->storage->primary_key)
+        if (!storage)
+            storage = std::make_shared<ASTStorage>();
+        auto & storage_ref = typeid_cast<ASTStorage &>(*storage);
+        if (storage_ref.primary_key)
             throw Exception(ErrorCodes::BAD_ARGUMENTS, "Multiple primary keys are not allowed.");
-
-        query->storage->primary_key = query->columns_list->primary_key;
-
+        storage_ref.primary_key = query->columns_list->primary_key;
     }
 
     if (query->columns_list && (query->columns_list->primary_key_from_columns))
     {
         /// If engine is not set will use default one
-        if (!query->storage)
-            query->set(query->storage, std::make_shared<ASTStorage>());
-        else if (query->storage->primary_key)
+        if (!storage)
+            storage = std::make_shared<ASTStorage>();
+        auto & storage_ref = typeid_cast<ASTStorage &>(*storage);
+        if (storage_ref.primary_key)
             throw Exception(ErrorCodes::BAD_ARGUMENTS, "Multiple primary keys are not allowed.");
+        storage_ref.primary_key = query->columns_list->primary_key_from_columns;
+    }
 
-        query->storage->primary_key = query->columns_list->primary_key_from_columns;
+    std::shared_ptr<ASTViewTargets> targets;
+    if (to_table || to_inner_uuid || storage)
+    {
+        targets = std::make_shared<ASTViewTargets>();
+        if (to_table)
+            targets->setTableId(to_table->as<ASTTableIdentifier>()->getTableId());
+        if (to_inner_uuid)
+            targets->setInnerUUID(parseFromString<UUID>(to_inner_uuid->as<ASTLiteral>()->value.safeGet<String>()));
+        if (storage)
+            targets->setInnerStorage(storage);
     }
 
     tryGetIdentifierNameInto(as_database, query->as_database);

@@ -87,7 +87,8 @@ public:
     /// That engine can be seen for example after "ENGINE" in a statement like CREATE MATERIALIZED VIEW ... ENGINE ...
     void setInnerStorage(Kind kind, ASTPtr inner_storage_);
     void setInnerStorage(ASTPtr inner_storage_) { setInnerStorage(Kind::Target, inner_storage_); }
-    ASTStorage * getInnerStorage(Kind kind = Kind::Target) const { return getTarget(kind).inner_storage; }
+    const ASTStorage * getInnerStorage(Kind kind = Kind::Target) const { return getTarget(kind).inner_storage; }
+    ASTStorage * getInnerStorage(Kind kind = Kind::Target);
 
     String getID(char) const override { return "ViewTargets"; }
 

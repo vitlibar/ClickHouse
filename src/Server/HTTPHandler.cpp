@@ -361,6 +361,9 @@ void HTTPHandler::processQuery(
     if (!default_format.empty())
         context->setDefaultFormat(default_format);
 
+    /// Anything else beside HTTP POST should be readonly queries.
+    setReadOnlyIfHTTPMethodIdempotent(context, request.getMethod());
+
     bool has_external_data = startsWith(request.getContentType(), "multipart/form-data");
 
     auto param_could_be_skipped = [&] (const String & name)
@@ -405,9 +408,6 @@ void HTTPHandler::processQuery(
                 settings_changes.push_back({key, value});
         }
     }
-
-    /// Anything else beside HTTP POST should be readonly queries.
-    setReadOnlyIfHTTPMethodIdempotent(settings_changes, context->getSettingsRef(), request.getMethod());
 
     context->checkSettingsConstraints(settings_changes, SettingSource::QUERY);
     context->applySettingsChanges(settings_changes);

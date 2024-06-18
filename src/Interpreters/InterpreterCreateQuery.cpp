@@ -922,7 +922,7 @@ namespace
             throw Exception(ErrorCodes::INCORRECT_QUERY, "Temporary tables cannot be created with Replicated, Shared or KeeperMap table engines");
     }
 
-    void setDefaultTableEngine(ASTStorage &storage, DefaultTableEngine engine)
+    void setDefaultTableEngine(ASTStorage & storage, DefaultTableEngine engine)
     {
         if (engine == DefaultTableEngine::None)
             throw Exception(ErrorCodes::ENGINE_REQUIRED, "Table engine is not specified in CREATE query");
@@ -976,9 +976,9 @@ void InterpreterCreateQuery::setEngine(ASTCreateQuery & create) const
         if (!create.targets->getInnerStorage())
             create.targets->setInnerStorage(std::make_shared<ASTStorage>());
 
-        auto * target_storage = create.targets->getInnerStorage();
-        if (!target_storage->engine)
-            setDefaultTableEngine(*target_storage, getContext()->getSettingsRef().default_table_engine.value);
+        if (!create.targets->getInnerStorage()->engine)
+            setDefaultTableEngine(*create.targets->getInnerStorage(), getContext()->getSettingsRef().default_table_engine.value);
+
         return;
     }
 
@@ -1005,12 +1005,20 @@ void InterpreterCreateQuery::setEngine(ASTCreateQuery & create) const
         if (as_create.is_ordinary_view)
             throw Exception(ErrorCodes::INCORRECT_QUERY, "Cannot CREATE a table AS {}, it is a View", qualified_name);
 
-        if (as_create.is_materialized_view && as_create.hasTargetTableId())
+        if (as_create.is_materialized_view)
+        {
+            if (as_create.getTargetInnerStorage())
+            {
+                create.set(create.storage, as_create.getTargetInnerStorage()->clone());
+                return;
+            }
+
             throw Exception(
                 ErrorCodes::INCORRECT_QUERY,
                 "Cannot CREATE a table AS {}, it is a Materialized View without storage. Use \"AS {}\" instead",
                 qualified_name,
                 as_create.getTargetTableId().getFullTableName());
+        }
 
         if (as_create.is_live_view)
             throw Exception(ErrorCodes::INCORRECT_QUERY, "Cannot CREATE a table AS {}, it is a Live View", qualified_name);
