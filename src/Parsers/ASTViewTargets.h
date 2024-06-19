@@ -18,7 +18,7 @@ struct ViewTarget
         Target,
 
         /// Table with intermediate results for a window view.
-        Intermediate,
+        Inner,
 
         /// The "data" table for a TimeSeries table, contains time series.
         Data,

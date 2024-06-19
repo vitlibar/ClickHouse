@@ -452,7 +452,7 @@ void ASTCreateQuery::formatQueryImpl(const FormatSettings & settings, FormatStat
     if (storage)
         storage->formatImpl(settings, state, frame);
 
-    if (auto inner_storage = getTargetTableEngine(ViewTarget::Kind::Intermediate))
+    if (auto inner_storage = getTargetTableEngine(ViewTarget::Kind::Inner))
     {
         settings.ostr << " " << (settings.hilite ? hilite_keyword : "") << toStringView(Keyword::INNER) << (settings.hilite ? hilite_none : "");
         inner_storage->formatImpl(settings, state, frame);

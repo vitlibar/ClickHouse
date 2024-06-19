@@ -21,11 +21,11 @@ std::string_view toString(Kind kind)
 {
     switch (kind)
     {
-        case Kind::Target:       return "target";
-        case Kind::Intermediate: return "intermediate";
-        case Kind::Data:         return "data";
-        case Kind::Tags:         return "tags";
-        case Kind::Metrics:      return "metrics";
+        case Kind::Target:  return "target";
+        case Kind::Inner:   return "inner";
+        case Kind::Data:    return "data";
+        case Kind::Tags:    return "tags";
+        case Kind::Metrics: return "metrics";
     }
     throw Exception(ErrorCodes::LOGICAL_ERROR, "{} doesn't support kind {}", __FUNCTION__, kind);
 }
@@ -48,11 +48,11 @@ const ViewTarget & ViewTarget::getEmpty(Kind kind_)
     switch (kind_)
     {
         /// `s_empty` is a different variable for each Kind.
-        case Kind::Target:       { static const ViewTarget s_empty{kind_}; return s_empty; }
-        case Kind::Intermediate: { static const ViewTarget s_empty{kind_}; return s_empty; }
-        case Kind::Data:         { static const ViewTarget s_empty{kind_}; return s_empty; }
-        case Kind::Tags:         { static const ViewTarget s_empty{kind_}; return s_empty; }
-        case Kind::Metrics:      { static const ViewTarget s_empty{kind_}; return s_empty; }
+        case Kind::Target:  { static const ViewTarget s_empty{kind_}; return s_empty; }
+        case Kind::Inner:   { static const ViewTarget s_empty{kind_}; return s_empty; }
+        case Kind::Data:    { static const ViewTarget s_empty{kind_}; return s_empty; }
+        case Kind::Tags:    { static const ViewTarget s_empty{kind_}; return s_empty; }
+        case Kind::Metrics: { static const ViewTarget s_empty{kind_}; return s_empty; }
     }
     throw Exception(ErrorCodes::LOGICAL_ERROR, "{} doesn't support kind {}", __FUNCTION__, kind_);
 }

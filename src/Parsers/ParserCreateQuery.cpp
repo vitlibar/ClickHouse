@@ -1176,7 +1176,7 @@ bool ParserCreateWindowViewQuery::parseImpl(Pos & pos, ASTPtr & node, Expected &
         if (storage)
             targets->setTableEngine(storage);
         if (inner_storage)
-            targets->setTableEngine(ViewTarget::Kind::Intermediate, inner_storage);
+            targets->setTableEngine(ViewTarget::Kind::Inner, inner_storage);
     }
 
     // WATERMARK
