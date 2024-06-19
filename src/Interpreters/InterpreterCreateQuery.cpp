@@ -973,11 +973,11 @@ void InterpreterCreateQuery::setEngine(ASTCreateQuery & create) const
         if (!create.targets)
             create.set(create.targets, std::make_shared<ASTViewTargets>());
 
-        if (!create.targets->getInnerStorage())
-            create.targets->setInnerStorage(std::make_shared<ASTStorage>());
+        if (!create.targets->getTableEngine())
+            create.targets->setTableEngine(std::make_shared<ASTStorage>());
 
-        if (!create.targets->getInnerStorage()->engine)
-            setDefaultTableEngine(*create.targets->getInnerStorage(), getContext()->getSettingsRef().default_table_engine.value);
+        if (!create.targets->getTableEngine()->engine)
+            setDefaultTableEngine(*create.targets->getTableEngine(), getContext()->getSettingsRef().default_table_engine.value);
 
         return;
     }
@@ -1007,9 +1007,9 @@ void InterpreterCreateQuery::setEngine(ASTCreateQuery & create) const
 
         if (as_create.is_materialized_view)
         {
-            if (as_create.getTargetInnerStorage())
+            if (as_create.getTargetTableEngine())
             {
-                create.set(create.storage, as_create.getTargetInnerStorage()->clone());
+                create.set(create.storage, as_create.getTargetTableEngine());
                 return;
             }
 

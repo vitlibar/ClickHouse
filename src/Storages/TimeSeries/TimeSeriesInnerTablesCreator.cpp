@@ -233,9 +233,9 @@ std::shared_ptr<ASTCreateQuery> TimeSeriesInnerTablesCreator::generateCreateQuer
         InterpreterCreateQuery::formatColumns(
             getInnerTableColumnsDescription(inner_table_info.kind, time_series_columns, time_series_settings)));
 
-    if (inner_table_info.inner_storage)
+    if (inner_table_info.table_engine)
     {
-        create->set(create->storage, inner_table_info.inner_storage->clone());
+        create->set(create->storage, inner_table_info.table_engine->clone());
 
         /// Set ORDER BY if not set.
         if (!create->storage->order_by && !create->storage->primary_key && create->storage->engine && create->storage->engine->name.ends_with("MergeTree"))

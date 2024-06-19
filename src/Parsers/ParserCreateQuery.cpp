@@ -1174,9 +1174,9 @@ bool ParserCreateWindowViewQuery::parseImpl(Pos & pos, ASTPtr & node, Expected &
         if (to_table)
             targets->setTableId(to_table->as<ASTTableIdentifier>()->getTableId());
         if (storage)
-            targets->setInnerStorage(storage);
+            targets->setTableEngine(storage);
         if (inner_storage)
-            targets->setInnerStorage(ViewTarget::Kind::Intermediate, inner_storage);
+            targets->setTableEngine(ViewTarget::Kind::Intermediate, inner_storage);
     }
 
     // WATERMARK
@@ -1700,7 +1700,7 @@ bool ParserCreateViewQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expec
         if (to_inner_uuid)
             targets->setInnerUUID(parseFromString<UUID>(to_inner_uuid->as<ASTLiteral>()->value.safeGet<String>()));
         if (storage)
-            targets->setInnerStorage(storage);
+            targets->setTableEngine(storage);
     }
 
     tryGetIdentifierNameInto(as_database, query->as_database);

@@ -110,13 +110,13 @@ StorageMaterializedView::StorageMaterializedView(
     const auto & to_inner_uuid = target.inner_uuid;
     has_inner_table = to_table_id.empty();
 
-    if (has_inner_table && !target.inner_storage)
+    if (has_inner_table && !target.table_engine)
         throw Exception(ErrorCodes::INCORRECT_QUERY,
                         "You must specify where to save results of a MaterializedView query: "
                         "either ENGINE or an existing table in a TO clause");
 
-    if (target.inner_storage && target.inner_storage->primary_key)
-        storage_metadata.primary_key = KeyDescription::getKeyFromAST(target.inner_storage->primary_key->ptr(),
+    if (target.table_engine && target.table_engine->primary_key)
+        storage_metadata.primary_key = KeyDescription::getKeyFromAST(target.table_engine->primary_key->ptr(),
                                                                      storage_metadata.columns,
                                                                      local_context->getGlobalContext());
 
@@ -157,7 +157,7 @@ StorageMaterializedView::StorageMaterializedView(
     }
     else
     {
-        const String & engine = target.inner_storage->engine->name;
+        const String & engine = target.table_engine->engine->name;
         const auto & storage_features = StorageFactory::instance().getStorageFeatures(engine);
 
         /// We will create a query to create an internal table.
@@ -188,8 +188,8 @@ StorageMaterializedView::StorageMaterializedView(
 
         manual_create_query->set(manual_create_query->columns_list, new_columns_list);
 
-        if (target.inner_storage)
-            manual_create_query->set(manual_create_query->storage, target.inner_storage->ptr());
+        if (target.table_engine)
+            manual_create_query->set(manual_create_query->storage, target.table_engine->ptr());
 
         InterpreterCreateQuery create_interpreter(manual_create_query, create_context);
         create_interpreter.setInternal(true);

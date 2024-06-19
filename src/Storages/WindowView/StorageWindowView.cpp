@@ -1204,7 +1204,7 @@ StorageWindowView::StorageWindowView(
     const auto & to_table_id = target.table_id;
     has_inner_target_table = to_table_id.empty();
 
-    if (has_inner_target_table && !target.inner_storage)
+    if (has_inner_target_table && !target.table_engine)
         throw Exception(ErrorCodes::INCORRECT_QUERY,
                         "You must specify where to save results of a WindowView query: "
                         "either ENGINE or an existing table in a TO clause");
@@ -1219,7 +1219,7 @@ StorageWindowView::StorageWindowView(
 
     auto inner_query = initInnerQuery(query.select->list_of_selects->children.at(0)->as<ASTSelectQuery &>(), context_);
 
-    if (const auto * inner_storage = query.getTargetInnerStorage(ViewTarget::Kind::Intermediate))
+    if (auto inner_storage = query.getTargetTableEngine(ViewTarget::Kind::Intermediate))
         inner_table_engine = inner_storage->clone();
     inner_table_id = StorageID(getStorageID().database_name, generateInnerTableName(getStorageID()));
     inner_fetch_query = generateInnerFetchQuery(inner_table_id);
@@ -1249,7 +1249,7 @@ StorageWindowView::StorageWindowView(
             new_columns_list->set(new_columns_list->columns, query.columns_list->columns->ptr());
 
             target_create_query->set(target_create_query->columns_list, new_columns_list);
-            target_create_query->set(target_create_query->storage, target.inner_storage->ptr());
+            target_create_query->set(target_create_query->storage, target.table_engine);
 
             InterpreterCreateQuery create_interpreter_(target_create_query, create_context_);
             create_interpreter_.setInternal(true);

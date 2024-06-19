@@ -43,7 +43,7 @@ struct ViewTarget
 
     /// Table engine of the target table, if it's inner.
     /// That engine can be seen for example after "ENGINE" in a statement like CREATE MATERIALIZED VIEW ... ENGINE ...
-    ASTStorage * inner_storage = nullptr;
+    std::shared_ptr<ASTStorage> table_engine;
 
     explicit ViewTarget(Kind kind_) : kind(kind_) {}
     static const ViewTarget & getEmpty(Kind kind_);
@@ -85,10 +85,9 @@ public:
 
     /// Sets the table engine of the target table, if it's inner.
     /// That engine can be seen for example after "ENGINE" in a statement like CREATE MATERIALIZED VIEW ... ENGINE ...
-    void setInnerStorage(Kind kind, ASTPtr inner_storage_);
-    void setInnerStorage(ASTPtr inner_storage_) { setInnerStorage(Kind::Target, inner_storage_); }
-    const ASTStorage * getInnerStorage(Kind kind = Kind::Target) const { return getTarget(kind).inner_storage; }
-    ASTStorage * getInnerStorage(Kind kind = Kind::Target);
+    void setTableEngine(Kind kind, ASTPtr table_engine_);
+    void setTableEngine(ASTPtr table_engine_) { setTableEngine(Kind::Target, table_engine_); }
+    std::shared_ptr<ASTStorage> getTableEngine(Kind kind = Kind::Target) const { return getTarget(kind).table_engine; }
 
     String getID(char) const override { return "ViewTargets"; }
 
@@ -106,11 +105,7 @@ public:
     static Keyword kindToPrefixForInnerStorage(Kind kind);
 
 protected:
-    void forEachPointerToChild(std::function<void(void**)> f) override
-    {
-        for (auto & target : targets)
-            f(reinterpret_cast<void **>(&target.inner_storage));
-    }
+    void forEachPointerToChild(std::function<void(void**)> f) override;
 };
 
 }

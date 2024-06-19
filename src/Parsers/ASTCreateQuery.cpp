@@ -452,19 +452,14 @@ void ASTCreateQuery::formatQueryImpl(const FormatSettings & settings, FormatStat
     if (storage)
         storage->formatImpl(settings, state, frame);
 
-    if (dictionary)
-        dictionary->formatImpl(settings, state, frame);
-
-    if (const auto * target_inner_storage = getTargetInnerStorage(ViewTarget::Kind::Intermediate))
+    if (auto inner_storage = getTargetTableEngine(ViewTarget::Kind::Intermediate))
     {
         settings.ostr << " " << (settings.hilite ? hilite_keyword : "") << toStringView(Keyword::INNER) << (settings.hilite ? hilite_none : "");
-        target_inner_storage->formatImpl(settings, state, frame);
+        inner_storage->formatImpl(settings, state, frame);
     }
 
-    if (const auto * target_inner_storage = getTargetInnerStorage())
-    {
-        target_inner_storage->formatImpl(settings, state, frame);
-    }
+    if (auto target_storage = getTargetTableEngine())
+        target_storage->formatImpl(settings, state, frame);
 
     if (targets)
     {
@@ -472,6 +467,9 @@ void ASTCreateQuery::formatQueryImpl(const FormatSettings & settings, FormatStat
         targets->formatTarget(ViewTarget::Kind::Tags, settings, state, frame);
         targets->formatTarget(ViewTarget::Kind::Metrics, settings, state, frame);
     }
+
+    if (dictionary)
+        dictionary->formatImpl(settings, state, frame);
 
     if (is_watermark_strictly_ascending)
     {
@@ -548,9 +546,9 @@ const UUID & ASTCreateQuery::getTargetInnerUUID(ViewTarget::Kind kind) const
     return getTarget(kind).inner_uuid;
 }
 
-const ASTStorage * ASTCreateQuery::getTargetInnerStorage(ViewTarget::Kind kind) const
+std::shared_ptr<ASTStorage> ASTCreateQuery::getTargetTableEngine(ViewTarget::Kind kind) const
 {
-    return getTarget(kind).inner_storage;
+    return getTarget(kind).table_engine;
 }
 
 }

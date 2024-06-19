@@ -53,7 +53,7 @@ bool ParserViewTargets::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
                 ASTPtr ast;
                 if (storage_p.parse(pos, ast, expected))
                 {
-                    result().setInnerStorage(kind, ast);
+                    result().setTableEngine(kind, ast);
                     break;
                 }
             }

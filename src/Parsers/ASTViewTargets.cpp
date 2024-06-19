@@ -102,31 +102,32 @@ void ASTViewTargets::resetInnerUUIDs()
         target.inner_uuid = UUIDHelpers::Nil;
 }
 
-void ASTViewTargets::setInnerStorage(Kind kind, ASTPtr inner_storage_)
+void ASTViewTargets::setTableEngine(Kind kind, ASTPtr table_engine_)
 {
+    auto new_table_engine = typeid_cast<std::shared_ptr<ASTStorage>>(table_engine_);
+    if (!new_table_engine && table_engine_)
+        throw Exception(DB::ErrorCodes::LOGICAL_ERROR, "Bad cast from type {} to ASTStorage", table_engine_->getID());
+
     for (auto & target : targets)
     {
         if (target.kind == kind)
         {
-            if (inner_storage_)
-                setOrReplace(target.inner_storage, inner_storage_);
-            else
-                reset(target.inner_storage);
+            if (target.table_engine == new_table_engine)
+                return;
+            if (new_table_engine)
+                children.push_back(new_table_engine);
+            if (target.table_engine)
+                std::erase(children, target.table_engine);
+            target.table_engine = new_table_engine;
             return;
         }
     }
-    if (inner_storage_)
-        set(targets.emplace_back(kind).inner_storage, inner_storage_);
-}
 
-ASTStorage * ASTViewTargets::getInnerStorage(Kind kind)
-{
-    for (auto & target : targets)
+    if (new_table_engine)
     {
-        if (target.kind == kind)
-            return target.inner_storage;
+        targets.emplace_back(kind).table_engine = new_table_engine;
+        children.push_back(new_table_engine);
     }
-    return nullptr;
 }
 
 const ViewTarget & ASTViewTargets::getTarget(Kind kind) const
@@ -145,8 +146,8 @@ ASTPtr ASTViewTargets::clone() const
     res->children.clear();
     for (auto & target : res->targets)
     {
-        if (target.inner_storage)
-            res->set(target.inner_storage, target.inner_storage->clone());
+        if (target.table_engine)
+            res->children.push_back(target.table_engine);
     }
     return res;
 }
@@ -182,10 +183,10 @@ void ASTViewTargets::formatTarget(const ViewTarget & target, const FormatSetting
                << (s.hilite ? hilite_none : "") << " " << quoteString(toString(target.inner_uuid));
     }
 
-    if (target.inner_storage)
+    if (target.table_engine)
     {
         s.ostr << " " << (s.hilite ? hilite_keyword : "") << toStringView(kindToPrefixForInnerStorage(target.kind)) << (s.hilite ? hilite_none : "");
-        target.inner_storage->formatImpl(s, state, frame);
+        target.table_engine->formatImpl(s, state, frame);
     }
 }
 
@@ -240,6 +241,25 @@ Keyword ASTViewTargets::kindToKeywordForInnerUUID(Kind kind)
 
         default:
             throw Exception(ErrorCodes::LOGICAL_ERROR, "{} doesn't support kind {}", __FUNCTION__, kind);
+    }
+}
+
+void ASTViewTargets::forEachPointerToChild(std::function<void(void**)> f)
+{
+    for (auto & target : targets)
+    {
+        if (target.table_engine)
+        {
+            ASTStorage * new_table_engine = target.table_engine.get();
+            f(reinterpret_cast<void **>(&new_table_engine));
+            if (new_table_engine != target.table_engine.get())
+            {
+                if (new_table_engine)
+                    target.table_engine = typeid_cast<std::shared_ptr<ASTStorage>>(new_table_engine->ptr());
+                else
+                    target.table_engine.reset();
+            }
+        }
     }
 }
 
