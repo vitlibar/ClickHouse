@@ -551,4 +551,11 @@ std::shared_ptr<ASTStorage> ASTCreateQuery::getTargetTableEngine(ViewTarget::Kin
     return getTarget(kind).table_engine;
 }
 
+void ASTCreateQuery::setTargetTableEngine(ViewTarget::Kind kind, std::shared_ptr<ASTStorage> target_storage_def)
+{
+    if (!targets)
+        set(targets, std::make_shared<ASTViewTargets>());
+    targets->setTableEngine(kind, target_storage_def);
+}
+
 }

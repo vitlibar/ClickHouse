@@ -982,9 +982,7 @@ void InterpreterCreateQuery::setEngine(ASTCreateQuery & create) const
         }
 
         if (!create.storage->engine)
-        {
             setDefaultTableEngine(*create.storage, getContext()->getSettingsRef().default_temporary_table_engine.value);
-        }
 
         checkTemporaryTableEngineName(create.storage->engine->name);
         return;
@@ -992,30 +990,37 @@ void InterpreterCreateQuery::setEngine(ASTCreateQuery & create) const
 
     if (create.is_materialized_view)
     {
-        bool is_materialized_view_with_external_table = create.hasTargetTableID();
-        if (is_materialized_view_with_external_table)
+        /// A materialized view with an external target doesn't need a table engine.
+        bool is_materialized_view_with_external_target = create.hasTargetTableID();
+        if (is_materialized_view_with_external_target)
             return;
 
-        if (!create.targets)
-            create.set(create.targets, std::make_shared<ASTViewTargets>());
-
-        if (!create.targets->getTableEngine())
-            create.targets->setTableEngine(std::make_shared<ASTStorage>());
-
-        if (!create.targets->getTableEngine()->engine)
-            setDefaultTableEngine(*create.targets->getTableEngine(), getContext()->getSettingsRef().default_table_engine.value);
-
-        return;
+        if (auto target_engine = create.getTargetTableEngine())
+        {
+            /// This materialized view already has a storage definition.
+            if (!target_engine->engine)
+            {
+                /// Some part of storage definition (such as PARTITION BY) is specified, but ENGINE is not: just set default one.
+                setDefaultTableEngine(*target_engine, getContext()->getSettingsRef().default_table_engine.value);
+            }
+            return;
+        }
     }
 
     if (create.storage)
     {
-        /// Some part of storage definition (such as PARTITION BY) is specified, but ENGINE is not: just set default one.
+        /// This table already has a storage definition.
         if (!create.storage->engine)
+        {
+            /// Some part of storage definition (such as PARTITION BY) is specified, but ENGINE is not: just set default one.
             setDefaultTableEngine(*create.storage, getContext()->getSettingsRef().default_table_engine.value);
+        }
         return;
     }
 
+    /// We'll try to extract a storage definition from clause `AS`:
+    ///     CREATE TABLE table_name AS other_table_name
+    std::shared_ptr<ASTStorage> storage_def;
     if (!create.as_table.empty())
     {
         /// NOTE Getting the structure from the table specified in the AS is done not atomically with the creation of the table.
@@ -1031,18 +1036,13 @@ void InterpreterCreateQuery::setEngine(ASTCreateQuery & create) const
         if (as_create.is_ordinary_view)
             throw Exception(ErrorCodes::INCORRECT_QUERY, "Cannot CREATE a table AS {}, it is a View", qualified_name);
 
-        if (as_create.is_materialized_view)
+        if (as_create.is_materialized_view && as_create.hasTargetTableID())
         {
-            if (as_create.hasTargetTableID())
-            {
-                throw Exception(
-                    ErrorCodes::INCORRECT_QUERY,
-                    "Cannot CREATE a table AS {}, it is a Materialized View without storage. Use \"AS {}\" instead",
-                    qualified_name,
-                    as_create.getTargetTableID().getFullTableName());
-            }
-            create.set(create.storage, as_create.getTargetTableEngine());
-            return;
+            throw Exception(
+                ErrorCodes::INCORRECT_QUERY,
+                "Cannot CREATE a table AS {}, it is a Materialized View without storage. Use \"AS {}\" instead",
+                qualified_name,
+                as_create.getTargetTableID().getFullTableName());
         }
 
         if (as_create.is_live_view)
@@ -1054,18 +1054,37 @@ void InterpreterCreateQuery::setEngine(ASTCreateQuery & create) const
         if (as_create.is_dictionary)
             throw Exception(ErrorCodes::INCORRECT_QUERY, "Cannot CREATE a table AS {}, it is a Dictionary", qualified_name);
 
-        if (as_create.storage)
-            create.set(create.storage, as_create.storage->ptr());
+        if (as_create.is_materialized_view)
+        {
+            storage_def = as_create.getTargetTableEngine();
+        }
         else if (as_create.as_table_function)
+        {
             create.set(create.as_table_function, as_create.as_table_function->ptr());
+            return;
+        }
+        else if (as_create.storage)
+        {
+            storage_def = typeid_cast<std::shared_ptr<ASTStorage>>(as_create.storage->ptr());
+        }
         else
+        {
             throw Exception(ErrorCodes::LOGICAL_ERROR, "Cannot set engine, it's a bug.");
-
-        return;
+        }
     }
 
-    create.set(create.storage, std::make_shared<ASTStorage>());
-    setDefaultTableEngine(*create.storage, getContext()->getSettingsRef().default_table_engine.value);
+    if (!storage_def)
+    {
+        /// Set ENGINE by default.
+        storage_def = std::make_shared<ASTStorage>();
+        setDefaultTableEngine(*storage_def, getContext()->getSettingsRef().default_table_engine.value);
+    }
+
+    /// Use the found table engine to modify the create query.
+    if (create.is_materialized_view)
+        create.setTargetTableEngine(storage_def);
+    else
+        create.set(create.storage, storage_def);
 }
 
 void InterpreterCreateQuery::assertOrSetUUID(ASTCreateQuery & create, const DatabasePtr & database) const
@@ -1280,8 +1299,8 @@ BlockIO InterpreterCreateQuery::createTable(ASTCreateQuery & create)
     TableProperties properties = getTablePropertiesAndNormalizeCreateQuery(create, mode);
 
     /// Check type compatible for materialized dest table and select columns
-    bool is_materialized_view_with_external_table = create.is_materialized_view && create.hasTargetTableID();
-    if (is_materialized_view_with_external_table && create.select && mode <= LoadingStrictnessLevel::CREATE)
+    bool is_materialized_view_with_external_target = create.is_materialized_view && create.hasTargetTableID();
+    if (is_materialized_view_with_external_target && create.select && mode <= LoadingStrictnessLevel::CREATE)
     {
         if (StoragePtr to_table = DatabaseCatalog::instance().tryGetTable(create.getTargetTableID(), getContext()))
         {

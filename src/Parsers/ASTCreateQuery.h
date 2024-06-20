@@ -159,6 +159,8 @@ public:
     bool hasTargetTableID(ViewTarget::Kind kind = ViewTarget::Kind::Target) const;
     const UUID & getTargetInnerUUID(ViewTarget::Kind kind = ViewTarget::Kind::Target) const;
     std::shared_ptr<ASTStorage> getTargetTableEngine(ViewTarget::Kind kind = ViewTarget::Kind::Target) const;
+    void setTargetTableEngine(ViewTarget::Kind kind, std::shared_ptr<ASTStorage> target_storage_def);
+    void setTargetTableEngine(std::shared_ptr<ASTStorage> target_storage_def) { setTargetTableEngine(ViewTarget::Kind::Target, target_storage_def); }
 
     void setUUIDs(const CreateQueryUUIDs & uuids);
     void resetUUIDs();

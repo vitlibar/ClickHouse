@@ -85,8 +85,8 @@ public:
 
     /// Sets the table engine of the target table, if it's inner.
     /// That engine can be seen for example after "ENGINE" in a statement like CREATE MATERIALIZED VIEW ... ENGINE ...
-    void setTableEngine(Kind kind, ASTPtr table_engine_);
-    void setTableEngine(ASTPtr table_engine_) { setTableEngine(Kind::Target, table_engine_); }
+    void setTableEngine(Kind kind, ASTPtr storage_def);
+    void setTableEngine(ASTPtr storage_def) { setTableEngine(Kind::Target, storage_def); }
     std::shared_ptr<ASTStorage> getTableEngine(Kind kind = Kind::Target) const { return getTarget(kind).table_engine; }
 
     String getID(char) const override { return "ViewTargets"; }

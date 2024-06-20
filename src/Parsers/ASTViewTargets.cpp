@@ -102,11 +102,11 @@ void ASTViewTargets::resetInnerUUIDs()
         target.inner_uuid = UUIDHelpers::Nil;
 }
 
-void ASTViewTargets::setTableEngine(Kind kind, ASTPtr table_engine_)
+void ASTViewTargets::setTableEngine(Kind kind, ASTPtr storage_def)
 {
-    auto new_table_engine = typeid_cast<std::shared_ptr<ASTStorage>>(table_engine_);
-    if (!new_table_engine && table_engine_)
-        throw Exception(DB::ErrorCodes::LOGICAL_ERROR, "Bad cast from type {} to ASTStorage", table_engine_->getID());
+    auto new_table_engine = typeid_cast<std::shared_ptr<ASTStorage>>(storage_def);
+    if (!new_table_engine && storage_def)
+        throw Exception(DB::ErrorCodes::LOGICAL_ERROR, "Bad cast from type {} to ASTStorage", storage_def->getID());
 
     for (auto & target : targets)
     {
