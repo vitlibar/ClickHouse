@@ -61,6 +61,7 @@ Engines in the family:
 - [RabbitMQ](../../engines/table-engines/integrations/rabbitmq.md)
 - [PostgreSQL](../../engines/table-engines/integrations/postgresql.md)
 - [S3Queue](../../engines/table-engines/integrations/s3queue.md)
+- [TimeSeries](../../engines/table-engines/integrations/time-series.md)
 
 ### Special Engines {#special-engines}
 
@@ -78,7 +79,6 @@ Engines in the family:
 - [Memory](../../engines/table-engines/special/memory.md#memory)
 - [Buffer](../../engines/table-engines/special/buffer.md#buffer)
 - [KeeperMap](../../engines/table-engines/special/keepermap.md)
-- [TimeSeries](../../engines/table-engines/special/time_series.md)
 
 ## Virtual Columns {#table_engines-virtual_columns}
 
