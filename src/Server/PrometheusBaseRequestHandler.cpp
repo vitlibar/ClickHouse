@@ -79,7 +79,7 @@ void PrometheusBaseRequestHandler::trySendExceptionToClient(const String & excep
 {
     try
     {
-        sendExceptionToHTTPClient(exception_message, exception_code, request, response, out.get());
+        sendExceptionToHTTPClient(exception_message, exception_code, request, response, out.get(), log);
     }
     catch (...)
     {
