@@ -966,7 +966,7 @@ void InterpreterCreateQuery::setEngine(ASTCreateQuery & create) const
 
     if (create.is_materialized_view)
     {
-        bool is_materialized_view_with_external_table = create.hasTargetTableId();
+        bool is_materialized_view_with_external_table = create.hasTargetTableID();
         if (is_materialized_view_with_external_table)
             return;
 
@@ -1017,7 +1017,7 @@ void InterpreterCreateQuery::setEngine(ASTCreateQuery & create) const
                 ErrorCodes::INCORRECT_QUERY,
                 "Cannot CREATE a table AS {}, it is a Materialized View without storage. Use \"AS {}\" instead",
                 qualified_name,
-                as_create.getTargetTableId().getFullTableName());
+                as_create.getTargetTableID().getFullTableName());
         }
 
         if (as_create.is_live_view)
@@ -1255,10 +1255,10 @@ BlockIO InterpreterCreateQuery::createTable(ASTCreateQuery & create)
     TableProperties properties = getTablePropertiesAndNormalizeCreateQuery(create, mode);
 
     /// Check type compatible for materialized dest table and select columns
-    bool is_materialized_view_with_external_table = create.is_materialized_view && create.hasTargetTableId();
+    bool is_materialized_view_with_external_table = create.is_materialized_view && create.hasTargetTableID();
     if (is_materialized_view_with_external_table && create.select && mode <= LoadingStrictnessLevel::CREATE)
     {
-        if (StoragePtr to_table = DatabaseCatalog::instance().tryGetTable(create.getTargetTableId(), getContext()))
+        if (StoragePtr to_table = DatabaseCatalog::instance().tryGetTable(create.getTargetTableID(), getContext()))
         {
             Block input_block;
 

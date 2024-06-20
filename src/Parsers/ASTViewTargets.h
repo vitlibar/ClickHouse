@@ -30,7 +30,7 @@ struct ViewTarget
         Metrics,
     };
 
-    Kind kind;
+    Kind kind = Kind::Target;
 
     /// StorageID of the target table, if it's not inner.
     /// That storage ID can be seen for example after "TO" in a statement like CREATE MATERIALIZED VIEW ... TO ...
@@ -67,10 +67,10 @@ public:
 
     /// Sets the StorageID of the target table, if it's not inner.
     /// That storage ID can be seen for example after "TO" in a statement like CREATE MATERIALIZED VIEW ... TO ...
-    void setTableId(Kind kind, const StorageID & table_id_);
-    void setTableId(const StorageID & table_id_) { setTableId(Kind::Target, table_id_); }
-    const StorageID & getTableId(Kind kind = Kind::Target) const { return getTarget(kind).table_id; }
-    bool hasTableId(Kind kind = Kind::Target) const { return !getTableId(kind).empty(); }
+    void setTableID(Kind kind, const StorageID & table_id_);
+    void setTableID(const StorageID & table_id_) { setTableID(Kind::Target, table_id_); }
+    const StorageID & getTableID(Kind kind = Kind::Target) const { return getTarget(kind).table_id; }
+    bool hasTableID(Kind kind = Kind::Target) const { return !getTableID(kind).empty(); }
 
     /// Replaces an empty database in the StorageID of the target table with a specified database.
     void setCurrentDatabase(const String & current_database);
@@ -100,7 +100,7 @@ public:
     static void formatTarget(const ViewTarget & target, const FormatSettings & s, FormatState & state, FormatStateStacked frame);
 
     /// Helper functions for class ParserViewTargets. Assumes the kind is Data or Tags or Metrics.
-    static Keyword kindToKeywordForTableId(Kind kind);
+    static Keyword kindToKeywordForTableID(Kind kind);
     static Keyword kindToKeywordForInnerUUID(Kind kind);
     static Keyword kindToPrefixForInnerStorage(Kind kind);
 

@@ -1219,7 +1219,7 @@ StorageWindowView::StorageWindowView(
 
     auto inner_query = initInnerQuery(query.select->list_of_selects->children.at(0)->as<ASTSelectQuery &>(), context_);
 
-    if (auto inner_storage = query.getTargetTableEngine(ViewTarget::Kind::Intermediate))
+    if (auto inner_storage = query.getTargetTableEngine(ViewTarget::Kind::Inner))
         inner_table_engine = inner_storage->clone();
     inner_table_id = StorageID(getStorageID().database_name, generateInnerTableName(getStorageID()));
     inner_fetch_query = generateInnerFetchQuery(inner_table_id);

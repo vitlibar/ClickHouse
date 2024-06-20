@@ -58,7 +58,7 @@ const ViewTarget & ViewTarget::getEmpty(Kind kind_)
 }
 
 
-void ASTViewTargets::setTableId(Kind kind, const StorageID & table_id_)
+void ASTViewTargets::setTableID(Kind kind, const StorageID & table_id_)
 {
     for (auto & target : targets)
     {
@@ -171,7 +171,7 @@ void ASTViewTargets::formatTarget(const ViewTarget & target, const FormatSetting
 {
     if (target.table_id)
     {
-        s.ostr <<  " " << (s.hilite ? hilite_keyword : "") << toStringView(kindToKeywordForTableId(target.kind))
+        s.ostr <<  " " << (s.hilite ? hilite_keyword : "") << toStringView(kindToKeywordForTableID(target.kind))
                << (s.hilite ? hilite_none : "") << " "
                << (!target.table_id.database_name.empty() ? backQuoteIfNeed(target.table_id.database_name) + "." : "")
                << backQuoteIfNeed(target.table_id.table_name);
@@ -190,7 +190,7 @@ void ASTViewTargets::formatTarget(const ViewTarget & target, const FormatSetting
     }
 }
 
-Keyword ASTViewTargets::kindToKeywordForTableId(Kind kind)
+Keyword ASTViewTargets::kindToKeywordForTableID(Kind kind)
 {
     switch (kind)
     {

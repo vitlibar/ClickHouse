@@ -155,8 +155,8 @@ public:
     QueryKind getQueryKind() const override { return QueryKind::Create; }
 
     const ViewTarget & getTarget(ViewTarget::Kind kind = ViewTarget::Kind::Target) const;
-    const StorageID & getTargetTableId(ViewTarget::Kind kind = ViewTarget::Kind::Target) const;
-    bool hasTargetTableId(ViewTarget::Kind kind = ViewTarget::Kind::Target) const;
+    const StorageID & getTargetTableID(ViewTarget::Kind kind = ViewTarget::Kind::Target) const;
+    bool hasTargetTableID(ViewTarget::Kind kind = ViewTarget::Kind::Target) const;
     const UUID & getTargetInnerUUID(ViewTarget::Kind kind = ViewTarget::Kind::Target) const;
     std::shared_ptr<ASTStorage> getTargetTableEngine(ViewTarget::Kind kind = ViewTarget::Kind::Target) const;
 

@@ -389,7 +389,7 @@ void ASTCreateQuery::formatQueryImpl(const FormatSettings & settings, FormatStat
         refresh_strategy->formatImpl(settings, state, frame);
     }
 
-    if (auto target_table_id = getTargetTableId())
+    if (auto target_table_id = getTargetTableID())
     {
         settings.ostr <<  " " << (settings.hilite ? hilite_keyword : "") << toStringView(Keyword::TO)
                       << (settings.hilite ? hilite_none : "") << " "
@@ -531,14 +531,14 @@ const ViewTarget & ASTCreateQuery::getTarget(ViewTarget::Kind kind) const
     return targets ? targets->getTarget(kind) : ViewTarget::getEmpty(kind);
 }
 
-const StorageID & ASTCreateQuery::getTargetTableId(ViewTarget::Kind kind) const
+const StorageID & ASTCreateQuery::getTargetTableID(ViewTarget::Kind kind) const
 {
     return getTarget(kind).table_id;
 }
 
-bool ASTCreateQuery::hasTargetTableId(ViewTarget::Kind kind) const
+bool ASTCreateQuery::hasTargetTableID(ViewTarget::Kind kind) const
 {
-    return !getTargetTableId(kind).empty();
+    return !getTargetTableID(kind).empty();
 }
 
 const UUID & ASTCreateQuery::getTargetInnerUUID(ViewTarget::Kind kind) const

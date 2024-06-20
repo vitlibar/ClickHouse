@@ -1004,7 +1004,7 @@ bool ParserCreateLiveViewQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & e
     if (to_table)
     {
         targets = std::make_shared<ASTViewTargets>();
-        targets->setTableId(to_table->as<ASTTableIdentifier>()->getTableId());
+        targets->setTableID(to_table->as<ASTTableIdentifier>()->getTableId());
     }
 
     /// Optional - a list of columns can be specified. It must fully comply with SELECT.
@@ -1172,7 +1172,7 @@ bool ParserCreateWindowViewQuery::parseImpl(Pos & pos, ASTPtr & node, Expected &
     {
         targets = std::make_shared<ASTViewTargets>();
         if (to_table)
-            targets->setTableId(to_table->as<ASTTableIdentifier>()->getTableId());
+            targets->setTableID(to_table->as<ASTTableIdentifier>()->getTableId());
         if (storage)
             targets->setTableEngine(storage);
         if (inner_storage)
@@ -1696,7 +1696,7 @@ bool ParserCreateViewQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expec
     {
         targets = std::make_shared<ASTViewTargets>();
         if (to_table)
-            targets->setTableId(to_table->as<ASTTableIdentifier>()->getTableId());
+            targets->setTableID(to_table->as<ASTTableIdentifier>()->getTableId());
         if (to_inner_uuid)
             targets->setInnerUUID(parseFromString<UUID>(to_inner_uuid->as<ASTLiteral>()->value.safeGet<String>()));
         if (storage)

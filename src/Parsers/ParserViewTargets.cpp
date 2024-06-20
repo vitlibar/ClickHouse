@@ -59,13 +59,13 @@ bool ParserViewTargets::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
             }
             pos = current;
 
-            keyword = ASTViewTargets::kindToKeywordForTableId(kind);
+            keyword = ASTViewTargets::kindToKeywordForTableID(kind);
             if (ParserKeyword{keyword}.ignore(pos, expected))
             {
                 ASTPtr ast;
                 if (table_name_p.parse(pos, ast, expected))
                 {
-                    result().setTableId(kind, ast->as<ASTTableIdentifier>()->getTableId());
+                    result().setTableID(kind, ast->as<ASTTableIdentifier>()->getTableId());
                     break;
                 }
             }
