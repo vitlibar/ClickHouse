@@ -458,7 +458,7 @@ void TimeSeriesDefinitionNormalizer::validateTargetColumns(TargetKind target_kin
                 /// Here we check only existence of columns "min_time" and "max_time" here because otherwise it would be difficult
                 /// (those columns can be defined with using SimpleAggregateFunction).
                 for (const auto & column_name : {TimeSeriesColumnNames::MinTime, TimeSeriesColumnNames::MaxTime})
-                    get_column_description(column_name);
+                    validateColumnForTimestamp(get_column_description(column_name));
             }
 
             break;
