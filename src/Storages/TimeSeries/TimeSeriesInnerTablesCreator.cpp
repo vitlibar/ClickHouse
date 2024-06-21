@@ -97,50 +97,6 @@ namespace
 
         return columns;
     }
-
-    /// Makes description of the default table engine of an inner target table.
-    std::shared_ptr<ASTStorage> getDefaultEngineForInnerTable(TargetKind inner_table_kind)
-    {
-        auto storage = std::make_shared<ASTStorage>();
-        switch (inner_table_kind)
-        {
-            case TargetKind::Data:
-            {
-                storage->set(storage->engine, makeASTFunction("MergeTree"));
-                storage->engine->no_empty_args = false;
-
-                storage->set(storage->order_by,
-                             makeASTFunction("tuple",
-                                             std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::ID),
-                                             std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Timestamp)));
-                break;
-            }
-            case TargetKind::Tags:
-            {
-                storage->set(storage->engine, makeASTFunction("ReplacingMergeTree"));
-                storage->engine->no_empty_args = false;
-
-                storage->set(storage->primary_key,
-                             std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::MetricName));
-
-                storage->set(storage->order_by,
-                             makeASTFunction("tuple",
-                                             std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::MetricName),
-                                             std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::ID)));
-                break;
-            }
-            case TargetKind::Metrics:
-            {
-                storage->set(storage->engine, makeASTFunction("ReplacingMergeTree"));
-                storage->engine->no_empty_args = false;
-                storage->set(storage->order_by, std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::MetricFamilyName));
-                break;
-            }
-            default:
-                UNREACHABLE();
-        }
-        return storage;
-    }
 }
 
 
@@ -176,24 +132,7 @@ std::shared_ptr<ASTCreateQuery> TimeSeriesInnerTablesCreator::generateCreateQuer
         InterpreterCreateQuery::formatColumns(
             getInnerTableColumnsDescription(inner_table_info.kind, time_series_columns, time_series_settings)));
 
-    if (inner_table_info.table_engine)
-    {
-        create->set(create->storage, inner_table_info.table_engine->clone());
-
-        /// Set ORDER BY if not set.
-        if (!create->storage->order_by && !create->storage->primary_key && create->storage->engine && create->storage->engine->name.ends_with("MergeTree"))
-        {
-            auto default_engine = getDefaultEngineForInnerTable(inner_table_info.kind);
-            if (default_engine->order_by)
-                create->storage->set(create->storage->order_by, default_engine->order_by->clone());
-            if (default_engine->primary_key)
-                create->storage->set(create->storage->primary_key, default_engine->primary_key->clone());
-        }
-    }
-    else
-    {
-        create->set(create->storage, getDefaultEngineForInnerTable(inner_table_info.kind));
-    }
+    create->set(create->storage, inner_table_info.table_engine->clone());
 
     return create;
 }

@@ -8,7 +8,7 @@
 #include <Storages/AlterCommands.h>
 #include <Storages/StorageFactory.h>
 #include <Storages/TimeSeries/TimeSeriesColumnNames.h>
-#include <Storages/TimeSeries/TimeSeriesColumnsValidator.h>
+#include <Storages/TimeSeries/TimeSeriesDefinitionNormalizer.h>
 #include <Storages/TimeSeries/TimeSeriesInnerTablesCreator.h>
 #include <Storages/TimeSeries/TimeSeriesSettings.h>
 
@@ -66,8 +66,8 @@ namespace
                 auto target_table = DatabaseCatalog::instance().getTable(target_info.table_id, context);
                 auto target_metadata = target_table->getInMemoryMetadataPtr();
                 const auto & target_columns = target_metadata->columns;
-                TimeSeriesColumnsValidator target_validator{target_info.table_id};
-                target_validator.validateTargetColumns(target_info.kind, target_columns, time_series_settings);
+                TimeSeriesDefinitionNormalizer normalizer{target_info.table_id};
+                normalizer.validateTargetColumns(target_info.kind, target_columns, time_series_settings);
             }
         }
         else
@@ -92,12 +92,15 @@ namespace
 }
 
 
-void StorageTimeSeries::validateTableStructure(ColumnsDescription & columns, const ASTCreateQuery & create_query)
+void StorageTimeSeries::normalizeTableDefinition(ASTCreateQuery & create_query, ColumnsDescription & columns, const ContextPtr & local_context)
 {
-    auto time_series_settings = getTimeSeriesSettingsFromQuery(create_query);
     StorageID time_series_storage_id{create_query.getDatabase(), create_query.getTable()};
-    TimeSeriesColumnsValidator validator{time_series_storage_id};
-    validator.validateColumns(columns, *time_series_settings);
+    TimeSeriesSettings time_series_settings;
+    if (create_query.storage)
+        time_series_settings.loadFromQuery(*create_query.storage);
+    TimeSeriesDefinitionNormalizer normalizer{time_series_storage_id};
+    normalizer.addMissingColumnsAndValidate(columns, time_series_settings);
+    normalizer.setInnerTablesEngines(create_query, local_context);
 }
 
 

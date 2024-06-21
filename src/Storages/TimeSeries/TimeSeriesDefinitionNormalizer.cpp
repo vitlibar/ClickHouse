@@ -1,4 +1,4 @@
-#include <Storages/TimeSeries/TimeSeriesColumnsValidator.h>
+#include <Storages/TimeSeries/TimeSeriesDefinitionNormalizer.h>
 
 #include <DataTypes/DataTypeArray.h>
 #include <DataTypes/DataTypeDateTime64.h>
@@ -10,6 +10,8 @@
 #include <DataTypes/DataTypeTuple.h>
 #include <DataTypes/DataTypeUUID.h>
 #include <DataTypes/DataTypesNumber.h>
+#include <Interpreters/Context.h>
+#include <Interpreters/DatabaseCatalog.h>
 #include <Parsers/ASTFunction.h>
 #include <Parsers/ASTIdentifier.h>
 #include <Storages/StorageTimeSeries.h>
@@ -23,23 +25,24 @@ namespace DB
 namespace ErrorCodes
 {
     extern const int INCOMPATIBLE_COLUMNS;
+    extern const int INCORRECT_QUERY;
     extern const int THERE_IS_NO_COLUMN;
 }
 
 
-void TimeSeriesColumnsValidator::validateColumns(ColumnsDescription & columns, const TimeSeriesSettings & time_series_settings) const
+void TimeSeriesDefinitionNormalizer::addMissingColumnsAndValidate(ColumnsDescription & columns, const TimeSeriesSettings & time_series_settings) const
 {
     if (!areColumnsValid(columns, time_series_settings))
-        columns = doValidateColumns(columns, time_series_settings);
+        columns = validateColumns(columns, time_series_settings);
 }
 
-bool TimeSeriesColumnsValidator::areColumnsValid(const ColumnsDescription & columns, const TimeSeriesSettings & time_series_settings) const
+bool TimeSeriesDefinitionNormalizer::areColumnsValid(const ColumnsDescription & columns, const TimeSeriesSettings & time_series_settings) const
 {
     auto it = columns.begin();
     if (it->name == TimeSeriesColumnNames::ID)
     {
         std::optional<ColumnDescription> new_column;
-        validateColumnForID(*it, /* check_default= */ true, new_column);
+        validateColumnForIDAndAddDefault(*it, new_column);
         if (new_column.has_value())
             return false;
     }
@@ -119,7 +122,7 @@ bool TimeSeriesColumnsValidator::areColumnsValid(const ColumnsDescription & colu
 }
 
 /// Adds missing columns and reorders the columns.
-ColumnsDescription TimeSeriesColumnsValidator::doValidateColumns(const ColumnsDescription & columns, const TimeSeriesSettings & time_series_settings) const
+ColumnsDescription TimeSeriesDefinitionNormalizer::validateColumns(const ColumnsDescription & columns, const TimeSeriesSettings & time_series_settings) const
 {
     ColumnsDescription res;
 
@@ -128,7 +131,7 @@ ColumnsDescription TimeSeriesColumnsValidator::doValidateColumns(const ColumnsDe
         if (const auto * column = columns.tryGet(TimeSeriesColumnNames::ID))
         {
             std::optional<ColumnDescription> new_column;
-            validateColumnForID(*column, /* check_default= */ true, new_column);
+            validateColumnForIDAndAddDefault(*column, new_column);
             if (new_column)
                 res.add(std::move(*new_column));
             else
@@ -301,7 +304,7 @@ ColumnsDescription TimeSeriesColumnsValidator::doValidateColumns(const ColumnsDe
 }
 
 /// Generates a formulae for calculating the identifier of a time series from the metric name and all the tags.
-ASTPtr TimeSeriesColumnsValidator::chooseIDAlgorithm(const ColumnDescription & id_description) const
+ASTPtr TimeSeriesDefinitionNormalizer::chooseIDAlgorithm(const ColumnDescription & id_description) const
 {
     ASTs arguments_for_hash_function;
     arguments_for_hash_function.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::MetricName));
@@ -346,7 +349,7 @@ ASTPtr TimeSeriesColumnsValidator::chooseIDAlgorithm(const ColumnDescription & i
     }
 }
 
-void TimeSeriesColumnsValidator::validateTargetColumns(TargetKind target_kind, const ColumnsDescription & target_columns, const TimeSeriesSettings & time_series_settings) const
+void TimeSeriesDefinitionNormalizer::validateTargetColumns(TargetKind target_kind, const ColumnsDescription & target_columns, const TimeSeriesSettings & time_series_settings) const
 {
     auto get_column_description = [&](const String & column_name) -> const ColumnDescription &
     {
@@ -404,7 +407,7 @@ void TimeSeriesColumnsValidator::validateTargetColumns(TargetKind target_kind, c
     }
 }
 
-void TimeSeriesColumnsValidator::validateColumnForID(const ColumnDescription & column, bool check_default) const
+void TimeSeriesDefinitionNormalizer::validateColumnForID(const ColumnDescription & column, bool check_default) const
 {
     if (!check_default || column.default_desc.expression)
         return;
@@ -414,16 +417,16 @@ void TimeSeriesColumnsValidator::validateColumnForID(const ColumnDescription & c
                     storage_id.getNameForLogs(), column.name, column.name, column.type->getName());
 }
 
-void TimeSeriesColumnsValidator::validateColumnForID(const ColumnDescription & column, bool check_default, std::optional<ColumnDescription> & out_corrected_version) const
+void TimeSeriesDefinitionNormalizer::validateColumnForIDAndAddDefault(const ColumnDescription & column, std::optional<ColumnDescription> & out_column_with_default) const
 {
-    if (!check_default || column.default_desc.expression)
+    if (column.default_desc.expression)
         return;
 
-    out_corrected_version = column;
-    out_corrected_version->default_desc.expression = chooseIDAlgorithm(column);
+    out_column_with_default = column;
+    out_column_with_default->default_desc.expression = chooseIDAlgorithm(column);
 }
 
-void TimeSeriesColumnsValidator::validateColumnForTimestamp(const ColumnDescription & column) const
+void TimeSeriesDefinitionNormalizer::validateColumnForTimestamp(const ColumnDescription & column) const
 {
     if (!isDateTime64(removeNullable(column.type)))
     {
@@ -432,7 +435,7 @@ void TimeSeriesColumnsValidator::validateColumnForTimestamp(const ColumnDescript
     }
 }
 
-void TimeSeriesColumnsValidator::validateColumnForTimestamp(const ColumnDescription & column, UInt32 & out_scale) const
+void TimeSeriesDefinitionNormalizer::validateColumnForTimestamp(const ColumnDescription & column, UInt32 & out_scale) const
 {
     auto maybe_datetime64_type = removeNullable(column.type);
     if (!isDateTime64(maybe_datetime64_type))
@@ -444,7 +447,7 @@ void TimeSeriesColumnsValidator::validateColumnForTimestamp(const ColumnDescript
     out_scale = datetime64_type.getScale();
 }
 
-void TimeSeriesColumnsValidator::validateColumnForValue(const ColumnDescription & column) const
+void TimeSeriesDefinitionNormalizer::validateColumnForValue(const ColumnDescription & column) const
 {
     if (!isFloat(removeNullable(column.type)))
     {
@@ -453,12 +456,12 @@ void TimeSeriesColumnsValidator::validateColumnForValue(const ColumnDescription 
     }
 }
 
-void TimeSeriesColumnsValidator::validateColumnForMetricName(const ColumnDescription & column) const
+void TimeSeriesDefinitionNormalizer::validateColumnForMetricName(const ColumnDescription & column) const
 {
     validateColumnForTagValue(column);
 }
 
-void TimeSeriesColumnsValidator::validateColumnForTagValue(const ColumnDescription & column) const
+void TimeSeriesDefinitionNormalizer::validateColumnForTagValue(const ColumnDescription & column) const
 {
     if (!isString(removeLowCardinalityAndNullable(column.type)))
     {
@@ -467,7 +470,7 @@ void TimeSeriesColumnsValidator::validateColumnForTagValue(const ColumnDescripti
     }
 }
 
-void TimeSeriesColumnsValidator::validateColumnForTagsMap(const ColumnDescription & column) const
+void TimeSeriesDefinitionNormalizer::validateColumnForTagsMap(const ColumnDescription & column) const
 {
     if (!isMap(column.type)
         || !isString(removeLowCardinality(typeid_cast<const DataTypeMap &>(*column.type).getKeyType()))
@@ -478,7 +481,7 @@ void TimeSeriesColumnsValidator::validateColumnForTagsMap(const ColumnDescriptio
     }
 }
 
-void TimeSeriesColumnsValidator::validateColumnForMetricFamilyName(const ColumnDescription & column) const
+void TimeSeriesDefinitionNormalizer::validateColumnForMetricFamilyName(const ColumnDescription & column) const
 {
     if (!isString(removeLowCardinalityAndNullable(column.type)))
     {
@@ -487,19 +490,141 @@ void TimeSeriesColumnsValidator::validateColumnForMetricFamilyName(const ColumnD
     }
 }
 
-void TimeSeriesColumnsValidator::validateColumnForType(const ColumnDescription & column) const
+void TimeSeriesDefinitionNormalizer::validateColumnForType(const ColumnDescription & column) const
 {
     validateColumnForMetricFamilyName(column);
 }
 
-void TimeSeriesColumnsValidator::validateColumnForUnit(const ColumnDescription & column) const
+void TimeSeriesDefinitionNormalizer::validateColumnForUnit(const ColumnDescription & column) const
 {
     validateColumnForMetricFamilyName(column);
 }
 
-void TimeSeriesColumnsValidator::validateColumnForHelp(const ColumnDescription & column) const
+void TimeSeriesDefinitionNormalizer::validateColumnForHelp(const ColumnDescription & column) const
 {
     validateColumnForMetricFamilyName(column);
+}
+
+
+void TimeSeriesDefinitionNormalizer::setInnerTablesEngines(ASTCreateQuery & create_query, const ContextPtr & context) const
+{
+    /// Check if the engines of inner tables are already set.
+    bool all_is_set = true;
+
+    for (auto kind : {TargetKind::Data, TargetKind::Tags, TargetKind::Metrics})
+    {
+        if (create_query.hasTargetTableID(kind))
+            continue; /// An external target doesn't need a table engine.
+
+        if (auto target_engine = create_query.getTargetTableEngine(kind))
+        {
+            if (!target_engine->engine)
+            {
+                /// Some part of storage definition (such as PARTITION BY) is specified, but ENGINE is not: just set default one.
+                setInnerTableDefaultEngine(*create_query.getTargetTableEngine(kind), kind);
+            }
+            continue;
+        }
+
+        /// The engine of the inner table is not set yet, the rest of this function will take case about it.
+        all_is_set = false;
+    }
+
+    if (all_is_set)
+        return;
+
+    /// We'll try to extract storage definitions from clause `AS`:
+    ///     CREATE TABLE time_series_table_name AS other_time_series_table_name
+    if (!create_query.as_table.empty())
+    {
+        const String & as_table_name = create_query.as_table;
+        String as_database_name = context->resolveDatabase(create_query.as_database);
+        ASTPtr as_create_ptr = DatabaseCatalog::instance().getDatabase(as_database_name)->getCreateTableQuery(as_table_name, context);
+        const auto & as_create = as_create_ptr->as<ASTCreateQuery &>();
+
+        for (auto kind : {TargetKind::Data, TargetKind::Tags, TargetKind::Metrics})
+        {
+            if (as_create.hasTargetTableID(kind))
+            {
+                throw Exception(
+                    ErrorCodes::INCORRECT_QUERY,
+                    "Cannot CREATE a table AS {}.{} because it is a TimeSeries with external tables",
+                    backQuoteIfNeed(as_database_name), backQuoteIfNeed(as_table_name));
+            }
+            create_query.setTargetTableEngine(kind, as_create.getTargetTableEngine(kind));
+        }
+    }
+
+    /// Set ENGINEs by default.
+    for (auto kind : {TargetKind::Data, TargetKind::Tags, TargetKind::Metrics})
+    {
+        if (!create_query.getTargetTableEngine(kind))
+        {
+            auto inner_storage_def = std::make_shared<ASTStorage>();
+            setInnerTableDefaultEngine(*inner_storage_def, kind);
+            create_query.setTargetTableEngine(kind, inner_storage_def);
+        }
+    }
+}
+
+void TimeSeriesDefinitionNormalizer::setInnerTableDefaultEngine(ASTStorage & inner_storage_def, TargetKind inner_table_kind) const
+{
+    switch (inner_table_kind)
+    {
+        case TargetKind::Data:
+        {
+            inner_storage_def.set(inner_storage_def.engine, makeASTFunction("MergeTree"));
+            inner_storage_def.engine->no_empty_args = false;
+
+            if (!inner_storage_def.order_by && !inner_storage_def.primary_key && inner_storage_def.engine->name.ends_with("MergeTree"))
+            {
+                inner_storage_def.set(inner_storage_def.order_by,
+                                      makeASTFunction("tuple",
+                                                      std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::ID),
+                                                      std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Timestamp)));
+            }
+            break;
+        }
+
+        case TargetKind::Tags:
+        {
+            inner_storage_def.set(inner_storage_def.engine, makeASTFunction("ReplacingMergeTree"));
+            inner_storage_def.engine->no_empty_args = false;
+
+            if (!inner_storage_def.order_by && !inner_storage_def.primary_key && inner_storage_def.engine->name.ends_with("MergeTree"))
+            {
+                inner_storage_def.set(inner_storage_def.primary_key,
+                                std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::MetricName));
+
+                ASTs order_by_list;
+                order_by_list.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::MetricName));
+                order_by_list.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::ID));
+
+                auto order_by_tuple = std::make_shared<ASTFunction>();
+                order_by_tuple->name = "tuple";
+                auto arguments_list = std::make_shared<ASTExpressionList>();
+                arguments_list->children = std::move(order_by_list);
+                order_by_tuple->arguments = arguments_list;
+                inner_storage_def.set(inner_storage_def.order_by, order_by_tuple);
+            }
+            break;
+        }
+
+        case TargetKind::Metrics:
+        {
+            inner_storage_def.set(inner_storage_def.engine, makeASTFunction("ReplacingMergeTree"));
+            inner_storage_def.engine->no_empty_args = false;
+
+            if (!inner_storage_def.order_by && !inner_storage_def.primary_key && inner_storage_def.engine->name.ends_with("MergeTree"))
+            {
+                inner_storage_def.set(inner_storage_def.order_by, std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::MetricFamilyName));
+            }
+            break;
+        }
+
+        default:
+            UNREACHABLE();
+    }
 }
 
 }

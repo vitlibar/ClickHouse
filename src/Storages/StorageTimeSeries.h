@@ -30,9 +30,9 @@ using TimeSeriesSettingsPtr = std::shared_ptr<const TimeSeriesSettings>;
 class StorageTimeSeries final : public IStorage, WithContext
 {
 public:
-    /// Validates the columns of a TimeSeries table. Also adds missing columns and reorders the columns in the proper way.
-    /// This function is called by InterpreterCreateQuery to build a corrected version of the table's columns.
-    static void validateTableStructure(ColumnsDescription & columns, const ASTCreateQuery & create_query);
+    /// Adds missing columns and reorder columns, and also sets inner table engines.
+    /// The function also check the types of columns and throw if they're not valid.
+    static void normalizeTableDefinition(ASTCreateQuery & create_query, ColumnsDescription & columns, const ContextPtr & local_context);
 
     StorageTimeSeries(const StorageID & table_id, const ContextPtr & local_context, LoadingStrictnessLevel mode,
                       const ASTCreateQuery & query, const ColumnsDescription & columns, const String & comment);
