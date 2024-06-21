@@ -73,8 +73,11 @@ CREATE TABLE my_table
     `help` String
 )
 ENGINE = TimeSeries
+DATA ENGINE = MergeTree ORDER BY (id, timestamp)
 DATA INNER UUID '01234567-89ab-cdef-0123-456789abcdef'
+TAGS ENGINE = AggregatingMergeTree PRIMARY KEY metric_name ORDER BY (metric_name, id)
 TAGS INNER UUID '01234567-89ab-cdef-0123-456789abcdef'
+METRICS ENGINE = ReplacingMergeTree ORDER BY metric_family_name
 METRICS INNER UUID '01234567-89ab-cdef-0123-456789abcdef'
 ```
 
