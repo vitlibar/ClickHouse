@@ -101,7 +101,7 @@ void StorageTimeSeries::normalizeTableDefinition(ASTCreateQuery & create_query, 
         time_series_settings.loadFromQuery(*create_query.storage);
     TimeSeriesDefinitionNormalizer normalizer{time_series_storage_id};
     normalizer.addMissingColumnsAndValidate(columns, time_series_settings);
-    normalizer.setInnerTablesEngines(create_query, local_context);
+    normalizer.setInnerTablesEngines(create_query, time_series_settings, local_context);
 }
 
 

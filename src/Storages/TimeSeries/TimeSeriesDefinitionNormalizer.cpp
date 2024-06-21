@@ -602,7 +602,8 @@ void TimeSeriesDefinitionNormalizer::validateColumnForHelp(const ColumnDescripti
 }
 
 
-void TimeSeriesDefinitionNormalizer::setInnerTablesEngines(ASTCreateQuery & create_query, const ContextPtr & context) const
+void TimeSeriesDefinitionNormalizer::setInnerTablesEngines(
+    ASTCreateQuery & create_query, const TimeSeriesSettings & time_series_settings, const ContextPtr & context) const
 {
     /// Check if the engines of inner tables are already set.
     bool all_is_set = true;
@@ -617,7 +618,7 @@ void TimeSeriesDefinitionNormalizer::setInnerTablesEngines(ASTCreateQuery & crea
             if (!target_engine->engine)
             {
                 /// Some part of storage definition (such as PARTITION BY) is specified, but ENGINE is not: just set default one.
-                setInnerTableDefaultEngine(*create_query.getTargetTableEngine(kind), kind);
+                setInnerTableDefaultEngine(*create_query.getTargetTableEngine(kind), kind, time_series_settings);
             }
             continue;
         }
@@ -657,13 +658,14 @@ void TimeSeriesDefinitionNormalizer::setInnerTablesEngines(ASTCreateQuery & crea
         if (!create_query.getTargetTableEngine(kind))
         {
             auto inner_storage_def = std::make_shared<ASTStorage>();
-            setInnerTableDefaultEngine(*inner_storage_def, kind);
+            setInnerTableDefaultEngine(*inner_storage_def, kind, time_series_settings);
             create_query.setTargetTableEngine(kind, inner_storage_def);
         }
     }
 }
 
-void TimeSeriesDefinitionNormalizer::setInnerTableDefaultEngine(ASTStorage & inner_storage_def, TargetKind inner_table_kind) const
+void TimeSeriesDefinitionNormalizer::setInnerTableDefaultEngine(
+    ASTStorage & inner_storage_def, TargetKind inner_table_kind, const TimeSeriesSettings & time_series_settings) const
 {
     switch (inner_table_kind)
     {
@@ -696,7 +698,7 @@ void TimeSeriesDefinitionNormalizer::setInnerTableDefaultEngine(ASTStorage & inn
             if (!inner_storage_def.order_by && !inner_storage_def.primary_key && inner_storage_def.engine->name.ends_with("MergeTree"))
             {
                 inner_storage_def.set(inner_storage_def.primary_key,
-                                std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::MetricName));
+                                      std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::MetricName));
 
                 ASTs order_by_list;
                 order_by_list.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::MetricName));
@@ -734,5 +736,4 @@ void TimeSeriesDefinitionNormalizer::setInnerTableDefaultEngine(ASTStorage & inn
             UNREACHABLE();
     }
 }
-
 }

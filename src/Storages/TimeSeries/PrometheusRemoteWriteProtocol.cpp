@@ -311,8 +311,8 @@ namespace
         {
             const auto & min_time_description = get_column_description(TimeSeriesColumnNames::MinTime);
             const auto & max_time_description = get_column_description(TimeSeriesColumnNames::MaxTime);
-            validator.validateColumnForTimestamp(min_time_description, min_time_scale);
-            validator.validateColumnForTimestamp(max_time_description, max_time_scale);
+            normalizer.validateColumnForTimestamp(min_time_description, min_time_scale);
+            normalizer.validateColumnForTimestamp(max_time_description, max_time_scale);
             min_time_column = &make_column_for_tags_block(min_time_description);
             max_time_column = &make_column_for_tags_block(max_time_description);
             columns_to_fill_in_tags_table.emplace_back(min_time_column);
