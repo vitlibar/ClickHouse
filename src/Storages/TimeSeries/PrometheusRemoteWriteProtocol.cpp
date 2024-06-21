@@ -11,7 +11,7 @@
 #include <DataTypes/DataTypeString.h>
 #include <Storages/StorageTimeSeries.h>
 #include <Storages/TimeSeries/TimeSeriesColumnNames.h>
-#include <Storages/TimeSeries/TimeSeriesColumnsValidator.h>
+#include <Storages/TimeSeries/TimeSeriesDefinitionNormalizer.h>
 #include <Storages/TimeSeries/TimeSeriesTagNames.h>
 #include <Storages/TimeSeries/TimeSeriesSettings.h>
 #include <Interpreters/Context.h>
@@ -218,24 +218,24 @@ namespace
 
         /// Column "id".
         const auto & id_description = get_column_description(TimeSeriesColumnNames::ID);
-        TimeSeriesColumnsValidator validator{time_series_storage_id};
-        validator.validateColumnForID(id_description);
+        TimeSeriesDefinitionNormalizer normalizer{time_series_storage_id};
+        normalizer.validateColumnForID(id_description);
         auto & id_column_in_data_table = make_column_for_data_block(id_description);
 
         /// Column "timestamp".
         const auto & timestamp_description = get_column_description(TimeSeriesColumnNames::Timestamp);
         UInt32 timestamp_scale;
-        validator.validateColumnForTimestamp(timestamp_description, timestamp_scale);
+        normalizer.validateColumnForTimestamp(timestamp_description, timestamp_scale);
         auto & timestamp_column = make_column_for_data_block(timestamp_description);
 
         /// Column "value".
         const auto & value_description = get_column_description(TimeSeriesColumnNames::Value);
-        validator.validateColumnForValue(value_description);
+        normalizer.validateColumnForValue(value_description);
         auto & value_column = make_column_for_data_block(value_description);
 
         /// Column "metric_name".
         const auto & metric_name_description = get_column_description(TimeSeriesColumnNames::MetricName);
-        validator.validateColumnForMetricName(metric_name_description);
+        normalizer.validateColumnForMetricName(metric_name_description);
         auto & metric_name_column = make_column_for_tags_block(metric_name_description);
 
         /// Columns we should check explicitly that they're filled after filling each row.
@@ -250,7 +250,7 @@ namespace
             const auto & tag_name = tuple.at(0).safeGet<String>();
             const auto & column_name = tuple.at(1).safeGet<String>();
             const auto & column_description = get_column_description(column_name);
-            validator.validateColumnForTagValue(column_description);
+            normalizer.validateColumnForTagValue(column_description);
             auto & column = make_column_for_tags_block(column_description);
             columns_by_tag_name[tag_name] = &column;
             columns_to_fill_in_tags_table.emplace_back(&column);
@@ -258,7 +258,7 @@ namespace
 
         /// Column "tags".
         const auto & tags_description = get_column_description(TimeSeriesColumnNames::Tags);
-        validator.validateColumnForTagsMap(tags_description);
+        normalizer.validateColumnForTagsMap(tags_description);
         auto & tags_column = typeid_cast<ColumnMap &>(make_column_for_tags_block(tags_description));
         IColumn & tags_names = tags_column.getNestedData().getColumn(0);
         IColumn & tags_values = tags_column.getNestedData().getColumn(1);
@@ -266,7 +266,7 @@ namespace
 
         /// Column "all_tags".
         const auto & all_tags_description = get_column_description(TimeSeriesColumnNames::AllTags);
-        validator.validateColumnForTagsMap(all_tags_description);
+        normalizer.validateColumnForTagsMap(all_tags_description);
         auto & all_tags_column = typeid_cast<ColumnMap &>(make_column_for_tags_block(all_tags_description));
         IColumn & all_tags_names = all_tags_column.getNestedData().getColumn(0);
         IColumn & all_tags_values = all_tags_column.getNestedData().getColumn(1);
@@ -413,23 +413,23 @@ namespace
 
         /// Column "metric_family_name".
         const auto & metric_family_name_description = get_column_description(TimeSeriesColumnNames::MetricFamilyName);
-        TimeSeriesColumnsValidator validator{time_series_storage_id};
-        validator.validateColumnForMetricFamilyName(metric_family_name_description);
+        TimeSeriesDefinitionNormalizer normalizer{time_series_storage_id};
+        normalizer.validateColumnForMetricFamilyName(metric_family_name_description);
         auto & metric_family_name_column = make_column(metric_family_name_description);
 
         /// Column "type".
         const auto & type_description = get_column_description(TimeSeriesColumnNames::Type);
-        validator.validateColumnForType(type_description);
+        normalizer.validateColumnForType(type_description);
         auto & type_column = make_column(type_description);
 
         /// Column "unit".
         const auto & unit_description = get_column_description(TimeSeriesColumnNames::Unit);
-        validator.validateColumnForUnit(unit_description);
+        normalizer.validateColumnForUnit(unit_description);
         auto & unit_column = make_column(unit_description);
 
         /// Column "help".
         const auto & help_description = get_column_description(TimeSeriesColumnNames::Help);
-        validator.validateColumnForHelp(help_description);
+        normalizer.validateColumnForHelp(help_description);
         auto & help_column = make_column(help_description);
 
         /// Fill those columns.
