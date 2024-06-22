@@ -761,6 +761,10 @@ InterpreterCreateQuery::TableProperties InterpreterCreateQuery::getTableProperti
     if (create.storage && create.storage->engine)
         getContext()->checkAccess(AccessType::TABLE_ENGINE, create.storage->engine->name);
 
+    /// If this is a TimeSeries table then we need to normalize list of columns (add missing columns and reorder), and also set inner table engines.
+    if (create.is_time_series_table && (mode < LoadingStrictnessLevel::ATTACH))
+        StorageTimeSeries::normalizeTableDefinition(create, getContext());
+
     TableProperties properties;
     TableLockHolder as_storage_lock;
 
@@ -880,10 +884,6 @@ InterpreterCreateQuery::TableProperties InterpreterCreateQuery::getTableProperti
     /// supports schema inference (will determine table structure in it's constructor).
     else if (!StorageFactory::instance().getStorageFeatures(create.storage->engine->name).supports_schema_inference)
         throw Exception(ErrorCodes::INCORRECT_QUERY, "Incorrect CREATE query: required list of column descriptions or AS section or SELECT.");
-
-    /// If this is a TimeSeries table then we need to normalize list of columns (add missing columns and reorder), and also set inner table engines.
-    if (create.is_time_series_table)
-        StorageTimeSeries::normalizeTableDefinition(create, properties.columns, getContext());
 
     /// Even if query has list of columns, canonicalize it (unfold Nested columns).
     if (!create.columns_list)

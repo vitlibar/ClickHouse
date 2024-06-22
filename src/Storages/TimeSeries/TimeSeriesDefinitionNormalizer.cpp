@@ -1,20 +1,12 @@
 #include <Storages/TimeSeries/TimeSeriesDefinitionNormalizer.h>
 
-#include <DataTypes/DataTypeArray.h>
-#include <DataTypes/DataTypeDateTime64.h>
+#include <DataTypes/DataTypeFactory.h>
 #include <DataTypes/DataTypeFixedString.h>
-#include <DataTypes/DataTypeLowCardinality.h>
-#include <DataTypes/DataTypeMap.h>
-#include <DataTypes/DataTypeNullable.h>
-#include <DataTypes/DataTypeString.h>
-#include <DataTypes/DataTypeTuple.h>
-#include <DataTypes/DataTypeUUID.h>
-#include <DataTypes/DataTypesNumber.h>
-#include <Interpreters/Context.h>
-#include <Interpreters/DatabaseCatalog.h>
+#include <Parsers/ASTColumnDeclaration.h>
+#include <Parsers/ASTCreateQuery.h>
 #include <Parsers/ASTFunction.h>
 #include <Parsers/ASTIdentifier.h>
-#include <Storages/StorageTimeSeries.h>
+#include <Parsers/ASTLiteral.h>
 #include <Storages/TimeSeries/TimeSeriesColumnNames.h>
 #include <Storages/TimeSeries/TimeSeriesSettings.h>
 
@@ -24,333 +16,250 @@ namespace DB
 
 namespace ErrorCodes
 {
-    extern const int ILLEGAL_COLUMN;
     extern const int INCOMPATIBLE_COLUMNS;
     extern const int INCORRECT_QUERY;
-    extern const int THERE_IS_NO_COLUMN;
 }
 
 
-void TimeSeriesDefinitionNormalizer::addMissingColumnsAndValidate(ColumnsDescription & columns, const TimeSeriesSettings & time_series_settings) const
+namespace
 {
-    if (!areColumnsValid(columns, time_series_settings))
-        columns = validateColumns(columns, time_series_settings);
+    template <typename... Args>
+    std::shared_ptr<ASTFunction> makeASTFunctionForDataType(const String & type_name, Args &&... args)
+    {
+        auto function = std::make_shared<ASTFunction>();
+        function->name = type_name;
+        function->no_empty_args = true;
+        if (sizeof...(args))
+        {
+            function->arguments = std::make_shared<ASTExpressionList>();
+            function->children.push_back(function->arguments);
+            function->arguments->children = { std::forward<Args>(args)... };
+        }
+        return function;
+    };
+
 }
 
-bool TimeSeriesDefinitionNormalizer::areColumnsValid(const ColumnsDescription & columns, const TimeSeriesSettings & time_series_settings) const
+void TimeSeriesDefinitionNormalizer::normalize(ASTCreateQuery & create_query,
+                                               const TimeSeriesSettings & time_series_settings,
+                                               const ASTCreateQuery * as_create_query) const
 {
-    auto it = columns.begin();
-    if (it->name == TimeSeriesColumnNames::ID)
-    {
-        std::optional<ColumnDescription> new_column;
-        validateColumnForIDAndAddDefault(*it, time_series_settings, new_column);
-        if (new_column.has_value())
-            return false;
-    }
-    else
-    {
-        return false;
-    }
+    reorderColumns(create_query, time_series_settings);
+    addMissingColumns(create_query, time_series_settings);
+    addMissingDefaultForIDColumn(create_query, time_series_settings);
 
-    ++it;
-    if (it->name == TimeSeriesColumnNames::Timestamp)
-        validateColumnForTimestamp(*it);
-    else
-        return false;
+    if (as_create_query)
+        addMissingInnerEnginesFromAsTable(create_query, *as_create_query);
 
-    ++it;
-    if (it->name == TimeSeriesColumnNames::Value)
-        validateColumnForValue(*it);
-    else
-        return false;
-
-    ++it;
-    if (it->name == TimeSeriesColumnNames::MetricName)
-        validateColumnForMetricName(*it);
-    else
-        return false;
-
-    const Map & tags_to_columns = time_series_settings.tags_to_columns;
-    for (const auto & tag_name_and_column_name : tags_to_columns)
-    {
-        const auto & tuple = tag_name_and_column_name.safeGet<const Tuple &>();
-        const auto & column_name = tuple.at(1).safeGet<String>();
-        ++it;
-        if (it->name == column_name)
-            validateColumnForTagValue(*it);
-        else
-            return false;
-    }
-
-    if (time_series_settings.store_other_tags_as_map)
-    {
-        ++it;
-        if (it->name == TimeSeriesColumnNames::Tags)
-            validateColumnForTagsMap(*it);
-        else
-            return false;
-    }
-
-    if (time_series_settings.enable_column_all_tags)
-    {
-        ++it;
-        if (it->name == TimeSeriesColumnNames::AllTags)
-            validateColumnForTagsMap(*it);
-        else
-            return false;
-    }
-
-    if (time_series_settings.store_min_time_and_max_time)
-    {
-        for (const auto & column_name : {TimeSeriesColumnNames::MinTime, TimeSeriesColumnNames::MaxTime})
-        {
-            ++it;
-            if (it->name == column_name)
-                validateColumnForTimestamp(*it);
-            else
-                return false;
-        }
-    }
-
-    ++it;
-    if (it->name == TimeSeriesColumnNames::MetricFamilyName)
-        validateColumnForMetricFamilyName(*it);
-    else
-        return false;
-
-    ++it;
-    if (it->name == TimeSeriesColumnNames::Type)
-        validateColumnForType(*it);
-    else
-        return false;
-
-    ++it;
-    if (it->name == TimeSeriesColumnNames::Unit)
-        validateColumnForUnit(*it);
-    else
-        return false;
-
-    ++it;
-    if (it->name == TimeSeriesColumnNames::Help)
-        validateColumnForHelp(*it);
-    else
-        return false;
-
-    ++it;
-    return it == columns.end();
+    addMissingInnerEngines(create_query, time_series_settings);
 }
 
-/// Adds missing columns and reorders the columns.
-ColumnsDescription TimeSeriesDefinitionNormalizer::validateColumns(const ColumnsDescription & columns, const TimeSeriesSettings & time_series_settings) const
+
+void TimeSeriesDefinitionNormalizer::reorderColumns(ASTCreateQuery & create, const TimeSeriesSettings & time_series_settings) const
 {
-    ColumnsDescription res;
+    if (!create.columns_list || !create.columns_list->columns)
+        return;
 
-    /// Column `id`.
-    {
-        if (const auto * column = columns.tryGet(TimeSeriesColumnNames::ID))
-        {
-            std::optional<ColumnDescription> new_column;
-            validateColumnForIDAndAddDefault(*column, time_series_settings, new_column);
-            if (new_column)
-                res.add(std::move(*new_column));
-            else
-                res.add(*column);
-        }
-        else
-        {
-            ColumnDescription new_column{TimeSeriesColumnNames::ID, std::make_shared<DataTypeUUID>()};
-            new_column.default_desc.expression = chooseIDAlgorithm(new_column, time_series_settings);
-            res.add(std::move(new_column));
-        }
-    }
+    auto & columns = create.columns_list->columns->children;
 
-    /// Column `timestamp`.
-    {
-        if (const auto * column = columns.tryGet(TimeSeriesColumnNames::Timestamp))
-        {
-            validateColumnForTimestamp(*column);
-            res.add(*column);
-        }
-        else
-        {
-            res.add(ColumnDescription{TimeSeriesColumnNames::Timestamp, std::make_shared<DataTypeDateTime64>(3)});
-        }
-    }
-
-    /// Column `value`.
-    {
-        if (const auto * column = columns.tryGet(TimeSeriesColumnNames::Value))
-        {
-            validateColumnForValue(*column);
-            res.add(*column);
-        }
-        else
-        {
-            res.add(ColumnDescription{TimeSeriesColumnNames::Value, std::make_shared<DataTypeFloat64>()});
-        }
-    }
-
-    /// Column `metric_name`.
-    {
-        if (const auto * column = columns.tryGet(TimeSeriesColumnNames::MetricName))
-        {
-            validateColumnForMetricName(*column);
-            res.add(*column);
-        }
-        else
-        {
-            res.add(ColumnDescription{TimeSeriesColumnNames::MetricName, std::make_shared<DataTypeLowCardinality>(std::make_shared<DataTypeString>())});
-        }
-    }
-
-    /// Columns corresponding to the `tags_to_columns` setting.
-    const Map & tags_to_columns = time_series_settings.tags_to_columns;
-    for (const auto & tag_name_and_column_name : tags_to_columns)
-    {
-        const auto & tuple = tag_name_and_column_name.safeGet<const Tuple &>();
-        const auto & column_name = tuple.at(1).safeGet<String>();
-        if (const auto * column = columns.tryGet(column_name))
-        {
-            validateColumnForTagValue(*column);
-            res.add(*column);
-        }
-        else
-        {
-            res.add(ColumnDescription{column_name, std::make_shared<DataTypeLowCardinality>(std::make_shared<DataTypeString>())});
-        }
-    }
-
-    /// Column `tags`.
-    if (time_series_settings.store_other_tags_as_map)
-    {
-        if (const auto * column = columns.tryGet(TimeSeriesColumnNames::Tags))
-        {
-            validateColumnForTagsMap(*column);
-            res.add(*column);
-        }
-        else
-        {
-            res.add(ColumnDescription{
-                TimeSeriesColumnNames::Tags,
-                std::make_shared<DataTypeMap>(
-                    std::make_shared<DataTypeLowCardinality>(std::make_shared<DataTypeString>()), std::make_shared<DataTypeString>())});
-        }
-    }
-
-    /// Column `all_tags`.
-    if (time_series_settings.enable_column_all_tags)
-    {
-        if (const auto * column = columns.tryGet(TimeSeriesColumnNames::AllTags))
-        {
-            validateColumnForTagsMap(*column);
-            res.add(*column);
-        }
-        else
-        {
-            res.add(ColumnDescription{
-                TimeSeriesColumnNames::AllTags,
-                std::make_shared<DataTypeMap>(std::make_shared<DataTypeString>(), std::make_shared<DataTypeString>())});
-        }
-    }
-
-    /// Columns `min_time` and `max_time`.
-    if (time_series_settings.store_min_time_and_max_time)
-    {
-        for (const auto & column_name : {TimeSeriesColumnNames::MinTime, TimeSeriesColumnNames::MaxTime})
-        {
-            if (const auto * column = columns.tryGet(column_name))
-            {
-                validateColumnForTimestamp(*column);
-                res.add(*column);
-            }
-            else if (const auto * timestamp_column = columns.tryGet(TimeSeriesColumnNames::Timestamp))
-            {
-                auto new_column = *timestamp_column;
-                new_column.name = column_name;
-                validateColumnForTimestamp(new_column);
-                res.add(new_column);
-            }
-            else
-            {
-                /// A nullable type is better for storing min_time / max_time because we want to allow time series in the 'tags' table
-                /// which have no timestamps.
-                res.add(ColumnDescription{column_name, std::make_shared<DataTypeNullable>(std::make_shared<DataTypeDateTime64>(3))});
-            }
-        }
-    }
-
-    /// Column `metric_family_name`.
-    {
-        if (const auto * column = columns.tryGet(TimeSeriesColumnNames::MetricFamilyName))
-        {
-            validateColumnForMetricFamilyName(*column);
-            res.add(*column);
-        }
-        else
-        {
-            res.add(ColumnDescription{TimeSeriesColumnNames::MetricFamilyName, std::make_shared<DataTypeString>()});
-        }
-    }
-
-    /// Column `type`.
-    {
-        if (const auto * column = columns.tryGet(TimeSeriesColumnNames::Type))
-        {
-            validateColumnForType(*column);
-            res.add(*column);
-        }
-        else
-        {
-            res.add(ColumnDescription{TimeSeriesColumnNames::Type, std::make_shared<DataTypeLowCardinality>(std::make_shared<DataTypeString>())});
-        }
-    }
-
-    /// Column `unit`.
-    {
-        if (const auto * column = columns.tryGet(TimeSeriesColumnNames::Unit))
-        {
-            validateColumnForUnit(*column);
-            res.add(*column);
-        }
-        else
-        {
-            res.add(ColumnDescription{TimeSeriesColumnNames::Unit, std::make_shared<DataTypeLowCardinality>(std::make_shared<DataTypeString>())});
-        }
-    }
-
-    /// Column `help`.
-    {
-        if (const auto * column = columns.tryGet(TimeSeriesColumnNames::Help))
-        {
-            validateColumnForHelp(*column);
-            res.add(*column);
-        }
-        else
-        {
-            res.add(ColumnDescription{TimeSeriesColumnNames::Help, std::make_shared<DataTypeString>()});
-        }
-    }
-
-    /// Each of the passed columns must present in `res`.
+    std::unordered_map<std::string_view, std::shared_ptr<ASTColumnDeclaration>> columns_by_name;
     for (const auto & column : columns)
     {
-        if (!res.has(column.name))
-        {
-            throw Exception(
-                ErrorCodes::INCOMPATIBLE_COLUMNS,
-                "{}: Column {} can't be used in this table. "
-                "The TimeSeries table engine supports only a limited set of columns (id, timestamp, value, metric_name, tags, metric_family_name, type, unit, help). "
-                "Extra columns representing tags must be specified in the 'tags_to_columns' setting.",
-                storage_id.getNameForLogs(), column.name);
-        }
+        auto column_declaration = typeid_cast<std::shared_ptr<ASTColumnDeclaration>>(column);
+        columns_by_name[column_declaration->name] = column_declaration;
     }
 
-    chassert(areColumnsValid(res, time_series_settings));
-    return res;
+    columns.clear();
+
+    auto add_column_in_correct_order = [&](std::string_view column_name)
+    {
+        auto it = columns_by_name.find(column_name);
+        if (it != columns_by_name.end())
+        {
+            columns.push_back(it->second);
+            columns_by_name.erase(it);
+        }
+    };
+
+    add_column_in_correct_order(TimeSeriesColumnNames::ID);
+    add_column_in_correct_order(TimeSeriesColumnNames::Timestamp);
+    add_column_in_correct_order(TimeSeriesColumnNames::Value);
+
+    add_column_in_correct_order(TimeSeriesColumnNames::MetricName);
+
+    const Map & tags_to_columns = time_series_settings.tags_to_columns;
+    for (const auto & tag_name_and_column_name : tags_to_columns)
+    {
+        const auto & tuple = tag_name_and_column_name.safeGet<const Tuple &>();
+        const auto & column_name = tuple.at(1).safeGet<String>();
+        add_column_in_correct_order(column_name);
+    }
+
+    if (time_series_settings.store_other_tags_as_map)
+        add_column_in_correct_order(TimeSeriesColumnNames::Tags);
+
+    if (time_series_settings.enable_column_all_tags)
+        add_column_in_correct_order(TimeSeriesColumnNames::AllTags);
+
+    if (time_series_settings.store_min_time_and_max_time)
+    {
+        add_column_in_correct_order(TimeSeriesColumnNames::MinTime);
+        add_column_in_correct_order(TimeSeriesColumnNames::MaxTime);
+    }
+
+    add_column_in_correct_order(TimeSeriesColumnNames::MetricFamilyName);
+    add_column_in_correct_order(TimeSeriesColumnNames::Type);
+    add_column_in_correct_order(TimeSeriesColumnNames::Unit);
+    add_column_in_correct_order(TimeSeriesColumnNames::Help);
+
+    if (!columns_by_name.empty())
+    {
+        throw Exception(
+            ErrorCodes::INCOMPATIBLE_COLUMNS,
+            "{}: Column {} can't be used in this table. "
+            "The TimeSeries table engine supports only a limited set of columns (id, timestamp, value, metric_name, tags, metric_family_name, type, unit, help). "
+            "Extra columns representing tags must be specified in the 'tags_to_columns' setting.",
+            time_series_storage_id.getNameForLogs(), columns_by_name.begin()->first);
+    }
 }
 
+
+void TimeSeriesDefinitionNormalizer::addMissingColumns(ASTCreateQuery & create, const TimeSeriesSettings & time_series_settings) const
+{
+    if (!create.as_table.empty())
+    {
+        /// Collumns must be extracted from the AS <table>.
+        return;
+    }
+
+    if (!create.columns_list)
+        create.set(create.columns_list, std::make_shared<ASTColumns>());
+
+    if (!create.columns_list->columns)
+        create.columns_list->set(create.columns_list->columns, std::make_shared<ASTExpressionList>());
+    auto & columns = create.columns_list->columns->children;
+
+    size_t position = 0;
+
+    auto is_next_column_named = [&](std::string_view column_name)
+    {
+        if (position < columns.size() && (typeid_cast<const ASTColumnDeclaration &>(*columns[position]).name == column_name))
+        {
+            ++position;
+            return true;
+        }
+        return false;
+    };
+
+    auto make_new_column = [&](const String & column_name, ASTPtr type)
+    {
+        auto new_column = std::make_shared<ASTColumnDeclaration>();
+        new_column->name = column_name;
+        new_column->type = type;
+        columns.insert(columns.begin() + position, new_column);
+        ++position;
+    };
+
+    auto make_nullable = [&](std::shared_ptr<ASTFunction> type)
+    {
+        if (type->name == "Nullable")
+            return type;
+        else
+            return makeASTFunctionForDataType("Nullable", type);
+    };
+
+    auto get_uuid_type = [] { return makeASTFunctionForDataType("UUID"); };
+    auto get_datetime_type = [] { return makeASTFunctionForDataType("DateTime64", std::make_shared<ASTLiteral>(3ul)); };
+    auto get_float_type = [] { return makeASTFunctionForDataType("Float64"); };
+    auto get_string_type = [] { return makeASTFunctionForDataType("String"); };
+    auto get_lc_string_type = [&] { return makeASTFunctionForDataType("LowCardinality", get_string_type()); };
+    auto get_string_to_string_map_type = [&] { return makeASTFunctionForDataType("Map", get_string_type(), get_string_type()); };
+    auto get_lc_string_to_string_map_type = [&] { return makeASTFunctionForDataType("Map", get_lc_string_type(), get_string_type()); };
+
+    if (!is_next_column_named(TimeSeriesColumnNames::ID))
+        make_new_column(TimeSeriesColumnNames::ID, get_uuid_type());
+
+    if (!is_next_column_named(TimeSeriesColumnNames::Timestamp))
+        make_new_column(TimeSeriesColumnNames::Timestamp, get_datetime_type());
+
+    auto timestamp_type
+        = typeid_cast<std::shared_ptr<ASTFunction>>(typeid_cast<const ASTColumnDeclaration &>(*columns[position - 1]).type->ptr());
+
+    if (!is_next_column_named(TimeSeriesColumnNames::Value))
+        make_new_column(TimeSeriesColumnNames::Value, get_float_type());
+
+    if (!is_next_column_named(TimeSeriesColumnNames::MetricName))
+        make_new_column(TimeSeriesColumnNames::MetricName, get_lc_string_type());
+
+    const Map & tags_to_columns = time_series_settings.tags_to_columns;
+    for (const auto & tag_name_and_column_name : tags_to_columns)
+    {
+        const auto & tuple = tag_name_and_column_name.safeGet<const Tuple &>();
+        const auto & column_name = tuple.at(1).safeGet<String>();
+        if (!is_next_column_named(column_name))
+            make_new_column(column_name, get_lc_string_type());
+    }
+
+    if (time_series_settings.store_other_tags_as_map)
+    {
+        if (!is_next_column_named(TimeSeriesColumnNames::Tags))
+            make_new_column(TimeSeriesColumnNames::Tags, get_lc_string_to_string_map_type());
+    }
+
+    if (time_series_settings.enable_column_all_tags)
+    {
+        if (!is_next_column_named(TimeSeriesColumnNames::AllTags))
+            make_new_column(TimeSeriesColumnNames::AllTags, get_string_to_string_map_type());
+    }
+
+    if (time_series_settings.store_min_time_and_max_time)
+    {
+        if (!is_next_column_named(TimeSeriesColumnNames::MinTime))
+            make_new_column(TimeSeriesColumnNames::MinTime, make_nullable(timestamp_type));
+        if (!is_next_column_named(TimeSeriesColumnNames::MaxTime))
+            make_new_column(TimeSeriesColumnNames::MaxTime, make_nullable(timestamp_type));
+    }
+
+    if (!is_next_column_named(TimeSeriesColumnNames::MetricFamilyName))
+        make_new_column(TimeSeriesColumnNames::MetricFamilyName, get_string_type());
+
+    if (!is_next_column_named(TimeSeriesColumnNames::Type))
+        make_new_column(TimeSeriesColumnNames::Type, get_lc_string_type());
+
+    if (!is_next_column_named(TimeSeriesColumnNames::Unit))
+        make_new_column(TimeSeriesColumnNames::Unit, get_lc_string_type());
+
+    if (!is_next_column_named(TimeSeriesColumnNames::Help))
+        make_new_column(TimeSeriesColumnNames::Help, get_string_type());
+}
+
+
+void TimeSeriesDefinitionNormalizer::addMissingDefaultForIDColumn(ASTCreateQuery & create, const TimeSeriesSettings & time_series_settings) const
+{
+    if (!create.columns_list || !create.columns_list->columns)
+        return;
+
+    auto & columns = create.columns_list->columns->children;
+    auto it = std::find_if(columns.begin(), columns.end(), [](const ASTPtr & column)
+    {
+        return typeid_cast<const ASTColumnDeclaration &>(*column).name == TimeSeriesColumnNames::ID;
+    });
+
+    if (it == columns.end())
+        return;
+
+    auto & column_declaration = typeid_cast<ASTColumnDeclaration &>(**it);
+
+    if (column_declaration.default_specifier.empty() && !column_declaration.default_expression)
+    {
+        column_declaration.default_specifier = "DEFAULT";
+        column_declaration.default_expression = chooseIDAlgorithm(column_declaration, time_series_settings);
+    }
+}
+
+
 /// Generates a formulae for calculating the identifier of a time series from the metric name and all the tags.
-ASTPtr TimeSeriesDefinitionNormalizer::chooseIDAlgorithm(const ColumnDescription & id_description, const TimeSeriesSettings & time_series_settings) const
+ASTPtr TimeSeriesDefinitionNormalizer::chooseIDAlgorithm(const ASTColumnDeclaration & id_column, const TimeSeriesSettings & time_series_settings) const
 {
     ASTs arguments_for_hash_function;
     arguments_for_hash_function.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::MetricName));
@@ -382,14 +291,14 @@ ASTPtr TimeSeriesDefinitionNormalizer::chooseIDAlgorithm(const ColumnDescription
         return function;
     };
 
-    const auto & id_type = *id_description.type;
-    WhichDataType id_type_which(id_type);
+    auto id_type = DataTypeFactory::instance().get(id_column.type);
+    WhichDataType id_type_which(*id_type);
 
     if (id_type_which.isUInt64())
     {
         return make_hash_function("sipHash64");
     }
-    else if (id_type_which.isFixedString() && typeid_cast<const DataTypeFixedString &>(id_type).getN() == 16)
+    else if (id_type_which.isFixedString() && typeid_cast<const DataTypeFixedString &>(*id_type).getN() == 16)
     {
         return make_hash_function("sipHash128");
     }
@@ -407,267 +316,56 @@ ASTPtr TimeSeriesDefinitionNormalizer::chooseIDAlgorithm(const ColumnDescription
                         "which will be used to calculate the identifier of each time series: {} {} DEFAULT ... "
                         "If the DEFAULT expression is not specified then it can be chosen implicitly but only if the column type is one of these: UInt64, UInt128, UUID. "
                         "For type {} the DEFAULT expression can't be chosen automatically, so please specify it explicitly",
-                        storage_id.getNameForLogs(), id_description.name, id_description.name, id_type.getName(), id_type.getName());
+                        time_series_storage_id.getNameForLogs(), id_column.name, id_column.name, id_type->getName(), id_type->getName());
     }
 }
 
-void TimeSeriesDefinitionNormalizer::validateTargetColumns(TargetKind target_kind, const ColumnsDescription & target_columns, const TimeSeriesSettings & time_series_settings) const
+
+void TimeSeriesDefinitionNormalizer::addMissingInnerEnginesFromAsTable(ASTCreateQuery & create, const ASTCreateQuery & as_create) const
 {
-    auto get_column_description = [&](const String & column_name) -> const ColumnDescription &
+    for (auto kind : {TargetKind::Data, TargetKind::Tags, TargetKind::Metrics})
     {
-        const auto * column = target_columns.tryGet(column_name);
-        if (!column)
+        if (as_create.hasTargetTableID(kind))
         {
+            QualifiedTableName as_table{as_create.getDatabase(), as_create.getTable()};
             throw Exception(
-                ErrorCodes::THERE_IS_NO_COLUMN,
-                "{}: Column {} is required for the TimeSeries table engine",
-                storage_id.getNameForLogs(), column_name);
-        }
-        return *column;
-    };
-
-    switch (target_kind)
-    {
-        case TargetKind::Data:
-        {
-            /// Here "check_default = false" because it's ok for the "id" column in the target table not to contain
-            /// an expression for calculating the identifier of a time series.
-            validateColumnForID(get_column_description(TimeSeriesColumnNames::ID), /* check_default= */ false);
-            validateColumnForTimestamp(get_column_description(TimeSeriesColumnNames::Timestamp));
-            validateColumnForValue(get_column_description(TimeSeriesColumnNames::Value));
-            break;
+                ErrorCodes::INCORRECT_QUERY,
+                "Cannot CREATE a table AS {}.{} because it has external tables",
+                backQuoteIfNeed(as_table.database), backQuoteIfNeed(as_table.table));
         }
 
-        case TargetKind::Tags:
-        {
-            validateColumnForMetricName(get_column_description(TimeSeriesColumnNames::MetricName));
-
-            const Map & tags_to_columns = time_series_settings.tags_to_columns;
-            for (const auto & tag_name_and_column_name : tags_to_columns)
-            {
-                const auto & tuple = tag_name_and_column_name.safeGet<const Tuple &>();
-                const auto & column_name = tuple.at(1).safeGet<String>();
-                validateColumnForTagValue(get_column_description(column_name));
-            }
-
-            if (time_series_settings.store_other_tags_as_map)
-                validateColumnForTagsMap(get_column_description(TimeSeriesColumnNames::Tags));
-
-            if (time_series_settings.store_min_time_and_max_time)
-            {
-                /// Here we check only existence of columns "min_time" and "max_time" here because otherwise it would be difficult
-                /// (those columns can be defined with using SimpleAggregateFunction).
-                for (const auto & column_name : {TimeSeriesColumnNames::MinTime, TimeSeriesColumnNames::MaxTime})
-                    validateColumnForTimestamp(get_column_description(column_name));
-            }
-
-            break;
-        }
-
-        case TargetKind::Metrics:
-        {
-            validateColumnForMetricFamilyName(get_column_description(TimeSeriesColumnNames::MetricFamilyName));
-            validateColumnForType(get_column_description(TimeSeriesColumnNames::Type));
-            validateColumnForUnit(get_column_description(TimeSeriesColumnNames::Unit));
-            validateColumnForHelp(get_column_description(TimeSeriesColumnNames::Help));
-            break;
-        }
-
-        default:
-            UNREACHABLE();
-    }
-}
-
-void TimeSeriesDefinitionNormalizer::validateColumnForID(const ColumnDescription & column, bool check_default) const
-{
-    if (!check_default || column.default_desc.expression)
-        return;
-
-    throw Exception(ErrorCodes::INCOMPATIBLE_COLUMNS, "{}: The DEFAULT expression for column {} must contain an expression "
-                    "which will be used to calculate the identifier of each time series: {} {} DEFAULT ...",
-                    storage_id.getNameForLogs(), column.name, column.name, column.type->getName());
-}
-
-void TimeSeriesDefinitionNormalizer::validateColumnForIDAndAddDefault(const ColumnDescription & column, const TimeSeriesSettings & time_series_settings, std::optional<ColumnDescription> & out_column_with_default) const
-{
-    if (column.default_desc.expression)
-        return;
-
-    out_column_with_default = column;
-    out_column_with_default->default_desc.expression = chooseIDAlgorithm(column, time_series_settings);
-}
-
-void TimeSeriesDefinitionNormalizer::validateColumnForTimestamp(const ColumnDescription & column) const
-{
-    if (!isDateTime64(removeNullable(column.type)))
-    {
-        throw Exception(ErrorCodes::INCOMPATIBLE_COLUMNS, "{}: Column {} has illegal data type {}, expected DateTime64",
-                        storage_id.getNameForLogs(), column.name, column.type->getName());
-    }
-}
-
-void TimeSeriesDefinitionNormalizer::validateColumnForTimestamp(const ColumnDescription & column, UInt32 & out_scale) const
-{
-    auto maybe_datetime64_type = removeNullable(column.type);
-    if (!isDateTime64(maybe_datetime64_type))
-    {
-        throw Exception(ErrorCodes::INCOMPATIBLE_COLUMNS, "{}: Column {} has illegal data type {}, expected DateTime64",
-                        storage_id.getNameForLogs(), column.name, column.type->getName());
-    }
-    const auto & datetime64_type = typeid_cast<const DataTypeDateTime64 &>(*maybe_datetime64_type);
-    out_scale = datetime64_type.getScale();
-}
-
-void TimeSeriesDefinitionNormalizer::validateColumnForValue(const ColumnDescription & column) const
-{
-    if (!isFloat(removeNullable(column.type)))
-    {
-        throw Exception(ErrorCodes::INCOMPATIBLE_COLUMNS, "{}: Column {} has illegal data type {}, expected Float32 or Float64",
-                        storage_id.getNameForLogs(), column.name, column.type->getName());
-    }
-}
-
-void TimeSeriesDefinitionNormalizer::validateColumnForMetricName(const ColumnDescription & column) const
-{
-    validateColumnForTagValue(column);
-}
-
-void TimeSeriesDefinitionNormalizer::validateColumnForMetricName(const ColumnWithTypeAndName & column) const
-{
-    validateColumnForTagValue(column);
-}
-
-void TimeSeriesDefinitionNormalizer::validateColumnForTagValue(const ColumnDescription & column) const
-{
-    if (!isString(removeLowCardinalityAndNullable(column.type)))
-    {
-        throw Exception(ErrorCodes::INCOMPATIBLE_COLUMNS, "{}: Column {} has illegal data type {}, expected String or LowCardinality(String)",
-                        storage_id.getNameForLogs(), column.name, column.type->getName());
-    }
-}
-
-void TimeSeriesDefinitionNormalizer::validateColumnForTagValue(const ColumnWithTypeAndName & column) const
-{
-    if (!isString(removeLowCardinalityAndNullable(column.type)))
-    {
-        throw Exception(ErrorCodes::ILLEGAL_COLUMN, "{}: Column {} has illegal data type {}, expected String or LowCardinality(String)",
-                        storage_id.getNameForLogs(), column.name, column.type->getName());
-    }
-}
-
-void TimeSeriesDefinitionNormalizer::validateColumnForTagsMap(const ColumnDescription & column) const
-{
-    if (!isMap(column.type)
-        || !isString(removeLowCardinality(typeid_cast<const DataTypeMap &>(*column.type).getKeyType()))
-        || !isString(removeLowCardinality(typeid_cast<const DataTypeMap &>(*column.type).getValueType())))
-    {
-        throw Exception(ErrorCodes::INCOMPATIBLE_COLUMNS, "{}: Column {} has illegal data type {}, expected Map(String, String) or Map(LowCardinality(String), String)",
-                        storage_id.getNameForLogs(), column.name, column.type->getName());
-    }
-}
-
-void TimeSeriesDefinitionNormalizer::validateColumnForTagsMap(const ColumnWithTypeAndName & column) const
-{
-    if (!isMap(column.type)
-        || !isString(removeLowCardinality(typeid_cast<const DataTypeMap &>(*column.type).getKeyType()))
-        || !isString(removeLowCardinality(typeid_cast<const DataTypeMap &>(*column.type).getValueType())))
-    {
-        throw Exception(ErrorCodes::ILLEGAL_COLUMN, "{}: Column {} has illegal data type {}, expected Map(String, String) or Map(LowCardinality(String), String)",
-                        storage_id.getNameForLogs(), column.name, column.type->getName());
-    }
-}
-
-void TimeSeriesDefinitionNormalizer::validateColumnForMetricFamilyName(const ColumnDescription & column) const
-{
-    if (!isString(removeLowCardinalityAndNullable(column.type)))
-    {
-        throw Exception(ErrorCodes::INCOMPATIBLE_COLUMNS, "{}: Column {} has illegal data type {}, expected String or LowCardinality(String)",
-                        storage_id.getNameForLogs(), column.name, column.type->getName());
-    }
-}
-
-void TimeSeriesDefinitionNormalizer::validateColumnForType(const ColumnDescription & column) const
-{
-    validateColumnForMetricFamilyName(column);
-}
-
-void TimeSeriesDefinitionNormalizer::validateColumnForUnit(const ColumnDescription & column) const
-{
-    validateColumnForMetricFamilyName(column);
-}
-
-void TimeSeriesDefinitionNormalizer::validateColumnForHelp(const ColumnDescription & column) const
-{
-    validateColumnForMetricFamilyName(column);
-}
-
-
-void TimeSeriesDefinitionNormalizer::setInnerTablesEngines(
-    ASTCreateQuery & create_query, const TimeSeriesSettings & time_series_settings, const ContextPtr & context) const
-{
-    /// Check if the engines of inner tables are already set.
-    bool all_is_set = true;
-
-    for (auto kind : {TargetKind::Data, TargetKind::Tags, TargetKind::Metrics})
-    {
-        if (create_query.hasTargetTableID(kind))
-            continue; /// An external target doesn't need a table engine.
-
-        if (auto target_engine = create_query.getTargetTableEngine(kind))
-        {
-            if (!target_engine->engine)
-            {
-                /// Some part of storage definition (such as PARTITION BY) is specified, but ENGINE is not: just set default one.
-                setInnerTableDefaultEngine(*create_query.getTargetTableEngine(kind), kind, time_series_settings);
-            }
+        auto inner_storage_def = create.getTargetTableEngine(kind);
+        if (inner_storage_def)
             continue;
-        }
 
-        /// The engine of the inner table is not set yet, the rest of this function will take case about it.
-        all_is_set = false;
-    }
-
-    if (all_is_set)
-        return;
-
-    /// We'll try to extract storage definitions from clause `AS`:
-    ///     CREATE TABLE time_series_table_name AS other_time_series_table_name
-    if (!create_query.as_table.empty())
-    {
-        const String & as_table_name = create_query.as_table;
-        String as_database_name = context->resolveDatabase(create_query.as_database);
-        ASTPtr as_create_ptr = DatabaseCatalog::instance().getDatabase(as_database_name)->getCreateTableQuery(as_table_name, context);
-        const auto & as_create = as_create_ptr->as<ASTCreateQuery &>();
-
-        for (auto kind : {TargetKind::Data, TargetKind::Tags, TargetKind::Metrics})
-        {
-            if (as_create.hasTargetTableID(kind))
-            {
-                throw Exception(
-                    ErrorCodes::INCORRECT_QUERY,
-                    "Cannot CREATE a table AS {}.{} because it is a TimeSeries with external tables",
-                    backQuoteIfNeed(as_database_name), backQuoteIfNeed(as_table_name));
-            }
-            create_query.setTargetTableEngine(kind, as_create.getTargetTableEngine(kind));
-        }
-    }
-
-    /// Set ENGINEs by default.
-    for (auto kind : {TargetKind::Data, TargetKind::Tags, TargetKind::Metrics})
-    {
-        if (!create_query.getTargetTableEngine(kind))
-        {
-            auto inner_storage_def = std::make_shared<ASTStorage>();
-            setInnerTableDefaultEngine(*inner_storage_def, kind, time_series_settings);
-            create_query.setTargetTableEngine(kind, inner_storage_def);
-        }
+        auto extracted_storage_def = as_create.getTargetTableEngine(kind);
+        if (extracted_storage_def)
+            create.setTargetTableEngine(kind, typeid_cast<std::shared_ptr<ASTStorage>>(extracted_storage_def->clone()));
     }
 }
 
-void TimeSeriesDefinitionNormalizer::setInnerTableDefaultEngine(
-    ASTStorage & inner_storage_def, TargetKind inner_table_kind, const TimeSeriesSettings & time_series_settings) const
+
+void TimeSeriesDefinitionNormalizer::addMissingInnerEngines(ASTCreateQuery & create, const TimeSeriesSettings & time_series_settings) const
 {
-    switch (inner_table_kind)
+    for (auto kind : {TargetKind::Data, TargetKind::Tags, TargetKind::Metrics})
+    {
+        auto inner_storage_def = create.getTargetTableEngine(kind);
+        if (inner_storage_def && inner_storage_def->engine)
+            continue;
+        if (!inner_storage_def)
+        {
+            inner_storage_def = std::make_shared<ASTStorage>();
+            create.setTargetTableEngine(kind, inner_storage_def);
+        }
+        setInnerDefaultEngine(kind, *inner_storage_def, time_series_settings);
+    }
+}
+
+
+void TimeSeriesDefinitionNormalizer::setInnerDefaultEngine(
+    TargetKind kind, ASTStorage & inner_storage_def, const TimeSeriesSettings & time_series_settings) const
+{
+    switch (kind)
     {
         case TargetKind::Data:
         {

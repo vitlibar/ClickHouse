@@ -23,7 +23,7 @@
 #include <Processors/Executors/PullingPipelineExecutor.h>
 #include <Storages/StorageTimeSeries.h>
 #include <Storages/TimeSeries/TimeSeriesColumnNames.h>
-#include <Storages/TimeSeries/TimeSeriesDefinitionNormalizer.h>
+#include <Storages/TimeSeries/TimeSeriesColumnsValidator.h>
 #include <Storages/TimeSeries/TimeSeriesTagNames.h>
 #include <Storages/TimeSeries/TimeSeriesSettings.h>
 
@@ -321,8 +321,8 @@ namespace
 
         /// Column "metric_name".
         const auto & metric_name_column_with_type = get_next_column_with_type();
-        TimeSeriesDefinitionNormalizer normalizer{time_series_storage_id};
-        normalizer.validateColumnForMetricName(metric_name_column_with_type);
+        TimeSeriesColumnsValidator validator{time_series_storage_id};
+        validator.validateColumnForMetricName(metric_name_column_with_type);
         const auto & metric_name_column = *metric_name_column_with_type.column;
 
         /// Columns corresponding to specific tags specified in the "tags_to_columns" setting.
@@ -333,7 +333,7 @@ namespace
             const auto & tuple = tag_name_and_column_name.safeGet<const Tuple &>();
             const auto & tag_name = tuple.at(0).safeGet<String>();
             const auto & column_with_type = get_next_column_with_type();
-            normalizer.validateColumnForTagValue(column_with_type);
+            validator.validateColumnForTagValue(column_with_type);
             const auto & column = *column_with_type.column;
             column_by_tag_name[tag_name] = &column;
         }
@@ -345,7 +345,7 @@ namespace
         if (time_series_settings.store_other_tags_as_map)
         {
             const auto & tags_column_with_type = get_next_column_with_type();
-            normalizer.validateColumnForTagsMap(tags_column_with_type);
+            validator.validateColumnForTagsMap(tags_column_with_type);
             const auto & tags_column = checkAndGetColumn<ColumnMap>(*tags_column_with_type.column);
             tags_names = &tags_column.getNestedData().getColumn(0);
             tags_values = &tags_column.getNestedData().getColumn(1);

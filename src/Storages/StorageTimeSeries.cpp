@@ -8,6 +8,7 @@
 #include <Storages/AlterCommands.h>
 #include <Storages/StorageFactory.h>
 #include <Storages/TimeSeries/TimeSeriesColumnNames.h>
+#include <Storages/TimeSeries/TimeSeriesColumnsValidator.h>
 #include <Storages/TimeSeries/TimeSeriesDefinitionNormalizer.h>
 #include <Storages/TimeSeries/TimeSeriesInnerTablesCreator.h>
 #include <Storages/TimeSeries/TimeSeriesSettings.h>
@@ -67,8 +68,8 @@ namespace
                 auto target_table = DatabaseCatalog::instance().getTable(target_info.table_id, context);
                 auto target_metadata = target_table->getInMemoryMetadataPtr();
                 const auto & target_columns = target_metadata->columns;
-                TimeSeriesDefinitionNormalizer normalizer{target_info.table_id};
-                normalizer.validateTargetColumns(target_info.kind, target_columns, time_series_settings);
+                TimeSeriesColumnsValidator validator{target_info.table_id};
+                validator.validateTargetColumns(target_info.kind, target_columns, time_series_settings);
             }
         }
         else
@@ -93,15 +94,21 @@ namespace
 }
 
 
-void StorageTimeSeries::normalizeTableDefinition(ASTCreateQuery & create_query, ColumnsDescription & columns, const ContextPtr & local_context)
+void StorageTimeSeries::normalizeTableDefinition(ASTCreateQuery & create_query, const ContextPtr & local_context)
 {
     StorageID time_series_storage_id{create_query.getDatabase(), create_query.getTable()};
     TimeSeriesSettings time_series_settings;
     if (create_query.storage)
         time_series_settings.loadFromQuery(*create_query.storage);
+    std::shared_ptr<const ASTCreateQuery> as_create_query;
+    if (!create_query.as_table.empty())
+    {
+        auto as_database = local_context->resolveDatabase(create_query.as_database);
+        as_create_query = typeid_cast<std::shared_ptr<const ASTCreateQuery>>(
+            DatabaseCatalog::instance().getDatabase(as_database)->getCreateTableQuery(create_query.as_table, local_context));
+    }
     TimeSeriesDefinitionNormalizer normalizer{time_series_storage_id};
-    normalizer.addMissingColumnsAndValidate(columns, time_series_settings);
-    normalizer.setInnerTablesEngines(create_query, time_series_settings, local_context);
+    normalizer.normalize(create_query, time_series_settings, as_create_query.get());
 }
 
 
