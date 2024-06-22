@@ -126,17 +126,6 @@ def test_custom_id_algorithm():
     compare_queries()
 
 
-def test_custom_id_algorithm():
-    node.query(
-        "CREATE TABLE prometheus ("
-        "id FixedString(16) DEFAULT murmurHash3_128(metric_name, all_tags), "
-        "metric_name LowCardinality(String), "
-        "all_tags Map(String, String)"
-        ") ENGINE=TimeSeries"
-    )
-    compare_queries()
-
-
 def test_create_as_table():
     node.query("CREATE TABLE original ENGINE=TimeSeries")
     node.query("CREATE TABLE prometheus AS original")
