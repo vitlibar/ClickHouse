@@ -23,6 +23,7 @@
 #include <Common/ZooKeeper/ZooKeeper.h>
 #include <Common/ZooKeeper/KeeperException.h>
 #include <Common/ZooKeeper/ZooKeeperLock.h>
+#include <Common/ZooKeeper/ZooKeeperRetries.h>
 #include <Common/isLocalAddress.h>
 #include <Core/ServerUUID.h>
 #include <Core/Settings.h>
@@ -1055,38 +1056,43 @@ void DDLWorker::createStatusDirs(const std::string & node_path, const ZooKeeperP
 }
 
 
-String DDLWorker::enqueueQuery(DDLLogEntry & entry)
+String DDLWorker::enqueueQuery(DDLLogEntry & entry, const ZooKeeperRetriesInfo & retries_info, QueryStatusPtr process_list_element)
 {
     if (entry.hosts.empty())
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Empty host list in a distributed DDL task");
 
-    auto zookeeper = getAndSetZooKeeper();
+    String node_path;
 
-    String query_path_prefix = fs::path(queue_dir) / "query-";
-    zookeeper->createAncestors(query_path_prefix);
+    ZooKeeperRetriesControl retries_ctl{"DDLWorker::enqueueQuery", log, retries_info, process_list_element};
+    retries_ctl.retryLoop([&]{
+        auto zookeeper = getAndSetZooKeeper();
 
-    String node_path = zookeeper->create(query_path_prefix, entry.toString(), zkutil::CreateMode::PersistentSequential);
-    if (max_pushed_entry_metric)
-    {
-        String str_buf = node_path.substr(query_path_prefix.length());
-        DB::ReadBufferFromString in(str_buf);
-        CurrentMetrics::Value pushed_entry;
-        readText(pushed_entry, in);
-        pushed_entry = std::max(CurrentMetrics::get(*max_pushed_entry_metric), pushed_entry);
-        CurrentMetrics::set(*max_pushed_entry_metric, pushed_entry);
-    }
+        String query_path_prefix = fs::path(queue_dir) / "query-";
+        zookeeper->createAncestors(query_path_prefix);
 
-    /// We cannot create status dirs in a single transaction with previous request,
-    /// because we don't know node_path until previous request is executed.
-    /// Se we try to create status dirs here or later when we will execute entry.
-    try
-    {
-        createStatusDirs(node_path, zookeeper);
-    }
-    catch (...)
-    {
-        LOG_INFO(log, "An error occurred while creating auxiliary ZooKeeper directories in {} . They will be created later. Error : {}", node_path, getCurrentExceptionMessage(true));
-    }
+        node_path = zookeeper->create(query_path_prefix, entry.toString(), zkutil::CreateMode::PersistentSequential);
+        if (max_pushed_entry_metric)
+        {
+            String str_buf = node_path.substr(query_path_prefix.length());
+            DB::ReadBufferFromString in(str_buf);
+            CurrentMetrics::Value pushed_entry;
+            readText(pushed_entry, in);
+            pushed_entry = std::max(CurrentMetrics::get(*max_pushed_entry_metric), pushed_entry);
+            CurrentMetrics::set(*max_pushed_entry_metric, pushed_entry);
+        }
+
+        /// We cannot create status dirs in a single transaction with previous request,
+        /// because we don't know node_path until previous request is executed.
+        /// Se we try to create status dirs here or later when we will execute entry.
+        try
+        {
+            createStatusDirs(node_path, zookeeper);
+        }
+        catch (...)
+        {
+            LOG_INFO(log, "An error occurred while creating auxiliary ZooKeeper directories in {} . They will be created later. Error : {}", node_path, getCurrentExceptionMessage(true));
+        }
+    });
 
     return node_path;
 }

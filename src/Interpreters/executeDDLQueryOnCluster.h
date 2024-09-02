@@ -37,6 +37,8 @@ struct DDLQueryOnClusterParams
 
     /// Privileges which the current user should have to execute a query.
     AccessRightsElements access_to_check;
+
+    ZooKeeperRetriesInfo retries_info;
 };
 
 /// Pushes distributed DDL query to the queue.

@@ -2116,6 +2116,16 @@ class ClickHouseCluster:
                 ],
             )
 
+    def remove_file_from_container(self, container_id, path):
+        self.exec_in_container(
+                container_id,
+                [
+                    "bash",
+                    "-c",
+                    "rm {}".format(path),
+                ],
+            )
+
     def wait_for_url(
         self, url="http://localhost:8123/ping", conn_timeout=2, interval=2, timeout=60
     ):
@@ -4118,6 +4128,11 @@ class ClickHouseInstance:
     def copy_file_to_container(self, local_path, dest_path):
         return self.cluster.copy_file_to_container(
             self.docker_id, local_path, dest_path
+        )
+
+    def remove_file_from_container(self, path):
+        return self.cluster.remove_file_from_container(
+            self.docker_id, path
         )
 
     def get_process_pid(self, process_name):
