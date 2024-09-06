@@ -48,10 +48,12 @@ struct IAccessEntity
 
     /// Finds all dependencies.
     virtual std::vector<UUID> findDependencies() const { return {}; }
+    virtual bool hasDependencies(const std::unordered_set<UUID> & /* ids */) const { return false; }
 
     /// Replaces dependencies according to a specified map.
-    void replaceDependencies(const std::unordered_map<UUID, UUID> & old_to_new_ids) { doReplaceDependencies(old_to_new_ids); }
-    static void replaceDependencies(std::shared_ptr<const IAccessEntity> & entity, const std::unordered_map<UUID, UUID> & old_to_new_ids);
+    virtual void replaceDependencies(const std::unordered_map<UUID, UUID> & /* old_to_new_ids */) {}
+    virtual void copyDependenciesFrom(const IAccessEntity & /* src */, const std::unordered_set<UUID> & /* ids */) {}
+    virtual void removeDependencies(const std::unordered_set<UUID> & /* ids */) {}
 
     /// Whether this access entity should be written to a backup.
     virtual bool isBackupAllowed() const { return false; }

@@ -160,7 +160,8 @@ namespace
     M(UInt64, replica_num_in_backup) \
     M(Bool, allow_non_empty_tables) \
     M(RestoreAccessCreationMode, create_access) \
-    M(Bool, allow_unresolved_access_dependencies) \
+    M(Bool, skip_unresolved_dependencies_of_access_entities) \
+    M(Bool, update_dependants_of_restored_access_entities) \
     M(RestoreUDFCreationMode, create_function) \
     M(Bool, allow_s3_native_copy) \
     M(Bool, use_same_s3_credentials_for_base_backup) \
@@ -187,7 +188,11 @@ RestoreSettings RestoreSettings::fromRestoreQuery(const ASTBackupQuery & query)
             else
 
             LIST_OF_RESTORE_SETTINGS(GET_SETTINGS_FROM_RESTORE_QUERY_HELPER)
-            throw Exception(ErrorCodes::CANNOT_PARSE_BACKUP_SETTINGS, "Unknown setting {}", setting.name);
+
+            if (setting.name == "allow_unresolved_access_dependencies")
+                res.skip_unresolved_dependencies_of_access_entities = SettingFieldBool{setting.value}.value;
+            else
+                throw Exception(ErrorCodes::CANNOT_PARSE_BACKUP_SETTINGS, "Unknown setting {}", setting.name);
         }
     }
 

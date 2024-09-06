@@ -598,7 +598,7 @@ void IAccessStorage::backup(BackupEntriesCollector & backup_entries_collector, c
 }
 
 
-void IAccessStorage::restoreFromBackup(RestorerFromBackup & restorer)
+void IAccessStorage::restoreFromBackup(RestorerFromBackup & restorer, const String & data_path_in_backup)
 {
     if (!isRestoreAllowed())
         throwRestoreNotAllowed();
@@ -606,42 +606,14 @@ void IAccessStorage::restoreFromBackup(RestorerFromBackup & restorer)
     if (isReplicated() && !acquireReplicatedRestore(restorer))
         return;
 
-    auto entities = restorer.getAccessEntitiesToRestore();
-    if (entities.empty())
-        return;
-
-    auto create_access = restorer.getRestoreSettings().create_access;
-    bool replace_if_exists = (create_access == RestoreAccessCreationMode::kReplace);
-    bool throw_if_exists = (create_access == RestoreAccessCreationMode::kCreate);
-
-    restorer.addDataRestoreTask([this, my_entities = std::move(entities), replace_if_exists, throw_if_exists] mutable
-    {
-        std::unordered_map<UUID, UUID> new_to_existing_ids;
-        for (auto & [id, entity] : my_entities)
+    restorer.addDataRestoreTask(
+        [this, &restorer, data_path_in_backup]
         {
-            UUID existing_entity_id;
-            if (!insert(id, entity, replace_if_exists, throw_if_exists, &existing_entity_id))
-            {
-                /// Couldn't insert `entity` because there is an existing entity with the same name.
-                new_to_existing_ids[id] = existing_entity_id;
-            }
-        }
-
-        if (!new_to_existing_ids.empty())
-        {
-            /// If new entities restored from backup have dependencies on other entities from backup which were not restored because they existed,
-            /// then we should correct those dependencies.
-            auto update_func = [&](const AccessEntityPtr & entity) -> AccessEntityPtr
-            {
-                auto res = entity;
-                IAccessEntity::replaceDependencies(res, new_to_existing_ids);
-                return res;
-            };
-            std::vector<UUID> ids;
-            boost::copy(my_entities | boost::adaptors::map_keys, std::back_inserter(ids));
-            tryUpdate(ids, update_func);
-        }
-    });
+            auto entities = restorer.getAccessEntitiesToRestore(data_path_in_backup);
+            auto external_dependencies = restorer.getAccessEntitiesToRestoreDependants(data_path_in_backup);
+            const auto & restore_settings = restorer.getRestoreSettings();
+            restoreAccessEntitiesFromBackup(*this, entities, external_dependencies, restore_settings);
+        });
 }
 
 

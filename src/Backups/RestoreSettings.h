@@ -102,7 +102,13 @@ struct RestoreSettings
 
     /// Skip dependencies of access entities which can't be resolved.
     /// For example, if an user has a profile assigned and that profile is not in the backup and doesn't exist locally.
-    bool allow_unresolved_access_dependencies = false;
+    bool skip_unresolved_dependencies_of_access_entities = true;
+
+    /// Try to update dependants of restored access entities.
+    /// For example, if a backup contains a role granted to a user: `CREATE USER u1; CREATE ROLE r1; GRANT r1 TO u1`
+    /// and now we're restoring only role `r1` and user `u1` already exists, then
+    /// this flag is whether restored role `r1` should be granted to user `u1` again.
+    bool update_dependants_of_restored_access_entities = true;
 
     /// How the RESTORE command will handle if a user-defined function which it's going to restore already exists.
     RestoreUDFCreationMode create_function = RestoreUDFCreationMode::kCreateIfNotExists;
