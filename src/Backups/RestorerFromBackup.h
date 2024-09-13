@@ -69,6 +69,7 @@ public:
 
     /// Returns the list of access entities to restore.
     std::vector<std::pair<UUID, AccessEntityPtr>> getAccessEntitiesToRestore(const String & data_path_in_backup) const;
+    std::vector<std::pair<UUID, AccessEntityPtr>> getAccessEntitiesToRestoreDependents(const String & data_path_in_backup) const;
 
     /// Throws an exception that a specified table is already non-empty.
     [[noreturn]] static void throwTableIsNotEmpty(const StorageID & storage_id);

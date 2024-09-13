@@ -721,6 +721,15 @@ std::vector<std::pair<UUID, AccessEntityPtr>> RestorerFromBackup::getAccessEntit
     return access_restorer->getEntities(data_path_in_backup);
 }
 
+std::vector<std::pair<UUID, AccessEntityPtr>> RestorerFromBackup::getAccessEntitiesToRestoreDependents(const String & data_path_in_backup) const
+{
+    std::lock_guard lock{mutex};
+    if (!access_restorer)
+        return {};
+    access_restorer->generateRandomIDsAndResolveDependencies(context->getAccessControl());
+    return access_restorer->getDependents(data_path_in_backup);
+}
+
 void RestorerFromBackup::createDatabases()
 {
     Strings database_names;

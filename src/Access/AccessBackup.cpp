@@ -200,6 +200,7 @@ AccessRestorerFromBackup::AccessRestorerFromBackup(
     : backup(backup_)
     , creation_mode(restore_settings_.create_access)
     , skip_unresolved_dependencies(restore_settings_.allow_unresolved_access_dependencies)
+    , update_dependents(restore_settings_.update_access_entities_dependents)
     , log(getLogger("AccessRestorerFromBackup"))
 {
 }
@@ -431,10 +432,20 @@ void AccessRestorerFromBackup::generateRandomIDsAndResolveDependencies(const Acc
             old_ids_to_restore.insert(id);
     }
 
+    /// Calculate `is_dependent` for each entity info.
+    if (update_dependents)
+    {
+        for (auto & [id, entity_info] : entity_infos)
+        {
+            if (!entity_info.restore && entity_info.new_id && entity_info.entity && entity_info.entity->hasDependencies(old_ids_to_restore))
+                entity_info.is_dependent = true;
+        }
+    }
+
     /// Remap the UUIDs of dependencies in the access entities we're going to restore.
     for (auto & [id, entity_info] : entity_infos)
     {
-        if (entity_info.entity && entity_info.restore)
+        if (entity_info.entity && (entity_info.restore || entity_info.is_dependent))
         {
             auto new_entity = entity_info.entity->clone();
             new_entity->replaceDependencies(old_to_new_ids);
@@ -470,10 +481,31 @@ std::vector<std::pair<UUID, AccessEntityPtr>> AccessRestorerFromBackup::getEntit
     return res;
 }
 
+std::vector<std::pair<UUID, AccessEntityPtr>> AccessRestorerFromBackup::getDependents(const String & data_path_in_backup) const
+{
+    if (!ids_assigned)
+        throw Exception(ErrorCodes::LOGICAL_ERROR, "IDs not assigned");
+
+    if (data_path_in_backup != data_path_with_entities_to_restore)
+        return {};
+
+    std::vector<std::pair<UUID, AccessEntityPtr>> res;
+    res.reserve(entity_infos.size());
+
+    for (const auto & [id, entity_info] : entity_infos)
+    {
+        if (entity_info.is_dependent)
+            res.emplace_back(*entity_info.new_id, entity_info.entity);
+    }
+
+    return res;
+}
+
 
 void restoreAccessEntitiesFromBackup(
     IAccessStorage & destination_access_storage,
     const std::vector<std::pair<UUID, AccessEntityPtr>> & entities,
+    const std::vector<std::pair<UUID, AccessEntityPtr>> & dependents,
     const RestoreSettings & restore_settings)
 {
     if (entities.empty())
@@ -483,8 +515,10 @@ void restoreAccessEntitiesFromBackup(
 
     bool replace_if_exists = (restore_settings.create_access == RestoreAccessCreationMode::kReplace);
     bool throw_if_exists = (restore_settings.create_access == RestoreAccessCreationMode::kCreate);
+    bool update_dependents = restore_settings.update_access_entities_dependents;
 
     std::unordered_map<UUID, UUID> new_to_existing_ids;
+    std::vector<std::pair<UUID, AccessEntityPtr>> more_dependents;
 
     for (const auto & [id, entity] : entities)
     {
@@ -502,6 +536,8 @@ void restoreAccessEntitiesFromBackup(
             /// Couldn't insert `entity` because there is an existing entity with the same name.
             LOG_TRACE(log, "{}: Not added because already exists with UUID {}", AccessEntityTypeInfo::get(type).formatEntityNameWithType(name), existing_id);
             new_to_existing_ids[id] = existing_id;
+            if (update_dependents)
+                more_dependents.emplace_back(existing_id, entity);
         }
     }
 
@@ -537,6 +573,58 @@ void restoreAccessEntitiesFromBackup(
         /// It's totally ok if some UUIDs from `ids_to_update` don't exist anymore, that's why we use tryUpdate() here.
         destination_access_storage.tryUpdate(ids_to_update, update_func);
     }
+
+    std::unordered_set<UUID> restored_ids;
+
+    auto do_update_dependents = [&](const std::vector<std::pair<UUID, AccessEntityPtr>> & dependents_to_update)
+    {
+        if (dependents_to_update.empty())
+            return;
+
+        ids_to_update.clear();
+        ids_to_update.reserve(dependents_to_update.size());
+        std::unordered_map<UUID, AccessEntityPtr> id_to_dependent;
+
+        for (const auto & [id, entity] : dependents_to_update)
+        {
+            if (!destination_access_storage.isReadOnly(id))
+            {
+                auto new_entity = entity->clone();
+                new_entity->replaceDependencies(new_to_existing_ids);
+                id_to_dependent[id] = new_entity;
+                ids_to_update.emplace_back(id);
+            }
+        }
+
+        if (restored_ids.empty())
+        {
+            for (const auto & [id, entity] : entities)
+            {
+                bool is_restored = !new_to_existing_ids.contains(id);
+                if (is_restored)
+                    restored_ids.insert(id);
+            }
+        }
+
+        /// If new entities restored from backup have dependencies on other entities from backup which were not restored because they existed,
+        /// then we should correct those dependencies.
+        auto update_func = [&](const AccessEntityPtr & entity, const UUID & id) -> AccessEntityPtr
+        {
+            const auto & src_entity = *id_to_dependent.at(id);
+            if (!src_entity.hasDependencies(restored_ids))
+                return entity;
+            LOG_TRACE(log, "{}: Updating dependent", entity->formatTypeWithName());
+            auto res = entity->clone();
+            res->copyDependenciesFrom(src_entity, restored_ids);
+            return res;
+        };
+
+        /// It's totally ok if some UUIDs from `ids_to_update` don't exist anymore, that's why we use tryUpdate() here.
+        destination_access_storage.tryUpdate(ids_to_update, update_func);
+    };
+
+    do_update_dependents(dependents);
+    do_update_dependents(more_dependents);
 }
 
 }
