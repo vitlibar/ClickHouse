@@ -108,7 +108,7 @@ struct RestoreSettings
     /// and now we're restoring only user `u2` and role `r2` doesn't exist, then
     /// this flag is whether RESTORE should continue with restoring user `u2` without that grant.
     /// If this flag is false then RESTORE will throw an exception in that case.
-    bool skip_unresolved_access_entities_dependencies = false;
+    bool skip_unresolved_access_entities_dependencies = true;
 
     /// Try to update dependents of restored access entities.
     /// For example: if a backup contains a profile assigned to a user: `CREATE PROFILE p1; CREATE USER u1 SETTINGS PROFILE p1`
@@ -118,7 +118,7 @@ struct RestoreSettings
     /// and now we're restoring only role `r2` and user `u2` already exists, then
     /// this flag is whether restored role `r2` should be granted to user `u2` again.
     /// If this flag is false then RESTORE won't update existing access entities.
-    bool update_access_entities_dependents = false;
+    bool update_access_entities_dependents = true;
 
     /// How the RESTORE command will handle if a user-defined function which it's going to restore already exists.
     RestoreUDFCreationMode create_function = RestoreUDFCreationMode::kCreateIfNotExists;
