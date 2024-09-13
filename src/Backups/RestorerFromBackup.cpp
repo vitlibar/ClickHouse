@@ -72,6 +72,12 @@ namespace
             || (table_name.table == "row_policies") || (table_name.table == "quotas");
     }
 
+    const Strings & getAllSystemAccessTableNames()
+    {
+        static const Strings all_system_access_table_names{"users", "roles", "quotas", "settings_profiles", "row_policies"};
+        return all_system_access_table_names;
+    }
+
     /// Whether a specified name corresponds one of the tables backuping ACL.
     bool isSystemFunctionsTableName(const QualifiedTableName & table_name)
     {
@@ -612,6 +618,8 @@ void RestorerFromBackup::loadSystemAccessTables()
     if (restore_settings.structure_only)
         return;
 
+    std::unordered_set<String> system_access_tables;
+
     /// Special handling for ACL-related system tables.
     std::lock_guard lock{mutex};
     for (const auto & [table_name, table_info] : table_infos)
@@ -620,12 +628,41 @@ void RestorerFromBackup::loadSystemAccessTables()
         {
             if (!access_restorer)
                 access_restorer = std::make_unique<AccessRestorerFromBackup>(backup, restore_settings);
-            access_restorer->addDataPath(table_info.data_path_in_backup);
+            access_restorer->addDataPath(table_info.data_path_in_backup, /* dependents_only = */ false);
+            system_access_tables.emplace(table_name.table);
         }
     }
 
-    if (access_restorer)
-        access_restorer->loadFromBackup();
+    if (!access_restorer)
+        return;
+
+    if (restore_settings.update_access_entities_dependents)
+    {
+        /// Collect dependents from all the system access tables, even from those ones which we aren't restoring at the moment.
+        for (const auto & table_name : getAllSystemAccessTableNames())
+        {
+            if (!system_access_tables.contains(table_name))
+            {
+                std::optional<fs::path> root_path_in_use;
+                for (const auto & root_path_in_backup : root_paths_in_backup)
+                {
+                    fs::path try_metadata_path = root_path_in_backup / "metadata" / DatabaseCatalog::SYSTEM_DATABASE / (escapeForFileName(table_name) + ".sql");
+                    if (backup->fileExists(try_metadata_path))
+                    {
+                        root_path_in_use = root_path_in_backup;
+                        break;
+                    }
+                }
+                if (root_path_in_use)
+                {
+                    String data_path_in_backup = *root_path_in_use / "data" / DatabaseCatalog::SYSTEM_DATABASE / escapeForFileName(table_name);
+                    access_restorer->addDataPath(data_path_in_backup, /* dependents_only = */ true);
+                }
+            }
+        }
+    }
+
+    access_restorer->loadFromBackup();
 }
 
 void RestorerFromBackup::checkAccessForObjectsFoundInBackup() const

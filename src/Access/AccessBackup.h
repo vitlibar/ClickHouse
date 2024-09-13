@@ -44,7 +44,7 @@ public:
     ~AccessRestorerFromBackup();
 
     /// Adds a data path to loads access entities from.
-    void addDataPath(const String & data_path_in_backup);
+    void addDataPath(const String & data_path_in_backup, bool dependents_only = false);
 
     /// Loads access entities from the backup.
     void loadFromBackup();
@@ -81,7 +81,7 @@ private:
     /// Whether generateRandomIDsAndResolveDependencies() finished.
     bool ids_assigned = false;
 
-    Strings data_paths_in_backup;
+    std::vector<std::pair<String, bool /* dependents_only */>> data_paths_in_backup;
     String data_path_with_entities_to_restore;
 
     /// Information about an access entity loaded from the backup.

@@ -208,13 +208,24 @@ AccessRestorerFromBackup::AccessRestorerFromBackup(
 AccessRestorerFromBackup::~AccessRestorerFromBackup() = default;
 
 
-void AccessRestorerFromBackup::addDataPath(const String & data_path_in_backup)
+void AccessRestorerFromBackup::addDataPath(const String & data_path_in_backup, bool dependents_only)
 {
     if (loaded)
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Access entities already loaded");
 
-    if (std::find(data_paths_in_backup.begin(), data_paths_in_backup.end(), data_path_in_backup) == data_paths_in_backup.end())
-        data_paths_in_backup.emplace_back(data_path_in_backup);
+    if (dependents_only && !update_dependents)
+        return;
+
+    for (auto & stored_data_path : data_paths_in_backup)
+    {
+        if (stored_data_path.first == data_path_in_backup)
+        {
+            stored_data_path.second &= dependents_only;
+            return;
+        }
+    }
+
+    data_paths_in_backup.emplace_back(data_path_in_backup, dependents_only);
 }
 
 
@@ -226,7 +237,8 @@ void AccessRestorerFromBackup::loadFromBackup()
     /// Parse files "access*.txt" found in the added data paths in the backup.
     for (size_t data_path_index = 0; data_path_index != data_paths_in_backup.size(); ++data_path_index)
     {
-        const String & data_path_in_backup = data_paths_in_backup[data_path_index];
+        const String & data_path_in_backup = data_paths_in_backup[data_path_index].first;
+        bool dependents_only = data_paths_in_backup[data_path_index].second;
 
         fs::path data_path_in_backup_fs = data_path_in_backup;
         Strings filenames = backup->listFiles(data_path_in_backup_fs, /*recursive*/ false);
@@ -266,7 +278,8 @@ void AccessRestorerFromBackup::loadFromBackup()
                 EntityInfo & entity_info = it->second;
                 entity_info.entity = entity;
                 entity_info.data_path_index = data_path_index;
-                entity_info.restore = true;
+                if (!dependents_only)
+                    entity_info.restore = true;
             }
 
             for (const auto & [id, name_and_type] : ab.dependencies)
@@ -454,7 +467,7 @@ void AccessRestorerFromBackup::generateRandomIDsAndResolveDependencies(const Acc
         }
 
         if (entity_info.restore && data_path_with_entities_to_restore.empty())
-            data_path_with_entities_to_restore = data_paths_in_backup[entity_info.data_path_index];
+            data_path_with_entities_to_restore = data_paths_in_backup[entity_info.data_path_index].first;
     }
 
     ids_assigned = true;
