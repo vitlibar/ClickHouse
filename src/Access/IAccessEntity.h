@@ -69,8 +69,6 @@ protected:
     {
         return std::make_shared<EntityClassT>(typeid_cast<const EntityClassT &>(*this));
     }
-
-    virtual void doReplaceDependencies(const std::unordered_map<UUID, UUID> & /* old_to_new_ids */) {}
 };
 
 using AccessEntityPtr = std::shared_ptr<const IAccessEntity>;
