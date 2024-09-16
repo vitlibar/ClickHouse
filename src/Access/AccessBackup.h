@@ -21,12 +21,11 @@ struct RestoreSettings;
 enum class RestoreAccessCreationMode : uint8_t;
 
 
-/// Makes a backup of access entities of a specified type.
-std::pair<String, BackupEntryPtr> makeBackupEntryForAccess(
-    const std::vector<std::pair<UUID, AccessEntityPtr>> & access_entities,
-    const String & data_path_in_backup,
-    size_t counter,
-    const AccessControl & access_control);
+/// Makes a backup entry for of a set of access entities.
+std::pair<String, BackupEntryPtr> makeBackupEntryForAccessEntities(
+    const std::vector<UUID> & entities_ids,
+    const std::unordered_map<UUID, AccessEntityPtr> & all_entities,
+    const String & data_path_in_backup);
 
 /// Restores access entities from a backup.
 void restoreAccessEntitiesFromBackup(
@@ -44,7 +43,7 @@ public:
     ~AccessRestorerFromBackup();
 
     /// Adds a data path to loads access entities from.
-    void addDataPath(const String & data_path_in_backup, bool dependents_only = false);
+    void addDataPath(const String & data_path_in_backup);
 
     /// Loads access entities from the backup.
     void loadFromBackup();
@@ -81,7 +80,7 @@ private:
     /// Whether generateRandomIDsAndResolveDependencies() finished.
     bool ids_assigned = false;
 
-    std::vector<std::pair<String, bool /* dependents_only */>> data_paths_in_backup;
+    Strings data_paths_in_backup;
     String data_path_with_entities_to_restore;
 
     /// Information about an access entity loaded from the backup.

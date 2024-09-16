@@ -42,6 +42,7 @@ namespace
     {
         std::unordered_map<UUID, AccessEntityPtr> entities;
         std::unordered_map<UUID, std::pair<String, AccessEntityType>> dependencies;
+        std::unordered_map<UUID, AccessEntityPtr> dependents;
 
         BackupEntryPtr toBackupEntry() const
         {
@@ -73,6 +74,24 @@ namespace
                 }
             }
 
+            if (!dependents.empty())
+            {
+                if (!dependencies.empty())
+                    writeText("\n", buf);
+                writeText("DEPENDENTS\n", buf);
+                for (const auto & [id, entity] : dependents)
+                {
+                    writeText(id, buf);
+                    writeChar('\t', buf);
+                    writeText(entity->getTypeInfo().name, buf);
+                    writeChar('\t', buf);
+                    writeText(entity->getName(), buf);
+                    writeChar('\n', buf);
+                    writeText(serializeAccessEntity(*entity), buf);
+                    writeChar('\n', buf);
+                }
+            }
+
             return std::make_shared<BackupEntryFromMemory>(buf.str());
         }
 
@@ -82,59 +101,71 @@ namespace
             {
                 AccessEntitiesInBackup res;
 
-                bool dependencies_found = false;
+                bool reading_dependencies = false;
+                bool reading_dependents = false;
 
                 while (!buf->eof())
                 {
                     String line;
                     readStringUntilNewlineInto(line, *buf);
                     buf->ignore();
+
                     if (line == "DEPENDENCIES")
                     {
-                        dependencies_found = true;
-                        break;
+                        reading_dependencies = true;
+                        reading_dependents = false;
+                        continue;
+                    }
+                    else if (line == "DEPENDENTS")
+                    {
+                        reading_dependents = true;
+                        reading_dependencies = false;
+                        continue;
+                    }
+                    else if (line.empty())
+                    {
+                        continue;
                     }
 
-                    UUID id = parse<UUID>(line.substr(0, line.find('\t')));
-                    line.clear();
+                    size_t separator1 = line.find('\t');
+                    size_t separator2 = line.find('\t', separator1 + 1);
+                    if ((separator1 == String::npos) || (separator2 == String::npos))
+                        throw Exception(ErrorCodes::CANNOT_RESTORE_TABLE, "Separators not found in line {}", line);
 
-                    String queries;
-                    while (!buf->eof())
+                    UUID id = parse<UUID>(line.substr(0, separator1));
+                    AccessEntityType type = AccessEntityTypeInfo::parseType(line.substr(separator1 + 1, separator2 - separator1 - 1));
+                    String name = line.substr(separator2 + 1);
+
+                    if (reading_dependencies)
                     {
-                        String query;
-                        readStringUntilNewlineInto(query, *buf);
-                        buf->ignore();
-                        if (query.empty())
-                            break;
-                        if (!queries.empty())
-                            queries.append("\n");
-                        queries.append(query);
+                       res.dependencies.emplace(id, std::pair{name, type});
                     }
-
-                    AccessEntityPtr entity = deserializeAccessEntity(queries);
-                    res.entities.emplace(id, entity);
-                }
-
-                if (dependencies_found)
-                {
-                    while (!buf->eof())
+                    else
                     {
-                        String id_as_string;
-                        readStringInto(id_as_string, *buf);
-                        buf->ignore();
-                        UUID id = parse<UUID>(id_as_string);
+                        String queries;
+                        while (!buf->eof())
+                        {
+                            String query;
+                            readStringUntilNewlineInto(query, *buf);
+                            buf->ignore();
+                            if (query.empty())
+                                break;
+                            if (!queries.empty())
+                                queries.append("\n");
+                            queries.append(query);
+                        }
 
-                        String type_as_string;
-                        readStringInto(type_as_string, *buf);
-                        buf->ignore();
-                        AccessEntityType type = AccessEntityTypeInfo::parseType(type_as_string);
+                        AccessEntityPtr entity = deserializeAccessEntity(queries);
 
-                        String name;
-                        readStringInto(name, *buf);
-                        buf->ignore();
+                        if (name != entity->getName())
+                            throw Exception(ErrorCodes::CANNOT_RESTORE_TABLE, "Unexpected name {} is specified for {}", name, entity->formatTypeWithName());
+                        if (type != entity->getType())
+                            throw Exception(ErrorCodes::CANNOT_RESTORE_TABLE, "Unexpected type {} is specified for {}", AccessEntityTypeInfo::get(type).name, entity->formatTypeWithName());
 
-                        if (!res.entities.contains(id))
-                            res.dependencies.emplace(id, std::pair{name, type});
+                        if (reading_dependents)
+                            res.dependents.emplace(id, entity);
+                        else
+                            res.entities.emplace(id, entity);
                     }
                 }
 
@@ -147,49 +178,55 @@ namespace
             }
         }
     };
-
-    std::vector<UUID> findDependencies(const std::vector<std::pair<UUID, AccessEntityPtr>> & entities)
-    {
-        std::vector<UUID> res;
-        for (const auto & entity : entities | boost::adaptors::map_values)
-            insertAtEnd(res, entity->findDependencies());
-
-        /// Remove duplicates in the list of dependencies (some entities can refer to other entities).
-        ::sort(res.begin(), res.end());
-        res.erase(std::unique(res.begin(), res.end()), res.end());
-        for (const auto & id : entities | boost::adaptors::map_keys)
-        {
-            auto it = std::lower_bound(res.begin(), res.end(), id);
-            if ((it != res.end()) && (*it == id))
-                res.erase(it);
-        }
-        return res;
-    }
-
-    std::unordered_map<UUID, std::pair<String, AccessEntityType>> readDependenciesNamesAndTypes(const std::vector<UUID> & dependencies, const AccessControl & access_control)
-    {
-        std::unordered_map<UUID, std::pair<String, AccessEntityType>> res;
-        for (const auto & id : dependencies)
-        {
-            if (auto name_and_type = access_control.tryReadNameWithType(id))
-                res.emplace(id, name_and_type.value());
-        }
-        return res;
-    }
 }
 
 
-std::pair<String, BackupEntryPtr> makeBackupEntryForAccess(
-    const std::vector<std::pair<UUID, AccessEntityPtr>> & access_entities,
-    const String & data_path_in_backup,
-    size_t counter,
-    const AccessControl & access_control)
+std::pair<String, BackupEntryPtr> makeBackupEntryForAccessEntities(
+    const std::vector<UUID> & entities_ids,
+    const std::unordered_map<UUID, AccessEntityPtr> & all_entities,
+    const String & data_path_in_backup)
 {
-    auto dependencies = readDependenciesNamesAndTypes(findDependencies(access_entities), access_control);
     AccessEntitiesInBackup ab;
-    boost::range::copy(access_entities, std::inserter(ab.entities, ab.entities.end()));
-    ab.dependencies = std::move(dependencies);
-    String filename = fmt::format("access{:02}.txt", counter + 1); /// access01.txt, access02.txt, ...
+
+    std::unordered_set<UUID> entities_ids_set;
+    for (const auto & id : entities_ids)
+        entities_ids_set.emplace(id);
+
+    for (const auto & id : entities_ids)
+    {
+        auto it = all_entities.find(id);
+        if (it != all_entities.end())
+        {
+            AccessEntityPtr entity = it->second;
+            ab.entities.emplace(id, entity);
+
+            auto dependencies = entity->findDependencies();
+            for (const auto & dependency_id : dependencies)
+            {
+                if (!entities_ids_set.contains(dependency_id))
+                {
+                    auto it_dependency = all_entities.find(dependency_id);
+                    if (it_dependency != all_entities.end())
+                    {
+                        auto dependency_entity = it_dependency->second;
+                        ab.dependencies.emplace(dependency_id, std::make_pair(dependency_entity->getName(), dependency_entity->getType()));
+                    }
+                }
+            }
+        }
+    }
+
+    for (const auto & [id, possible_dependent] : all_entities)
+    {
+        if (!entities_ids_set.contains(id) && possible_dependent->hasDependencies(entities_ids_set))
+        {
+            auto dependent = possible_dependent->clone();
+            dependent->clearAllExceptDependencies();
+            ab.dependents.emplace(id, dependent);
+        }
+    }
+
+    String filename = fmt::format("access-{}.txt", UUIDHelpers::generateV4());
     String file_path_in_backup = fs::path{data_path_in_backup} / filename;
     return {file_path_in_backup, ab.toBackupEntry()};
 }
@@ -208,24 +245,13 @@ AccessRestorerFromBackup::AccessRestorerFromBackup(
 AccessRestorerFromBackup::~AccessRestorerFromBackup() = default;
 
 
-void AccessRestorerFromBackup::addDataPath(const String & data_path_in_backup, bool dependents_only)
+void AccessRestorerFromBackup::addDataPath(const String & data_path_in_backup)
 {
     if (loaded)
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Access entities already loaded");
 
-    if (dependents_only && !update_dependents)
-        return;
-
-    for (auto & stored_data_path : data_paths_in_backup)
-    {
-        if (stored_data_path.first == data_path_in_backup)
-        {
-            stored_data_path.second &= dependents_only;
-            return;
-        }
-    }
-
-    data_paths_in_backup.emplace_back(data_path_in_backup, dependents_only);
+    if (std::find(data_paths_in_backup.begin(), data_paths_in_backup.end(), data_path_in_backup) == data_paths_in_backup.end())
+        data_paths_in_backup.emplace_back(data_path_in_backup);
 }
 
 
@@ -237,8 +263,7 @@ void AccessRestorerFromBackup::loadFromBackup()
     /// Parse files "access*.txt" found in the added data paths in the backup.
     for (size_t data_path_index = 0; data_path_index != data_paths_in_backup.size(); ++data_path_index)
     {
-        const String & data_path_in_backup = data_paths_in_backup[data_path_index].first;
-        bool dependents_only = data_paths_in_backup[data_path_index].second;
+        const String & data_path_in_backup = data_paths_in_backup[data_path_index];
 
         fs::path data_path_in_backup_fs = data_path_in_backup;
         Strings filenames = backup->listFiles(data_path_in_backup_fs, /*recursive*/ false);
@@ -277,9 +302,8 @@ void AccessRestorerFromBackup::loadFromBackup()
                 }
                 EntityInfo & entity_info = it->second;
                 entity_info.entity = entity;
+                entity_info.restore = true;
                 entity_info.data_path_index = data_path_index;
-                if (!dependents_only)
-                    entity_info.restore = true;
             }
 
             for (const auto & [id, name_and_type] : ab.dependencies)
@@ -291,6 +315,18 @@ void AccessRestorerFromBackup::loadFromBackup()
                 }
                 EntityInfo & entity_info = it->second;
                 entity_info.is_dependency = true;
+            }
+
+            for (const auto & [id, entity] : ab.dependents)
+            {
+                auto it = entity_infos.find(id);
+                if (it == entity_infos.end())
+                {
+                    it = entity_infos.emplace(id, EntityInfo{.id = id, .name = entity->getName(), .type = entity->getType()}).first;
+                }
+                EntityInfo & entity_info = it->second;
+                if (!entity_info.restore)
+                    entity_info.entity = entity;
             }
         }
     }
@@ -467,7 +503,7 @@ void AccessRestorerFromBackup::generateRandomIDsAndResolveDependencies(const Acc
         }
 
         if (entity_info.restore && data_path_with_entities_to_restore.empty())
-            data_path_with_entities_to_restore = data_paths_in_backup[entity_info.data_path_index].first;
+            data_path_with_entities_to_restore = data_paths_in_backup[entity_info.data_path_index];
     }
 
     ids_assigned = true;

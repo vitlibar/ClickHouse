@@ -80,4 +80,14 @@ void User::removeDependencies(const std::unordered_set<UUID> & ids)
     settings.removeDependencies(ids);
 }
 
+void User::clearAllExceptDependencies()
+{
+    auth_data = AuthenticationData{};
+    allowed_client_hosts = AllowedClientHosts::AnyHostTag{};
+    access = {};
+    settings.removeSettingsKeepProfiles();
+    default_database = {};
+    valid_until = 0;
+}
+
 }
