@@ -942,7 +942,8 @@ void StorageKeeperMap::backupData(BackupEntriesCollector & backup_entries_collec
             getLogger(fmt::format("StorageKeeperMapBackup ({})", getStorageID().getNameForLogs())),
             [&] { return getClient(); },
             BackupKeeperSettings::fromContext(backup_entries_collector.getContext()),
-            backup_entries_collector.getContext()->getProcessListElement()
+            backup_entries_collector.getContext()->getProcessListElement(),
+            nullptr
         );
 
         backup_entries_collector.addBackupEntries(
@@ -972,7 +973,8 @@ void StorageKeeperMap::restoreDataFromBackup(RestorerFromBackup & restorer, cons
         getLogger(fmt::format("StorageKeeperMapRestore ({})", getStorageID().getNameForLogs())),
         [&] { return getClient(); },
         BackupKeeperSettings::fromContext(restorer.getContext()),
-        restorer.getContext()->getProcessListElement()
+        restorer.getContext()->getProcessListElement(),
+        nullptr
     );
 
     bool allow_non_empty_tables = restorer.isNonEmptyTableAllowed();

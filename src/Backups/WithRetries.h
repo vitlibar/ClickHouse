@@ -17,6 +17,7 @@ class WithRetries
 {
 public:
     using FaultyKeeper = Coordination::ZooKeeperWithFaultInjection::Ptr;
+    using RenewerCallback = std::function<void(FaultyKeeper)>;
 
     struct Reason
     {
@@ -45,7 +46,7 @@ public:
     };
 
     RetriesControlHolder createRetriesControlHolder(const String & name, const Reason & reason = {.initialization = false, .error_handling = false}) const;
-    WithRetries(LoggerPtr log, zkutil::GetZooKeeper get_zookeeper_, const BackupKeeperSettings & settings, QueryStatusPtr process_list_element_);
+    WithRetries(LoggerPtr log, zkutil::GetZooKeeper get_zookeeper_, const BackupKeeperSettings & settings, QueryStatusPtr process_list_element_, RenewerCallback callback);
 
     /// Used to re-establish new connection inside a retry loop.
     void renewZooKeeper(FaultyKeeper my_faulty_zookeeper) const;
@@ -59,6 +60,16 @@ private:
     zkutil::GetZooKeeper get_zookeeper;
     BackupKeeperSettings settings;
     QueryStatusPtr process_list_element;
+
+    /// This callback is called each time when a new [Zoo]Keeper session is created.
+    /// In backups it is primarily used to re-create an ephemeral node to signal the coordinator
+    /// that the host is alive and able to continue writing the backup.
+    /// Coordinator (or an initiator) of the backup also retries when it doesn't find an ephemeral node
+    /// for a particular host.
+    /// Again, this schema is not ideal. False-positives are still possible, but in worst case scenario
+    /// it could lead just to a failed backup which could possibly be successful
+    /// if there were a little bit more retries.
+    RenewerCallback callback;
 
     /// This is needed only to protect zookeeper object
     mutable std::mutex zookeeper_mutex;

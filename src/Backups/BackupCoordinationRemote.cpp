@@ -175,7 +175,7 @@ BackupCoordinationRemote::BackupCoordinationRemote(
     , current_host_index(findCurrentHostIndex(current_host, all_hosts))
     , plain_backup(is_plain_backup_)
     , log(getLogger("BackupCoordinationRemote"))
-    , with_retries(log, get_zookeeper_, keeper_settings, process_list_element_)
+    , with_retries(log, get_zookeeper_, keeper_settings, process_list_element_, [root_zookeeper_path_](Coordination::ZooKeeperWithFaultInjection::Ptr zk) { zk->sync(root_zookeeper_path_); })
     , concurrency_check(concurrency_checker_.checkRemote(/* is_restore = */ false, backup_uuid_, allow_concurrent_backup_))
     , stage_sync(/* is_restore = */ false, fs::path{zookeeper_path} / "stage", current_host, allow_concurrent_backup_, with_retries, schedule_, process_list_element_, log)
 {
@@ -310,7 +310,8 @@ bool BackupCoordinationRemote::tryRemoveAllNodes() noexcept
     }
     catch (...)
     {
-        /// retryLoop() has already logged this exception.
+        LOG_TRACE(log, "Caught exception while removing nodes from ZooKeeper for this backup: {}",
+                  getCurrentExceptionMessage(/* with_stacktrace= */ false, /* check_embedded_stacktrace= */ true));
         failed_to_remove_all_nodes = true;
         return false;
     }

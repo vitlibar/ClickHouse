@@ -7,11 +7,12 @@ namespace DB
 {
 
 WithRetries::WithRetries(
-    LoggerPtr log_, zkutil::GetZooKeeper get_zookeeper_, const BackupKeeperSettings & settings_, QueryStatusPtr process_list_element_)
+    LoggerPtr log_, zkutil::GetZooKeeper get_zookeeper_, const BackupKeeperSettings & settings_, QueryStatusPtr process_list_element_, RenewerCallback callback_)
     : log(log_)
     , get_zookeeper(get_zookeeper_)
     , settings(settings_)
     , process_list_element(process_list_element_)
+    , callback(callback_)
 {}
 
 WithRetries::RetriesControlHolder::RetriesControlHolder(
@@ -35,8 +36,19 @@ void WithRetries::renewZooKeeper(FaultyKeeper my_faulty_zookeeper) const
 
     if (!zookeeper || zookeeper->expired())
     {
+        LOG_INFO(getLogger("!!!"), "No zookeeper or zookeeper is expired");
+        auto old = zookeeper;
         zookeeper = get_zookeeper();
         my_faulty_zookeeper->setKeeper(zookeeper);
+
+        if (callback)
+            callback(my_faulty_zookeeper);
+
+        if (zookeeper != old)
+            LOG_INFO(getLogger("!!!"), "Zookeeper changed: {} -> {}",
+                reinterpret_cast<size_t>(static_cast<const void *>(old.get())),
+                reinterpret_cast<size_t>(static_cast<const void *>(zookeeper.get()))
+            );
     }
     else
     {

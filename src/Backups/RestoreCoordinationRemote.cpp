@@ -35,7 +35,7 @@ RestoreCoordinationRemote::RestoreCoordinationRemote(
     , current_host(current_host_)
     , current_host_index(BackupCoordinationRemote::findCurrentHostIndex(current_host, all_hosts))
     , log(getLogger("RestoreCoordinationRemote"))
-    , with_retries(log, get_zookeeper_, keeper_settings, process_list_element_)
+    , with_retries(log, get_zookeeper_, keeper_settings, process_list_element_, [root_zookeeper_path_](Coordination::ZooKeeperWithFaultInjection::Ptr zk) { zk->sync(root_zookeeper_path_); })
     , concurrency_check(concurrency_checker_.checkRemote(/* is_restore = */ true, restore_uuid_, allow_concurrent_restore_))
     , stage_sync(/* is_restore = */ true, fs::path{zookeeper_path} / "stage", current_host, allow_concurrent_restore_, with_retries, schedule_, process_list_element_, log)
 {
@@ -348,7 +348,8 @@ bool RestoreCoordinationRemote::tryRemoveAllNodes() noexcept
     }
     catch (...)
     {
-        /// retryLoop() has already logged this exception.
+        LOG_TRACE(log, "Caught exception while removing nodes from ZooKeeper for this restore: {}",
+                  getCurrentExceptionMessage(/* with_stacktrace= */ false, /* check_embedded_stacktrace= */ true));
         failed_to_remove_all_nodes = true;
         return false;
     }

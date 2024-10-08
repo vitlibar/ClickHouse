@@ -1,0 +1,7 @@
+<clickhouse>
+    <profiles>
+        <default>
+            <backup_restore_failure_after_host_disconnected_for_seconds>10</backup_restore_failure_after_host_disconnected_for_seconds>
+        </default>
+    </profiles>
+</clickhouse>

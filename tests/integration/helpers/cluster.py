@@ -2116,6 +2116,16 @@ class ClickHouseCluster:
                 ],
             )
 
+    def remove_file_from_container(self, container_id, path):
+        self.exec_in_container(
+                container_id,
+                [
+                    "bash",
+                    "-c",
+                    "rm {}".format(path),
+                ],
+            )
+
     def wait_for_url(
         self, url="http://localhost:8123/ping", conn_timeout=2, interval=2, timeout=60
     ):
@@ -4120,6 +4130,11 @@ class ClickHouseInstance:
             self.docker_id, local_path, dest_path
         )
 
+    def remove_file_from_container(self, path):
+        return self.cluster.remove_file_from_container(
+            self.docker_id, path
+        )
+
     def get_process_pid(self, process_name):
         output = self.exec_in_container(
             [
@@ -4433,10 +4448,6 @@ class ClickHouseInstance:
         self.exec_in_container(
             ["bash", "-c", f"sed -i 's/{replace}/{replacement}/g' {path_to_config}"]
         )
-
-    def rename_config(self, path_to_config, new_filename):
-        dest_path = os.path.join(os.path.dirname(path_to_config), new_filename)
-        self.exec_in_container(["bash", "-c", f"mv '{path_to_config}' '{dest_path}'"])
 
     def create_dir(self):
         """Create the instance directory and all the needed files there."""

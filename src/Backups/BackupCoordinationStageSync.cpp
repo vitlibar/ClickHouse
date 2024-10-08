@@ -193,6 +193,7 @@ void BackupCoordinationStageSync::createStartAndAliveNodes(Coordination::ZooKeep
         }
 
         Coordination::Requests requests;
+        requests.reserve(6);
 
         size_t operation_node_path_pos = static_cast<size_t>(-1);
         if (!zookeeper->exists(operation_node_path))
@@ -239,37 +240,37 @@ void BackupCoordinationStageSync::createStartAndAliveNodes(Coordination::ZooKeep
             (responses[operation_node_path_pos]->error == Coordination::Error::ZNODEEXISTS))
         {
             show_error_before_next_attempt(fmt::format("Node {} in ZooKeeper already exists", operation_node_path));
-            /// need another attempt
+            /// needs another attempt
         }
         else if ((responses.size() > stage_node_path_pos) &&
             (responses[stage_node_path_pos]->error == Coordination::Error::ZNODEEXISTS))
         {
             show_error_before_next_attempt(fmt::format("Node {} in ZooKeeper already exists", stage_node_path));
-            /// need another attempt
+            /// needs another attempt
         }
         else if ((responses.size() > num_hosts_node_path_pos) && num_hosts &&
             (responses[num_hosts_node_path_pos]->error == Coordination::Error::ZBADVERSION))
         {
             show_error_before_next_attempt("Other host changed the 'num_hosts' node in ZooKeeper");
-            num_hosts.reset(); /// need to reread 'num_hosts' again
+            num_hosts.reset(); /// needs to reread 'num_hosts' again
         }
         else if ((responses.size() > num_hosts_node_path_pos) && num_hosts &&
             (responses[num_hosts_node_path_pos]->error == Coordination::Error::ZNONODE))
         {
             show_error_before_next_attempt("Other host removed the 'num_hosts' node in ZooKeeper");
-            num_hosts.reset(); /// need to reread 'num_hosts' again
+            num_hosts.reset(); /// needs to reread 'num_hosts' again
         }
         else if ((responses.size() > num_hosts_node_path_pos) && !num_hosts &&
             (responses[num_hosts_node_path_pos]->error == Coordination::Error::ZNODEEXISTS))
         {
             show_error_before_next_attempt("Other host created the 'num_hosts' node in ZooKeeper");
-            /// need another attempt
+            /// needs another attempt
         }
         else if ((responses.size() > alive_tracker_node_path_pos) &&
             (responses[alive_tracker_node_path_pos]->error == Coordination::Error::ZBADVERSION))
         {
             show_error_before_next_attempt("Concurrent backup or restore changed some 'alive' nodes in ZooKeeper");
-            check_concurrency = true; /// need to recheck for concurrency again
+            check_concurrency = true; /// needs to recheck for concurrency again
         }
         else
         {
@@ -291,20 +292,20 @@ bool BackupCoordinationStageSync::tryRemoveStartAndAliveNodes()
         holder.retries_ctl.retryLoop([&, &zookeeper = holder.faulty_zookeeper]()
         {
             with_retries.renewZooKeeper(zookeeper);
-            removeStartNode(zookeeper);
-            removeAliveNode(zookeeper);
+            removeStartAndAliveNodes(zookeeper);
         });
         return true;
     }
     catch (...)
     {
-        /// retryLoop() inside removeStartNode() and removeAliveNode() has already logged this exception.
+        LOG_TRACE(log, "Caught exception while removing the 'start' node for {}: {}",
+                  current_host_desc, getCurrentExceptionMessage(/* with_stacktrace= */ false, /* check_embedded_stacktrace= */ true));
         return false;
     }
 }
 
 
-void BackupCoordinationStageSync::removeStartNode(Coordination::ZooKeeperWithFaultInjection::Ptr zookeeper)
+void BackupCoordinationStageSync::removeStartAndAliveNodes(Coordination::ZooKeeperWithFaultInjection::Ptr zookeeper)
 {
     if (!zookeeper->exists(start_node_path))
         return;
@@ -322,17 +323,22 @@ void BackupCoordinationStageSync::removeStartNode(Coordination::ZooKeeperWithFau
         }
 
         Coordination::Requests requests;
+        requests.reserve(3);
+
         requests.emplace_back(zkutil::makeRemoveRequest(start_node_path, -1));
+
+        size_t num_hosts_node_path_pos = requests.size();
         requests.emplace_back(zkutil::makeSetRequest(num_hosts_node_path, toString(*num_hosts - 1), num_hosts_version));
+
+        size_t alive_node_path_pos = static_cast<size_t>(-1);
+        if (zookeeper->exists(alive_node_path))
+        {
+            alive_node_path_pos = requests.size();
+            requests.emplace_back(zkutil::makeRemoveRequest(alive_node_path, -1));
+        }
 
         Coordination::Responses responses;
         auto code = zookeeper->tryMulti(requests, responses);
-
-        if (!((code == Coordination::Error::ZOK) || (code == Coordination::Error::ZBADVERSION)))
-        {
-            /// callAndCatchAll() will catch that and log.
-            zkutil::KeeperMultiException::check(code, requests, responses);
-        }
 
         if (code == Coordination::Error::ZOK)
         {
@@ -340,33 +346,34 @@ void BackupCoordinationStageSync::removeStartNode(Coordination::ZooKeeperWithFau
             return;
         }
 
-        chassert(code == Coordination::Error::ZBADVERSION);
-        bool will_try_again = (attempt_no < max_attempts_after_bad_version);
+        auto show_error_before_next_attempt = [&](const String & message)
+        {
+            bool will_try_again = (attempt_no < max_attempts_after_bad_version);
+            LOG_TRACE(log, "{} (attempt #{}){}", message, attempt_no, will_try_again ? ", will try again" : "");
+        };
 
-        LOG_TRACE(log, "Other host changed the 'num_hosts' node in ZooKeeper (attempt #{}){}", attempt_no,
-                  (will_try_again ? ", will try again" : ""));
-        num_hosts.reset(); /// need to reread 'num_hosts' again
+        if ((responses.size() > num_hosts_node_path_pos) &&
+            (responses[num_hosts_node_path_pos]->error == Coordination::Error::ZBADVERSION))
+        {
+            show_error_before_next_attempt("Other host changed the 'num_hosts' node in ZooKeeper");
+            num_hosts.reset(); /// needs to reread 'num_hosts' again
+        }
+        else if ((responses.size() > alive_node_path_pos) &&
+            (responses[alive_node_path_pos]->error == Coordination::Error::ZNONODE))
+        {
+            show_error_before_next_attempt(fmt::format("Node {} in ZooKeeper doesn't exist", alive_node_path_pos));
+            /// needs another attempt
+        }
+        else
+        {
+            zkutil::KeeperMultiException::check(code, requests, responses);
+        }
     }
 
     throw Exception(ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE,
                     "Couldn't remove the 'start' node from ZooKeeper for {} after {} attempts",
                     current_host_desc, max_attempts_after_bad_version);
 }
-
-
-void BackupCoordinationStageSync::removeAliveNode(Coordination::ZooKeeperWithFaultInjection::Ptr zookeeper)
-{
-    if (!zookeeper->exists(alive_node_path))
-        return;
-
-    auto code = zookeeper->tryRemove(alive_node_path);
-    if (!((code == Coordination::Error::ZOK) || (code == Coordination::Error::ZNONODE)))
-        throw zkutil::KeeperException::fromPath(code, alive_node_path);
-
-    if (code == Coordination::Error::ZOK)
-        LOG_TRACE(log, "Removed the 'alive' node for {}", current_host_desc);
-}
-
 
 void BackupCoordinationStageSync::checkConcurrency(Coordination::ZooKeeperWithFaultInjection::Ptr zookeeper)
 {
@@ -427,8 +434,6 @@ void BackupCoordinationStageSync::stopWatchingThread()
 
 void BackupCoordinationStageSync::watchingThread()
 {
-    auto holder = with_retries.createRetriesControlHolder("BackupStageSync::watchingThread");
-
     while (!should_stop_watching_thread)
     {
         try
@@ -437,6 +442,7 @@ void BackupCoordinationStageSync::watchingThread()
             checkIfQueryCancelled();
 
             /// Recreate the 'alive' node if necessary and read a new state from ZooKeeper.
+            auto holder = with_retries.createRetriesControlHolder("BackupStageSync::watchingThread");
             auto & zookeeper = holder.faulty_zookeeper;
             with_retries.renewZooKeeper(zookeeper);
 
@@ -464,7 +470,11 @@ void BackupCoordinationStageSync::watchingThread()
 
 void BackupCoordinationStageSync::createAliveNode(Coordination::ZooKeeperWithFaultInjection::Ptr zookeeper)
 {
-    if (zookeeper->exists(alive_node_path))
+    bool e = zookeeper->exists(alive_node_path);
+
+    LOG_INFO(getLogger("!!!"), "Node {} exists? {}", alive_node_path, e);
+
+    if (e)
         return;
 
     Coordination::Requests requests;
@@ -473,6 +483,8 @@ void BackupCoordinationStageSync::createAliveNode(Coordination::ZooKeeperWithFau
     zookeeper->multi(requests);
 
     LOG_INFO(log, "The alive node was recreated for {}", current_host_desc);
+    LOG_INFO(getLogger("!!!"), "zookeeper={}, zookeeper_expired={}",
+        reinterpret_cast<size_t>(static_cast<const void *>(zookeeper->getKeeper().get())), zookeeper->expired());
 }
 
 
@@ -501,6 +513,9 @@ void BackupCoordinationStageSync::readCurrentState(Coordination::ZooKeeperWithFa
         new_state = state;
     }
 
+    auto now = std::chrono::system_clock::now();
+    auto monotonic_now = std::chrono::steady_clock::now();
+
     auto get_host_info = [&](const String & host) -> HostInfo &
     {
         auto it = new_state.hosts.find(host);
@@ -509,8 +524,9 @@ void BackupCoordinationStageSync::readCurrentState(Coordination::ZooKeeperWithFa
         return it->second;
     };
 
-    auto now = std::chrono::system_clock::now();
-    auto monotonic_now = std::chrono::steady_clock::now();
+    /// Set `connected` for each host to false, we'll set them to true again after we find the 'alive' nodes.
+    for (auto & [_, host_info] : new_state.hosts)
+        host_info.connected = false;
 
     /// Read the current state of zk nodes.
     for (const auto & zk_node : new_zk_nodes)
@@ -807,8 +823,7 @@ void BackupCoordinationStageSync::finish()
         holder.retries_ctl.retryLoop([&, &zookeeper = holder.faulty_zookeeper]()
         {
             with_retries.renewZooKeeper(zookeeper);
-            createFinishNode(zookeeper);
-            removeAliveNode(zookeeper);
+            createFinishNodeAndRemoveAliveNode(zookeeper);
         });
 
         finished = true;
@@ -837,8 +852,7 @@ bool BackupCoordinationStageSync::tryFinish() noexcept
         holder.retries_ctl.retryLoop([&, &zookeeper = holder.faulty_zookeeper]()
         {
             with_retries.renewZooKeeper(zookeeper);
-            createFinishNode(zookeeper);
-            removeAliveNode(zookeeper);
+            createFinishNodeAndRemoveAliveNode(zookeeper);
         });
 
         finished = true;
@@ -846,14 +860,15 @@ bool BackupCoordinationStageSync::tryFinish() noexcept
     }
     catch (...)
     {
-        /// retryLoop() inside createFinishNode() and removeAliveNode() has already logged this exception.
+        LOG_TRACE(log, "Caught exception while removing the 'finish' node for {}: {}",
+                  current_host_desc, getCurrentExceptionMessage(/* with_stacktrace= */ false, /* check_embedded_stacktrace= */ true));
         failed_to_finish = true;
         return false;
     }
 }
 
 
-void BackupCoordinationStageSync::createFinishNode(Coordination::ZooKeeperWithFaultInjection::Ptr zookeeper)
+void BackupCoordinationStageSync::createFinishNodeAndRemoveAliveNode(Coordination::ZooKeeperWithFaultInjection::Ptr zookeeper)
 {
     if (zookeeper->exists(finish_node_path))
         return;
@@ -871,15 +886,22 @@ void BackupCoordinationStageSync::createFinishNode(Coordination::ZooKeeperWithFa
         }
 
         Coordination::Requests requests;
-        requests.reserve(2);
+        requests.reserve(3);
+
         requests.emplace_back(zkutil::makeCreateRequest(finish_node_path, "", zkutil::CreateMode::Persistent));
+
+        size_t num_hosts_node_path_pos = requests.size();
         requests.emplace_back(zkutil::makeSetRequest(num_hosts_node_path, toString(*num_hosts - 1), num_hosts_version));
+
+        size_t alive_node_path_pos = static_cast<size_t>(-1);
+        if (zookeeper->exists(alive_node_path))
+        {
+            alive_node_path_pos = requests.size();
+            requests.emplace_back(zkutil::makeRemoveRequest(alive_node_path, -1));
+        }
 
         Coordination::Responses responses;
         auto code = zookeeper->tryMulti(requests, responses);
-
-        if (!((code == Coordination::Error::ZOK) || (code == Coordination::Error::ZBADVERSION)))
-            zkutil::KeeperMultiException::check(code, requests, responses);
 
         if (code == Coordination::Error::ZOK)
         {
@@ -889,11 +911,28 @@ void BackupCoordinationStageSync::createFinishNode(Coordination::ZooKeeperWithFa
             return;
         }
 
-        bool will_try_again = (attempt_no < max_attempts_after_bad_version);
+        auto show_error_before_next_attempt = [&](const String & message)
+        {
+            bool will_try_again = (attempt_no < max_attempts_after_bad_version);
+            LOG_TRACE(log, "{} (attempt #{}){}", message, attempt_no, will_try_again ? ", will try again" : "");
+        };
 
-        LOG_TRACE(log, "Other host changed the 'num_hosts' node in ZooKeeper (attempt #{}){}", attempt_no,
-                  (will_try_again ? ", will try again" : ""));
-        num_hosts.reset(); /// need to reread 'num_hosts' again
+        if ((responses.size() > num_hosts_node_path_pos) &&
+            (responses[num_hosts_node_path_pos]->error == Coordination::Error::ZBADVERSION))
+        {
+            show_error_before_next_attempt("Other host changed the 'num_hosts' node in ZooKeeper");
+            num_hosts.reset(); /// needs to reread 'num_hosts' again
+        }
+        else if ((responses.size() > alive_node_path_pos) &&
+            (responses[alive_node_path_pos]->error == Coordination::Error::ZNONODE))
+        {
+            show_error_before_next_attempt(fmt::format("Node {} in ZooKeeper doesn't exist", alive_node_path_pos));
+            /// needs another attempt
+        }
+        else
+        {
+            zkutil::KeeperMultiException::check(code, requests, responses);
+        }
     }
 
     throw Exception(ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE,
@@ -940,8 +979,8 @@ bool BackupCoordinationStageSync::tryWaitHostsFinish(const Strings & hosts) cons
     }
     catch (...)
     {
-        /// Normally checkIfHostsFinish() must not throw any exception with `throw_if_error = false`.
-        tryLogCurrentException(log, fmt::format("Caught exception while waiting for other hosts to finish working on {}", operation_name));
+        LOG_TRACE(log, "Caught exception while waiting for other hosts to finish working on {}: {}",
+                  current_host_desc, getCurrentExceptionMessage(/* with_stacktrace= */ false, /* check_embedded_stacktrace= */ true));
         return false;
     }
 }

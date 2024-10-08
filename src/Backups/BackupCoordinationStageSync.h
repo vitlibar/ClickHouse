@@ -55,8 +55,7 @@ private:
 
     /// Removes both 'start' and 'alive' nodes (used only in case of failed initialization).
     bool tryRemoveStartAndAliveNodes();
-    void removeStartNode(Coordination::ZooKeeperWithFaultInjection::Ptr zookeeper);
-    void removeAliveNode(Coordination::ZooKeeperWithFaultInjection::Ptr zookeeper);
+    void removeStartAndAliveNodes(Coordination::ZooKeeperWithFaultInjection::Ptr zookeeper);
 
     /// Checks that there is no concurrent backup or restore if `allow_concurrency` is false.
     void checkConcurrency(Coordination::ZooKeeperWithFaultInjection::Ptr zookeeper);
@@ -83,7 +82,7 @@ private:
     /// Creates the 'finish' node and set `last_host_finished` if it was the last host participating in the current BACKUP or RESTORE operation.
     void createFinishNodeAndRemoveAliveNode();
     bool tryCreateFinishNodeAndRemoveAliveNode();
-    void createFinishNode(Coordination::ZooKeeperWithFaultInjection::Ptr zookeeper);
+    void createFinishNodeAndRemoveAliveNode(Coordination::ZooKeeperWithFaultInjection::Ptr zookeeper);
 
     /// Used by waitHostsFinish() to check if everything is ready to return.
     bool checkIfHostsFinish(const Strings & hosts, bool throw_if_error) const TSA_REQUIRES(mutex);

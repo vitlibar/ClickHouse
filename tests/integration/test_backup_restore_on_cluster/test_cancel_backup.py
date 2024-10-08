@@ -1,5 +1,6 @@
 import os
 import random
+import re
 import time
 import uuid
 
@@ -9,6 +10,7 @@ from helpers.cluster import ClickHouseCluster
 from helpers.test_tools import TSV
 
 cluster = ClickHouseCluster(__file__)
+CONFIG_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "configs")
 
 main_configs = [
     "configs/backups_disk.xml",
@@ -20,6 +22,7 @@ main_configs = [
 
 user_configs = [
     "configs/zookeeper_retries.xml",
+    "configs/failure_after_host_disconnected_for_seconds.xml",
 ]
 
 node1 = cluster.add_instance(
@@ -55,11 +58,12 @@ def start_cluster():
 
 
 @pytest.fixture(autouse=True)
-def drop_after_test():
+def cleanup_after_test():
     try:
         yield
     finally:
         node1.query("DROP TABLE IF EXISTS tbl ON CLUSTER 'cluster' SYNC")
+        use_separate_keepers_on_nodes(False)
 
 
 # Utilities
@@ -76,15 +80,15 @@ def random_node():
 
 
 # Makes table "tbl" and fill it with data.
-def create_and_fill_table(node, on_cluster=True):
+def create_and_fill_table(node, num_parts=10, on_cluster=True):
     # We use partitioning so backups would contain more files.
     node.query(
         "CREATE TABLE tbl "
         + ("ON CLUSTER 'cluster' " if on_cluster else "")
         + "(x UInt64) ENGINE=ReplicatedMergeTree('/clickhouse/tables/tbl/', '{replica}') "
-        + "ORDER BY tuple() PARTITION BY x%10"
+        + "ORDER BY tuple() PARTITION BY x%" + str(num_parts)
     )
-    node.query(f"INSERT INTO tbl SELECT number FROM numbers(100)")
+    node.query(f"INSERT INTO tbl SELECT number FROM numbers({num_parts})")
 
 
 # Generates an ID suitable both as backup id or restore id.
@@ -248,42 +252,48 @@ def kill_query(node, backup_id=None, restore_id=None, is_initial_query=None, tim
 
 
 # Stops all ZooKeeper servers.
-def stop_zookeeper_servers():
-    print("Stopping all ZooKeeper servers")
-    cluster.stop_zookeeper_nodes(["zoo1", "zoo2", "zoo3"])
+def stop_zookeeper_servers(zoo_nodes):
+    print(f"Stopping ZooKeeper servers {zoo_nodes}")
+    cluster.stop_zookeeper_nodes(zoo_nodes)
 
 
 # Starts all ZooKeeper servers back.
-def start_zookeeper_servers():
-    print("Starting all ZooKeeper servers")
-    cluster.start_zookeeper_nodes(["zoo1", "zoo2", "zoo3"])
+def start_zookeeper_servers(zoo_nodes):
+    print(f"Starting ZooKeeper servers {zoo_nodes}")
+    cluster.start_zookeeper_nodes(zoo_nodes)
 
 
-# Disconnects a specified host with ZooKeeper.
-def disable_zookeeper_on_host(node):
-    print(f"Disconnecting {get_node_name(node)} with ZooKeeper")
-    node.rename_config(
-        "/etc/clickhouse-server/conf.d/zookeeper_config.xml",
-        "zookeeper_config.xml.disabled",
-    )
-    node.query("SYSTEM RELOAD CONFIG")
+separate_keepers_on_nodes = False
 
-
-# Connects a specified node with ZooKeeper back.
-def enable_zookeeper_on_host(node):
-    print(f"Connecting {get_node_name(node)} with ZooKeeper back")
-    node.rename_config(
-        "/etc/clickhouse-server/conf.d/zookeeper_config.xml.disabled",
-        "zookeeper_config.xml",
-    )
-    node.query("SYSTEM RELOAD CONFIG")
+# Switch into using only "zoo1" on node1 and only "zoo2" on node2.
+def use_separate_keepers_on_nodes(turn_on):
+    global separate_keepers_on_nodes
+    if separate_keepers_on_nodes == turn_on:
+        return
+    if turn_on:
+        node1.copy_file_to_container(
+            os.path.join(CONFIG_DIR, "zoo1_config.xml"),
+            "/etc/clickhouse-server/conf.d/zzz_zoo1_config.xml")
+        node2.copy_file_to_container(
+            os.path.join(CONFIG_DIR, "zoo2_config.xml"),
+            "/etc/clickhouse-server/conf.d/zzz_zoo2_config.xml")
+    else:
+        node1.remove_file_from_container(
+            "/etc/clickhouse-server/conf.d/zzz_zoo1_config.xml")
+        node2.remove_file_from_container(
+            "/etc/clickhouse-server/conf.d/zzz_zoo2_config.xml")
+    node1.query("SYSTEM RELOAD CONFIG ON CLUSTER 'cluster'")
+    separate_keepers_on_nodes = turn_on
 
 
 # Sleeps for random amount of time.
 def random_sleep(max_seconds):
-    sleep_time = random.uniform(0, max_seconds)
-    print(f"Sleeping {sleep_time} seconds")
-    time.sleep(sleep_time)
+    sleep(random.uniform(0, max_seconds))
+
+
+def sleep(seconds):
+    print(f"Sleeping {seconds} seconds")
+    time.sleep(seconds)
 
 
 # Checks that BACKUP and RESTORE cleaned up properly with no trash left in ZooKeeper, backups folder, and logs.
@@ -557,7 +567,7 @@ def test_error_leaves_no_trash():
 
 
 # Long disconnection in the middle of a BACKUP or RESTORE operation shouldn't cause the whole operation's failure.
-def test_long_disconnection():
+def test_long_disconnection_doesnt_stop_backup():
     no_trash_checker = NoTrashChecker()
 
     create_and_fill_table(random_node())
@@ -612,3 +622,39 @@ def test_long_disconnection():
             "TABLE_IS_READ_ONLY",
         ],
     )
+
+
+def test_very_long_disconnection_stops_backup():
+    create_and_fill_table(random_node(), 100)
+    use_separate_keepers_on_nodes(True)
+
+    initiator = node1 #random_node()
+    print(f"Using {get_node_name(initiator)} as initiator")
+
+    backup_id = random_id()
+    initiator.query(
+        f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC"
+    )
+
+    assert get_status(initiator, backup_id=backup_id) == "CREATING_BACKUP"
+    assert get_num_system_processes(backup_id=backup_id) >= 1
+
+    # Stop some zookeeper nodes.
+    wait_num_system_processes(backup_id=backup_id, desired=3)
+
+    zoo_nodes_to_stop = ['zoo1']
+    #zoo_nodes_to_stop = random.choice([['zoo1'], ['zoo2'], ['zoo1', 'zoo2']])
+
+    stop_zookeeper_servers(zoo_nodes_to_stop)
+
+    assert get_status(initiator, backup_id=backup_id) == "CREATING_BACKUP"
+
+    # A long sleep longer than "backup_restore_failure_after_host_disconnected_for_seconds" should stop an operation.
+    sleep(12)
+
+    start_zookeeper_servers(zoo_nodes_to_stop)
+
+    assert wait_num_system_processes(backup_id=backup_id, desired=0, timeout=10) < 3
+    assert get_status(initiator, backup_id=backup_id) == "BACKUP_FAILED"
+    expected_error = "Lost connection to .* for .* which is more than the threshold for the failure set to 10s"
+    assert re.search(expected_error, get_error(initiator, backup_id=backup_id))
