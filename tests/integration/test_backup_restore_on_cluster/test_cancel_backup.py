@@ -62,8 +62,8 @@ def cleanup_after_test():
     try:
         yield
     finally:
-        node1.query("DROP TABLE IF EXISTS tbl ON CLUSTER 'cluster' SYNC")
         use_separate_keepers_on_nodes(False)
+        node1.query("DROP TABLE IF EXISTS tbl ON CLUSTER 'cluster' SYNC")
 
 
 # Utilities
@@ -254,13 +254,17 @@ def kill_query(node, backup_id=None, restore_id=None, is_initial_query=None, tim
 # Stops all ZooKeeper servers.
 def stop_zookeeper_servers(zoo_nodes):
     print(f"Stopping ZooKeeper servers {zoo_nodes}")
+    old_time = time.monotonic()
     cluster.stop_zookeeper_nodes(zoo_nodes)
+    print(f"Stopped ZooKeeper servers {zoo_nodes} in {time.monotonic() - old_time} seconds")
 
 
 # Starts all ZooKeeper servers back.
 def start_zookeeper_servers(zoo_nodes):
     print(f"Starting ZooKeeper servers {zoo_nodes}")
+    old_time = time.monotonic()
     cluster.start_zookeeper_nodes(zoo_nodes)
+    print(f"Started ZooKeeper servers {zoo_nodes} in {time.monotonic() - old_time} seconds")
 
 
 separate_keepers_on_nodes = False
@@ -282,7 +286,8 @@ def use_separate_keepers_on_nodes(turn_on):
             "/etc/clickhouse-server/conf.d/zzz_zoo1_config.xml")
         node2.remove_file_from_container(
             "/etc/clickhouse-server/conf.d/zzz_zoo2_config.xml")
-    node1.query("SYSTEM RELOAD CONFIG ON CLUSTER 'cluster'")
+    node1.query("SYSTEM RELOAD CONFIG")
+    node2.query("SYSTEM RELOAD CONFIG")
     separate_keepers_on_nodes = turn_on
 
 
@@ -625,8 +630,8 @@ def test_long_disconnection_doesnt_stop_backup():
 
 
 def test_very_long_disconnection_stops_backup():
-    create_and_fill_table(random_node(), 100)
     use_separate_keepers_on_nodes(True)
+    create_and_fill_table(random_node(), 100)
 
     initiator = node1 #random_node()
     print(f"Using {get_node_name(initiator)} as initiator")
@@ -642,7 +647,7 @@ def test_very_long_disconnection_stops_backup():
     # Stop some zookeeper nodes.
     wait_num_system_processes(backup_id=backup_id, desired=3)
 
-    zoo_nodes_to_stop = ['zoo1']
+    zoo_nodes_to_stop = ['zoo2']
     #zoo_nodes_to_stop = random.choice([['zoo1'], ['zoo2'], ['zoo1', 'zoo2']])
 
     stop_zookeeper_servers(zoo_nodes_to_stop)
@@ -652,9 +657,10 @@ def test_very_long_disconnection_stops_backup():
     # A long sleep longer than "backup_restore_failure_after_host_disconnected_for_seconds" should stop an operation.
     sleep(12)
 
-    start_zookeeper_servers(zoo_nodes_to_stop)
-
     assert wait_num_system_processes(backup_id=backup_id, desired=0, timeout=10) < 3
     assert get_status(initiator, backup_id=backup_id) == "BACKUP_FAILED"
-    expected_error = "Lost connection to .* for .* which is more than the threshold for the failure set to 10s"
+    expected_error = "Lost connection:.* disconnected .* timeout"
     assert re.search(expected_error, get_error(initiator, backup_id=backup_id))
+
+    start_zookeeper_servers(zoo_nodes_to_stop)
+    #assert False

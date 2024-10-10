@@ -210,32 +210,39 @@ void BackupCoordinationRemote::createRootNodes()
     });
 }
 
-void BackupCoordinationRemote::finish()
+void BackupCoordinationRemote::finish(bool & all_hosts_finished)
 {
     if (current_host == kInitiator)
-        stage_sync.waitHostsFinish(all_hosts);
+        stage_sync.waitForHostsToFinish(all_hosts);
 
-    stage_sync.finish();
+    stage_sync.finish(all_hosts_finished);
 }
 
-bool BackupCoordinationRemote::tryFinish() noexcept
+bool BackupCoordinationRemote::tryFinish(bool & all_hosts_finished) noexcept
 {
-    return tryFinishImpl();
+    return tryFinishImpl(all_hosts_finished);
+}
+
+bool BackupCoordinationRemote::tryFinishImpl(bool & all_hosts_finished) noexcept
+{
+    if (current_host == kInitiator)
+        stage_sync.tryWaitForHostsToFinish(all_hosts);
+
+    return stage_sync.tryFinish(all_hosts_finished);
 }
 
 bool BackupCoordinationRemote::tryFinishImpl() noexcept
 {
-    if ((current_host == kInitiator) && !stage_sync.tryWaitHostsFinish(all_hosts))
-        return false;
-
-    return stage_sync.tryFinish();
+    bool dummy;
+    return tryFinishImpl(dummy);
 }
 
 void BackupCoordinationRemote::cleanup()
 {
-    finish();
+    bool all_hosts_finished = false;
+    finish(all_hosts_finished);
 
-    if (current_host == kInitiator)
+    if (all_hosts_finished)
         removeAllNodes();
 
     std::lock_guard lock{concurrency_check_mutex};
@@ -249,14 +256,12 @@ bool BackupCoordinationRemote::tryCleanup() noexcept
 
 bool BackupCoordinationRemote::tryCleanupImpl() noexcept
 {
-    if (!tryFinishImpl())
+    bool all_hosts_finished = false;
+    if (!tryFinishImpl(all_hosts_finished))
         return false;
 
-    if (current_host == kInitiator)
-    {
-        if (!tryRemoveAllNodes())
-            return false;
-    }
+    if (all_hosts_finished && !tryRemoveAllNodes())
+        return false;
 
     std::lock_guard lock{concurrency_check_mutex};
     concurrency_check.reset();
@@ -329,7 +334,7 @@ void BackupCoordinationRemote::setError(const Exception & exception)
 
 Strings BackupCoordinationRemote::waitForStage(const String & stage_to_wait, std::optional<std::chrono::milliseconds> timeout)
 {
-    return stage_sync.waitHostsReachStage(stage_to_wait, all_hosts, timeout);
+    return stage_sync.waitForHostsToReachStage(stage_to_wait, all_hosts, timeout);
 }
 
 std::chrono::seconds BackupCoordinationRemote::getOnClusterInitializationTimeout() const

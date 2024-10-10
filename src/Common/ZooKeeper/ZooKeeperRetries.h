@@ -218,6 +218,7 @@ private:
             return false;
         }
 
+        /// Check if the query was cancelled.
         if (process_list_element)
             process_list_element->checkTimeLimit();
 
@@ -225,6 +226,10 @@ private:
         logLastError("will retry due to error");
         sleepForMilliseconds(current_backoff_ms);
         current_backoff_ms = std::min(current_backoff_ms * 2, retries_info.max_backoff_ms);
+
+        /// Check if the query was cancelled again after sleeping.
+        if (process_list_element)
+            process_list_element->checkTimeLimit();
 
         return true;
     }

@@ -43,11 +43,11 @@ struct BackupKeeperSettings
     /// The period of time during which all hosts participating in BACKUP ON CLUSTER or RESTORE ON CLUSTER should react
     /// to the 'error' node appeared in the stage folder and finish their work.
     /// Shouldn't be too big because that timeout is just for cleanup after the operation has failed already.
-    std::chrono::seconds on_cluster_error_handling_timeout{600};
+    std::chrono::seconds on_cluster_error_handling_timeout{300};
 
     /// Maximum number of retries while handling an error of a BACKUP ON CLUSTER or RESTORE ON CLUSTER operation.
     /// Shouldn't be too big because those retries are just for cleanup after the operation has failed already.
-    UInt64 max_retries_while_handling_error{50};
+    UInt64 max_retries_while_handling_error{10};
 
     /// Number of attempts after getting error ZBADVERSION from ZooKeeper.
     size_t max_attempts_after_bad_version{10};

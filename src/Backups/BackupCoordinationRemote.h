@@ -36,8 +36,8 @@ public:
 
     ~BackupCoordinationRemote() override;
 
-    void finish() override;
-    bool tryFinish() noexcept override;
+    void finish(bool & all_hosts_finished) override;
+    bool tryFinish(bool & all_hosts_finished) noexcept override;
     void cleanup() override;
     bool tryCleanup() noexcept override;
 
@@ -85,6 +85,7 @@ private:
     void createRootNodes();
 
     bool tryFinishImpl() noexcept;
+    bool tryFinishImpl(bool & all_hosts_finish) noexcept;
     bool tryCleanupImpl() noexcept;
     void removeAllNodes();
     bool tryRemoveAllNodes() noexcept;

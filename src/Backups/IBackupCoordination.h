@@ -22,8 +22,9 @@ public:
     virtual ~IBackupCoordination() = default;
 
     /// Sets that the current host finished its work.
-    virtual void finish() = 0;
-    virtual bool tryFinish() noexcept = 0;
+    /// The function sets its argument `all_hosts_finished` to true if all the other hosts finished their works too.
+    virtual void finish(bool & all_hosts_finished) = 0;
+    virtual bool tryFinish(bool & all_hosts_finished) noexcept = 0;
 
     /// Cleans up all external data (e.g. nodes in ZooKeeper) this coordination is using.
     virtual void cleanup() = 0;

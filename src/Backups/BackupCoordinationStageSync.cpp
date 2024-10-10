@@ -27,7 +27,7 @@ bool BackupCoordinationStageSync::HostInfo::operator ==(const HostInfo & other) 
 {
     /// We don't compare `last_connection_time` here.
     return (host == other.host) && (started == other.started) && (connected == other.connected) && (finished == other.finished)
-        && (stages == other.stages) && (!!exception == !!other.exception) && (disconnected_too_long == other.disconnected_too_long);
+        && (stages == other.stages) && (!!exception == !!other.exception);
 }
 
 bool BackupCoordinationStageSync::HostInfo::operator !=(const HostInfo & other) const
@@ -441,6 +441,9 @@ void BackupCoordinationStageSync::watchingThread()
             /// Check if the current BACKUP or RESTORE command is already cancelled.
             checkIfQueryCancelled();
 
+            /// Reset the `connected` flag for each host, we'll set them to true again after we find the 'alive' nodes.
+            resetConnectedFlag();
+
             /// Recreate the 'alive' node if necessary and read a new state from ZooKeeper.
             auto holder = with_retries.createRetriesControlHolder("BackupStageSync::watchingThread");
             auto & zookeeper = holder.faulty_zookeeper;
@@ -454,13 +457,21 @@ void BackupCoordinationStageSync::watchingThread()
 
             /// Reads the current state from nodes in ZooKeeper.
             readCurrentState(zookeeper);
-
-            /// Check if the current state contains error.
-            cancelQueryIfError();
         }
         catch (...)
         {
             tryLogCurrentException(log, "Caugth exception while watching");
+        }
+
+        try
+        {
+            /// Cancel the query if there is an error on another host or if some host was disconnected for too long.
+            cancelQueryIfError();
+            cancelQueryIfDisconnectedTooLong();
+        }
+        catch (...)
+        {
+            tryLogCurrentException(log, "Caugth exception while checking if the query should be cancelled");
         }
 
         zk_nodes_changed->tryWait(sync_period_ms.count());
@@ -470,11 +481,7 @@ void BackupCoordinationStageSync::watchingThread()
 
 void BackupCoordinationStageSync::createAliveNode(Coordination::ZooKeeperWithFaultInjection::Ptr zookeeper)
 {
-    bool e = zookeeper->exists(alive_node_path);
-
-    LOG_INFO(getLogger("!!!"), "Node {} exists? {}", alive_node_path, e);
-
-    if (e)
+    if (zookeeper->exists(alive_node_path))
         return;
 
     Coordination::Requests requests;
@@ -483,8 +490,14 @@ void BackupCoordinationStageSync::createAliveNode(Coordination::ZooKeeperWithFau
     zookeeper->multi(requests);
 
     LOG_INFO(log, "The alive node was recreated for {}", current_host_desc);
-    LOG_INFO(getLogger("!!!"), "zookeeper={}, zookeeper_expired={}",
-        reinterpret_cast<size_t>(static_cast<const void *>(zookeeper->getKeeper().get())), zookeeper->expired());
+}
+
+
+void BackupCoordinationStageSync::resetConnectedFlag()
+{
+    std::lock_guard lock{mutex};
+    for (auto & [_, host_info] : state.hosts)
+        host_info.connected = false;
 }
 
 
@@ -501,6 +514,7 @@ void BackupCoordinationStageSync::readCurrentState(Coordination::ZooKeeperWithFa
     {
         std::lock_guard lock{mutex};
 
+        /// Log all changes in zookeeper nodes in the "stage" folder to make debugging easier.
         Strings added_zk_nodes, removed_zk_nodes;
         std::set_difference(new_zk_nodes.begin(), new_zk_nodes.end(), zk_nodes.begin(), zk_nodes.end(), back_inserter(added_zk_nodes));
         std::set_difference(zk_nodes.begin(), zk_nodes.end(), new_zk_nodes.begin(), new_zk_nodes.end(), back_inserter(removed_zk_nodes));
@@ -524,11 +538,7 @@ void BackupCoordinationStageSync::readCurrentState(Coordination::ZooKeeperWithFa
         return it->second;
     };
 
-    /// Set `connected` for each host to false, we'll set them to true again after we find the 'alive' nodes.
-    for (auto & [_, host_info] : new_state.hosts)
-        host_info.connected = false;
-
-    /// Read the current state of zk nodes.
+    /// Read the current state from zookeeper nodes.
     for (const auto & zk_node : new_zk_nodes)
     {
         if (zk_node == "error")
@@ -569,7 +579,6 @@ void BackupCoordinationStageSync::readCurrentState(Coordination::ZooKeeperWithFa
             host_info.connected = true;
             host_info.last_connection_time = now;
             host_info.last_connection_time_monotonic = monotonic_now;
-            host_info.disconnected_too_long = false;
         }
         else if (zk_node.starts_with("current|"))
         {
@@ -586,24 +595,11 @@ void BackupCoordinationStageSync::readCurrentState(Coordination::ZooKeeperWithFa
         }
     }
 
+    /// Check if the state has been just changed, and if so then wake up waiting threads (see waitHostsReachStage()).
     bool was_state_changed = false;
+
     {
         std::lock_guard lock{mutex};
-
-        if (failure_after_host_disconnected_for_seconds.count() > 0)
-        {
-            for (auto & [host, host_info] : new_state.hosts)
-            {
-                if (!host_info.connected && host_info.started && !host_info.finished && !host_info.disconnected_too_long
-                    && (monotonic_now - host_info.last_connection_time_monotonic >= failure_after_host_disconnected_for_seconds))
-                {
-                    host_info.disconnected_too_long = true;
-                    LOG_WARNING(log, "Host {} has not been updating its 'alive' node for more than {}",
-                                getHostDesc(host), failure_after_host_disconnected_for_seconds);
-                }
-            }
-        }
-
         was_state_changed = (new_state != state);
         state = std::move(new_state);
     }
@@ -645,6 +641,55 @@ void BackupCoordinationStageSync::cancelQueryIfError()
 }
 
 
+void BackupCoordinationStageSync::cancelQueryIfDisconnectedTooLong()
+{
+    std::exception_ptr exception;
+
+    {
+        std::lock_guard lock{mutex};
+        if (state.cancelled || state.host_with_error || ((failure_after_host_disconnected_for_seconds.count() == 0)))
+            return;
+
+        auto monotonic_now = std::chrono::steady_clock::now();
+        bool info_shown = false;
+
+        for (auto & [host, host_info] : state.hosts)
+        {
+            if (!host_info.connected && host_info.started && !host_info.finished && (host != current_host))
+            {
+                auto disconnected_duration = std::chrono::duration_cast<std::chrono::seconds>(monotonic_now - host_info.last_connection_time_monotonic);
+                if ((disconnected_duration >= std::chrono::seconds{1}) && !info_shown)
+                {
+                    LOG_TRACE(log, "The 'alive' node hasn't been updated in ZooKeeper for {} for {}", getHostDesc(host), disconnected_duration);
+                    info_shown = true;
+                }
+
+                if (disconnected_duration > failure_after_host_disconnected_for_seconds)
+                {
+                    /// Host `host` was disconnected for too long. 
+                    /// We can't just throw an exception here because readCurrentState() is called from a background thread.
+                    /// So here we're writingh the error to the `process_list_element` and let it to be thrown later
+                    /// from `process_list_element->checkTimeLimit()`.
+                    String message = fmt::format("{} has been disconnected to {} for {} which is more than the failure timeout ({}), previously the connection existed at {}",
+                        current_host_desc, getHostDesc(host), disconnected_duration, failure_after_host_disconnected_for_seconds, host_info.last_connection_time);
+                    LOG_WARNING(log, "Lost connection: {}", message);
+                    exception = std::make_exception_ptr(Exception{ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE, "Lost connection: {}", message});
+                    break;
+                }
+            }
+        }
+
+        if (!exception)
+            return;
+
+        state.cancelled = true;
+    }
+
+    process_list_element->cancelQuery(false, exception);
+    state_changed.notify_all();
+}
+
+
 void BackupCoordinationStageSync::setStage(const String & stage, const String & stage_result)
 {
     LOG_INFO(log, "{} reached stage {}", current_host_desc, stage);
@@ -679,18 +724,23 @@ void BackupCoordinationStageSync::setError(const Exception & exception)
         writeException(exception, buf, true);
         auto code = zookeeper->tryCreate(error_node_path, buf.str(), zkutil::CreateMode::Persistent);
 
-        if (!((code == Coordination::Error::ZOK) || (code == Coordination::Error::ZNODEEXISTS)))
-            throw zkutil::KeeperException::fromPath(code, error_node_path);
-
         if (code == Coordination::Error::ZOK)
+        {
             LOG_TRACE(log, "Sent exception from {} to other hosts", current_host_desc);
+        }
+        else if (code == Coordination::Error::ZNODEEXISTS)
+        {
+            LOG_INFO(log, "An error has been already assigned for this {}", operation_name);
+        }
         else
-            LOG_INFO(log, "There is already an error assigned to this {}", operation_name);
+        {
+            throw zkutil::KeeperException::fromPath(code, error_node_path);
+        }
     });
 }
 
 
-Strings BackupCoordinationStageSync::waitHostsReachStage(const String & stage_to_wait, const Strings & hosts, std::optional<std::chrono::milliseconds> timeout) const
+Strings BackupCoordinationStageSync::waitForHostsToReachStage(const String & stage_to_wait, const Strings & hosts, std::optional<std::chrono::milliseconds> timeout) const
 {
     Strings results;
     results.resize(hosts.size());
@@ -726,9 +776,6 @@ bool BackupCoordinationStageSync::checkIfHostsReachStage(
 {
     if (should_stop_watching_thread)
         throw Exception(ErrorCodes::LOGICAL_ERROR, "finish() was called while another thread is waiting for a stage");
-
-    if (state.host_with_error)
-        std::rethrow_exception(state.hosts.at(*state.host_with_error).exception);
 
     process_list_element->checkTimeLimit();
 
@@ -790,12 +837,6 @@ bool BackupCoordinationStageSync::checkIfHostsReachStage(
                                 "Lost connection to {} for {} while waiting for the host to come to stage {} for too long{}{}",
                                 getHostDesc(host), disconnected_seconds, stage_to_wait, timeout_desc, last_connection_desc);
             }
-            else if (host_info.disconnected_too_long)
-            {
-                throw Exception(ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE,
-                                "Lost connection to {} for {} which is more than the threshold for the failure set to {}{}",
-                                getHostDesc(host), disconnected_seconds, failure_after_host_disconnected_for_seconds, last_connection_desc);
-            }
             else
             {
                 LOG_TRACE(log, "Waiting for reconnection to {}{}", getHostDesc(host), last_connection_desc);
@@ -809,12 +850,18 @@ bool BackupCoordinationStageSync::checkIfHostsReachStage(
 }
 
 
-void BackupCoordinationStageSync::finish()
+void BackupCoordinationStageSync::finish(bool & all_hosts_finished)
 {
-    if (finished)
-        return;
+    {
+        std::lock_guard lock{mutex};
+        if (finished)
+        {
+            all_hosts_finished = all_hosts_finished_value;
+            return;
+        }
+        chassert(!failed_to_finish);
+    }
 
-    chassert(!failed_to_finish);
     try
     {
         stopWatchingThread();
@@ -826,24 +873,32 @@ void BackupCoordinationStageSync::finish()
             createFinishNodeAndRemoveAliveNode(zookeeper);
         });
 
+        std::lock_guard lock{mutex};
         finished = true;
+        all_hosts_finished = all_hosts_finished_value;
     }
     catch (...)
     {
+        std::lock_guard lock{mutex};
         failed_to_finish = true;
         throw;
     }
 }
 
 
-bool BackupCoordinationStageSync::tryFinish() noexcept
+bool BackupCoordinationStageSync::tryFinish(bool & all_hosts_finished) noexcept
 {
-    if (finished)
-        return true;
-
-    if (failed_to_finish)
-        return false;
-
+    {
+        std::lock_guard lock{mutex};
+        if (finished)
+        {
+            all_hosts_finished = all_hosts_finished_value;
+            return true;
+        }
+        if (failed_to_finish)
+            return false;
+    }
+        
     try
     {
         stopWatchingThread();
@@ -855,16 +910,27 @@ bool BackupCoordinationStageSync::tryFinish() noexcept
             createFinishNodeAndRemoveAliveNode(zookeeper);
         });
 
+        std::lock_guard lock{mutex};
         finished = true;
+        all_hosts_finished = all_hosts_finished_value;
         return true;
     }
     catch (...)
     {
-        LOG_TRACE(log, "Caught exception while removing the 'finish' node for {}: {}",
+        LOG_TRACE(log, "Caught exception while creating the 'finish' node for {}: {}",
                   current_host_desc, getCurrentExceptionMessage(/* with_stacktrace= */ false, /* check_embedded_stacktrace= */ true));
+        
+        std::lock_guard lock{mutex};
         failed_to_finish = true;
         return false;
     }
+}
+
+
+void BackupCoordinationStageSync::tryFinish() noexcept
+{
+    bool dummy;
+    tryFinish(dummy);
 }
 
 
@@ -908,6 +974,11 @@ void BackupCoordinationStageSync::createFinishNodeAndRemoveAliveNode(Coordinatio
             --*num_hosts;
             String hosts_left_desc = ((*num_hosts == 0) ? "no hosts left" : fmt::format("{} hosts left", *num_hosts));
             LOG_INFO(log, "Created the 'finish' node in ZooKeeper for {}, {}", current_host_desc, hosts_left_desc);
+            if (*num_hosts == 0)
+            {
+                std::lock_guard lock{mutex};
+                all_hosts_finished_value = true;
+            }
             return;
         }
 
@@ -941,25 +1012,44 @@ void BackupCoordinationStageSync::createFinishNodeAndRemoveAliveNode(Coordinatio
 }
 
 
-void BackupCoordinationStageSync::waitHostsFinish(const Strings & hosts) const
-{
-    std::unique_lock lock{mutex};
-
-    /// TSA_NO_THREAD_SAFETY_ANALYSIS is here because Clang Thread Safety Analysis doesn't understand std::unique_lock.
-    auto check_if_hosts_finish = [&]() TSA_NO_THREAD_SAFETY_ANALYSIS
-    {
-        return checkIfHostsFinish(hosts, /* throw_if_error = */ true);
-    };
-
-    state_changed.wait(lock, [&] { return check_if_hosts_finish(); });
-}
-
-
-bool BackupCoordinationStageSync::tryWaitHostsFinish(const Strings & hosts) const noexcept
+void BackupCoordinationStageSync::waitForHostsToFinish(const Strings & hosts) const
 {
     try
     {
         std::unique_lock lock{mutex};
+        if (TSA_SUPPRESS_WARNING_FOR_READ(waited_for_other_hosts_to_finish))
+            return;
+
+        chassert(!TSA_SUPPRESS_WARNING_FOR_READ(failed_to_wait_for_other_hosts_to_finish));
+
+        /// TSA_NO_THREAD_SAFETY_ANALYSIS is here because Clang Thread Safety Analysis doesn't understand std::unique_lock.
+        auto check_if_hosts_finish = [&]() TSA_NO_THREAD_SAFETY_ANALYSIS
+        {
+            return checkIfHostsFinish(hosts, /* throw_if_error = */ true);
+        };
+
+        state_changed.wait(lock, [&] { return check_if_hosts_finish(); });
+
+        TSA_SUPPRESS_WARNING_FOR_WRITE(waited_for_other_hosts_to_finish) = true;
+    }
+    catch (...)
+    {
+        std::lock_guard lock{mutex};
+        failed_to_wait_for_other_hosts_to_finish = true;
+        throw;
+    }
+}
+
+
+bool BackupCoordinationStageSync::tryWaitForHostsToFinish(const Strings & hosts) const noexcept
+{
+    try
+    {
+        std::unique_lock lock{mutex};
+        if (TSA_SUPPRESS_WARNING_FOR_READ(waited_for_other_hosts_to_finish))
+            return true;
+        if (TSA_SUPPRESS_WARNING_FOR_READ(failed_to_wait_for_other_hosts_to_finish))
+            return false;
 
         /// TSA_NO_THREAD_SAFETY_ANALYSIS is here because Clang Thread Safety Analysis doesn't understand std::unique_lock.
         auto check_if_hosts_finish = [&]() TSA_NO_THREAD_SAFETY_ANALYSIS
@@ -969,18 +1059,26 @@ bool BackupCoordinationStageSync::tryWaitHostsFinish(const Strings & hosts) cons
 
         if (error_handling_timeout.count() != 0)
         {
-            return state_changed.wait_for(lock, error_handling_timeout, [&] { return check_if_hosts_finish(); });
+            if (!state_changed.wait_for(lock, error_handling_timeout, [&] { return check_if_hosts_finish(); }))
+            {
+                TSA_SUPPRESS_WARNING_FOR_WRITE(failed_to_wait_for_other_hosts_to_finish) = true;
+                return false;
+            }
         }
         else
         {
             state_changed.wait(lock, [&] { return check_if_hosts_finish(); });
-            return true;
         }
+
+        TSA_SUPPRESS_WARNING_FOR_WRITE(waited_for_other_hosts_to_finish) = true;
+        return true;
     }
     catch (...)
     {
         LOG_TRACE(log, "Caught exception while waiting for other hosts to finish working on {}: {}",
                   current_host_desc, getCurrentExceptionMessage(/* with_stacktrace= */ false, /* check_embedded_stacktrace= */ true));
+        std::lock_guard lock{mutex};
+        failed_to_wait_for_other_hosts_to_finish = true;
         return false;
     }
 }
@@ -989,12 +1087,7 @@ bool BackupCoordinationStageSync::tryWaitHostsFinish(const Strings & hosts) cons
 bool BackupCoordinationStageSync::checkIfHostsFinish(const Strings & hosts, bool throw_if_error) const
 {
     if (throw_if_error)
-    {
-        if (state.host_with_error)
-            std::rethrow_exception(state.hosts.at(*state.host_with_error).exception);
-
         process_list_element->checkTimeLimit();
-    }
 
     for (const auto & host : hosts)
     {
@@ -1013,25 +1106,11 @@ bool BackupCoordinationStageSync::checkIfHostsFinish(const Strings & hosts, bool
         if (host_info.finished)
             continue;
 
-        if (host_info.disconnected_too_long)
-        {
-            chassert(host_info.started && !host_info.connected);
-            if (throw_if_error)
-            {
-                auto disconnected_seconds = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - host_info.last_connection_time_monotonic);
-                String last_connection_desc = fmt::format(", last time the host was connected at {}", host_info.last_connection_time);
-                throw Exception(ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE,
-                    "Lost connection to {} for {} which is more than the threshold for the failure set to {}{}",
-                    getHostDesc(host), disconnected_seconds, failure_after_host_disconnected_for_seconds, last_connection_desc);
-            }
-            else
-                continue;
-        }
-
-        LOG_TRACE(log, "Waiting for {} to finish working on {}", getHostDesc(host), operation_name);
+        LOG_TRACE(log, "Waiting for {} to finish working on this {}", getHostDesc(host), operation_name);
         return false;
     }
 
+    LOG_TRACE(log, "All hosts finished working on this {}", operation_name);
     return true;
 }
 

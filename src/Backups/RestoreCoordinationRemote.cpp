@@ -80,7 +80,7 @@ void RestoreCoordinationRemote::setError(const Exception & exception)
 
 Strings RestoreCoordinationRemote::waitForStage(const String & stage_to_wait, std::optional<std::chrono::milliseconds> timeout)
 {
-    return stage_sync.waitHostsReachStage(stage_to_wait, all_hosts, timeout);
+    return stage_sync.waitForHostsToReachStage(stage_to_wait, all_hosts, timeout);
 }
 
 std::chrono::seconds RestoreCoordinationRemote::getOnClusterInitializationTimeout() const
@@ -268,11 +268,12 @@ void RestoreCoordinationRemote::generateUUIDForTable(ASTCreateQuery & create_que
 void RestoreCoordinationRemote::cleanup()
 {
     if (current_host == kInitiator)
-        stage_sync.waitHostsFinish(all_hosts);
+        stage_sync.waitForHostsToFinish(all_hosts);
 
-    stage_sync.finish();
+    bool all_hosts_finished = false;
+    stage_sync.finish(all_hosts_finished);
 
-    if (current_host == kInitiator)
+    if (all_hosts_finished)
         removeAllNodes();
 
     std::lock_guard lock{mutex};
@@ -286,13 +287,14 @@ bool RestoreCoordinationRemote::tryCleanup() noexcept
 
 bool RestoreCoordinationRemote::tryCleanupImpl() noexcept
 {
-    if ((current_host == kInitiator) && !stage_sync.tryWaitHostsFinish(all_hosts))
+    if ((current_host == kInitiator) && !stage_sync.tryWaitForHostsToFinish(all_hosts))
         return false;
 
-    if (!stage_sync.tryFinish())
+    bool all_hosts_finished = false;
+    if (!stage_sync.tryFinish(all_hosts_finished))
         return false;
 
-    if ((current_host == kInitiator) && !tryRemoveAllNodes())
+    if (all_hosts_finished && !tryRemoveAllNodes())
         return false;
 
     std::lock_guard lock{mutex};

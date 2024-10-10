@@ -28,19 +28,20 @@ public:
     /// Waits until all the specified hosts come to the specified stage.
     /// The function returns the results which specified hosts set when they came to the required stage.
     /// If it doesn't happen before the timeout then the function will stop waiting and throw an exception.
-    Strings waitHostsReachStage(const String & stage_to_wait, const Strings & hosts, std::optional<std::chrono::milliseconds> timeout = {}) const;
-
-    /// Waits until other hosts finish their work.
-    /// This function must be called before calling function finish().
-    void waitHostsFinish(const Strings & hosts) const;
-    bool tryWaitHostsFinish(const Strings & hosts) const noexcept;
+    Strings waitForHostsToReachStage(const String & stage_to_wait, const Strings & hosts, std::optional<std::chrono::milliseconds> timeout = {}) const;
 
     /// Sets that the current host finished its work.
-    void finish();
+    /// The function sets its argument `all_hosts_finished` to true if all the other hosts finished their works too.
+    void finish(bool & all_hosts_finished);
 
     /// The same as finish(), but without throwing an exception if something goes wrong.
     /// tryFinish() is called from the destructor but sometimes it makes sense to call it before that.
-    bool tryFinish() noexcept;
+    bool tryFinish(bool & all_hosts_finished) noexcept;
+
+    /// Waits until other hosts finish their work.
+    /// This function must be called before calling function finish().
+    void waitForHostsToFinish(const Strings & hosts) const;
+    bool tryWaitForHostsToFinish(const Strings & hosts) const noexcept;
 
 private:
     /// Creates the root node in ZooKeeper.
@@ -69,6 +70,9 @@ private:
     void readCurrentState(Coordination::ZooKeeperWithFaultInjection::Ptr zookeeper);
     String getStageNodePath(const String & stage) const;
 
+    /// Reset the `connected` flag for each host.
+    void resetConnectedFlag();
+
     /// Checks if the current query is cancelled, and if so then the function sets the `cancelled` flag in the current state.
     void checkIfQueryCancelled();
 
@@ -76,15 +80,19 @@ private:
     /// to cancel the current BACKUP or RESTORE command.
     void cancelQueryIfError();
 
-    /// Used by waitHostsReachStage() to check if everything is ready to return.
+    /// Checks if some host was disconnected for too long, and if so then the function generates an error and pass it to the query status
+    /// to cancel the current BACKUP or RESTORE command.
+    void cancelQueryIfDisconnectedTooLong();
+
+    /// Used by waitForHostsToReachStage() to check if everything is ready to return.
     bool checkIfHostsReachStage(const Strings & hosts, const String & stage_to_wait, std::optional<std::chrono::milliseconds> timeout, bool throw_if_not_ready, Strings & results) const TSA_REQUIRES(mutex);
 
-    /// Creates the 'finish' node and set `last_host_finished` if it was the last host participating in the current BACKUP or RESTORE operation.
+    /// Creates the 'finish' node.
+    void tryFinish() noexcept;
     void createFinishNodeAndRemoveAliveNode();
-    bool tryCreateFinishNodeAndRemoveAliveNode();
     void createFinishNodeAndRemoveAliveNode(Coordination::ZooKeeperWithFaultInjection::Ptr zookeeper);
 
-    /// Used by waitHostsFinish() to check if everything is ready to return.
+    /// Used by waitForHostsToFinish() to check if everything is ready to return.
     bool checkIfHostsFinish(const Strings & hosts, bool throw_if_error) const TSA_REQUIRES(mutex);
 
     /// Returns a printable name of a specific host. For empty host the function returns "initiator".
@@ -139,9 +147,6 @@ private:
         std::chrono::time_point<std::chrono::system_clock> last_connection_time = {};
         std::chrono::time_point<std::chrono::steady_clock> last_connection_time_monotonic = {};
 
-        /// Set if this host has been disconnected longer than `failure_after_host_disconnected_for_seconds`.
-        bool disconnected_too_long = false;
-
         bool operator ==(const HostInfo & other) const;
         bool operator !=(const HostInfo & other) const;
     };
@@ -163,8 +168,12 @@ private:
     std::future<void> watching_thread_future;
     std::atomic<bool> should_stop_watching_thread = false;
 
-    std::atomic<bool> finished = false;
-    std::atomic<bool> failed_to_finish = false;
+    bool finished TSA_GUARDED_BY(mutex) = false;
+    bool failed_to_finish TSA_GUARDED_BY(mutex) = false;
+    bool all_hosts_finished_value TSA_GUARDED_BY(mutex) = false;
+
+    mutable bool waited_for_other_hosts_to_finish TSA_GUARDED_BY(mutex) = false;
+    mutable bool failed_to_wait_for_other_hosts_to_finish TSA_GUARDED_BY(mutex) = false;
 
     mutable std::mutex mutex;
 };

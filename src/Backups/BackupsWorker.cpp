@@ -460,7 +460,8 @@ struct BackupsWorker::BackupStarter
         if (backup_coordination)
         {
             sendCurrentExceptionToCoordination(backup_coordination);
-            if (!backup_coordination->tryFinish())
+            bool all_hosts_finished = false;
+            if (!backup_coordination->tryFinish(all_hosts_finished) || !all_hosts_finished)
                 should_remove_files_in_backup = false;
         }
 

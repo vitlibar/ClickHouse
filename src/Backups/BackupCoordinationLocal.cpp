@@ -20,21 +20,23 @@ BackupCoordinationLocal::BackupCoordinationLocal(
 
 BackupCoordinationLocal::~BackupCoordinationLocal() = default;
 
-void BackupCoordinationLocal::finish()
+void BackupCoordinationLocal::finish(bool & all_hosts_finished)
 {
+    all_hosts_finished = true; /// There is only one host in case of BackupCoordinationLocal.
     std::lock_guard lock{concurrency_check_mutex};
     concurrency_check.reset();
 }
 
-bool BackupCoordinationLocal::tryFinish() noexcept
+bool BackupCoordinationLocal::tryFinish(bool & all_hosts_finished) noexcept
 {
-    finish();
+    finish(all_hosts_finished);
     return true;
 }
 
 void BackupCoordinationLocal::cleanup()
 {
-    finish();
+    bool dummy;
+    finish(dummy);
 }
 
 bool BackupCoordinationLocal::tryCleanup() noexcept

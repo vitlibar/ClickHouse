@@ -26,8 +26,8 @@ public:
     explicit BackupCoordinationLocal(bool is_plain_backup_, BackupLocalConcurrencyChecker & concurrency_checker_, bool allow_concurrent_backup_);
     ~BackupCoordinationLocal() override;
 
-    void finish() override;
-    bool tryFinish() noexcept override;
+    void finish(bool & all_hosts_finished) override;
+    bool tryFinish(bool & all_hosts_finished) noexcept override;
     void cleanup() override;
     bool tryCleanup() noexcept override;
 

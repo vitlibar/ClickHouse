@@ -21,7 +21,7 @@ WithRetries::RetriesControlHolder::RetriesControlHolder(
                               : (reason.error_handling ? parent->settings.max_retries_while_handling_error : parent->settings.max_retries),
            parent->settings.retry_initial_backoff_ms.count(),
            parent->settings.retry_max_backoff_ms.count())
-    , retries_ctl(name, parent->log, info, parent->process_list_element)
+    , retries_ctl(name, parent->log, info, !reason.error_handling ? parent->process_list_element : nullptr)
     , faulty_zookeeper(parent->getFaultyZooKeeper())
 {}
 
@@ -36,19 +36,11 @@ void WithRetries::renewZooKeeper(FaultyKeeper my_faulty_zookeeper) const
 
     if (!zookeeper || zookeeper->expired())
     {
-        LOG_INFO(getLogger("!!!"), "No zookeeper or zookeeper is expired");
-        auto old = zookeeper;
         zookeeper = get_zookeeper();
         my_faulty_zookeeper->setKeeper(zookeeper);
 
         if (callback)
             callback(my_faulty_zookeeper);
-
-        if (zookeeper != old)
-            LOG_INFO(getLogger("!!!"), "Zookeeper changed: {} -> {}",
-                reinterpret_cast<size_t>(static_cast<const void *>(old.get())),
-                reinterpret_cast<size_t>(static_cast<const void *>(zookeeper.get()))
-            );
     }
     else
     {

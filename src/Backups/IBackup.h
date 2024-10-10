@@ -121,11 +121,12 @@ public:
     /// Finalizes writing the backup, should be called after all entries have been successfully written.
     virtual void finalizeWriting() = 0;
 
-    /// Let the implementation know that an error happened while the backup was being written so the backup can't be finalized.
-    /// Used after an exception or if the backup was cancelled.
+    /// Sets that a non-retriable error happened while the backup was being written which means that
+    /// the backup is most likely corrupted and it can't be finalized.
+    /// This function is called while handling an exception or if the backup was cancelled.
     virtual bool setIsCorrupted() noexcept = 0;
 
-    /// Try to remove all files copied to the backup. Used after setIsCorrupted().
+    /// Try to remove all files copied to the backup. Could be used after setIsCorrupted().
     virtual bool tryRemoveAllFiles() noexcept = 0;
 };
 
