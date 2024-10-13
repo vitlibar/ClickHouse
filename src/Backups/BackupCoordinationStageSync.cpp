@@ -100,7 +100,6 @@ BackupCoordinationStageSync::BackupCoordinationStageSync(
 
 BackupCoordinationStageSync::~BackupCoordinationStageSync()
 {
-    /// tryFinish() must not throw any exceptions.
     tryFinish();
 }
 
@@ -123,6 +122,19 @@ String BackupCoordinationStageSync::getHostDesc(const String & host)
         {
             res = "host " + host;
         }
+    }
+    return res;
+}
+
+
+String BackupCoordinationStageSync::getHostsDesc(const Strings & hosts)
+{
+    String res;
+    for (const String & host : hosts)
+    {
+        if (!res.empty())
+            res += ", ";
+        res += getHostDesc(host);
     }
     return res;
 }
@@ -850,60 +862,52 @@ bool BackupCoordinationStageSync::checkIfHostsReachStage(
 }
 
 
+void BackupCoordinationStageSync::finish()
+{
+    bool all_hosts_finished;
+    finish(all_hosts_finished);
+}
+
+
 void BackupCoordinationStageSync::finish(bool & all_hosts_finished)
 {
-    {
-        std::lock_guard lock{mutex};
-        if (finished)
-        {
-            all_hosts_finished = all_hosts_finished_value;
-            return;
-        }
-        chassert(!failed_to_finish);
-    }
+    tryFinishImpl(all_hosts_finished, /* retries_params = */ {}, /* throw_if_error = */ true);
+}
 
-    try
-    {
-        stopWatchingThread();
 
-        auto holder = with_retries.createRetriesControlHolder("BackupStageSync::finish");
-        holder.retries_ctl.retryLoop([&, &zookeeper = holder.faulty_zookeeper]()
-        {
-            with_retries.renewZooKeeper(zookeeper);
-            createFinishNodeAndRemoveAliveNode(zookeeper);
-        });
-
-        std::lock_guard lock{mutex};
-        finished = true;
-        all_hosts_finished = all_hosts_finished_value;
-    }
-    catch (...)
-    {
-        std::lock_guard lock{mutex};
-        failed_to_finish = true;
-        throw;
-    }
+bool BackupCoordinationStageSync::tryFinish() noexcept
+{
+    bool all_hosts_finished;
+    return tryFinish(all_hosts_finished);
 }
 
 
 bool BackupCoordinationStageSync::tryFinish(bool & all_hosts_finished) noexcept
 {
+    return tryFinishImpl(all_hosts_finished, /* retries_params = */ {.error_handling = true}, /* throw_if_error = */ false);
+}
+
+
+bool BackupCoordinationStageSync::tryFinishImpl(bool & all_hosts_finished, const WithRetries::Params & retries_params, bool throw_if_error)
+{
+    all_hosts_finished = false;
+
     {
         std::lock_guard lock{mutex};
-        if (finished)
+        if (finish_result.succeeded)
         {
-            all_hosts_finished = all_hosts_finished_value;
+            all_hosts_finished = finish_result.all_hosts_finished;
             return true;
         }
-        if (failed_to_finish)
+        if (finish_result.failed)
             return false;
     }
-        
+
     try
     {
         stopWatchingThread();
 
-        auto holder = with_retries.createRetriesControlHolder("BackupStageSync::tryFinish", {.error_handling = true});
+        auto holder = with_retries.createRetriesControlHolder("BackupStageSync::finish", retries_params);
         holder.retries_ctl.retryLoop([&, &zookeeper = holder.faulty_zookeeper]()
         {
             with_retries.renewZooKeeper(zookeeper);
@@ -911,26 +915,21 @@ bool BackupCoordinationStageSync::tryFinish(bool & all_hosts_finished) noexcept
         });
 
         std::lock_guard lock{mutex};
-        finished = true;
-        all_hosts_finished = all_hosts_finished_value;
+        finish_result.succeeded = true;
         return true;
     }
     catch (...)
     {
-        LOG_TRACE(log, "Caught exception while creating the 'finish' node for {}: {}",
-                  current_host_desc, getCurrentExceptionMessage(/* with_stacktrace= */ false, /* check_embedded_stacktrace= */ true));
-        
         std::lock_guard lock{mutex};
-        failed_to_finish = true;
+        finish_result.failed = true;
+        if (throw_if_error)
+            throw;
+
+        LOG_TRACE(log, "Caught exception while creating the 'finish' node for {}: {}",
+            current_host_desc,
+            getCurrentExceptionMessage(/* with_stacktrace= */ false, /* check_embedded_stacktrace= */ true));
         return false;
     }
-}
-
-
-void BackupCoordinationStageSync::tryFinish() noexcept
-{
-    bool dummy;
-    tryFinish(dummy);
 }
 
 
@@ -977,7 +976,7 @@ void BackupCoordinationStageSync::createFinishNodeAndRemoveAliveNode(Coordinatio
             if (*num_hosts == 0)
             {
                 std::lock_guard lock{mutex};
-                all_hosts_finished_value = true;
+                finish_result.all_hosts_finished = true;
             }
             return;
         }
@@ -1014,55 +1013,53 @@ void BackupCoordinationStageSync::createFinishNodeAndRemoveAliveNode(Coordinatio
 
 void BackupCoordinationStageSync::waitForHostsToFinish(const Strings & hosts) const
 {
-    try
-    {
-        std::unique_lock lock{mutex};
-        if (TSA_SUPPRESS_WARNING_FOR_READ(waited_for_other_hosts_to_finish))
-            return;
-
-        chassert(!TSA_SUPPRESS_WARNING_FOR_READ(failed_to_wait_for_other_hosts_to_finish));
-
-        /// TSA_NO_THREAD_SAFETY_ANALYSIS is here because Clang Thread Safety Analysis doesn't understand std::unique_lock.
-        auto check_if_hosts_finish = [&]() TSA_NO_THREAD_SAFETY_ANALYSIS
-        {
-            return checkIfHostsFinish(hosts, /* throw_if_error = */ true);
-        };
-
-        state_changed.wait(lock, [&] { return check_if_hosts_finish(); });
-
-        TSA_SUPPRESS_WARNING_FOR_WRITE(waited_for_other_hosts_to_finish) = true;
-    }
-    catch (...)
-    {
-        std::lock_guard lock{mutex};
-        failed_to_wait_for_other_hosts_to_finish = true;
-        throw;
-    }
+    tryWaitForHostsToFinishImpl(hosts, /* timeout = */ {}, /* throw_if_error = */ true);
 }
 
 
 bool BackupCoordinationStageSync::tryWaitForHostsToFinish(const Strings & hosts) const noexcept
 {
+    std::optional<std::chrono::seconds> timeout;
+    if (error_handling_timeout.count() != 0)
+        timeout = error_handling_timeout;
+
+    return tryWaitForHostsToFinishImpl(hosts, timeout, /* throw_if_error = */ false);
+}
+
+
+bool BackupCoordinationStageSync::tryWaitForHostsToFinishImpl(const Strings & hosts, std::optional<std::chrono::seconds> timeout, bool throw_if_error) const
+{
+    {
+        std::lock_guard lock{mutex};
+        if (wait_for_other_hosts_to_finish_result.succeeded)
+            return true;
+        if (wait_for_other_hosts_to_finish_result.failed)
+            return false;
+    }
+
     try
     {
         std::unique_lock lock{mutex};
-        if (TSA_SUPPRESS_WARNING_FOR_READ(waited_for_other_hosts_to_finish))
-            return true;
-        if (TSA_SUPPRESS_WARNING_FOR_READ(failed_to_wait_for_other_hosts_to_finish))
-            return false;
 
         /// TSA_NO_THREAD_SAFETY_ANALYSIS is here because Clang Thread Safety Analysis doesn't understand std::unique_lock.
-        auto check_if_hosts_finish = [&]() TSA_NO_THREAD_SAFETY_ANALYSIS
-        {
-            return checkIfHostsFinish(hosts, /* throw_if_error = */ false);
-        };
+        auto check_if_hosts_finish = [&]() TSA_NO_THREAD_SAFETY_ANALYSIS { return checkIfHostsFinish(hosts, throw_if_error); };
 
-        if (error_handling_timeout.count() != 0)
+        if (timeout)
         {
-            if (!state_changed.wait_for(lock, error_handling_timeout, [&] { return check_if_hosts_finish(); }))
+            if (!state_changed.wait_for(lock, *timeout, [&] { return check_if_hosts_finish(); }))
             {
-                TSA_SUPPRESS_WARNING_FOR_WRITE(failed_to_wait_for_other_hosts_to_finish) = true;
-                return false;
+                TSA_SUPPRESS_WARNING_FOR_WRITE(wait_for_other_hosts_to_finish_result).failed = true;
+                if (throw_if_error)
+                {
+                    throw Exception(ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE, "Waited too long for {} to finish working on this {}",
+                                    getHostsDesc(hosts), operation_name);
+                }
+                else
+                {
+                    LOG_TRACE(log, "Waited too long for {} to finish working on this {}",
+                              getHostsDesc(hosts), operation_name);
+                    return false;
+                }
             }
         }
         else
@@ -1070,15 +1067,19 @@ bool BackupCoordinationStageSync::tryWaitForHostsToFinish(const Strings & hosts)
             state_changed.wait(lock, [&] { return check_if_hosts_finish(); });
         }
 
-        TSA_SUPPRESS_WARNING_FOR_WRITE(waited_for_other_hosts_to_finish) = true;
+        TSA_SUPPRESS_WARNING_FOR_WRITE(wait_for_other_hosts_to_finish_result).succeeded = true;
         return true;
     }
     catch (...)
     {
-        LOG_TRACE(log, "Caught exception while waiting for other hosts to finish working on {}: {}",
-                  current_host_desc, getCurrentExceptionMessage(/* with_stacktrace= */ false, /* check_embedded_stacktrace= */ true));
         std::lock_guard lock{mutex};
-        failed_to_wait_for_other_hosts_to_finish = true;
+        wait_for_other_hosts_to_finish_result.failed = true;
+        if (throw_if_error)
+            throw;
+
+        LOG_TRACE(log, "Caught exception while waiting for {} to finish working on this {}: {}",
+                  getHostsDesc(hosts), operation_name,
+                  getCurrentExceptionMessage(/* with_stacktrace= */ false, /* check_embedded_stacktrace= */ true));
         return false;
     }
 }

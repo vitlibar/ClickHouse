@@ -16,18 +16,18 @@ WithRetries::WithRetries(
 {}
 
 WithRetries::RetriesControlHolder::RetriesControlHolder(
-    const WithRetries * parent, const String & name, const Reason & reason)
-    : info(reason.initialization ? parent->settings.max_retries_while_initializing
-                              : (reason.error_handling ? parent->settings.max_retries_while_handling_error : parent->settings.max_retries),
+    const WithRetries * parent, const String & name, const Params & params)
+    : info(params.initialization ? parent->settings.max_retries_while_initializing
+                              : (params.error_handling ? parent->settings.max_retries_while_handling_error : parent->settings.max_retries),
            parent->settings.retry_initial_backoff_ms.count(),
            parent->settings.retry_max_backoff_ms.count())
-    , retries_ctl(name, parent->log, info, !reason.error_handling ? parent->process_list_element : nullptr)
+    , retries_ctl(name, parent->log, info, !params.error_handling ? parent->process_list_element : nullptr)
     , faulty_zookeeper(parent->getFaultyZooKeeper())
 {}
 
-WithRetries::RetriesControlHolder WithRetries::createRetriesControlHolder(const String & name, const Reason & reason) const
+WithRetries::RetriesControlHolder WithRetries::createRetriesControlHolder(const String & name, const Params & params) const
 {
-    return RetriesControlHolder(this, name, reason);
+    return RetriesControlHolder(this, name, params);
 }
 
 void WithRetries::renewZooKeeper(FaultyKeeper my_faulty_zookeeper) const

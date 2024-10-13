@@ -19,7 +19,7 @@ public:
     using FaultyKeeper = Coordination::ZooKeeperWithFaultInjection::Ptr;
     using RenewerCallback = std::function<void(FaultyKeeper)>;
 
-    struct Reason
+    struct Params
     {
         bool initialization = false;
         bool error_handling = false;
@@ -42,10 +42,10 @@ public:
 
     private:
         friend class WithRetries;
-        RetriesControlHolder(const WithRetries * parent, const String & name, const Reason & reason);
+        RetriesControlHolder(const WithRetries * parent, const String & name, const Params & params);
     };
 
-    RetriesControlHolder createRetriesControlHolder(const String & name, const Reason & reason = {.initialization = false, .error_handling = false}) const;
+    RetriesControlHolder createRetriesControlHolder(const String & name, const Params & params = {.initialization = false, .error_handling = false}) const;
     WithRetries(LoggerPtr log, zkutil::GetZooKeeper get_zookeeper_, const BackupKeeperSettings & settings, QueryStatusPtr process_list_element_, RenewerCallback callback);
 
     /// Used to re-establish new connection inside a retry loop.

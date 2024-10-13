@@ -26,8 +26,7 @@ RestoreCoordinationRemote::RestoreCoordinationRemote(
     bool allow_concurrent_restore_,
     ThreadPoolCallbackRunnerUnsafe<void> schedule_,
     QueryStatusPtr process_list_element_)
-    : get_zookeeper(get_zookeeper_)
-    , root_zookeeper_path(root_zookeeper_path_)
+    : root_zookeeper_path(root_zookeeper_path_)
     , keeper_settings(keeper_settings_)
     , restore_uuid(restore_uuid_)
     , zookeeper_path(root_zookeeper_path_ + "/restore-" + toString(restore_uuid_))
@@ -287,72 +286,63 @@ bool RestoreCoordinationRemote::tryCleanup() noexcept
 
 bool RestoreCoordinationRemote::tryCleanupImpl() noexcept
 {
-    if ((current_host == kInitiator) && !stage_sync.tryWaitForHostsToFinish(all_hosts))
-        return false;
+    if (current_host == kInitiator)
+        stage_sync.tryWaitForHostsToFinish(all_hosts);
 
-    bool all_hosts_finished = false;
-    if (!stage_sync.tryFinish(all_hosts_finished))
-        return false;
-
-    if (all_hosts_finished && !tryRemoveAllNodes())
-        return false;
+    bool all_hosts_finished;
+    bool ok = stage_sync.tryFinish(all_hosts_finished);
+    if (ok && all_hosts_finished)
+        ok = tryRemoveAllNodes();
 
     std::lock_guard lock{mutex};
     concurrency_check.reset();
-    return true;
+    return ok;
 }
 
 void RestoreCoordinationRemote::removeAllNodes()
 {
-    if (all_nodes_removed)
-        return;
-
-    chassert(!failed_to_remove_all_nodes);
-    try
-    {
-        LOG_TRACE(log, "Removing nodes from ZooKeeper");
-        auto holder = with_retries.createRetriesControlHolder("removeAllNodes");
-        holder.retries_ctl.retryLoop([&, &zookeeper = holder.faulty_zookeeper]()
-        {
-            with_retries.renewZooKeeper(zookeeper);
-            zookeeper->removeRecursive(zookeeper_path);
-        });
-
-        all_nodes_removed = true;
-    }
-    catch (...)
-    {
-        failed_to_remove_all_nodes = true;
-        throw;
-    }
+    tryRemoveAllNodesImpl(/* retries_params = */ {}, /* throw_if_error = */ true);
 }
 
 bool RestoreCoordinationRemote::tryRemoveAllNodes() noexcept
 {
-    if (all_nodes_removed)
-        return true;
+    return tryRemoveAllNodesImpl(/* retries_params = */ {.error_handling = true}, /* throw_if_error = */ false);
+}
 
-    if (failed_to_remove_all_nodes)
-        return false;
+bool RestoreCoordinationRemote::tryRemoveAllNodesImpl(const WithRetries::Params & retries_params, bool throw_if_error)
+{
+    {
+        std::lock_guard lock{mutex};
+        if (remove_all_nodes_result.succeeded)
+            return true;
+        if (remove_all_nodes_result.failed)
+            return false;
+    }
 
     try
     {
         LOG_TRACE(log, "Removing nodes from ZooKeeper");
-        auto holder = with_retries.createRetriesControlHolder("tryRemoveAllNodes", {.error_handling = true});
+        auto holder = with_retries.createRetriesControlHolder("removeAllNodes", retries_params);
         holder.retries_ctl.retryLoop([&, &zookeeper = holder.faulty_zookeeper]()
         {
             with_retries.renewZooKeeper(zookeeper);
             zookeeper->removeRecursive(zookeeper_path);
         });
 
-        all_nodes_removed = true;
+        std::lock_guard lock{mutex};
+        remove_all_nodes_result.succeeded = true;
         return true;
     }
     catch (...)
     {
+        std::lock_guard lock{mutex};
+        remove_all_nodes_result.failed = true;
+
+        if (throw_if_error)
+            throw;
+
         LOG_TRACE(log, "Caught exception while removing nodes from ZooKeeper for this restore: {}",
                   getCurrentExceptionMessage(/* with_stacktrace= */ false, /* check_embedded_stacktrace= */ true));
-        failed_to_remove_all_nodes = true;
         return false;
     }
 }

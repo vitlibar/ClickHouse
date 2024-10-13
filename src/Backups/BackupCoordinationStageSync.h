@@ -32,10 +32,12 @@ public:
 
     /// Sets that the current host finished its work.
     /// The function sets its argument `all_hosts_finished` to true if all the other hosts finished their works too.
+    void finish();
     void finish(bool & all_hosts_finished);
 
     /// The same as finish(), but without throwing an exception if something goes wrong.
     /// tryFinish() is called from the destructor but sometimes it makes sense to call it before that.
+    bool tryFinish() noexcept;
     bool tryFinish(bool & all_hosts_finished) noexcept;
 
     /// Waits until other hosts finish their work.
@@ -88,15 +90,18 @@ private:
     bool checkIfHostsReachStage(const Strings & hosts, const String & stage_to_wait, std::optional<std::chrono::milliseconds> timeout, bool throw_if_not_ready, Strings & results) const TSA_REQUIRES(mutex);
 
     /// Creates the 'finish' node.
-    void tryFinish() noexcept;
+    bool tryFinishImpl(bool & all_hosts_finished, const WithRetries::Params & retries_params, bool throw_if_error);
     void createFinishNodeAndRemoveAliveNode();
     void createFinishNodeAndRemoveAliveNode(Coordination::ZooKeeperWithFaultInjection::Ptr zookeeper);
+
+    bool tryWaitForHostsToFinishImpl(const Strings & hosts, std::optional<std::chrono::seconds> timeout, bool throw_if_error) const;
 
     /// Used by waitForHostsToFinish() to check if everything is ready to return.
     bool checkIfHostsFinish(const Strings & hosts, bool throw_if_error) const TSA_REQUIRES(mutex);
 
     /// Returns a printable name of a specific host. For empty host the function returns "initiator".
     static String getHostDesc(const String & host);
+    static String getHostsDesc(const Strings & hosts);
 
     const bool is_restore;
     const String operation_name;
@@ -168,12 +173,20 @@ private:
     std::future<void> watching_thread_future;
     std::atomic<bool> should_stop_watching_thread = false;
 
-    bool finished TSA_GUARDED_BY(mutex) = false;
-    bool failed_to_finish TSA_GUARDED_BY(mutex) = false;
-    bool all_hosts_finished_value TSA_GUARDED_BY(mutex) = false;
+    struct FinishResult
+    {
+        bool succeeded = false;
+        bool failed = false;
+        bool all_hosts_finished = false;
+    };
+    FinishResult finish_result TSA_GUARDED_BY(mutex);
 
-    mutable bool waited_for_other_hosts_to_finish TSA_GUARDED_BY(mutex) = false;
-    mutable bool failed_to_wait_for_other_hosts_to_finish TSA_GUARDED_BY(mutex) = false;
+    struct WaitForOtherHostsToFinishResult
+    {
+        bool succeeded = false;
+        bool failed = false;
+    };
+    mutable WaitForOtherHostsToFinishResult wait_for_other_hosts_to_finish_result TSA_GUARDED_BY(mutex);
 
     mutable std::mutex mutex;
 };

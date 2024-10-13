@@ -69,9 +69,8 @@ private:
     bool tryCleanupImpl() noexcept;
     void removeAllNodes();
     bool tryRemoveAllNodes() noexcept;
+    bool tryRemoveAllNodesImpl(const WithRetries::Params & retries_params, bool throw_if_error);
 
-    /// get_zookeeper will provide a zookeeper client without any fault injection
-    const zkutil::GetZooKeeper get_zookeeper;
     const String root_zookeeper_path;
     const BackupKeeperSettings keeper_settings;
     const UUID restore_uuid;
@@ -85,8 +84,12 @@ private:
     scope_guard concurrency_check TSA_GUARDED_BY(mutex);
     BackupCoordinationStageSync stage_sync;
 
-    std::atomic<bool> all_nodes_removed = false;
-    std::atomic<bool> failed_to_remove_all_nodes = false;
+    struct RemoveAllNodesResult
+    {
+        bool succeeded = false;
+        bool failed = false;
+    };
+    RemoveAllNodesResult remove_all_nodes_result TSA_GUARDED_BY(mutex);
 
     std::mutex mutex;
 };

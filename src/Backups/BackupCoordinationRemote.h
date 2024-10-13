@@ -84,11 +84,11 @@ public:
 private:
     void createRootNodes();
 
-    bool tryFinishImpl() noexcept;
     bool tryFinishImpl(bool & all_hosts_finish) noexcept;
     bool tryCleanupImpl() noexcept;
     void removeAllNodes();
     bool tryRemoveAllNodes() noexcept;
+    bool tryRemoveAllNodesImpl(const WithRetries::Params & retries_params, bool throw_if_error);
 
     void serializeToMultipleZooKeeperNodes(const String & path, const String & value, const String & logging_name);
     String deserializeFromMultipleZooKeeperNodes(const String & path, const String & logging_name) const;
@@ -113,11 +113,15 @@ private:
     LoggerPtr const log;
 
     const WithRetries with_retries;
-    scope_guard concurrency_check TSA_GUARDED_BY(concurrency_check_mutex);
+    scope_guard concurrency_check TSA_GUARDED_BY(mutex);
     BackupCoordinationStageSync stage_sync;
 
-    std::atomic<bool> all_nodes_removed = false;
-    std::atomic<bool> failed_to_remove_all_nodes = false;
+    struct RemoveAllNodesResult
+    {
+        bool succeeded = false;
+        bool failed = false;
+    };
+    RemoveAllNodesResult remove_all_nodes_result TSA_GUARDED_BY(mutex);
 
     mutable std::optional<BackupCoordinationReplicatedTables> replicated_tables TSA_GUARDED_BY(replicated_tables_mutex);
     mutable std::optional<BackupCoordinationReplicatedAccess> replicated_access TSA_GUARDED_BY(replicated_access_mutex);
@@ -126,8 +130,7 @@ private:
     mutable std::optional<BackupCoordinationKeeperMapTables> keeper_map_tables TSA_GUARDED_BY(keeper_map_tables_mutex);
     std::unordered_set<size_t> writing_files TSA_GUARDED_BY(writing_files_mutex);
 
-    mutable std::mutex concurrency_check_mutex;
-    mutable std::mutex zookeeper_mutex;
+    mutable std::mutex mutex;
     mutable std::mutex replicated_tables_mutex;
     mutable std::mutex replicated_access_mutex;
     mutable std::mutex replicated_sql_objects_mutex;
