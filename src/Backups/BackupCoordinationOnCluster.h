@@ -1,6 +1,8 @@
 #pragma once
 
 #include <Backups/IBackupCoordination.h>
+#include <Backups/BackupConcurrencyCheck.h>
+#include <Backups/BackupCoordinationCleaner.h>
 #include <Backups/BackupCoordinationFileInfos.h>
 #include <Backups/BackupCoordinationReplicatedAccess.h>
 #include <Backups/BackupCoordinationReplicatedSQLObjects.h>
@@ -12,16 +14,15 @@
 
 namespace DB
 {
-class BackupLocalConcurrencyChecker;
 
 /// Implementation of the IBackupCoordination interface performing coordination via ZooKeeper. It's necessary for "BACKUP ON CLUSTER".
-class BackupCoordinationRemote : public IBackupCoordination
+class BackupCoordinationOnCluster : public IBackupCoordination
 {
 public:
     /// Empty string as the current host is used to mark the initiator of a BACKUP ON CLUSTER query.
     static const constexpr std::string_view kInitiator;
 
-    BackupCoordinationRemote(
+    BackupCoordinationOnCluster(
         const UUID & backup_uuid_,
         bool is_plain_backup_,
         const String & root_zookeeper_path_,
@@ -29,12 +30,12 @@ public:
         const BackupKeeperSettings & keeper_settings_,
         const String & current_host_,
         const Strings & all_hosts_,
-        BackupLocalConcurrencyChecker & concurrency_checker_,
         bool allow_concurrent_backup_,
+        BackupConcurrencyCounters & concurrency_counters_,
         ThreadPoolCallbackRunnerUnsafe<void> schedule_,
         QueryStatusPtr process_list_element_);
 
-    ~BackupCoordinationRemote() override;
+    ~BackupCoordinationOnCluster() override;
 
     void finish(bool & all_hosts_finished) override;
     bool tryFinish(bool & all_hosts_finished) noexcept override;
@@ -86,9 +87,6 @@ private:
 
     bool tryFinishImpl(bool & all_hosts_finish) noexcept;
     bool tryCleanupImpl() noexcept;
-    void removeAllNodes();
-    bool tryRemoveAllNodes() noexcept;
-    bool tryRemoveAllNodesImpl(const WithRetries::Params & retries_params, bool throw_if_error);
 
     void serializeToMultipleZooKeeperNodes(const String & path, const String & value, const String & logging_name);
     String deserializeFromMultipleZooKeeperNodes(const String & path, const String & logging_name) const;
@@ -113,15 +111,9 @@ private:
     LoggerPtr const log;
 
     const WithRetries with_retries;
-    scope_guard concurrency_check TSA_GUARDED_BY(mutex);
+    BackupConcurrencyCheck concurrency_check;
     BackupCoordinationStageSync stage_sync;
-
-    struct RemoveAllNodesResult
-    {
-        bool succeeded = false;
-        bool failed = false;
-    };
-    RemoveAllNodesResult remove_all_nodes_result TSA_GUARDED_BY(mutex);
+    BackupCoordinationCleaner cleaner;
 
     mutable std::optional<BackupCoordinationReplicatedTables> replicated_tables TSA_GUARDED_BY(replicated_tables_mutex);
     mutable std::optional<BackupCoordinationReplicatedAccess> replicated_access TSA_GUARDED_BY(replicated_access_mutex);

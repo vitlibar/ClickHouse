@@ -3,11 +3,12 @@ import random
 import re
 import time
 import uuid
+from datetime import datetime
 
 import pytest
 
 from helpers.cluster import ClickHouseCluster
-from helpers.test_tools import TSV
+from helpers.test_tools import TSV, assert_eq_with_retry
 
 cluster = ClickHouseCluster(__file__)
 CONFIG_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "configs")
@@ -62,7 +63,6 @@ def cleanup_after_test():
     try:
         yield
     finally:
-        use_separate_keepers_on_nodes(False)
         node1.query("DROP TABLE IF EXISTS tbl ON CLUSTER 'cluster' SYNC")
 
 
@@ -81,14 +81,17 @@ def random_node():
 
 # Makes table "tbl" and fill it with data.
 def create_and_fill_table(node, num_parts=10, on_cluster=True):
-    # We use partitioning so backups would contain more files.
+    # We use partitioning to make sure there will be more files in a backup.
+    partition_by_clause = " PARTITION BY x%" + str(num_parts) if num_parts > 1 else ""
     node.query(
         "CREATE TABLE tbl "
         + ("ON CLUSTER 'cluster' " if on_cluster else "")
         + "(x UInt64) ENGINE=ReplicatedMergeTree('/clickhouse/tables/tbl/', '{replica}') "
-        + "ORDER BY tuple() PARTITION BY x%" + str(num_parts)
+        + "ORDER BY tuple()"
+        + partition_by_clause
     )
-    node.query(f"INSERT INTO tbl SELECT number FROM numbers({num_parts})")
+    if num_parts > 0:
+        node.query(f"INSERT INTO tbl SELECT number FROM numbers({num_parts})")
 
 
 # Generates an ID suitable both as backup id or restore id.
@@ -120,44 +123,52 @@ def get_error(initiator, backup_id=None, restore_id=None):
 # Waits until the status of a backup or a restore becomes a desired one.
 # Returns how many seconds the function was waiting.
 def wait_status(
-    initiator, backup_id=None, restore_id=None, desired="BACKUP_CREATED", timeout=2
+    initiator,
+    status="BACKUP_CREATED",
+    backup_id=None,
+    restore_id=None,
+    timeout=None,
 ):
-    print(f"Waiting for status {desired}")
+    print(f"Waiting for status {status}")
     id = backup_id if backup_id is not None else restore_id
     operation_name = "backup" if backup_id is not None else "restore"
     current_status = get_status(initiator, backup_id=backup_id, restore_id=restore_id)
     waited = 0
-    while (current_status != desired) and (timeout > 0):
-        sleep_time = min(1, timeout)
+    while (current_status != status) and ((timeout is None) or (waited < timeout)):
+        sleep_time = 1 if (timeout is None) else min(1, timeout - waited)
         time.sleep(sleep_time)
-        timeout -= sleep_time
         waited += sleep_time
         current_status = get_status(
             initiator, backup_id=backup_id, restore_id=restore_id
         )
-    duration_str = initiator.query(
-        f"SELECT any(end_time - start_time) FROM system.backups WHERE id='{id}'"
-    ).rstrip("\n")
-    duration = int(duration_str) if duration_str else 0
-    print(
-        f"{get_node_name(initiator)} : Got status {current_status} for {operation_name} {id} after {waited} seconds (actual duration is {duration})"
+    start_time, end_time = (
+        initiator.query(
+            f"SELECT start_time, end_time FROM system.backups WHERE id='{id}'"
+        )
+        .splitlines()[0]
+        .split("\t")
     )
-    assert current_status == desired
-    return duration
+    print(
+        f"{get_node_name(initiator)} : Got status {current_status} for {operation_name} {id} after waiting {waited} seconds "
+        f"(start_time = {start_time}, end_time = {end_time})"
+    )
+    assert current_status == status
 
 
 # Returns how many entries are in system.processes corresponding to a specified backup or restore.
 def get_num_system_processes(
-    node=None, backup_id=None, restore_id=None, is_initial_query=None
+    node_or_nodes, backup_id=None, restore_id=None, is_initial_query=None
 ):
     id = backup_id if backup_id is not None else restore_id
     query_kind = "Backup" if backup_id is not None else "Restore"
     total = 0
-    nodes_to_consider = [node] if node is not None else nodes
     filter_for_is_initial_query = (
         f" AND (is_initial_query = {is_initial_query})"
         if is_initial_query is not None
         else ""
+    )
+    nodes_to_consider = (
+        node_or_nodes if (type(node_or_nodes) is list) else [node_or_nodes]
     )
     for node in nodes_to_consider:
         count = int(
@@ -172,50 +183,53 @@ def get_num_system_processes(
 # Waits until the number of entries in system.processes corresponding to a specified backup or restore becomes a desired one.
 # Returns how many seconds the function was waiting.
 def wait_num_system_processes(
-    node=None,
+    node_or_nodes,
+    num_system_processes=0,
     backup_id=None,
     restore_id=None,
     is_initial_query=None,
-    desired=0,
-    timeout=2,
+    timeout=None,
 ):
-    print(f"Waiting for number of system processes = {desired}")
+    print(f"Waiting for number of system processes = {num_system_processes}")
     id = backup_id if backup_id is not None else restore_id
     operation_name = "backup" if backup_id is not None else "restore"
     current_count = get_num_system_processes(
-        node=node,
+        node_or_nodes,
         backup_id=backup_id,
         restore_id=restore_id,
         is_initial_query=is_initial_query,
     )
 
-    def is_current_count_desired():
-        return (current_count == desired) or (desired == "1+" and current_count >= 1)
+    def is_current_count_ok():
+        return (current_count == num_system_processes) or (
+            num_system_processes == "1+" and current_count >= 1
+        )
 
     waited = 0
-    while not is_current_count_desired() and (timeout > 0):
-        sleep_time = min(1, timeout)
+    while not is_current_count_ok() and ((timeout is None) or (waited < timeout)):
+        sleep_time = 1 if (timeout is None) else min(1, timeout - waited)
         time.sleep(sleep_time)
-        timeout -= sleep_time
         waited += sleep_time
         current_count = get_num_system_processes(
-            node=node,
+            node_or_nodes,
             backup_id=backup_id,
             restore_id=restore_id,
             is_initial_query=is_initial_query,
         )
-    if is_current_count_desired():
+    if is_current_count_ok():
         print(
-            f"Got {current_count} system processes for {operation_name} {id} after {waited} seconds"
+            f"Got {current_count} system processes for {operation_name} {id} after waiting {waited} seconds"
         )
     else:
-        nodes_to_consider = [node] if node is not None else nodes
+        nodes_to_consider = (
+            node_or_nodes if (type(node_or_nodes) is list) else [node_or_nodes]
+        )
         for n in nodes_to_consider:
             count = get_num_system_processes(
                 node=n, backup_id=backup_id, restore_id=restore_id
             )
             print(
-                f"{get_node_name(n)}: Got {count} system processes for {operation_name} {id} after {waited} seconds"
+                f"{get_node_name(n)}: Got {count} system processes for {operation_name} {id} after waiting {waited} seconds"
             )
         assert False
     return waited
@@ -223,7 +237,7 @@ def wait_num_system_processes(
 
 # Kills a BACKUP or RESTORE query.
 # Returns how many seconds the KILL QUERY was executing.
-def kill_query(node, backup_id=None, restore_id=None, is_initial_query=None, timeout=2):
+def kill_query(node, backup_id=None, restore_id=None, is_initial_query=None, timeout=None):
     id = backup_id if backup_id is not None else restore_id
     query_kind = "Backup" if backup_id is not None else "Restore"
     operation_name = "backup" if backup_id is not None else "restore"
@@ -248,7 +262,8 @@ def kill_query(node, backup_id=None, restore_id=None, is_initial_query=None, tim
     print(
         f"{get_node_name(node)}: Cancelled {operation_name} {id} after {duration} seconds"
     )
-    return duration
+    if timeout is not None:
+        assert duration < timeout
 
 
 # Stops all ZooKeeper servers.
@@ -256,7 +271,9 @@ def stop_zookeeper_servers(zoo_nodes):
     print(f"Stopping ZooKeeper servers {zoo_nodes}")
     old_time = time.monotonic()
     cluster.stop_zookeeper_nodes(zoo_nodes)
-    print(f"Stopped ZooKeeper servers {zoo_nodes} in {time.monotonic() - old_time} seconds")
+    print(
+        f"Stopped ZooKeeper servers {zoo_nodes} in {time.monotonic() - old_time} seconds"
+    )
 
 
 # Starts all ZooKeeper servers back.
@@ -264,31 +281,31 @@ def start_zookeeper_servers(zoo_nodes):
     print(f"Starting ZooKeeper servers {zoo_nodes}")
     old_time = time.monotonic()
     cluster.start_zookeeper_nodes(zoo_nodes)
-    print(f"Started ZooKeeper servers {zoo_nodes} in {time.monotonic() - old_time} seconds")
+    print(
+        f"Started ZooKeeper servers {zoo_nodes} in {time.monotonic() - old_time} seconds"
+    )
 
-
-separate_keepers_on_nodes = False
 
 # Switch into using only "zoo1" on node1 and only "zoo2" on node2.
 def use_separate_keepers_on_nodes(turn_on):
-    global separate_keepers_on_nodes
-    if separate_keepers_on_nodes == turn_on:
-        return
     if turn_on:
         node1.copy_file_to_container(
             os.path.join(CONFIG_DIR, "zoo1_config.xml"),
-            "/etc/clickhouse-server/conf.d/zzz_zoo1_config.xml")
+            "/etc/clickhouse-server/conf.d/zzz_zoo1_config.xml",
+        )
         node2.copy_file_to_container(
             os.path.join(CONFIG_DIR, "zoo2_config.xml"),
-            "/etc/clickhouse-server/conf.d/zzz_zoo2_config.xml")
+            "/etc/clickhouse-server/conf.d/zzz_zoo2_config.xml",
+        )
     else:
         node1.remove_file_from_container(
-            "/etc/clickhouse-server/conf.d/zzz_zoo1_config.xml")
+            "/etc/clickhouse-server/conf.d/zzz_zoo1_config.xml"
+        )
         node2.remove_file_from_container(
-            "/etc/clickhouse-server/conf.d/zzz_zoo2_config.xml")
-    node1.query("SYSTEM RELOAD CONFIG")
-    node2.query("SYSTEM RELOAD CONFIG")
-    separate_keepers_on_nodes = turn_on
+            "/etc/clickhouse-server/conf.d/zzz_zoo2_config.xml"
+        )
+    assert_eq_with_retry(node1, "SYSTEM RELOAD CONFIG", "")
+    assert_eq_with_retry(node2, "SYSTEM RELOAD CONFIG", "")
 
 
 # Sleeps for random amount of time.
@@ -304,9 +321,8 @@ def sleep(seconds):
 # Checks that BACKUP and RESTORE cleaned up properly with no trash left in ZooKeeper, backups folder, and logs.
 class NoTrashChecker:
     def __init__(self):
-        time.sleep(
-            1
-        )  # Ensure this NoTrashChecker won't collect errors from a possible previous NoTrashChecker.
+        # Ensure this NoTrashChecker won't collect errors from a possible previous NoTrashChecker.
+        time.sleep(1)
         self.__start_time_for_collecting_errors = time.gmtime()
         self.__previous_list_of_backups = set(
             os.listdir(os.path.join(node1.cluster.instances_dir, "backups"))
@@ -362,25 +378,13 @@ class NoTrashChecker:
             assert False
 
 
-# Minimum duration for backup and restore operations in this test.
-# We test cancelling here so we don't want those too operations to be too fast (otherwise they'll be finished before we cancel them).
-min_backup_time = 5
-min_restore_time = 5
-
-# Maximum duration for backup and restore operations in this test.
-max_backup_time = 120
-max_restore_time = 120
-
-
 # Actual tests
 
 
 # Test that a BACKUP operation can be cancelled with KILL QUERY.
 def test_cancel_backup():
-    # Cancel while making a backup.
     no_trash_checker = NoTrashChecker()
-
-    create_and_fill_table(random_node(), on_cluster=True)
+    create_and_fill_table(random_node())
 
     initiator = random_node()
     print(f"Using {get_node_name(initiator)} as initiator")
@@ -393,30 +397,32 @@ def test_cancel_backup():
     assert get_status(initiator, backup_id=backup_id) == "CREATING_BACKUP"
     assert get_num_system_processes(initiator, backup_id=backup_id) >= 1
 
-    # Some delay before we cancel making a backup.
-    random_sleep(min_backup_time)
+    # We shouldn't wait too long here, because otherwise the backup might be completed before we cancel it.
+    random_sleep(5)
 
     node_to_cancel, cancel_as_initiator = random.choice(
         [(node1, False), (node2, False), (initiator, True)]
     )
+
+    wait_num_system_processes(
+        node_to_cancel, "1+", backup_id=backup_id, is_initial_query=cancel_as_initiator
+    )
+
     print(
         f"Cancelling on {'initiator' if cancel_as_initiator else 'node'} {get_node_name(node_to_cancel)}"
     )
 
-    wait_num_system_processes(
-        node_to_cancel,
-        backup_id=backup_id,
-        is_initial_query=cancel_as_initiator,
-        desired="1+",
-    )
+    # The timeout is 2 seconds here because a backup must be cancelled quickly.
     kill_query(
-        node_to_cancel, backup_id=backup_id, is_initial_query=cancel_as_initiator
+        node_to_cancel, backup_id=backup_id, is_initial_query=cancel_as_initiator, timeout=3
     )
 
-    wait_status(initiator, backup_id=backup_id, desired="BACKUP_CANCELLED")
+    if cancel_as_initiator:
+        assert get_status(initiator, backup_id=backup_id) == "BACKUP_CANCELLED"
+    wait_status(initiator, "BACKUP_CANCELLED", backup_id=backup_id, timeout=3)
 
     assert "QUERY_WAS_CANCELLED" in get_error(initiator, backup_id=backup_id)
-    assert get_num_system_processes(backup_id=backup_id) == 0
+    assert get_num_system_processes(nodes, backup_id=backup_id) == 0
     no_trash_checker.check(expected_errors=["QUERY_WAS_CANCELLED"])
 
 
@@ -425,24 +431,18 @@ def test_cancel_restore():
     # Make backup.
     print("Will make backup successfully")
     no_trash_checker = NoTrashChecker()
-    create_and_fill_table(random_node(), on_cluster=True)
+    create_and_fill_table(random_node())
     backup_id = random_id()
     initiator = random_node()
+    print(f"Using {get_node_name(initiator)} as initiator")
     initiator.query(
         f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC"
     )
-    assert (
-        wait_status(
-            initiator,
-            backup_id=backup_id,
-            desired="BACKUP_CREATED",
-            timeout=max_backup_time,
-        )
-        > min_backup_time
-    )  # Backup shouldn't be too quick for this test.
-    assert get_num_system_processes(backup_id=backup_id) == 0
+    wait_status(initiator, "BACKUP_CREATED", backup_id=backup_id)
+    assert get_num_system_processes(nodes, backup_id=backup_id) == 0
     no_trash_checker.check(expected_backups=[backup_id])
 
+    # Dropping the table before restoring.
     node1.query("DROP TABLE tbl ON CLUSTER 'cluster' SYNC")
 
     # Some delay before we cancel restoring.
@@ -460,30 +460,35 @@ def test_cancel_restore():
     assert get_status(initiator, restore_id=restore_id) == "RESTORING"
     assert get_num_system_processes(initiator, restore_id=restore_id) >= 1
 
-    # We shouldn't wait too long, otherwise the restore might be completed before we cancel it.
-    random_sleep(min_restore_time)
+    # We shouldn't wait too long here, because otherwise the restore might be completed before we cancel it.
+    random_sleep(5)
 
     node_to_cancel, cancel_as_initiator = random.choice(
         [(node1, False), (node2, False), (initiator, True)]
     )
+
+    wait_num_system_processes(
+        node_to_cancel,
+        "1+",
+        restore_id=restore_id,
+        is_initial_query=cancel_as_initiator,
+    )
+
     print(
         f"Cancelling on {'initiator' if cancel_as_initiator else 'node'} {get_node_name(node_to_cancel)}"
     )
 
-    wait_num_system_processes(
-        node_to_cancel,
-        restore_id=restore_id,
-        is_initial_query=cancel_as_initiator,
-        desired="1+",
-    )
+    # The timeout is 2 seconds here because a restore must be cancelled quickly.
     kill_query(
-        node_to_cancel, restore_id=restore_id, is_initial_query=cancel_as_initiator
+        node_to_cancel, restore_id=restore_id, is_initial_query=cancel_as_initiator, timeout=3
     )
 
-    wait_status(initiator, restore_id=restore_id, desired="RESTORE_CANCELLED")
+    if cancel_as_initiator:
+        assert get_status(initiator, restore_id=restore_id) == "RESTORE_CANCELLED"
+    wait_status(initiator, "RESTORE_CANCELLED", restore_id=restore_id, timeout=3)
 
     assert "QUERY_WAS_CANCELLED" in get_error(initiator, restore_id=restore_id)
-    assert get_num_system_processes(restore_id=restore_id) == 0
+    assert get_num_system_processes(nodes, restore_id=restore_id) == 0
     no_trash_checker.check(expected_errors=["QUERY_WAS_CANCELLED"])
 
     # Restore successfully.
@@ -491,27 +496,21 @@ def test_cancel_restore():
     no_trash_checker = NoTrashChecker()
     restore_id = random_id()
     initiator = random_node()
+    print(f"Using {get_node_name(initiator)} as initiator")
+
     initiator.query(
         f"RESTORE TABLE tbl ON CLUSTER 'cluster' FROM {get_backup_name(backup_id)} SETTINGS id='{restore_id}' ASYNC"
     )
-    assert (
-        wait_status(
-            initiator,
-            restore_id=restore_id,
-            desired="RESTORED",
-            timeout=max_restore_time,
-        )
-        > min_restore_time
-    )  # Restore shouldn't be too quick for this test.
-    assert get_num_system_processes(restore_id=restore_id) == 0
+
+    wait_status(initiator, "RESTORED", restore_id=restore_id)
+    assert get_num_system_processes(nodes, restore_id=restore_id) == 0
     no_trash_checker.check()
 
 
 # Test that shutdown cancels a running backup and doesn't wait until it finishes.
 def test_shutdown_cancels_backup():
     no_trash_checker = NoTrashChecker()
-
-    create_and_fill_table(random_node(), on_cluster=True)
+    create_and_fill_table(random_node())
 
     initiator = random_node()
     print(f"Using {get_node_name(initiator)} as initiator")
@@ -524,17 +523,21 @@ def test_shutdown_cancels_backup():
     assert get_status(initiator, backup_id=backup_id) == "CREATING_BACKUP"
     assert get_num_system_processes(initiator, backup_id=backup_id) >= 1
 
-    # Some delay before we shutdown a host which will cancel making a backup.
-    random_sleep(min_backup_time)
+    # We shouldn't wait too long here, because otherwise the backup might be completed before we cancel it.
+    random_sleep(5)
 
     node_to_restart = random.choice([node1, node2])
-    wait_num_system_processes(node_to_restart, backup_id=backup_id, desired="1+")
+    wait_num_system_processes(node_to_restart, "1+", backup_id=backup_id)
 
     print(f"{get_node_name(node_to_restart)}: Restarting...")
     node_to_restart.restart_clickhouse()  # Must cancel the backup.
     print(f"{get_node_name(node_to_restart)}: Restarted")
 
-    wait_num_system_processes(backup_id=backup_id, desired=0)
+    wait_num_system_processes(nodes, 0, backup_id=backup_id)
+
+    if initiator != node_to_restart:
+        assert get_status(initiator, backup_id=backup_id) == "BACKUP_CANCELLED"
+        assert "QUERY_WAS_CANCELLED" in get_error(initiator, backup_id=backup_id)
 
     # The information about this cancelled backup must be stored in system.backup_log
     initiator.query("SYSTEM FLUSH LOGS")
@@ -562,60 +565,108 @@ def test_error_leaves_no_trash():
         f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC"
     )
 
-    wait_status(
-        initiator, backup_id=backup_id, desired="BACKUP_FAILED", timeout=max_backup_time
-    )
+    wait_status(initiator, "BACKUP_FAILED", backup_id=backup_id)
     assert "UNKNOWN_TABLE" in get_error(initiator, backup_id=backup_id)
 
-    assert get_num_system_processes(backup_id=backup_id) == 0
+    assert get_num_system_processes(nodes, backup_id=backup_id) == 0
     no_trash_checker.check(expected_errors=["UNKNOWN_TABLE"])
 
 
-# Long disconnection in the middle of a BACKUP or RESTORE operation shouldn't cause the whole operation's failure.
-def test_long_disconnection_doesnt_stop_backup():
-    no_trash_checker = NoTrashChecker()
-
-    create_and_fill_table(random_node())
+# A backup must be stopped if Zookeeper is disconnected longer than `failure_after_host_disconnected_for_seconds`.
+def test_long_disconnection_stops_backup():
+    use_separate_keepers_on_nodes(True)
+    create_and_fill_table(random_node(), num_parts=100)
 
     initiator = random_node()
     print(f"Using {get_node_name(initiator)} as initiator")
 
+    failure_after_host_disconnected_for_seconds = random.randint(1, 25)
+    print(
+        f"Settings: failure_after_host_disconnected_for_seconds = {failure_after_host_disconnected_for_seconds}"
+    )
+
     backup_id = random_id()
     initiator.query(
-        f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC"
+        f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC",
+        settings={
+            "backup_restore_failure_after_host_disconnected_for_seconds": failure_after_host_disconnected_for_seconds
+        },
     )
 
     assert get_status(initiator, backup_id=backup_id) == "CREATING_BACKUP"
-    assert get_num_system_processes(backup_id=backup_id) >= 1
-    wait_num_system_processes(backup_id=backup_id, desired=3)
+    assert get_num_system_processes(initiator, backup_id=backup_id) >= 1
 
-    # Some delay before we stop some ZooKeepers.
-    random_sleep(min_backup_time)
+    zoo_nodes_to_stop = random.choice([["zoo1"], ["zoo2"], ["zoo1", "zoo2"]])
+    time_before_disconnection = time.monotonic()
+    stop_zookeeper_servers(zoo_nodes_to_stop)
 
-    stop_all_zookeepers, node_to_disconnect = random.choice(
-        [(True, None), (False, node1), (False, node2)]
+    # Being disconnected from ZooKeeper a backup is expected to fail.
+    wait_num_system_processes(nodes, 0, backup_id=backup_id)
+
+    time_to_fail = time.monotonic() - time_before_disconnection
+    assert get_status(initiator, backup_id=backup_id) == "BACKUP_FAILED"
+    expected_error = "Lost connection .* timeout"
+    assert re.search(expected_error, get_error(initiator, backup_id=backup_id))
+
+    # A backup is expected to fail, but it isn't expected to fail too soon.
+    assert time_to_fail > failure_after_host_disconnected_for_seconds
+    assert time_to_fail < failure_after_host_disconnected_for_seconds + 30
+
+    # Take care about other tests.
+    start_zookeeper_servers(zoo_nodes_to_stop)
+    use_separate_keepers_on_nodes(False)
+
+
+# A backup must NOT be stopped if Zookeeper is disconnected shorter than `failure_after_host_disconnected_for_seconds`.
+def test_not_so_long_disconnection_doesnt_stop_backup():
+    use_separate_keepers_on_nodes(True)
+    create_and_fill_table(random_node())
+
+    no_trash_checker = NoTrashChecker()
+
+    initiator = random_node()
+    print(f"Using {get_node_name(initiator)} as initiator")
+
+    # Minimum for `failure_after_host_disconnected_for_seconds` must be greater than the time required to stop and start zookeeper node.
+    failure_after_host_disconnected_for_seconds = random.randint(18, 30)
+    print(
+        f"Settings: failure_after_host_disconnected_for_seconds = {failure_after_host_disconnected_for_seconds}"
     )
 
-    if stop_all_zookeepers:
-        stop_zookeeper_servers()
-    else:
-        disable_zookeeper_on_host(node_to_disconnect)
-
-    random_sleep(5)
-
-    if stop_all_zookeepers:
-        start_zookeeper_servers()
-    else:
-        enable_zookeeper_on_host(node_to_disconnect)
-
-    wait_status(
-        initiator,
-        backup_id=backup_id,
-        desired="BACKUP_CREATED",
-        timeout=max_backup_time,
+    backup_id = random_id()
+    initiator.query(
+        f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC",
+        settings={
+            "backup_restore_failure_after_host_disconnected_for_seconds": failure_after_host_disconnected_for_seconds
+        },
     )
 
-    assert get_num_system_processes(backup_id=backup_id) == 0
+    assert get_status(initiator, backup_id=backup_id) == "CREATING_BACKUP"
+    assert get_num_system_processes(initiator, backup_id=backup_id) >= 1
+
+    # Stop some zookeeper nodes.
+    zoo_nodes_to_stop = random.choice([["zoo1"], ["zoo2"], ["zoo1", "zoo2"]])
+    time_before_disconnection = time.monotonic()
+    stop_zookeeper_servers(zoo_nodes_to_stop)
+
+    time_to_stop_zookeeper = time.monotonic() - time_before_disconnection
+    # `failure_after_host_disconnected_for_seconds` must be big enough for this test
+    assert failure_after_host_disconnected_for_seconds > time_to_stop_zookeeper
+    time_to_start_zookeeper = 1
+    max_sleep_time = max(
+        failure_after_host_disconnected_for_seconds
+        - time_to_stop_zookeeper
+        - time_to_start_zookeeper,
+        0,
+    )
+    sleep_time = random.uniform(0, max_sleep_time)
+    time.sleep(sleep_time)
+
+    # Start the stopped zookeeper nodes again, the backup must not fail.
+    start_zookeeper_servers(zoo_nodes_to_stop)
+
+    wait_status(initiator, "BACKUP_CREATED", backup_id=backup_id)
+    assert get_num_system_processes(nodes, backup_id=backup_id) == 0
 
     no_trash_checker.check(
         expected_backups=[backup_id],
@@ -628,39 +679,5 @@ def test_long_disconnection_doesnt_stop_backup():
         ],
     )
 
-
-def test_very_long_disconnection_stops_backup():
-    use_separate_keepers_on_nodes(True)
-    create_and_fill_table(random_node(), 100)
-
-    initiator = node1 #random_node()
-    print(f"Using {get_node_name(initiator)} as initiator")
-
-    backup_id = random_id()
-    initiator.query(
-        f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC"
-    )
-
-    assert get_status(initiator, backup_id=backup_id) == "CREATING_BACKUP"
-    assert get_num_system_processes(backup_id=backup_id) >= 1
-
-    # Stop some zookeeper nodes.
-    wait_num_system_processes(backup_id=backup_id, desired=3)
-
-    zoo_nodes_to_stop = ['zoo2']
-    #zoo_nodes_to_stop = random.choice([['zoo1'], ['zoo2'], ['zoo1', 'zoo2']])
-
-    stop_zookeeper_servers(zoo_nodes_to_stop)
-
-    assert get_status(initiator, backup_id=backup_id) == "CREATING_BACKUP"
-
-    # A long sleep longer than "backup_restore_failure_after_host_disconnected_for_seconds" should stop an operation.
-    sleep(12)
-
-    assert wait_num_system_processes(backup_id=backup_id, desired=0, timeout=10) < 3
-    assert get_status(initiator, backup_id=backup_id) == "BACKUP_FAILED"
-    expected_error = "Lost connection:.* disconnected .* timeout"
-    assert re.search(expected_error, get_error(initiator, backup_id=backup_id))
-
-    start_zookeeper_servers(zoo_nodes_to_stop)
-    #assert False
+    # Take care about other tests.
+    use_separate_keepers_on_nodes(False)

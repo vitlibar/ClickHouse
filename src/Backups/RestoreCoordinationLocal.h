@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Backups/IRestoreCoordination.h>
+#include <Backups/BackupConcurrencyCheck.h>
 #include <Parsers/CreateQueryUUIDs.h>
 #include <Common/Logger.h>
 #include <mutex>
@@ -11,13 +12,12 @@
 namespace DB
 {
 class ASTCreateQuery;
-class BackupLocalConcurrencyChecker;
 
 /// Implementation of the IRestoreCoordination interface performing coordination in memory.
 class RestoreCoordinationLocal : public IRestoreCoordination
 {
 public:
-    RestoreCoordinationLocal(BackupLocalConcurrencyChecker & concurrency_checker_, bool allow_concurrent_restore_);
+    RestoreCoordinationLocal(const UUID & restore_uuid_, bool allow_concurrent_restore_, BackupConcurrencyCounters & concurrency_counters_);
     ~RestoreCoordinationLocal() override;
 
     /// Cleans up all external data (e.g. nodes in ZooKeeper) this coordination is using.
@@ -55,8 +55,8 @@ public:
 
 private:
     LoggerPtr const log;
+    BackupConcurrencyCheck concurrency_check;
 
-    scope_guard concurrency_check TSA_GUARDED_BY(mutex);
     std::set<std::pair<String /* database_zk_path */, String /* table_name */>> acquired_tables_in_replicated_databases TSA_GUARDED_BY(mutex);
     std::unordered_set<String /* table_zk_path */> acquired_data_in_replicated_tables TSA_GUARDED_BY(mutex);
     std::unordered_map<String, CreateQueryUUIDs> create_query_uuids TSA_GUARDED_BY(mutex);

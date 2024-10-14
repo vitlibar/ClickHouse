@@ -1,7 +1,6 @@
 #pragma once
 
 #include <Backups/BackupOperationInfo.h>
-#include <Backups/BackupLocalConcurrencyChecker.h>
 #include <Common/ThreadPool_fwd.h>
 #include <Interpreters/Context_fwd.h>
 #include <Core/UUID.h>
@@ -24,7 +23,7 @@ using BackupMutablePtr = std::shared_ptr<IBackup>;
 using BackupPtr = std::shared_ptr<const IBackup>;
 class IBackupEntry;
 using BackupEntries = std::vector<std::pair<String, std::shared_ptr<const IBackupEntry>>>;
-class BackupLocalConcurrencyChecker;
+class BackupConcurrencyCounters;
 using DataRestoreTasks = std::vector<std::function<void()>>;
 struct ReadSettings;
 class BackupLog;
@@ -107,8 +106,8 @@ private:
         const ClusterPtr & cluster,
         ContextMutablePtr context);
 
-    std::shared_ptr<IBackupCoordination> makeBackupCoordination(bool remote, const BackupSettings & backup_settings, const ContextPtr & context) const;
-    std::shared_ptr<IRestoreCoordination> makeRestoreCoordination(bool remote, const RestoreSettings & restore_settings, const ContextPtr & context) const;
+    std::shared_ptr<IBackupCoordination> makeBackupCoordination(bool on_cluster_coordination, const BackupSettings & backup_settings, const ContextPtr & context) const;
+    std::shared_ptr<IRestoreCoordination> makeRestoreCoordination(bool on_cluster_coordination, const RestoreSettings & restore_settings, const ContextPtr & context) const;
 
     /// Run data restoring tasks which insert data to tables.
     void restoreTablesData(const BackupOperationID & restore_id, BackupPtr backup, DataRestoreTasks && tasks, ThreadPool & thread_pool, QueryStatusPtr process_list_element);
@@ -153,7 +152,7 @@ private:
     std::shared_ptr<BackupLog> backup_log;
     ProcessList & process_list;
 
-    std::unique_ptr<BackupLocalConcurrencyChecker> concurrency_checker;
+    std::unique_ptr<BackupConcurrencyCounters> concurrency_counters;
 };
 
 }

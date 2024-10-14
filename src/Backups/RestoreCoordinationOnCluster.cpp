@@ -1,9 +1,8 @@
-#include <Backups/BackupCoordinationRemote.h>
+#include <Backups/BackupCoordinationOnCluster.h>
 
 #include <Backups/BackupCoordinationStage.h>
 #include <Backups/BackupCoordinationStageSync.h>
-#include <Backups/BackupLocalConcurrencyChecker.h>
-#include <Backups/RestoreCoordinationRemote.h>
+#include <Backups/RestoreCoordinationOnCluster.h>
 #include <Parsers/ASTCreateQuery.h>
 #include <Parsers/CreateQueryUUIDs.h>
 #include <Parsers/formatAST.h>
@@ -15,15 +14,15 @@
 namespace DB
 {
 
-RestoreCoordinationRemote::RestoreCoordinationRemote(
+RestoreCoordinationOnCluster::RestoreCoordinationOnCluster(
     const UUID & restore_uuid_,
     const String & root_zookeeper_path_,
     zkutil::GetZooKeeper get_zookeeper_,
     const BackupKeeperSettings & keeper_settings_,
     const String & current_host_,
     const Strings & all_hosts_,
-    BackupLocalConcurrencyChecker & concurrency_checker_,
     bool allow_concurrent_restore_,
+    BackupConcurrencyCounters & concurrency_counters_,
     ThreadPoolCallbackRunnerUnsafe<void> schedule_,
     QueryStatusPtr process_list_element_)
     : root_zookeeper_path(root_zookeeper_path_)
@@ -32,23 +31,24 @@ RestoreCoordinationRemote::RestoreCoordinationRemote(
     , zookeeper_path(root_zookeeper_path_ + "/restore-" + toString(restore_uuid_))
     , all_hosts(all_hosts_)
     , current_host(current_host_)
-    , current_host_index(BackupCoordinationRemote::findCurrentHostIndex(current_host, all_hosts))
-    , log(getLogger("RestoreCoordinationRemote"))
+    , current_host_index(BackupCoordinationOnCluster::findCurrentHostIndex(current_host, all_hosts))
+    , log(getLogger("RestoreCoordinationOnCluster"))
     , with_retries(log, get_zookeeper_, keeper_settings, process_list_element_, [root_zookeeper_path_](Coordination::ZooKeeperWithFaultInjection::Ptr zk) { zk->sync(root_zookeeper_path_); })
-    , concurrency_check(concurrency_checker_.checkRemote(/* is_restore = */ true, restore_uuid_, allow_concurrent_restore_))
+    , concurrency_check(/* is_restore = */ true, restore_uuid_, /* on_cluster = */ true, allow_concurrent_restore_, concurrency_counters_)
     , stage_sync(/* is_restore = */ true, fs::path{zookeeper_path} / "stage", current_host, allow_concurrent_restore_, with_retries, schedule_, process_list_element_, log)
+    , cleaner(zookeeper_path, with_retries, log)
 {
     chassert(std::find(all_hosts.begin(), all_hosts.end(), kInitiator) == all_hosts.end());
     createRootNodes();
 }
 
-RestoreCoordinationRemote::~RestoreCoordinationRemote()
+RestoreCoordinationOnCluster::~RestoreCoordinationOnCluster()
 {
     /// tryCleanupImpl() must not throw any exceptions.
     tryCleanupImpl();
 }
 
-void RestoreCoordinationRemote::createRootNodes()
+void RestoreCoordinationOnCluster::createRootNodes()
 {
     auto holder = with_retries.createRetriesControlHolder("createRootNodes", {.initialization = true});
     holder.retries_ctl.retryLoop(
@@ -67,27 +67,27 @@ void RestoreCoordinationRemote::createRootNodes()
         });
 }
 
-void RestoreCoordinationRemote::setStage(const String & new_stage, const String & message)
+void RestoreCoordinationOnCluster::setStage(const String & new_stage, const String & message)
 {
     stage_sync.setStage(new_stage, message);
 }
 
-void RestoreCoordinationRemote::setError(const Exception & exception)
+void RestoreCoordinationOnCluster::setError(const Exception & exception)
 {
     stage_sync.setError(exception);
 }
 
-Strings RestoreCoordinationRemote::waitForStage(const String & stage_to_wait, std::optional<std::chrono::milliseconds> timeout)
+Strings RestoreCoordinationOnCluster::waitForStage(const String & stage_to_wait, std::optional<std::chrono::milliseconds> timeout)
 {
     return stage_sync.waitForHostsToReachStage(stage_to_wait, all_hosts, timeout);
 }
 
-std::chrono::seconds RestoreCoordinationRemote::getOnClusterInitializationTimeout() const
+std::chrono::seconds RestoreCoordinationOnCluster::getOnClusterInitializationTimeout() const
 {
     return keeper_settings.on_cluster_initialization_timeout;
 }
 
-bool RestoreCoordinationRemote::acquireCreatingTableInReplicatedDatabase(const String & database_zk_path, const String & table_name)
+bool RestoreCoordinationOnCluster::acquireCreatingTableInReplicatedDatabase(const String & database_zk_path, const String & table_name)
 {
     bool result = false;
     auto holder = with_retries.createRetriesControlHolder("acquireCreatingTableInReplicatedDatabase");
@@ -116,7 +116,7 @@ bool RestoreCoordinationRemote::acquireCreatingTableInReplicatedDatabase(const S
     return result;
 }
 
-bool RestoreCoordinationRemote::acquireInsertingDataIntoReplicatedTable(const String & table_zk_path)
+bool RestoreCoordinationOnCluster::acquireInsertingDataIntoReplicatedTable(const String & table_zk_path)
 {
     bool result = false;
     auto holder = with_retries.createRetriesControlHolder("acquireInsertingDataIntoReplicatedTable");
@@ -142,7 +142,7 @@ bool RestoreCoordinationRemote::acquireInsertingDataIntoReplicatedTable(const St
     return result;
 }
 
-bool RestoreCoordinationRemote::acquireReplicatedAccessStorage(const String & access_storage_zk_path)
+bool RestoreCoordinationOnCluster::acquireReplicatedAccessStorage(const String & access_storage_zk_path)
 {
     bool result = false;
     auto holder = with_retries.createRetriesControlHolder("acquireReplicatedAccessStorage");
@@ -168,7 +168,7 @@ bool RestoreCoordinationRemote::acquireReplicatedAccessStorage(const String & ac
     return result;
 }
 
-bool RestoreCoordinationRemote::acquireReplicatedSQLObjects(const String & loader_zk_path, UserDefinedSQLObjectType object_type)
+bool RestoreCoordinationOnCluster::acquireReplicatedSQLObjects(const String & loader_zk_path, UserDefinedSQLObjectType object_type)
 {
     bool result = false;
     auto holder = with_retries.createRetriesControlHolder("acquireReplicatedSQLObjects");
@@ -204,7 +204,7 @@ bool RestoreCoordinationRemote::acquireReplicatedSQLObjects(const String & loade
     return result;
 }
 
-bool RestoreCoordinationRemote::acquireInsertingDataForKeeperMap(const String & root_zk_path, const String & table_unique_id)
+bool RestoreCoordinationOnCluster::acquireInsertingDataForKeeperMap(const String & root_zk_path, const String & table_unique_id)
 {
     bool lock_acquired = false;
     auto holder = with_retries.createRetriesControlHolder("acquireInsertingDataForKeeperMap");
@@ -233,7 +233,7 @@ bool RestoreCoordinationRemote::acquireInsertingDataForKeeperMap(const String & 
     return lock_acquired;
 }
 
-void RestoreCoordinationRemote::generateUUIDForTable(ASTCreateQuery & create_query)
+void RestoreCoordinationOnCluster::generateUUIDForTable(ASTCreateQuery & create_query)
 {
     String query_str = serializeAST(create_query);
     CreateQueryUUIDs new_uuids{create_query, /* generate_random= */ true, /* force_random= */ true};
@@ -264,7 +264,7 @@ void RestoreCoordinationRemote::generateUUIDForTable(ASTCreateQuery & create_que
         });
 }
 
-void RestoreCoordinationRemote::cleanup()
+void RestoreCoordinationOnCluster::cleanup()
 {
     if (current_host == kInitiator)
         stage_sync.waitForHostsToFinish(all_hosts);
@@ -273,18 +273,15 @@ void RestoreCoordinationRemote::cleanup()
     stage_sync.finish(all_hosts_finished);
 
     if (all_hosts_finished)
-        removeAllNodes();
-
-    std::lock_guard lock{mutex};
-    concurrency_check.reset();
+        cleaner.cleanup();
 }
 
-bool RestoreCoordinationRemote::tryCleanup() noexcept
+bool RestoreCoordinationOnCluster::tryCleanup() noexcept
 {
     return tryCleanupImpl();
 }
 
-bool RestoreCoordinationRemote::tryCleanupImpl() noexcept
+bool RestoreCoordinationOnCluster::tryCleanupImpl() noexcept
 {
     if (current_host == kInitiator)
         stage_sync.tryWaitForHostsToFinish(all_hosts);
@@ -292,59 +289,9 @@ bool RestoreCoordinationRemote::tryCleanupImpl() noexcept
     bool all_hosts_finished;
     bool ok = stage_sync.tryFinish(all_hosts_finished);
     if (ok && all_hosts_finished)
-        ok = tryRemoveAllNodes();
+        ok = cleaner.tryCleanup();
 
-    std::lock_guard lock{mutex};
-    concurrency_check.reset();
     return ok;
-}
-
-void RestoreCoordinationRemote::removeAllNodes()
-{
-    tryRemoveAllNodesImpl(/* retries_params = */ {}, /* throw_if_error = */ true);
-}
-
-bool RestoreCoordinationRemote::tryRemoveAllNodes() noexcept
-{
-    return tryRemoveAllNodesImpl(/* retries_params = */ {.error_handling = true}, /* throw_if_error = */ false);
-}
-
-bool RestoreCoordinationRemote::tryRemoveAllNodesImpl(const WithRetries::Params & retries_params, bool throw_if_error)
-{
-    {
-        std::lock_guard lock{mutex};
-        if (remove_all_nodes_result.succeeded)
-            return true;
-        if (remove_all_nodes_result.failed)
-            return false;
-    }
-
-    try
-    {
-        LOG_TRACE(log, "Removing nodes from ZooKeeper");
-        auto holder = with_retries.createRetriesControlHolder("removeAllNodes", retries_params);
-        holder.retries_ctl.retryLoop([&, &zookeeper = holder.faulty_zookeeper]()
-        {
-            with_retries.renewZooKeeper(zookeeper);
-            zookeeper->removeRecursive(zookeeper_path);
-        });
-
-        std::lock_guard lock{mutex};
-        remove_all_nodes_result.succeeded = true;
-        return true;
-    }
-    catch (...)
-    {
-        std::lock_guard lock{mutex};
-        remove_all_nodes_result.failed = true;
-
-        if (throw_if_error)
-            throw;
-
-        LOG_TRACE(log, "Caught exception while removing nodes from ZooKeeper for this restore: {}",
-                  getCurrentExceptionMessage(/* with_stacktrace= */ false, /* check_embedded_stacktrace= */ true));
-        return false;
-    }
 }
 
 }

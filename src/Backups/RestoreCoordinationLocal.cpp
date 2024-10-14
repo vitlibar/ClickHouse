@@ -1,6 +1,5 @@
 #include <Backups/RestoreCoordinationLocal.h>
 
-#include <Backups/BackupLocalConcurrencyChecker.h>
 #include <Parsers/ASTCreateQuery.h>
 #include <Parsers/formatAST.h>
 #include <Common/logger_useful.h>
@@ -9,9 +8,10 @@
 namespace DB
 {
 
-RestoreCoordinationLocal::RestoreCoordinationLocal(BackupLocalConcurrencyChecker & concurrency_checker_, bool allow_concurrent_restore_)
+RestoreCoordinationLocal::RestoreCoordinationLocal(
+    const UUID & restore_uuid, bool allow_concurrent_restore_, BackupConcurrencyCounters & concurrency_counters_)
     : log(getLogger("RestoreCoordinationLocal"))
-    , concurrency_check(concurrency_checker_.checkLocal(/* is_restore = */ true, allow_concurrent_restore_))
+    , concurrency_check(/* is_restore = */ true, restore_uuid, /* on_cluster = */ false, allow_concurrent_restore_, concurrency_counters_)
 {
 }
 
@@ -19,13 +19,10 @@ RestoreCoordinationLocal::~RestoreCoordinationLocal() = default;
 
 void RestoreCoordinationLocal::cleanup()
 {
-    std::lock_guard lock{mutex};
-    concurrency_check.reset();
 }
 
 bool RestoreCoordinationLocal::tryCleanup() noexcept
 {
-    cleanup();
     return true;
 }
 

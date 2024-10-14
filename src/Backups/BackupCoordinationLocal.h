@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Backups/IBackupCoordination.h>
+#include <Backups/BackupConcurrencyCheck.h>
 #include <Backups/BackupCoordinationFileInfos.h>
 #include <Backups/BackupCoordinationReplicatedAccess.h>
 #include <Backups/BackupCoordinationReplicatedSQLObjects.h>
@@ -17,13 +18,17 @@ namespace Poco { class Logger; }
 
 namespace DB
 {
-class BackupLocalConcurrencyChecker;
 
 /// Implementation of the IBackupCoordination interface performing coordination in memory.
 class BackupCoordinationLocal : public IBackupCoordination
 {
 public:
-    explicit BackupCoordinationLocal(bool is_plain_backup_, BackupLocalConcurrencyChecker & concurrency_checker_, bool allow_concurrent_backup_);
+    explicit BackupCoordinationLocal(
+        const UUID & backup_uuid_,
+        bool is_plain_backup_,
+        bool allow_concurrent_backup_,
+        BackupConcurrencyCounters & concurrency_counters_);
+
     ~BackupCoordinationLocal() override;
 
     void finish(bool & all_hosts_finished) override;
@@ -63,8 +68,8 @@ public:
 
 private:
     LoggerPtr const log;
+    BackupConcurrencyCheck concurrency_check;
 
-    scope_guard concurrency_check TSA_GUARDED_BY(concurrency_check_mutex);
     BackupCoordinationReplicatedTables replicated_tables TSA_GUARDED_BY(replicated_tables_mutex);
     BackupCoordinationReplicatedAccess replicated_access TSA_GUARDED_BY(replicated_access_mutex);
     BackupCoordinationReplicatedSQLObjects replicated_sql_objects TSA_GUARDED_BY(replicated_sql_objects_mutex);
@@ -72,7 +77,6 @@ private:
     BackupCoordinationKeeperMapTables keeper_map_tables TSA_GUARDED_BY(keeper_map_tables_mutex);
     std::unordered_set<size_t> writing_files TSA_GUARDED_BY(writing_files_mutex);
 
-    mutable std::mutex concurrency_check_mutex;
     mutable std::mutex replicated_tables_mutex;
     mutable std::mutex replicated_access_mutex;
     mutable std::mutex replicated_sql_objects_mutex;

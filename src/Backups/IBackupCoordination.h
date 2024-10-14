@@ -13,9 +13,9 @@ enum class AccessEntityType : uint8_t;
 enum class UserDefinedSQLObjectType : uint8_t;
 
 /// Replicas use this class to coordinate what they're writing to a backup while executing BACKUP ON CLUSTER.
-/// There are two implementation of this interface: BackupCoordinationLocal and BackupCoordinationRemote.
+/// There are two implementation of this interface: BackupCoordinationLocal and BackupCoordinationOnCluster.
 /// BackupCoordinationLocal is used while executing BACKUP without ON CLUSTER and performs coordination in memory.
-/// BackupCoordinationRemote is used while executing BACKUP with ON CLUSTER and performs coordination via ZooKeeper.
+/// BackupCoordinationOnCluster is used while executing BACKUP with ON CLUSTER and performs coordination via ZooKeeper.
 class IBackupCoordination
 {
 public:

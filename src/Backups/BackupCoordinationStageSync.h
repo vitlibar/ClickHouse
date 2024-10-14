@@ -45,6 +45,10 @@ public:
     void waitForHostsToFinish(const Strings & hosts) const;
     bool tryWaitForHostsToFinish(const Strings & hosts) const noexcept;
 
+    /// Returns a printable name of a specific host. For empty host the function returns "initiator".
+    static String getHostDesc(const String & host);
+    static String getHostsDesc(const Strings & hosts);
+
 private:
     /// Creates the root node in ZooKeeper.
     void createRootNodes();
@@ -99,17 +103,13 @@ private:
     /// Used by waitForHostsToFinish() to check if everything is ready to return.
     bool checkIfHostsFinish(const Strings & hosts, bool throw_if_error) const TSA_REQUIRES(mutex);
 
-    /// Returns a printable name of a specific host. For empty host the function returns "initiator".
-    static String getHostDesc(const String & host);
-    static String getHostsDesc(const Strings & hosts);
-
     const bool is_restore;
     const String operation_name;
     const String current_host;
     const String current_host_desc;
     const bool allow_concurrency;
 
-    /// A reference to a field of the parent object which is either BackupCoordinationRemote or RestoreCoordinationRemote.
+    /// A reference to a field of the parent object which is either BackupCoordinationOnCluster or RestoreCoordinationOnCluster.
     const WithRetries & with_retries;
 
     const ThreadPoolCallbackRunnerUnsafe<void> schedule;

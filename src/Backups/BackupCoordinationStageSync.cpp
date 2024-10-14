@@ -9,7 +9,7 @@
 #include <IO/WriteBufferFromString.h>
 #include <IO/WriteHelpers.h>
 #include <Backups/BackupCoordinationStage.h>
-#include <Backups/BackupLocalConcurrencyChecker.h>
+#include <Backups/BackupConcurrencyCheck.h>
 #include <Poco/URI.h>
 #include <boost/algorithm/string/join.hpp>
 
@@ -416,7 +416,7 @@ void BackupCoordinationStageSync::checkConcurrency(Coordination::ZooKeeperWithFa
                 for (const String & stage : stages)
                 {
                     if (stage.starts_with("alive"))
-                        BackupLocalConcurrencyChecker::throwConcurrentOperationNotAllowed(is_restore);
+                        BackupConcurrencyCheck::throwConcurrentOperationNotAllowed(is_restore);
                 }
             }
         }
@@ -477,7 +477,7 @@ void BackupCoordinationStageSync::watchingThread()
 
         try
         {
-            /// Cancel the query if there is an error on another host or if some host was disconnected for too long.
+            /// Cancel the query if there is an error on another host or if some host was disconnected too long.
             cancelQueryIfError();
             cancelQueryIfDisconnectedTooLong();
         }
@@ -670,23 +670,25 @@ void BackupCoordinationStageSync::cancelQueryIfDisconnectedTooLong()
             if (!host_info.connected && host_info.started && !host_info.finished && (host != current_host))
             {
                 auto disconnected_duration = std::chrono::duration_cast<std::chrono::seconds>(monotonic_now - host_info.last_connection_time_monotonic);
+                if (disconnected_duration > failure_after_host_disconnected_for_seconds)
+                {
+                    /// Host `host` was disconnected too long. 
+                    /// We can't just throw an exception here because readCurrentState() is called from a background thread.
+                    /// So here we're writingh the error to the `process_list_element` and let it to be thrown later
+                    /// from `process_list_element->checkTimeLimit()`.
+                    String message = fmt::format("The 'alive' node hasn't been updated in ZooKeeper for {} for {} "
+                                                 "which is more than the specified timeout {}. The last time the 'alive' node was detected at {}",
+                                                 getHostDesc(host), disconnected_duration, failure_after_host_disconnected_for_seconds,
+                                                 host_info.last_connection_time);
+                    LOG_WARNING(log, "Lost connection to {}: {}", getHostDesc(host), message);
+                    exception = std::make_exception_ptr(Exception{ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE, "Lost connection to {}: {}", getHostDesc(host), message});
+                    break;
+                }
+
                 if ((disconnected_duration >= std::chrono::seconds{1}) && !info_shown)
                 {
                     LOG_TRACE(log, "The 'alive' node hasn't been updated in ZooKeeper for {} for {}", getHostDesc(host), disconnected_duration);
                     info_shown = true;
-                }
-
-                if (disconnected_duration > failure_after_host_disconnected_for_seconds)
-                {
-                    /// Host `host` was disconnected for too long. 
-                    /// We can't just throw an exception here because readCurrentState() is called from a background thread.
-                    /// So here we're writingh the error to the `process_list_element` and let it to be thrown later
-                    /// from `process_list_element->checkTimeLimit()`.
-                    String message = fmt::format("{} has been disconnected to {} for {} which is more than the failure timeout ({}), previously the connection existed at {}",
-                        current_host_desc, getHostDesc(host), disconnected_duration, failure_after_host_disconnected_for_seconds, host_info.last_connection_time);
-                    LOG_WARNING(log, "Lost connection: {}", message);
-                    exception = std::make_exception_ptr(Exception{ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE, "Lost connection: {}", message});
-                    break;
                 }
             }
         }
@@ -828,12 +830,12 @@ bool BackupCoordinationStageSync::checkIfHostsReachStage(
             if (throw_if_not_ready)
             {
                 String timeout_desc = timeout ? fmt::format(" ({})", *timeout) : "";
-                throw Exception(ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE, "Waited for {} to come to stage {} for too long{}",
+                throw Exception(ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE, "Waited for {} to reach stage {} too long{}",
                                 getHostDesc(host), stage_to_wait, timeout_desc);
             }
             else
             {
-                LOG_TRACE(log, "Waiting for {} to come to stage {}", getHostDesc(host), stage_to_wait);
+                LOG_TRACE(log, "Waiting for {} to reach stage {}", getHostDesc(host), stage_to_wait);
                 return false;
             }
         }
@@ -846,7 +848,7 @@ bool BackupCoordinationStageSync::checkIfHostsReachStage(
             {
                 String timeout_desc = timeout ? fmt::format(" ({})", *timeout) : "";
                 throw Exception(ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE,
-                                "Lost connection to {} for {} while waiting for the host to come to stage {} for too long{}{}",
+                                "Lost connection to {} for {} while waiting for the host to reach stage {} too long{}{}",
                                 getHostDesc(host), disconnected_seconds, stage_to_wait, timeout_desc, last_connection_desc);
             }
             else
@@ -916,6 +918,7 @@ bool BackupCoordinationStageSync::tryFinishImpl(bool & all_hosts_finished, const
 
         std::lock_guard lock{mutex};
         finish_result.succeeded = true;
+        all_hosts_finished = finish_result.all_hosts_finished;
         return true;
     }
     catch (...)

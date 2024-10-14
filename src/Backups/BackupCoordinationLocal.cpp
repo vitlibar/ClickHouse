@@ -1,6 +1,5 @@
 #include <Backups/BackupCoordinationLocal.h>
 
-#include <Backups/BackupLocalConcurrencyChecker.h>
 #include <Common/Exception.h>
 #include <Common/logger_useful.h>
 #include <Common/quoteString.h>
@@ -11,9 +10,12 @@ namespace DB
 {
 
 BackupCoordinationLocal::BackupCoordinationLocal(
-    bool is_plain_backup_, BackupLocalConcurrencyChecker & concurrency_checker_, bool allow_concurrent_backup_)
+    const UUID & backup_uuid_,
+    bool is_plain_backup_,
+    bool allow_concurrent_backup_,
+    BackupConcurrencyCounters & concurrency_counters_)
     : log(getLogger("BackupCoordinationLocal"))
-    , concurrency_check(concurrency_checker_.checkLocal(/* is_restore = */ false, allow_concurrent_backup_))
+    , concurrency_check(/* is_restore = */ false, backup_uuid_, /* on_cluster = */ false, allow_concurrent_backup_, concurrency_counters_)
     , file_infos(is_plain_backup_)
 {
 }
@@ -23,25 +25,20 @@ BackupCoordinationLocal::~BackupCoordinationLocal() = default;
 void BackupCoordinationLocal::finish(bool & all_hosts_finished)
 {
     all_hosts_finished = true; /// There is only one host in case of BackupCoordinationLocal.
-    std::lock_guard lock{concurrency_check_mutex};
-    concurrency_check.reset();
 }
 
 bool BackupCoordinationLocal::tryFinish(bool & all_hosts_finished) noexcept
 {
-    finish(all_hosts_finished);
+    all_hosts_finished = true; /// There is only one host in case of BackupCoordinationLocal.
     return true;
 }
 
 void BackupCoordinationLocal::cleanup()
 {
-    bool dummy;
-    finish(dummy);
 }
 
 bool BackupCoordinationLocal::tryCleanup() noexcept
 {
-    cleanup();
     return true;
 }
 

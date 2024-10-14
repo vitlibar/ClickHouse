@@ -11,9 +11,9 @@ enum class UserDefinedSQLObjectType : uint8_t;
 class ASTCreateQuery;
 
 /// Replicas use this class to coordinate what they're reading from a backup while executing RESTORE ON CLUSTER.
-/// There are two implementation of this interface: RestoreCoordinationLocal and RestoreCoordinationRemote.
+/// There are two implementation of this interface: RestoreCoordinationLocal and RestoreCoordinationOnCluster.
 /// RestoreCoordinationLocal is used while executing RESTORE without ON CLUSTER and performs coordination in memory.
-/// RestoreCoordinationRemote is used while executing RESTORE with ON CLUSTER and performs coordination via ZooKeeper.
+/// RestoreCoordinationOnCluster is used while executing RESTORE with ON CLUSTER and performs coordination via ZooKeeper.
 class IRestoreCoordination
 {
 public:

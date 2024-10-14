@@ -1,4 +1,6 @@
 #include <Backups/BackupsWorker.h>
+
+#include <Backups/BackupConcurrencyCheck.h>
 #include <Backups/BackupFactory.h>
 #include <Backups/BackupInfo.h>
 #include <Backups/BackupSettings.h>
@@ -6,9 +8,9 @@
 #include <Backups/IBackupEntry.h>
 #include <Backups/BackupEntriesCollector.h>
 #include <Backups/BackupCoordinationStage.h>
-#include <Backups/BackupCoordinationRemote.h>
+#include <Backups/BackupCoordinationOnCluster.h>
 #include <Backups/BackupCoordinationLocal.h>
-#include <Backups/RestoreCoordinationRemote.h>
+#include <Backups/RestoreCoordinationOnCluster.h>
 #include <Backups/RestoreCoordinationLocal.h>
 #include <Backups/RestoreSettings.h>
 #include <Backups/RestorerFromBackup.h>
@@ -337,7 +339,7 @@ BackupsWorker::BackupsWorker(ContextMutablePtr global_context, size_t num_backup
     , log(getLogger("BackupsWorker"))
     , backup_log(global_context->getBackupLog())
     , process_list(global_context->getProcessList())
-    , concurrency_checker(std::make_unique<BackupLocalConcurrencyChecker>())
+    , concurrency_counters(std::make_unique<BackupConcurrencyCounters>())
 {
 }
 
@@ -429,8 +431,8 @@ struct BackupsWorker::BackupStarter
             cluster = backup_context->getCluster(backup_query->cluster);
             backup_settings.cluster_host_ids = cluster->getHostIDs();
         }
-        bool use_remote_coordination = on_cluster || is_internal_backup;
-        backup_coordination = backups_worker.makeBackupCoordination(use_remote_coordination, backup_settings, backup_context);
+        bool on_cluster_coordination = on_cluster || is_internal_backup;
+        backup_coordination = backups_worker.makeBackupCoordination(on_cluster_coordination, backup_settings, backup_context);
     }
 
     void openBackupForWriting()
@@ -822,8 +824,8 @@ struct BackupsWorker::RestoreStarter
             cluster = restore_context->getCluster(restore_query->cluster);
             restore_settings.cluster_host_ids = cluster->getHostIDs();
         }
-        bool use_remote_coordination = on_cluster || is_internal_restore;
-        restore_coordination = backups_worker.makeRestoreCoordination(use_remote_coordination, restore_settings, restore_context);
+        bool on_cluster_coordination = on_cluster || is_internal_restore;
+        restore_coordination = backups_worker.makeRestoreCoordination(on_cluster_coordination, restore_settings, restore_context);
     }
 
     void doRestore()
@@ -1009,9 +1011,9 @@ void BackupsWorker::doRestore(
 
 
 std::shared_ptr<IBackupCoordination>
-BackupsWorker::makeBackupCoordination(bool remote, const BackupSettings & backup_settings, const ContextPtr & context) const
+BackupsWorker::makeBackupCoordination(bool on_cluster_coordination, const BackupSettings & backup_settings, const ContextPtr & context) const
 {
-    if (remote)
+    if (on_cluster_coordination)
     {
         String root_zk_path = context->getConfigRef().getString("backups.zookeeper_path", "/clickhouse/backups");
         auto get_zookeeper = [global_context = context->getGlobalContext()] { return global_context->getZooKeeper(); };
@@ -1020,13 +1022,13 @@ BackupsWorker::makeBackupCoordination(bool remote, const BackupSettings & backup
         auto all_hosts = BackupSettings::Util::filterHostIDs(
             backup_settings.cluster_host_ids, backup_settings.shard_num, backup_settings.replica_num);
 
-        String current_host = backup_settings.internal ? backup_settings.host_id : String{BackupCoordinationRemote::kInitiator};
+        String current_host = backup_settings.internal ? backup_settings.host_id : String{BackupCoordinationOnCluster::kInitiator};
 
         auto thread_pool_id = backup_settings.internal ? ThreadPoolId::BACKUP_COORDINATION_WORKER : ThreadPoolId::BACKUP_COORDINATION_WORKER_ON_CLUSTER;
         String thread_name = backup_settings.internal ? "BackupCoordWrk" : "BackupCoordInt";
         auto schedule = threadPoolCallbackRunnerUnsafe<void>(thread_pools->getThreadPool(thread_pool_id), thread_name);
 
-        return std::make_shared<BackupCoordinationRemote>(
+        return std::make_shared<BackupCoordinationOnCluster>(
             *backup_settings.backup_uuid,
             !backup_settings.deduplicate_files,
             root_zk_path,
@@ -1034,21 +1036,22 @@ BackupsWorker::makeBackupCoordination(bool remote, const BackupSettings & backup
             keeper_settings,
             current_host,
             all_hosts,
-            *concurrency_checker,
             allow_concurrent_backups,
+            *concurrency_counters,
             schedule,
             context->getProcessListElement());
     }
     else
     {
-        return std::make_shared<BackupCoordinationLocal>(!backup_settings.deduplicate_files, *concurrency_checker, allow_concurrent_backups);
+        return std::make_shared<BackupCoordinationLocal>(
+            *backup_settings.backup_uuid, !backup_settings.deduplicate_files, allow_concurrent_backups, *concurrency_counters);
     }
 }
 
 std::shared_ptr<IRestoreCoordination>
-BackupsWorker::makeRestoreCoordination(bool remote, const RestoreSettings & restore_settings, const ContextPtr & context) const
+BackupsWorker::makeRestoreCoordination(bool on_cluster_coordination, const RestoreSettings & restore_settings, const ContextPtr & context) const
 {
-    if (remote)
+    if (on_cluster_coordination)
     {
         String root_zk_path = context->getConfigRef().getString("backups.zookeeper_path", "/clickhouse/backups");
         auto get_zookeeper = [global_context = context->getGlobalContext()] { return global_context->getZooKeeper(); };
@@ -1057,27 +1060,28 @@ BackupsWorker::makeRestoreCoordination(bool remote, const RestoreSettings & rest
         auto all_hosts = BackupSettings::Util::filterHostIDs(
             restore_settings.cluster_host_ids, restore_settings.shard_num, restore_settings.replica_num);
 
-        String current_host = restore_settings.internal ? restore_settings.host_id : String{RestoreCoordinationRemote::kInitiator};
+        String current_host = restore_settings.internal ? restore_settings.host_id : String{RestoreCoordinationOnCluster::kInitiator};
 
         auto thread_pool_id = restore_settings.internal ? ThreadPoolId::RESTORE_COORDINATION_WORKER : ThreadPoolId::RESTORE_COORDINATION_WORKER_ON_CLUSTER;
         String thread_name = restore_settings.internal ? "RestoreCoordWrk" : "RestoreCoordInt";
         auto schedule = threadPoolCallbackRunnerUnsafe<void>(thread_pools->getThreadPool(thread_pool_id), thread_name);
 
-        return std::make_shared<RestoreCoordinationRemote>(
+        return std::make_shared<RestoreCoordinationOnCluster>(
             *restore_settings.restore_uuid,
             root_zk_path,
             get_zookeeper,
             keeper_settings,
             current_host,
             all_hosts,
-            *concurrency_checker,
             allow_concurrent_restores,
+            *concurrency_counters,
             schedule,
             context->getProcessListElement());
     }
     else
     {
-        return std::make_shared<RestoreCoordinationLocal>(*concurrency_checker, allow_concurrent_restores);
+        return std::make_shared<RestoreCoordinationLocal>(
+            *restore_settings.restore_uuid, allow_concurrent_restores, *concurrency_counters);
     }
 }
 

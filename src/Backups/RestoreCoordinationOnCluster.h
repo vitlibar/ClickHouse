@@ -1,34 +1,35 @@
 #pragma once
 
 #include <Backups/IRestoreCoordination.h>
+#include <Backups/BackupConcurrencyCheck.h>
+#include <Backups/BackupCoordinationCleaner.h>
 #include <Backups/BackupCoordinationStageSync.h>
 #include <Backups/WithRetries.h>
 
 
 namespace DB
 {
-class BackupLocalConcurrencyChecker;
 
 /// Implementation of the IRestoreCoordination interface performing coordination via ZooKeeper. It's necessary for "RESTORE ON CLUSTER".
-class RestoreCoordinationRemote : public IRestoreCoordination
+class RestoreCoordinationOnCluster : public IRestoreCoordination
 {
 public:
     /// Empty string as the current host is used to mark the initiator of a RESTORE ON CLUSTER query.
     static const constexpr std::string_view kInitiator;
 
-    RestoreCoordinationRemote(
+    RestoreCoordinationOnCluster(
         const UUID & restore_uuid_,
         const String & root_zookeeper_path_,
         zkutil::GetZooKeeper get_zookeeper_,
         const BackupKeeperSettings & keeper_settings_,
         const String & current_host_,
         const Strings & all_hosts_,
-        BackupLocalConcurrencyChecker & concurrency_checker_,
         bool allow_concurrent_restore_,
+        BackupConcurrencyCounters & concurrency_counters_,
         ThreadPoolCallbackRunnerUnsafe<void> schedule_,
         QueryStatusPtr process_list_element_);
 
-    ~RestoreCoordinationRemote() override;
+    ~RestoreCoordinationOnCluster() override;
 
     /// Cleans up all external data (e.g. nodes in ZooKeeper) this coordination is using.
     void cleanup() override;
@@ -65,11 +66,7 @@ public:
 
 private:
     void createRootNodes();
-
     bool tryCleanupImpl() noexcept;
-    void removeAllNodes();
-    bool tryRemoveAllNodes() noexcept;
-    bool tryRemoveAllNodesImpl(const WithRetries::Params & retries_params, bool throw_if_error);
 
     const String root_zookeeper_path;
     const BackupKeeperSettings keeper_settings;
@@ -81,15 +78,9 @@ private:
     LoggerPtr const log;
 
     const WithRetries with_retries;
-    scope_guard concurrency_check TSA_GUARDED_BY(mutex);
+    BackupConcurrencyCheck concurrency_check;
     BackupCoordinationStageSync stage_sync;
-
-    struct RemoveAllNodesResult
-    {
-        bool succeeded = false;
-        bool failed = false;
-    };
-    RemoveAllNodesResult remove_all_nodes_result TSA_GUARDED_BY(mutex);
+    BackupCoordinationCleaner cleaner;
 
     std::mutex mutex;
 };
