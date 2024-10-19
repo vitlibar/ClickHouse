@@ -4729,6 +4729,8 @@ class ClickHouseInstance:
                 )
                 logging.info(f"external_dir_abs_path={external_dir_abs_path}")
                 os.makedirs(external_dir_abs_path, exist_ok=True)
+                if external_dirs_volumes != "":
+                    external_dirs_volumes += ' ' * 12 # Matches the indent of {external_dirs_volumes} in DOCKER_COMPOSE_TEMPLATE
                 external_dirs_volumes += (
                     "- " + external_dir_abs_path + ":" + external_dir + "\n"
                 )
