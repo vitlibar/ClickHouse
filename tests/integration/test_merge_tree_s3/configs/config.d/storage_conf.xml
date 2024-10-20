@@ -47,11 +47,11 @@
             </broken_s3_always_multi_part>
             <hdd>
                 <type>local</type>
-                <path>/hdd/</path>
+                <path>/</path>
             </hdd>
             <hdd_blob>
                 <type>local_blob_storage</type>
-                <path>/hdd_blob/</path>
+                <path>/</path>
             </hdd_blob>
             <s3_with_cache>
                 <type>cache</type>

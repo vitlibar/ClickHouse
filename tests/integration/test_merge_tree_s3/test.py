@@ -34,9 +34,6 @@ def cluster():
             ],
             stay_alive=True,
             with_minio=True,
-            tmpfs=[
-                "/hdd", "/hdd_blob", "/s3_with_cache", "/jbod1", "/s3_cache_r"
-            ],
         )
 
         cluster.add_instance(
