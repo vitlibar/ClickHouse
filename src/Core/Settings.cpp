@@ -520,6 +520,8 @@ namespace ErrorCodes
     M(UInt64, backup_restore_keeper_retry_initial_backoff_ms, 100, "Initial backoff timeout for [Zoo]Keeper operations during backup or restore", 0) \
     M(UInt64, backup_restore_keeper_retry_max_backoff_ms, 5000, "Max backoff timeout for [Zoo]Keeper operations during backup or restore", 0) \
     M(UInt64, backup_restore_failure_after_host_disconnected_for_seconds, 3600, "If a host during BACKUP ON CLUSTER or RESTORE ON CLUSTER doesn't recreate its 'alive' node in ZooKeeper for this amount of time then the whole backup or restore is considered as failed. Should be bigger than any reasonable time for a host to reconnect to ZooKeeper after a failure. Set to zero to disable", 0) \
+    M(UInt64, backup_restore_on_cluster_initialization_timeout_sec, 180, "The period of time during which all hosts participating in BACKUP ON CLUSTER or RESTORE ON CLUSTER should respond to the initiator of the query that they have started working on it", 0) \
+    M(UInt64, backup_restore_keeper_max_retries_while_initializing, 20, "Max retries for [Zoo]Keeper operations during the initialization of a BACKUP ON CLUSTER or RESTORE ON CLUSTER operation", 0) \
     M(UInt64, backup_restore_keeper_value_max_size, 1048576, "Maximum size of data of a [Zoo]Keeper's node during backup", 0) \
     M(UInt64, backup_restore_batch_size_for_keeper_multi, 1000, "Maximum size of batch for multi request to [Zoo]Keeper during backup or restore", 0) \
     M(UInt64, backup_restore_batch_size_for_keeper_multiread, 10000, "Maximum size of batch for multiread request to [Zoo]Keeper during backup or restore", 0) \

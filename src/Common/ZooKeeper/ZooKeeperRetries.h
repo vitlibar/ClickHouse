@@ -15,14 +15,15 @@ namespace ErrorCodes
 
 struct ZooKeeperRetriesInfo
 {
+    ZooKeeperRetriesInfo() = default;
     ZooKeeperRetriesInfo(UInt64 max_retries_, UInt64 initial_backoff_ms_, UInt64 max_backoff_ms_)
         : max_retries(max_retries_), initial_backoff_ms(std::min(initial_backoff_ms_, max_backoff_ms_)), max_backoff_ms(max_backoff_ms_)
     {
     }
 
-    UInt64 max_retries;
-    UInt64 initial_backoff_ms;
-    UInt64 max_backoff_ms;
+    UInt64 max_retries = 0;
+    UInt64 initial_backoff_ms = 100;
+    UInt64 max_backoff_ms = 5000;
 };
 
 class ZooKeeperRetriesControl
@@ -62,13 +63,11 @@ public:
     /// Each retryLoop is independent and it will execute f at least once
     void retryLoop(auto && f, auto && iteration_cleanup)
     {
-        LOG_INFO(::getLogger("!!!"), "retryLoop");
         current_iteration = 0;
         current_backoff_ms = retries_info.initial_backoff_ms;
 
         while (current_iteration == 0 || canTry())
         {
-            LOG_INFO(::getLogger("!!!"), "retryLoop - loop");
             /// reset the flag, it will be set to false in case of error
             iteration_succeeded = true;
             try

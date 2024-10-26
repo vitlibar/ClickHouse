@@ -6,11 +6,11 @@
 
 namespace DB
 {
-class Exception;
 struct BackupFileInfo;
 using BackupFileInfos = std::vector<BackupFileInfo>;
 enum class AccessEntityType : uint8_t;
 enum class UserDefinedSQLObjectType : uint8_t;
+struct ZooKeeperRetriesInfo;
 
 /// Replicas use this class to coordinate what they're writing to a backup while executing BACKUP ON CLUSTER.
 /// There are two implementation of this interface: BackupCoordinationLocal and BackupCoordinationOnCluster.
@@ -21,21 +21,23 @@ class IBackupCoordination
 public:
     virtual ~IBackupCoordination() = default;
 
-    /// Sets that the current host finished its work.
-    /// The function sets its argument `all_hosts_finished` to true if all the other hosts finished their works too.
-    virtual void finish(bool & all_hosts_finished) = 0;
-    virtual bool tryFinish(bool & all_hosts_finished) noexcept = 0;
-
     /// Cleans up all external data (e.g. nodes in ZooKeeper) this coordination is using.
     virtual void cleanup() = 0;
     virtual bool tryCleanup() noexcept = 0;
 
+    /// Sets that the current host finished its work. This is a part of cleanup().
+    /// The function sets its argument `all_hosts_finished` to true if all the other hosts finished their works too.
+    virtual void finish(bool & all_hosts_finished) = 0;
+    virtual bool tryFinish(bool & all_hosts_finished) noexcept = 0;
+
     /// Sets the current stage and waits for other hosts to come to this stage too.
     virtual void setStage(const String & new_stage, const String & message) = 0;
-    virtual void setError(const Exception & exception) = 0;
+    virtual bool trySetError(std::exception_ptr exception) = 0;
     virtual Strings waitForStage(const String & stage_to_wait, std::optional<std::chrono::milliseconds> timeout) = 0;
     Strings waitForStage(const String & stage_to_wait) { return waitForStage(stage_to_wait, {}); }
+
     virtual std::chrono::seconds getOnClusterInitializationTimeout() const = 0;
+    virtual ZooKeeperRetriesInfo getOnClusterInitializationKeeperRetriesInfo() const = 0;
 
     struct PartNameAndChecksum
     {

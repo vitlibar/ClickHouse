@@ -6,9 +6,9 @@
 
 namespace DB
 {
-class Exception;
 enum class UserDefinedSQLObjectType : uint8_t;
 class ASTCreateQuery;
+struct ZooKeeperRetriesInfo;
 
 /// Replicas use this class to coordinate what they're reading from a backup while executing RESTORE ON CLUSTER.
 /// There are two implementation of this interface: RestoreCoordinationLocal and RestoreCoordinationOnCluster.
@@ -25,10 +25,12 @@ public:
 
     /// Sets the current stage and waits for other hosts to come to this stage too.
     virtual void setStage(const String & new_stage, const String & message) = 0;
-    virtual void setError(const Exception & exception) = 0;
+    virtual bool trySetError(std::exception_ptr exception) = 0;
     virtual Strings waitForStage(const String & stage_to_wait, std::optional<std::chrono::milliseconds> timeout) = 0;
     Strings waitForStage(const String & stage_to_wait) { return waitForStage(stage_to_wait, {}); }
+
     virtual std::chrono::seconds getOnClusterInitializationTimeout() const = 0;
+    virtual ZooKeeperRetriesInfo getOnClusterInitializationKeeperRetriesInfo() const = 0;
 
     /// Starts creating a table in a replicated database. Returns false if there is another host which is already creating this table.
     virtual bool acquireCreatingTableInReplicatedDatabase(const String & database_zk_path, const String & table_name) = 0;

@@ -61,35 +61,32 @@ namespace Stage = BackupCoordinationStage;
 
 namespace
 {
-    /// Sends information about an exception to IBackupCoordination or IRestoreCoordination.
-    template <typename CoordinationType>
-    void sendExceptionToCoordination(std::shared_ptr<CoordinationType> coordination, const Exception & exception) noexcept
+    /// Returns true if this error comes from coordination of hosts during BACKUP ON CLUSTER / RESTORE ON CLUSTER.
+    /// (In that case we shouldn't pass this error to BackupCoordination/RestoreCoordination because that won't probably work.)
+    bool isCoordinationError(std::exception_ptr/* exception */)
     {
+        return false;
+        /*
         try
         {
-            coordination->setError(exception);
+            std::rethrow_exception(exception);
         }
-        catch (...) // NOLINT(bugprone-empty-catch)
+        catch (zkutil::KeeperException & e)
         {
+            if (isHardwareError(e.code))
+                return true;
+            return false;
         }
-    }
-
-    /// Sends information about the current exception to IBackupCoordination or IRestoreCoordination.
-    template <typename CoordinationType>
-    void sendCurrentExceptionToCoordination(std::shared_ptr<CoordinationType> coordination) noexcept
-    {
-        try
+        catch (Exception & e)
         {
-            throw;
-        }
-        catch (const Exception & e)
-        {
-            sendExceptionToCoordination(coordination, e);
+            if (e.code() == ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE)
+                return true;
+            return false;
         }
         catch (...)
         {
-            sendExceptionToCoordination(coordination, Exception(getCurrentExceptionMessageAndPattern(true, true), getCurrentExceptionCode()));
-        }
+            return false;
+        }*/
     }
 
     bool isFinishedSuccessfully(BackupStatus status)
@@ -460,21 +457,18 @@ struct BackupsWorker::BackupStarter
         if (backup && !backup->setIsCorrupted())
             should_remove_files_in_backup = false;
 
-        if (getCurrentExceptionCode() != ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE)
+        if (backup_coordination && !isCoordinationError(std::current_exception()))
         {
-            if (backup_coordination)
+            if (backup_coordination->trySetError(std::current_exception()))
             {
-                sendCurrentExceptionToCoordination(backup_coordination);
                 bool all_hosts_finished = false;
-                if (!backup_coordination->tryFinish(all_hosts_finished) || !all_hosts_finished)
-                    should_remove_files_in_backup = false;
-            }
-
-            if (should_remove_files_in_backup)
-                backup->tryRemoveAllFiles();
-
-            if (backup_coordination)
+                if (backup_coordination->tryFinish(all_hosts_finished))
+                {
+                    if (should_remove_files_in_backup && all_hosts_finished)
+                        backup->tryRemoveAllFiles();
+                }
                 backup_coordination->tryCleanup();
+            }
         }
 
         backups_worker.setStatusSafe(backup_id, getBackupStatusFromCurrentException());
@@ -584,6 +578,7 @@ void BackupsWorker::doBackup(
         params.only_shard_num = backup_settings.shard_num;
         params.only_replica_num = backup_settings.replica_num;
         params.access_to_check = required_access;
+        params.retries_info = backup_coordination->getOnClusterInitializationKeeperRetriesInfo();
         backup_settings.copySettingsToQuery(*backup_query);
 
         startOnClusterOperation(*backup_query, context, params, backup_coordination->getOnClusterInitializationTimeout());
@@ -841,13 +836,10 @@ struct BackupsWorker::RestoreStarter
         /// Something bad happened, some data were not restored.
         tryLogCurrentException(backups_worker.log, fmt::format("Failed to restore from {} {}", (is_internal_restore ? "internal backup" : "backup"), backup_name_for_logging));
 
-        if (getCurrentExceptionCode() != ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE)
+        if (restore_coordination && !isCoordinationError(std::current_exception()))
         {
-            if (restore_coordination)
-            {
-                sendCurrentExceptionToCoordination(restore_coordination);
+            if (restore_coordination->trySetError(std::current_exception()))
                 restore_coordination->tryCleanup();
-            }
         }
 
         backups_worker.setStatusSafe(restore_id, getRestoreStatusFromCurrentException());
@@ -965,6 +957,7 @@ void BackupsWorker::doRestore(
         params.cluster = cluster;
         params.only_shard_num = restore_settings.shard_num;
         params.only_replica_num = restore_settings.replica_num;
+        params.retries_info = restore_coordination->getOnClusterInitializationKeeperRetriesInfo();
         restore_settings.copySettingsToQuery(*restore_query);
 
         startOnClusterOperation(*restore_query, context, params, restore_coordination->getOnClusterInitializationTimeout());
@@ -1008,18 +1001,9 @@ void BackupsWorker::startOnClusterOperation(const ASTBackupQuery & backup_or_res
     context->setSetting("distributed_ddl_task_timeout", Field{distributed_ddl_task_timeout});
     context->setSetting("distributed_ddl_output_mode", Field{"none"});
 
-    try
-    {
-        // executeDDLQueryOnCluster() will return without waiting for completion
-        BlockIO io = executeDDLQueryOnCluster(backup_or_restore_query.clone(), context, on_cluster_params);
-        CompletedPipelineExecutor{io.pipeline}.execute();
-    }
-    catch (const zkutil::KeeperException & e)
-    {
-        if (!Coordination::isHardwareError(e.code))
-            throw;
-        throw Exception(getExceptionMessageAndPattern(e, /* with_stacktrace = */ true), ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE);
-    }
+    // executeDDLQueryOnCluster() will return without waiting for completion
+    BlockIO io = executeDDLQueryOnCluster(backup_or_restore_query.clone(), context, on_cluster_params);
+    CompletedPipelineExecutor{io.pipeline}.execute();
 
     maybeSleepForTesting();
 }

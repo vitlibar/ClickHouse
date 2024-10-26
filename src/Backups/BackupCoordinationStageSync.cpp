@@ -100,7 +100,6 @@ BackupCoordinationStageSync::BackupCoordinationStageSync(
 
 BackupCoordinationStageSync::~BackupCoordinationStageSync()
 {
-    //tryFinish();
     stopWatchingThread();
 }
 
@@ -144,7 +143,7 @@ String BackupCoordinationStageSync::getHostsDesc(const Strings & hosts)
 void BackupCoordinationStageSync::createRootNodes()
 {
     auto holder = with_retries.createRetriesControlHolder("BackupStageSync::createRootNodes", {.initialization = true});
-    holder.retryLoop(
+    holder.retries_ctl.retryLoop(
         [&, &zookeeper = holder.faulty_zookeeper]()
         {
             with_retries.renewZooKeeper(zookeeper);
@@ -157,7 +156,7 @@ void BackupCoordinationStageSync::createRootNodes()
 void BackupCoordinationStageSync::createStartAndAliveNodes()
 {
     auto holder = with_retries.createRetriesControlHolder("BackupStageSync::createStartAndAliveNodes", {.initialization = true});
-    holder.retryLoop([&, &zookeeper = holder.faulty_zookeeper]()
+    holder.retries_ctl.retryLoop([&, &zookeeper = holder.faulty_zookeeper]()
     {
         with_retries.renewZooKeeper(zookeeper);
         createStartAndAliveNodes(zookeeper);
@@ -302,7 +301,7 @@ bool BackupCoordinationStageSync::tryRemoveStartAndAliveNodes()
     try
     {
         auto holder = with_retries.createRetriesControlHolder("BackupStageSync::removeStartAndAliveNodes", {.error_handling = true});
-        holder.retryLoop([&, &zookeeper = holder.faulty_zookeeper]()
+        holder.retries_ctl.retryLoop([&, &zookeeper = holder.faulty_zookeeper]()
         {
             with_retries.renewZooKeeper(zookeeper);
             removeStartAndAliveNodes(zookeeper);
@@ -709,7 +708,7 @@ void BackupCoordinationStageSync::setStage(const String & stage, const String & 
 {
     LOG_INFO(log, "{} reached stage {}", current_host_desc, stage);
     auto holder = with_retries.createRetriesControlHolder("BackupStageSync::setStage");
-    holder.retryLoop([&, &zookeeper = holder.faulty_zookeeper]()
+    holder.retries_ctl.retryLoop([&, &zookeeper = holder.faulty_zookeeper]()
     {
         with_retries.renewZooKeeper(zookeeper);
         zookeeper->createIfNotExists(getStageNodePath(stage), stage_result);
@@ -723,6 +722,37 @@ String BackupCoordinationStageSync::getStageNodePath(const String & stage) const
 }
 
 
+bool BackupCoordinationStageSync::trySetError(std::exception_ptr exception)
+{
+    try
+    {
+        std::rethrow_exception(exception);
+    }
+    catch (const Exception & e)
+    {
+        return trySetError(e);
+    }
+    catch (...)
+    {
+        return trySetError(Exception(getCurrentExceptionMessageAndPattern(true, true), getCurrentExceptionCode()));
+    }
+}
+
+
+bool BackupCoordinationStageSync::trySetError(const Exception & exception)
+{
+    try
+    {
+        setError(exception);
+        return true;
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
+
 void BackupCoordinationStageSync::setError(const Exception & exception)
 {
     /// Most likely this exception has been already logged so here we're logging it without stacktrace.
@@ -731,13 +761,9 @@ void BackupCoordinationStageSync::setError(const Exception & exception)
 
     auto holder = with_retries.createRetriesControlHolder("BackupStageSync::setError", {.error_handling = true});
 
-    LOG_INFO(getLogger("!!!"), "setError: holder created");
-
-    holder.retryLoop([&, &zookeeper = holder.faulty_zookeeper]()
+    holder.retries_ctl.retryLoop([&, &zookeeper = holder.faulty_zookeeper]()
     {
-        LOG_INFO(getLogger("!!!"), "setError: Renewing zk");
         with_retries.renewZooKeeper(zookeeper);
-        LOG_INFO(getLogger("!!!"), "setError: Renewed zk");
 
         WriteBufferFromOwnString buf;
         writeStringBinary(current_host, buf);
@@ -916,7 +942,7 @@ bool BackupCoordinationStageSync::tryFinishImpl(bool & all_hosts_finished, const
         stopWatchingThread();
 
         auto holder = with_retries.createRetriesControlHolder("BackupStageSync::finish", retries_params);
-        holder.retryLoop([&, &zookeeper = holder.faulty_zookeeper]()
+        holder.retries_ctl.retryLoop([&, &zookeeper = holder.faulty_zookeeper]()
         {
             with_retries.renewZooKeeper(zookeeper);
             createFinishNodeAndRemoveAliveNode(zookeeper);

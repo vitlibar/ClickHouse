@@ -33,7 +33,7 @@ RestoreCoordinationOnCluster::RestoreCoordinationOnCluster(
     , current_host(current_host_)
     , current_host_index(BackupCoordinationOnCluster::findCurrentHostIndex(current_host, all_hosts))
     , log(getLogger("RestoreCoordinationOnCluster"))
-    , with_retries(log, get_zookeeper_, keeper_settings, process_list_element_, /* on_cluster_coordination = */ true, [root_zookeeper_path_](Coordination::ZooKeeperWithFaultInjection::Ptr zk) { zk->sync(root_zookeeper_path_); })
+    , with_retries(log, get_zookeeper_, keeper_settings, process_list_element_, [root_zookeeper_path_](Coordination::ZooKeeperWithFaultInjection::Ptr zk) { zk->sync(root_zookeeper_path_); })
     , concurrency_check(/* is_restore = */ true, restore_uuid_, /* on_cluster = */ true, allow_concurrent_restore_, concurrency_counters_)
     , stage_sync(/* is_restore = */ true, fs::path{zookeeper_path} / "stage", current_host, allow_concurrent_restore_, with_retries, schedule_, process_list_element_, log)
     , cleaner(zookeeper_path, with_retries, log)
@@ -42,16 +42,12 @@ RestoreCoordinationOnCluster::RestoreCoordinationOnCluster(
     createRootNodes();
 }
 
-RestoreCoordinationOnCluster::~RestoreCoordinationOnCluster()
-{
-    /// tryCleanupImpl() must not throw any exceptions.
-    //tryCleanupImpl();
-}
+RestoreCoordinationOnCluster::~RestoreCoordinationOnCluster() = default;
 
 void RestoreCoordinationOnCluster::createRootNodes()
 {
     auto holder = with_retries.createRetriesControlHolder("createRootNodes", {.initialization = true});
-    holder.retryLoop(
+    holder.retries_ctl.retryLoop(
         [&, &zk = holder.faulty_zookeeper]()
         {
             with_retries.renewZooKeeper(zk);
@@ -72,9 +68,9 @@ void RestoreCoordinationOnCluster::setStage(const String & new_stage, const Stri
     stage_sync.setStage(new_stage, message);
 }
 
-void RestoreCoordinationOnCluster::setError(const Exception & exception)
+bool RestoreCoordinationOnCluster::trySetError(std::exception_ptr exception)
 {
-    stage_sync.setError(exception);
+    return stage_sync.trySetError(exception);
 }
 
 Strings RestoreCoordinationOnCluster::waitForStage(const String & stage_to_wait, std::optional<std::chrono::milliseconds> timeout)
@@ -87,11 +83,18 @@ std::chrono::seconds RestoreCoordinationOnCluster::getOnClusterInitializationTim
     return keeper_settings.on_cluster_initialization_timeout;
 }
 
+ZooKeeperRetriesInfo RestoreCoordinationOnCluster::getOnClusterInitializationKeeperRetriesInfo() const
+{
+    return ZooKeeperRetriesInfo{keeper_settings.max_retries_while_initializing,
+                                static_cast<UInt64>(keeper_settings.retry_initial_backoff_ms.count()),
+                                static_cast<UInt64>(keeper_settings.retry_max_backoff_ms.count())};
+}
+
 bool RestoreCoordinationOnCluster::acquireCreatingTableInReplicatedDatabase(const String & database_zk_path, const String & table_name)
 {
     bool result = false;
     auto holder = with_retries.createRetriesControlHolder("acquireCreatingTableInReplicatedDatabase");
-    holder.retryLoop(
+    holder.retries_ctl.retryLoop(
         [&, &zk = holder.faulty_zookeeper]()
         {
             with_retries.renewZooKeeper(zk);
@@ -120,7 +123,7 @@ bool RestoreCoordinationOnCluster::acquireInsertingDataIntoReplicatedTable(const
 {
     bool result = false;
     auto holder = with_retries.createRetriesControlHolder("acquireInsertingDataIntoReplicatedTable");
-    holder.retryLoop(
+    holder.retries_ctl.retryLoop(
         [&, &zk = holder.faulty_zookeeper]()
         {
             with_retries.renewZooKeeper(zk);
@@ -146,7 +149,7 @@ bool RestoreCoordinationOnCluster::acquireReplicatedAccessStorage(const String &
 {
     bool result = false;
     auto holder = with_retries.createRetriesControlHolder("acquireReplicatedAccessStorage");
-    holder.retryLoop(
+    holder.retries_ctl.retryLoop(
         [&, &zk = holder.faulty_zookeeper]()
         {
             with_retries.renewZooKeeper(zk);
@@ -172,7 +175,7 @@ bool RestoreCoordinationOnCluster::acquireReplicatedSQLObjects(const String & lo
 {
     bool result = false;
     auto holder = with_retries.createRetriesControlHolder("acquireReplicatedSQLObjects");
-    holder.retryLoop(
+    holder.retries_ctl.retryLoop(
         [&, &zk = holder.faulty_zookeeper]()
         {
             with_retries.renewZooKeeper(zk);
@@ -208,7 +211,7 @@ bool RestoreCoordinationOnCluster::acquireInsertingDataForKeeperMap(const String
 {
     bool lock_acquired = false;
     auto holder = with_retries.createRetriesControlHolder("acquireInsertingDataForKeeperMap");
-    holder.retryLoop(
+    holder.retries_ctl.retryLoop(
         [&, &zk = holder.faulty_zookeeper]()
         {
             with_retries.renewZooKeeper(zk);
@@ -240,7 +243,7 @@ void RestoreCoordinationOnCluster::generateUUIDForTable(ASTCreateQuery & create_
     String new_uuids_str = new_uuids.toString();
 
     auto holder = with_retries.createRetriesControlHolder("generateUUIDForTable");
-    holder.retryLoop(
+    holder.retries_ctl.retryLoop(
         [&, &zk = holder.faulty_zookeeper]()
         {
             with_retries.renewZooKeeper(zk);
@@ -278,20 +281,17 @@ void RestoreCoordinationOnCluster::cleanup()
 
 bool RestoreCoordinationOnCluster::tryCleanup() noexcept
 {
-    return tryCleanupImpl();
-}
-
-bool RestoreCoordinationOnCluster::tryCleanupImpl() noexcept
-{
     if (current_host == kInitiator)
         stage_sync.tryWaitForHostsToFinish(all_hosts);
 
     bool all_hosts_finished;
-    bool ok = stage_sync.tryFinish(all_hosts_finished);
-    if (ok && all_hosts_finished)
-        ok = cleaner.tryCleanup();
+    if (!stage_sync.tryFinish(all_hosts_finished))
+        return false;
 
-    return ok;
+    if (all_hosts_finished && !cleaner.tryCleanup())
+        return false;
+
+    return true;
 }
 
 }

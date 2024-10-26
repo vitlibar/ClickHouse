@@ -2,6 +2,7 @@
 
 #include <Parsers/ASTCreateQuery.h>
 #include <Parsers/formatAST.h>
+#include <Common/ZooKeeper/ZooKeeperRetries.h>
 #include <Common/logger_useful.h>
 
 
@@ -24,6 +25,11 @@ void RestoreCoordinationLocal::cleanup()
 bool RestoreCoordinationLocal::tryCleanup() noexcept
 {
     return true;
+}
+
+ZooKeeperRetriesInfo RestoreCoordinationLocal::getOnClusterInitializationKeeperRetriesInfo() const
+{
+    return {};
 }
 
 bool RestoreCoordinationLocal::acquireCreatingTableInReplicatedDatabase(const String & database_zk_path, const String & table_name)

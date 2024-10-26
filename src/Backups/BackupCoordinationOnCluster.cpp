@@ -174,13 +174,7 @@ BackupCoordinationOnCluster::BackupCoordinationOnCluster(
     , current_host_index(findCurrentHostIndex(current_host, all_hosts))
     , plain_backup(is_plain_backup_)
     , log(getLogger("BackupCoordinationOnCluster"))
-    , with_retries(log, get_zookeeper_, keeper_settings, process_list_element_, /* on_cluster_coordination = */ true,
-        [root_zookeeper_path_](Coordination::ZooKeeperWithFaultInjection::Ptr zk)
-        {
-            LOG_INFO(getLogger("!!!"), "Syncing zk");
-            zk->sync(root_zookeeper_path_);
-            LOG_INFO(getLogger("!!!"), "Synced zk");
-        })
+    , with_retries(log, get_zookeeper_, keeper_settings, process_list_element_, [root_zookeeper_path_](Coordination::ZooKeeperWithFaultInjection::Ptr zk) { zk->sync(root_zookeeper_path_); })
     , concurrency_check(/* is_restore = */ false, backup_uuid_, /* on_cluster = */ true, allow_concurrent_backup_, concurrency_counters_)
     , stage_sync(/* is_restore = */ false, fs::path{zookeeper_path} / "stage", current_host, allow_concurrent_backup_, with_retries, schedule_, process_list_element_, log)
     , cleaner(zookeeper_path, with_retries, log)
@@ -189,16 +183,12 @@ BackupCoordinationOnCluster::BackupCoordinationOnCluster(
     createRootNodes();
 }
 
-BackupCoordinationOnCluster::~BackupCoordinationOnCluster()
-{
-    /// tryCleanupImpl() must not throw any exceptions.
-    //tryCleanupImpl();
-}
+BackupCoordinationOnCluster::~BackupCoordinationOnCluster() = default;
 
 void BackupCoordinationOnCluster::createRootNodes()
 {
     auto holder = with_retries.createRetriesControlHolder("createRootNodes", {.initialization = true});
-    holder.retryLoop(
+    holder.retries_ctl.retryLoop(
     [&, &zk = holder.faulty_zookeeper]()
     {
         with_retries.renewZooKeeper(zk);
@@ -226,11 +216,6 @@ void BackupCoordinationOnCluster::finish(bool & all_hosts_finished)
 
 bool BackupCoordinationOnCluster::tryFinish(bool & all_hosts_finished) noexcept
 {
-    return tryFinishImpl(all_hosts_finished);
-}
-
-bool BackupCoordinationOnCluster::tryFinishImpl(bool & all_hosts_finished) noexcept
-{
     if (current_host == kInitiator)
         stage_sync.tryWaitForHostsToFinish(all_hosts);
 
@@ -248,18 +233,14 @@ void BackupCoordinationOnCluster::cleanup()
 
 bool BackupCoordinationOnCluster::tryCleanup() noexcept
 {
-    return tryCleanupImpl();
-}
-
-bool BackupCoordinationOnCluster::tryCleanupImpl() noexcept
-{
     bool all_hosts_finished = false;
-    bool ok = tryFinishImpl(all_hosts_finished);
+    if (!tryFinish(all_hosts_finished))
+        return false;
 
-    if (ok && all_hosts_finished)
-        ok = cleaner.tryCleanup();
+    if (all_hosts_finished && !cleaner.tryCleanup())
+        return false;
 
-    return ok;
+    return true;
 }
 
 void BackupCoordinationOnCluster::setStage(const String & new_stage, const String & message)
@@ -267,9 +248,9 @@ void BackupCoordinationOnCluster::setStage(const String & new_stage, const Strin
     stage_sync.setStage(new_stage, message);
 }
 
-void BackupCoordinationOnCluster::setError(const Exception & exception)
+bool BackupCoordinationOnCluster::trySetError(std::exception_ptr exception)
 {
-    stage_sync.setError(exception);
+    return stage_sync.trySetError(exception);
 }
 
 Strings BackupCoordinationOnCluster::waitForStage(const String & stage_to_wait, std::optional<std::chrono::milliseconds> timeout)
@@ -282,11 +263,18 @@ std::chrono::seconds BackupCoordinationOnCluster::getOnClusterInitializationTime
     return keeper_settings.on_cluster_initialization_timeout;
 }
 
+ZooKeeperRetriesInfo BackupCoordinationOnCluster::getOnClusterInitializationKeeperRetriesInfo() const
+{
+    return ZooKeeperRetriesInfo{keeper_settings.max_retries_while_initializing,
+                                static_cast<UInt64>(keeper_settings.retry_initial_backoff_ms.count()),
+                                static_cast<UInt64>(keeper_settings.retry_max_backoff_ms.count())};
+}
+
 void BackupCoordinationOnCluster::serializeToMultipleZooKeeperNodes(const String & path, const String & value, const String & logging_name)
 {
     {
         auto holder = with_retries.createRetriesControlHolder(logging_name + "::create");
-        holder.retryLoop(
+        holder.retries_ctl.retryLoop(
         [&, &zk = holder.faulty_zookeeper]()
         {
             with_retries.renewZooKeeper(zk);
@@ -311,7 +299,7 @@ void BackupCoordinationOnCluster::serializeToMultipleZooKeeperNodes(const String
         String part_path = fmt::format("{}/{:06}", path, i);
 
         auto holder = with_retries.createRetriesControlHolder(logging_name + "::createPart");
-        holder.retryLoop(
+        holder.retries_ctl.retryLoop(
         [&, &zk = holder.faulty_zookeeper]()
         {
             with_retries.renewZooKeeper(zk);
@@ -326,7 +314,7 @@ String BackupCoordinationOnCluster::deserializeFromMultipleZooKeeperNodes(const 
 
     {
         auto holder = with_retries.createRetriesControlHolder(logging_name + "::getChildren");
-        holder.retryLoop(
+        holder.retries_ctl.retryLoop(
         [&, &zk = holder.faulty_zookeeper]()
         {
             with_retries.renewZooKeeper(zk);
@@ -341,7 +329,7 @@ String BackupCoordinationOnCluster::deserializeFromMultipleZooKeeperNodes(const 
         String part;
         String part_path = path + "/" + part_name;
         auto holder = with_retries.createRetriesControlHolder(logging_name + "::get");
-        holder.retryLoop(
+        holder.retries_ctl.retryLoop(
         [&, &zk = holder.faulty_zookeeper]()
         {
             with_retries.renewZooKeeper(zk);
@@ -366,7 +354,7 @@ void BackupCoordinationOnCluster::addReplicatedPartNames(
     }
 
     auto holder = with_retries.createRetriesControlHolder("addReplicatedPartNames");
-    holder.retryLoop(
+    holder.retries_ctl.retryLoop(
     [&, &zk = holder.faulty_zookeeper]()
     {
         with_retries.renewZooKeeper(zk);
@@ -397,7 +385,7 @@ void BackupCoordinationOnCluster::addReplicatedMutations(
     }
 
     auto holder = with_retries.createRetriesControlHolder("addReplicatedMutations");
-    holder.retryLoop(
+    holder.retries_ctl.retryLoop(
         [&, &zk = holder.faulty_zookeeper]()
         {
             with_retries.renewZooKeeper(zk);
@@ -426,7 +414,7 @@ void BackupCoordinationOnCluster::addReplicatedDataPath(
     }
 
     auto holder = with_retries.createRetriesControlHolder("addReplicatedDataPath");
-    holder.retryLoop(
+    holder.retries_ctl.retryLoop(
     [&, &zk = holder.faulty_zookeeper]()
     {
         with_retries.renewZooKeeper(zk);
@@ -453,7 +441,7 @@ void BackupCoordinationOnCluster::prepareReplicatedTables() const
     std::vector<BackupCoordinationReplicatedTables::PartNamesForTableReplica> part_names_for_replicated_tables;
     {
         auto holder = with_retries.createRetriesControlHolder("prepareReplicatedTables::repl_part_names");
-        holder.retryLoop(
+        holder.retries_ctl.retryLoop(
             [&, &zk = holder.faulty_zookeeper]()
         {
             part_names_for_replicated_tables.clear();
@@ -478,7 +466,7 @@ void BackupCoordinationOnCluster::prepareReplicatedTables() const
     std::vector<BackupCoordinationReplicatedTables::MutationsForTableReplica> mutations_for_replicated_tables;
     {
         auto holder = with_retries.createRetriesControlHolder("prepareReplicatedTables::repl_mutations");
-        holder.retryLoop(
+        holder.retries_ctl.retryLoop(
             [&, &zk = holder.faulty_zookeeper]()
         {
             mutations_for_replicated_tables.clear();
@@ -503,7 +491,7 @@ void BackupCoordinationOnCluster::prepareReplicatedTables() const
     std::vector<BackupCoordinationReplicatedTables::DataPathForTableReplica> data_paths_for_replicated_tables;
     {
         auto holder = with_retries.createRetriesControlHolder("prepareReplicatedTables::repl_data_paths");
-        holder.retryLoop(
+        holder.retries_ctl.retryLoop(
             [&, &zk = holder.faulty_zookeeper]()
         {
             data_paths_for_replicated_tables.clear();
@@ -541,7 +529,7 @@ void BackupCoordinationOnCluster::addReplicatedAccessFilePath(const String & acc
     }
 
     auto holder = with_retries.createRetriesControlHolder("addReplicatedAccessFilePath");
-    holder.retryLoop(
+    holder.retries_ctl.retryLoop(
         [&, &zk = holder.faulty_zookeeper]()
     {
         with_retries.renewZooKeeper(zk);
@@ -568,7 +556,7 @@ void BackupCoordinationOnCluster::prepareReplicatedAccess() const
 
     std::vector<BackupCoordinationReplicatedAccess::FilePathForAccessEntity> file_path_for_access_entities;
     auto holder = with_retries.createRetriesControlHolder("prepareReplicatedAccess");
-    holder.retryLoop(
+    holder.retries_ctl.retryLoop(
         [&, &zk = holder.faulty_zookeeper]()
     {
         file_path_for_access_entities.clear();
@@ -606,7 +594,7 @@ void BackupCoordinationOnCluster::addReplicatedSQLObjectsDir(const String & load
     }
 
     auto holder = with_retries.createRetriesControlHolder("addReplicatedSQLObjectsDir");
-    holder.retryLoop(
+    holder.retries_ctl.retryLoop(
         [&, &zk = holder.faulty_zookeeper]()
     {
         with_retries.renewZooKeeper(zk);
@@ -641,7 +629,7 @@ void BackupCoordinationOnCluster::prepareReplicatedSQLObjects() const
 
     std::vector<BackupCoordinationReplicatedSQLObjects::DirectoryPathForSQLObject> directories_for_sql_objects;
     auto holder = with_retries.createRetriesControlHolder("prepareReplicatedSQLObjects");
-    holder.retryLoop(
+    holder.retries_ctl.retryLoop(
         [&, &zk = holder.faulty_zookeeper]()
     {
         directories_for_sql_objects.clear();
@@ -679,7 +667,7 @@ void BackupCoordinationOnCluster::addKeeperMapTable(const String & table_zookeep
     }
 
     auto holder = with_retries.createRetriesControlHolder("addKeeperMapTable");
-    holder.retryLoop(
+    holder.retries_ctl.retryLoop(
     [&, &zk = holder.faulty_zookeeper]()
     {
         with_retries.renewZooKeeper(zk);
@@ -698,7 +686,7 @@ void BackupCoordinationOnCluster::prepareKeeperMapTables() const
 
     std::vector<std::pair<std::string, BackupCoordinationKeeperMapTables::KeeperMapTableInfo>> keeper_map_table_infos;
     auto holder = with_retries.createRetriesControlHolder("prepareKeeperMapTables");
-    holder.retryLoop(
+    holder.retries_ctl.retryLoop(
         [&, &zk = holder.faulty_zookeeper]()
     {
         keeper_map_table_infos.clear();
@@ -781,7 +769,7 @@ void BackupCoordinationOnCluster::prepareFileInfos() const
     Strings hosts_with_file_infos;
     {
         auto holder = with_retries.createRetriesControlHolder("prepareFileInfos::get_hosts");
-        holder.retryLoop(
+        holder.retries_ctl.retryLoop(
             [&, &zk = holder.faulty_zookeeper]()
         {
             with_retries.renewZooKeeper(zk);
@@ -812,7 +800,7 @@ bool BackupCoordinationOnCluster::startWritingFile(size_t data_file_index)
     String host_index_str = std::to_string(current_host_index);
 
     auto holder = with_retries.createRetriesControlHolder("startWritingFile");
-    holder.retryLoop(
+    holder.retries_ctl.retryLoop(
             [&, &zk = holder.faulty_zookeeper]()
     {
         with_retries.renewZooKeeper(zk);

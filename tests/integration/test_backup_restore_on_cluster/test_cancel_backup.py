@@ -231,7 +231,9 @@ def wait_num_system_processes(
             node_or_nodes if (type(node_or_nodes) is list) else [node_or_nodes]
         )
         for node in nodes_to_consider:
-            count = get_num_system_processes(node, backup_id=backup_id, restore_id=restore_id)
+            count = get_num_system_processes(
+                node, backup_id=backup_id, restore_id=restore_id
+            )
             print(
                 f"{get_node_name(node)}: Got {count} system processes for {operation_name} {id} after waiting {waited} seconds"
             )
@@ -316,7 +318,8 @@ def use_separate_keepers_on_nodes(turn_on):
 
 # Sleeps for random amount of time.
 def random_sleep(max_seconds):
-    sleep(random.uniform(0, max_seconds))
+    if random.randint(0, 5) > 0:
+        sleep(random.uniform(0, max_seconds))
 
 
 def sleep(seconds):
@@ -342,6 +345,19 @@ class NoTrashChecker:
         nodes_in_zookeeper = nodes_in_zookeeper_query_result.splitlines()
         if nodes_in_zookeeper:
             print(f"Found nodes in ZooKeeper: {nodes_in_zookeeper}")
+            for node in nodes_in_zookeeper:
+                print(
+                    f"Nodes in '/clickhouse/backups/{node}':\n"
+                    + node1.query(
+                        f"SELECT name FROM system.zookeeper WHERE path = '/clickhouse/backups/{node}'"
+                    )
+                )
+                print(
+                    f"Nodes in '/clickhouse/backups/{node}/stage':\n"
+                    + node1.query(
+                        f"SELECT name FROM system.zookeeper WHERE path = '/clickhouse/backups/{node}/stage'"
+                    )
+                )
         assert nodes_in_zookeeper == []
 
         list_of_backups = set(
@@ -600,13 +616,15 @@ def test_long_disconnection_stops_backup():
     assert get_num_system_processes(initiator, backup_id=backup_id) >= 1
 
     if random.randint(0, 5) > 0:
-       random_sleep(5)
+        random_sleep(5)
 
     with PartitionManager() as pm:
         time_before_disconnection = time.monotonic()
 
         node_to_drop_zk_connection = random_node()
-        print(f"Dropping connection between {get_node_name(node_to_drop_zk_connection)} and ZooKeeper")
+        print(
+            f"Dropping connection between {get_node_name(node_to_drop_zk_connection)} and ZooKeeper"
+        )
         pm.drop_instance_zk_connections(node_to_drop_zk_connection)
 
         # Being disconnected from ZooKeeper a backup is expected to fail.
@@ -614,65 +632,52 @@ def test_long_disconnection_stops_backup():
 
         time_to_fail = time.monotonic() - time_before_disconnection
         error = get_error(initiator, backup_id=backup_id)
-        expected_errors = ["Lost connection .* timeout", "Distributed DDL task .* is not finished"]
-        assert any(re.search(expected_error, error) for expected_error in expected_errors)
+        print(f"error={error}")
+        expected_errors = [
+            "Lost connection .* timeout",
+            "Distributed DDL task .* is not finished",
+        ]
+        assert any(
+            re.search(expected_error, error) for expected_error in expected_errors
+        )
 
         # A backup is expected to fail, but it isn't expected to fail too soon.
         print(f"Backup failed after {time_to_fail} seconds disconnection")
         assert time_to_fail > 5
         assert time_to_fail < 30
 
-    assert False
-
 
 # A backup must NOT be stopped if Zookeeper is disconnected shorter than `failure_after_host_disconnected_for_seconds`.
-def test_not_so_long_disconnection_doesnt_stop_backup():
-    use_separate_keepers_on_nodes(True)
-    create_and_fill_table(random_node())
-
+def test_short_disconnection_doesnt_stop_backup():
     no_trash_checker = NoTrashChecker()
+    create_and_fill_table(random_node())
 
     initiator = random_node()
     print(f"Using {get_node_name(initiator)} as initiator")
 
-    # Minimum for `failure_after_host_disconnected_for_seconds` must be greater than the time required to stop and start zookeeper node.
-    failure_after_host_disconnected_for_seconds = random.randint(18, 30)
-    print(
-        f"Settings: failure_after_host_disconnected_for_seconds = {failure_after_host_disconnected_for_seconds}"
-    )
-
     backup_id = random_id()
     initiator.query(
-        f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC",
-        settings={
-            "backup_restore_failure_after_host_disconnected_for_seconds": failure_after_host_disconnected_for_seconds
-        },
+        f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC"
     )
 
     assert get_status(initiator, backup_id=backup_id) == "CREATING_BACKUP"
     assert get_num_system_processes(initiator, backup_id=backup_id) >= 1
 
-    # Stop some zookeeper nodes.
-    zoo_nodes_to_stop = random.choice([["zoo1"], ["zoo2"], ["zoo1", "zoo2"]])
-    time_before_disconnection = time.monotonic()
-    stop_zookeeper_servers(zoo_nodes_to_stop)
+    random_sleep(5)
 
-    time_to_stop_zookeeper = time.monotonic() - time_before_disconnection
-    # `failure_after_host_disconnected_for_seconds` must be big enough for this test
-    assert failure_after_host_disconnected_for_seconds > time_to_stop_zookeeper
-    time_to_start_zookeeper = 1
-    max_sleep_time = max(
-        failure_after_host_disconnected_for_seconds
-        - time_to_stop_zookeeper
-        - time_to_start_zookeeper,
-        0,
-    )
-    sleep_time = random.uniform(0, max_sleep_time)
-    time.sleep(sleep_time)
+    # Dropping connection for less than `failure_after_host_disconnected_for_seconds`
+    with PartitionManager() as pm:
+        node_to_drop_zk_connection = random_node()
+        print(
+            f"Dropping connection between {get_node_name(node_to_drop_zk_connection)} and ZooKeeper"
+        )
+        pm.drop_instance_zk_connections(node_to_drop_zk_connection)
+        random_sleep(5)
+        print(
+            f"Restoring connection between {get_node_name(node_to_drop_zk_connection)} and ZooKeeper"
+        )
 
-    # Start the stopped zookeeper nodes again, the backup must not fail.
-    start_zookeeper_servers(zoo_nodes_to_stop)
-
+    # Backup must be successful.
     wait_status(initiator, "BACKUP_CREATED", backup_id=backup_id)
     assert get_num_system_processes(nodes, backup_id=backup_id) == 0
 
@@ -686,6 +691,3 @@ def test_not_so_long_disconnection_doesnt_stop_backup():
             "TABLE_IS_READ_ONLY",
         ],
     )
-
-    # Take care about other tests.
-    use_separate_keepers_on_nodes(False)

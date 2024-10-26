@@ -26,9 +26,11 @@ public:
 
     /// Sets the current stage and waits for other hosts to come to this stage too.
     void setStage(const String &, const String &) override {}
-    void setError(const Exception &) override {}
+    bool trySetError(std::exception_ptr) override { return true; }
     Strings waitForStage(const String &, std::optional<std::chrono::milliseconds>) override { return {}; }
+
     std::chrono::seconds getOnClusterInitializationTimeout() const override { return {}; }
+    ZooKeeperRetriesInfo getOnClusterInitializationKeeperRetriesInfo() const override;
 
     /// Starts creating a table in a replicated database. Returns false if there is another host which is already creating this table.
     bool acquireCreatingTableInReplicatedDatabase(const String & database_zk_path, const String & table_name) override;

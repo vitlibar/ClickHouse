@@ -37,15 +37,17 @@ public:
 
     ~BackupCoordinationOnCluster() override;
 
-    void finish(bool & all_hosts_finished) override;
-    bool tryFinish(bool & all_hosts_finished) noexcept override;
     void cleanup() override;
     bool tryCleanup() noexcept override;
+    void finish(bool & all_hosts_finished) override;
+    bool tryFinish(bool & all_hosts_finished) noexcept override;
 
     void setStage(const String & new_stage, const String & message) override;
-    void setError(const Exception & exception) override;
+    bool trySetError(std::exception_ptr exception) override;
     Strings waitForStage(const String & stage_to_wait, std::optional<std::chrono::milliseconds> timeout) override;
+
     std::chrono::seconds getOnClusterInitializationTimeout() const override;
+    ZooKeeperRetriesInfo getOnClusterInitializationKeeperRetriesInfo() const override;
 
     void addReplicatedPartNames(
         const String & table_zk_path,
@@ -84,9 +86,6 @@ public:
 
 private:
     void createRootNodes();
-
-    bool tryFinishImpl(bool & all_hosts_finish) noexcept;
-    bool tryCleanupImpl() noexcept;
 
     void serializeToMultipleZooKeeperNodes(const String & path, const String & value, const String & logging_name);
     String deserializeFromMultipleZooKeeperNodes(const String & path, const String & logging_name) const;

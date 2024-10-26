@@ -437,8 +437,6 @@ void ZooKeeper::connect(
     const zkutil::ShuffleHosts & nodes,
     Poco::Timespan connection_timeout)
 {
-    LOG_INFO(getLogger("!!!"), "ZooKeeper::connect: connection_timeout = {}", connection_timeout.seconds());
-
     if (nodes.empty())
         throw Exception::fromMessage(Error::ZBADARGUMENTS, "No nodes passed to ZooKeeper constructor");
 
@@ -482,12 +480,8 @@ void ZooKeeper::connect(
     WriteBufferFromOwnString fail_reasons;
     for (size_t try_no = 0; try_no < num_tries; ++try_no)
     {
-        size_t node_index = 0;
         for (const auto & node : nodes)
         {
-            LOG_INFO(getLogger("!!!"), "ZooKeeper::connect: try_no = {}, node_index = {}", try_no, node_index);
-            ++node_index;
-
             try
             {
                 if (!node.address)

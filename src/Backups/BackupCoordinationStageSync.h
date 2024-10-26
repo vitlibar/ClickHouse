@@ -23,7 +23,9 @@ public:
 
     /// Sets the stage of the current host and signal other hosts if there were other hosts waiting for that.
     void setStage(const String & stage, const String & stage_result = {});
-    void setError(const Exception & exception);
+
+    /// Lets other hosts know that the current host has encountered an error.
+    bool trySetError(std::exception_ptr exception);
 
     /// Waits until all the specified hosts come to the specified stage.
     /// The function returns the results which specified hosts set when they came to the required stage.
@@ -36,7 +38,6 @@ public:
     void finish(bool & all_hosts_finished);
 
     /// The same as finish(), but without throwing an exception if something goes wrong.
-    /// tryFinish() is called from the destructor but sometimes it makes sense to call it before that.
     bool tryFinish() noexcept;
     bool tryFinish(bool & all_hosts_finished) noexcept;
 
@@ -75,6 +76,10 @@ private:
     /// Reads the current state from ZooKeeper without throwing exceptions.
     void readCurrentState(Coordination::ZooKeeperWithFaultInjection::Ptr zookeeper);
     String getStageNodePath(const String & stage) const;
+
+    /// Lets other hosts know that the current host has encountered an error.
+    bool trySetError(const Exception & exception);
+    void setError(const Exception & exception);
 
     /// Reset the `connected` flag for each host.
     void resetConnectedFlag();

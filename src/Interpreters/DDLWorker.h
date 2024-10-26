@@ -48,6 +48,9 @@ struct DDLTaskBase;
 using DDLTaskPtr = std::unique_ptr<DDLTaskBase>;
 using ZooKeeperPtr = std::shared_ptr<zkutil::ZooKeeper>;
 class AccessRightsElements;
+struct ZooKeeperRetriesInfo;
+class QueryStatus;
+using QueryStatusPtr = std::shared_ptr<QueryStatus>;
 
 class DDLWorker
 {
@@ -57,7 +60,7 @@ public:
     virtual ~DDLWorker();
 
     /// Pushes query into DDL queue, returns path to created node
-    virtual String enqueueQuery(DDLLogEntry & entry);
+    virtual String enqueueQuery(DDLLogEntry & entry, const ZooKeeperRetriesInfo & retries_info, QueryStatusPtr process_list_element);
 
     /// Host ID (name:port) for logging purposes
     /// Note that in each task hosts are identified individually by name:port from initiator server cluster config

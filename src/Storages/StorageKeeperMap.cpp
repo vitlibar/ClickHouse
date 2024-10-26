@@ -852,7 +852,7 @@ private:
         std::vector<std::string> data_children;
         {
             auto holder = with_retries->createRetriesControlHolder("getKeeperMapDataKeys");
-            holder.retryLoop(
+            holder.retries_ctl.retryLoop(
             [&, &zk = holder.faulty_zookeeper]()
             {
                 with_retries->renewZooKeeper(zk);
@@ -870,7 +870,7 @@ private:
 
             zkutil::ZooKeeper::MultiTryGetResponse data;
             auto holder = with_retries->createRetriesControlHolder("getKeeperMapDataKeys");
-            holder.retryLoop(
+            holder.retries_ctl.retryLoop(
             [&, &zk = holder.faulty_zookeeper]
             {
                 with_retries->renewZooKeeper(zk);
@@ -981,7 +981,7 @@ void StorageKeeperMap::restoreDataFromBackup(RestorerFromBackup & restorer, cons
         Coordination::Stat data_stats;
 
         auto holder = with_retries->createRetriesControlHolder("checkKeeperMapData");
-        holder.retryLoop(
+        holder.retries_ctl.retryLoop(
         [&, &zk = holder.faulty_zookeeper]()
         {
             with_retries->renewZooKeeper(zk);
@@ -1041,7 +1041,7 @@ void StorageKeeperMap::restoreDataImpl(
     const auto flush_create_requests = [&]
     {
         auto holder = with_retries->createRetriesControlHolder("addKeeperMapData");
-        holder.retryLoop(
+        holder.retries_ctl.retryLoop(
         [&, &zk = holder.faulty_zookeeper]()
         {
             with_retries->renewZooKeeper(zk);
@@ -1063,7 +1063,7 @@ void StorageKeeperMap::restoreDataImpl(
         if (allow_non_empty_tables)
         {
             auto holder = with_retries->createRetriesControlHolder("addKeeperMapData");
-            holder.retryLoop(
+            holder.retries_ctl.retryLoop(
             [&, &zk = holder.faulty_zookeeper]()
             {
                 with_retries->renewZooKeeper(zk);

@@ -1,6 +1,7 @@
 #include <Backups/BackupCoordinationLocal.h>
 
 #include <Common/Exception.h>
+#include <Common/ZooKeeper/ZooKeeperRetries.h>
 #include <Common/logger_useful.h>
 #include <Common/quoteString.h>
 #include <fmt/format.h>
@@ -40,6 +41,11 @@ void BackupCoordinationLocal::cleanup()
 bool BackupCoordinationLocal::tryCleanup() noexcept
 {
     return true;
+}
+
+ZooKeeperRetriesInfo BackupCoordinationLocal::getOnClusterInitializationKeeperRetriesInfo() const
+{
+    return {};
 }
 
 void BackupCoordinationLocal::addReplicatedPartNames(const String & table_zk_path, const String & table_name_for_logs, const String & replica_name, const std::vector<PartNameAndChecksum> & part_names_and_checksums)

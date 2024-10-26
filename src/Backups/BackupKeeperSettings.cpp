@@ -14,6 +14,8 @@ namespace Setting
     extern const SettingsUInt64 backup_restore_keeper_retry_initial_backoff_ms;
     extern const SettingsUInt64 backup_restore_keeper_retry_max_backoff_ms;
     extern const SettingsUInt64 backup_restore_failure_after_host_disconnected_for_seconds;
+    extern const SettingsUInt64 backup_restore_on_cluster_initialization_timeout_sec;
+    extern const SettingsUInt64 backup_restore_keeper_max_retries_while_initializing;
     extern const SettingsUInt64 backup_restore_keeper_value_max_size;
     extern const SettingsUInt64 backup_restore_batch_size_for_keeper_multi;
     extern const SettingsUInt64 backup_restore_batch_size_for_keeper_multiread;
@@ -36,13 +38,8 @@ BackupKeeperSettings BackupKeeperSettings::fromContext(const ContextPtr & contex
     if (config.has("backups.sync_period_ms"))
         keeper_settings.sync_period_ms = std::chrono::milliseconds{config.getUInt64("backups.sync_period_ms")};
 
-    if (config.has("backups.on_cluster_initialization_timeout_sec"))
-        keeper_settings.on_cluster_initialization_timeout = std::chrono::seconds{config.getUInt64("backups.on_cluster_initialization_timeout_sec")};
-    else if (config.has("backups.on_cluster_first_sync_timeout")) /// obsolete name
-        keeper_settings.on_cluster_initialization_timeout = std::chrono::seconds{config.getUInt64("backups.on_cluster_first_sync_timeout") / 1000};
-
-    if (config.has("backups.max_retries_while_initializing"))
-        keeper_settings.max_retries_while_initializing = config.getUInt64("backups.max_retries_while_initializing");
+    keeper_settings.on_cluster_initialization_timeout = std::chrono::seconds{settings[Setting::backup_restore_on_cluster_initialization_timeout_sec]};
+    keeper_settings.max_retries_while_initializing = settings[Setting::backup_restore_keeper_max_retries_while_initializing];
 
     if (config.has("backups.on_cluster_error_handling_timeout_sec"))
         keeper_settings.on_cluster_error_handling_timeout = std::chrono::seconds{config.getUInt64("backups.on_cluster_error_handling_timeout_sec")};

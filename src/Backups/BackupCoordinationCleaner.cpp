@@ -33,7 +33,7 @@ bool BackupCoordinationCleaner::tryRemoveAllNodes(const WithRetries::Params & re
     {
         LOG_TRACE(log, "Removing nodes from ZooKeeper");
         auto holder = with_retries.createRetriesControlHolder("removeAllNodes", retries_params);
-        holder.retryLoop([&, &zookeeper = holder.faulty_zookeeper]()
+        holder.retries_ctl.retryLoop([&, &zookeeper = holder.faulty_zookeeper]()
         {
             with_retries.renewZooKeeper(zookeeper);
             zookeeper->removeRecursive(zookeeper_path);
