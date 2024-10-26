@@ -32,6 +32,7 @@ using ThreadGroupPtr = std::shared_ptr<ThreadGroup>;
 class QueryStatus;
 using QueryStatusPtr = std::shared_ptr<QueryStatus>;
 class ProcessList;
+struct DDLQueryOnClusterParams;
 class Cluster;
 using ClusterPtr = std::shared_ptr<Cluster>;
 
@@ -108,6 +109,8 @@ private:
 
     std::shared_ptr<IBackupCoordination> makeBackupCoordination(bool on_cluster_coordination, const BackupSettings & backup_settings, const ContextPtr & context) const;
     std::shared_ptr<IRestoreCoordination> makeRestoreCoordination(bool on_cluster_coordination, const RestoreSettings & restore_settings, const ContextPtr & context) const;
+
+    void startOnClusterOperation(const ASTBackupQuery & backup_or_restore_query, ContextMutablePtr context, const DDLQueryOnClusterParams & on_cluster_params, std::chrono::seconds on_cluster_initialization_timeout) const;
 
     /// Run data restoring tasks which insert data to tables.
     void restoreTablesData(const BackupOperationID & restore_id, BackupPtr backup, DataRestoreTasks && tasks, ThreadPool & thread_pool, QueryStatusPtr process_list_element);

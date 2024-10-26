@@ -53,6 +53,7 @@ namespace ErrorCodes
     extern const int BAD_ARGUMENTS;
     extern const int LOGICAL_ERROR;
     extern const int QUERY_WAS_CANCELLED;
+    extern const int FAILED_TO_SYNC_BACKUP_OR_RESTORE;
 }
 
 using OperationID = BackupOperationID;
@@ -459,19 +460,22 @@ struct BackupsWorker::BackupStarter
         if (backup && !backup->setIsCorrupted())
             should_remove_files_in_backup = false;
 
-        if (backup_coordination)
+        if (getCurrentExceptionCode() != ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE)
         {
-            sendCurrentExceptionToCoordination(backup_coordination);
-            bool all_hosts_finished = false;
-            if (!backup_coordination->tryFinish(all_hosts_finished) || !all_hosts_finished)
-                should_remove_files_in_backup = false;
+            if (backup_coordination)
+            {
+                sendCurrentExceptionToCoordination(backup_coordination);
+                bool all_hosts_finished = false;
+                if (!backup_coordination->tryFinish(all_hosts_finished) || !all_hosts_finished)
+                    should_remove_files_in_backup = false;
+            }
+
+            if (should_remove_files_in_backup)
+                backup->tryRemoveAllFiles();
+
+            if (backup_coordination)
+                backup_coordination->tryCleanup();
         }
-
-        if (should_remove_files_in_backup)
-            backup->tryRemoveAllFiles();
-
-        if (backup_coordination)
-            backup_coordination->tryCleanup();
 
         backups_worker.setStatusSafe(backup_id, getBackupStatusFromCurrentException());
     }
@@ -582,16 +586,7 @@ void BackupsWorker::doBackup(
         params.access_to_check = required_access;
         backup_settings.copySettingsToQuery(*backup_query);
 
-        // executeDDLQueryOnCluster() will return without waiting for completion
-        Int64 distributed_ddl_task_timeout = backup_coordination->getOnClusterInitializationTimeout().count();
-        if (!distributed_ddl_task_timeout)
-            distributed_ddl_task_timeout = -1;
-        context->setSetting("distributed_ddl_task_timeout", Field{distributed_ddl_task_timeout});
-        context->setSetting("distributed_ddl_output_mode", Field{"none"});
-        BlockIO io = executeDDLQueryOnCluster(backup_query, context, params);
-        CompletedPipelineExecutor{io.pipeline}.execute();
-
-        maybeSleepForTesting();
+        startOnClusterOperation(*backup_query, context, params, backup_coordination->getOnClusterInitializationTimeout());
 
         /// Wait until all the hosts have written their backup entries.
         backup_coordination->waitForStage(Stage::COMPLETED);
@@ -846,10 +841,13 @@ struct BackupsWorker::RestoreStarter
         /// Something bad happened, some data were not restored.
         tryLogCurrentException(backups_worker.log, fmt::format("Failed to restore from {} {}", (is_internal_restore ? "internal backup" : "backup"), backup_name_for_logging));
 
-        if (restore_coordination)
+        if (getCurrentExceptionCode() != ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE)
         {
-            sendCurrentExceptionToCoordination(restore_coordination);
-            restore_coordination->tryCleanup();
+            if (restore_coordination)
+            {
+                sendCurrentExceptionToCoordination(restore_coordination);
+                restore_coordination->tryCleanup();
+            }
         }
 
         backups_worker.setStatusSafe(restore_id, getRestoreStatusFromCurrentException());
@@ -969,15 +967,7 @@ void BackupsWorker::doRestore(
         params.only_replica_num = restore_settings.replica_num;
         restore_settings.copySettingsToQuery(*restore_query);
 
-        Int64 distributed_ddl_task_timeout = restore_coordination->getOnClusterInitializationTimeout().count();
-        if (!distributed_ddl_task_timeout)
-            distributed_ddl_task_timeout = -1;
-        context->setSetting("distributed_ddl_task_timeout", Field{distributed_ddl_task_timeout});
-        context->setSetting("distributed_ddl_output_mode", Field{"none"});
-        BlockIO io = executeDDLQueryOnCluster(restore_query, context, params);
-        CompletedPipelineExecutor{io.pipeline}.execute();
-
-        maybeSleepForTesting();
+        startOnClusterOperation(*restore_query, context, params, restore_coordination->getOnClusterInitializationTimeout());
 
         /// Wait until all the hosts have written their backup entries.
         restore_coordination->waitForStage(Stage::COMPLETED);
@@ -1007,6 +997,31 @@ void BackupsWorker::doRestore(
 
     LOG_INFO(log, "Restored from {} {} successfully", (restore_settings.internal ? "internal backup" : "backup"), backup_name_for_logging);
     setStatus(restore_id, BackupStatus::RESTORED);
+}
+
+
+void BackupsWorker::startOnClusterOperation(const ASTBackupQuery & backup_or_restore_query, ContextMutablePtr context, const DDLQueryOnClusterParams & on_cluster_params, std::chrono::seconds on_cluster_initialization_timeout) const
+{
+    Int64 distributed_ddl_task_timeout = on_cluster_initialization_timeout.count();
+    if (!distributed_ddl_task_timeout)
+        distributed_ddl_task_timeout = -1;
+    context->setSetting("distributed_ddl_task_timeout", Field{distributed_ddl_task_timeout});
+    context->setSetting("distributed_ddl_output_mode", Field{"none"});
+
+    try
+    {
+        // executeDDLQueryOnCluster() will return without waiting for completion
+        BlockIO io = executeDDLQueryOnCluster(backup_or_restore_query.clone(), context, on_cluster_params);
+        CompletedPipelineExecutor{io.pipeline}.execute();
+    }
+    catch (const zkutil::KeeperException & e)
+    {
+        if (!Coordination::isHardwareError(e.code))
+            throw;
+        throw Exception(getExceptionMessageAndPattern(e, /* with_stacktrace = */ true), ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE);
+    }
+
+    maybeSleepForTesting();
 }
 
 

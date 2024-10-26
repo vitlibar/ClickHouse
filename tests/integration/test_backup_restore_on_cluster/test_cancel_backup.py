@@ -3,7 +3,7 @@ import random
 import re
 import time
 import uuid
-from datetime import datetime
+from helpers.network import PartitionManager
 
 import pytest
 
@@ -63,6 +63,8 @@ def cleanup_after_test():
     try:
         yield
     finally:
+        node1.query("SYSTEM RELOAD CONFIG")
+        node2.query("SYSTEM RELOAD CONFIG")
         node1.query("DROP TABLE IF EXISTS tbl ON CLUSTER 'cluster' SYNC")
 
 
@@ -134,7 +136,11 @@ def wait_status(
     operation_name = "backup" if backup_id is not None else "restore"
     current_status = get_status(initiator, backup_id=backup_id, restore_id=restore_id)
     waited = 0
-    while (current_status != status) and ((timeout is None) or (waited < timeout)):
+    while (
+        (current_status != status)
+        and (current_status in ["CREATING_BACKUP", "RESTORING"])
+        and ((timeout is None) or (waited < timeout))
+    ):
         sleep_time = 1 if (timeout is None) else min(1, timeout - waited)
         time.sleep(sleep_time)
         waited += sleep_time
@@ -224,12 +230,10 @@ def wait_num_system_processes(
         nodes_to_consider = (
             node_or_nodes if (type(node_or_nodes) is list) else [node_or_nodes]
         )
-        for n in nodes_to_consider:
-            count = get_num_system_processes(
-                node=n, backup_id=backup_id, restore_id=restore_id
-            )
+        for node in nodes_to_consider:
+            count = get_num_system_processes(node, backup_id=backup_id, restore_id=restore_id)
             print(
-                f"{get_node_name(n)}: Got {count} system processes for {operation_name} {id} after waiting {waited} seconds"
+                f"{get_node_name(node)}: Got {count} system processes for {operation_name} {id} after waiting {waited} seconds"
             )
         assert False
     return waited
@@ -237,7 +241,9 @@ def wait_num_system_processes(
 
 # Kills a BACKUP or RESTORE query.
 # Returns how many seconds the KILL QUERY was executing.
-def kill_query(node, backup_id=None, restore_id=None, is_initial_query=None, timeout=None):
+def kill_query(
+    node, backup_id=None, restore_id=None, is_initial_query=None, timeout=None
+):
     id = backup_id if backup_id is not None else restore_id
     query_kind = "Backup" if backup_id is not None else "Restore"
     operation_name = "backup" if backup_id is not None else "restore"
@@ -414,7 +420,10 @@ def test_cancel_backup():
 
     # The timeout is 2 seconds here because a backup must be cancelled quickly.
     kill_query(
-        node_to_cancel, backup_id=backup_id, is_initial_query=cancel_as_initiator, timeout=3
+        node_to_cancel,
+        backup_id=backup_id,
+        is_initial_query=cancel_as_initiator,
+        timeout=3,
     )
 
     if cancel_as_initiator:
@@ -480,7 +489,10 @@ def test_cancel_restore():
 
     # The timeout is 2 seconds here because a restore must be cancelled quickly.
     kill_query(
-        node_to_cancel, restore_id=restore_id, is_initial_query=cancel_as_initiator, timeout=3
+        node_to_cancel,
+        restore_id=restore_id,
+        is_initial_query=cancel_as_initiator,
+        timeout=3,
     )
 
     if cancel_as_initiator:
@@ -574,47 +586,43 @@ def test_error_leaves_no_trash():
 
 # A backup must be stopped if Zookeeper is disconnected longer than `failure_after_host_disconnected_for_seconds`.
 def test_long_disconnection_stops_backup():
-    use_separate_keepers_on_nodes(True)
     create_and_fill_table(random_node(), num_parts=100)
 
     initiator = random_node()
     print(f"Using {get_node_name(initiator)} as initiator")
 
-    failure_after_host_disconnected_for_seconds = random.randint(1, 25)
-    print(
-        f"Settings: failure_after_host_disconnected_for_seconds = {failure_after_host_disconnected_for_seconds}"
-    )
-
     backup_id = random_id()
     initiator.query(
-        f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC",
-        settings={
-            "backup_restore_failure_after_host_disconnected_for_seconds": failure_after_host_disconnected_for_seconds
-        },
+        f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC"
     )
 
     assert get_status(initiator, backup_id=backup_id) == "CREATING_BACKUP"
     assert get_num_system_processes(initiator, backup_id=backup_id) >= 1
 
-    zoo_nodes_to_stop = random.choice([["zoo1"], ["zoo2"], ["zoo1", "zoo2"]])
-    time_before_disconnection = time.monotonic()
-    stop_zookeeper_servers(zoo_nodes_to_stop)
+    if random.randint(0, 5) > 0:
+       random_sleep(5)
 
-    # Being disconnected from ZooKeeper a backup is expected to fail.
-    wait_num_system_processes(nodes, 0, backup_id=backup_id)
+    with PartitionManager() as pm:
+        time_before_disconnection = time.monotonic()
 
-    time_to_fail = time.monotonic() - time_before_disconnection
-    assert get_status(initiator, backup_id=backup_id) == "BACKUP_FAILED"
-    expected_error = "Lost connection .* timeout"
-    assert re.search(expected_error, get_error(initiator, backup_id=backup_id))
+        node_to_drop_zk_connection = random_node()
+        print(f"Dropping connection between {get_node_name(node_to_drop_zk_connection)} and ZooKeeper")
+        pm.drop_instance_zk_connections(node_to_drop_zk_connection)
 
-    # A backup is expected to fail, but it isn't expected to fail too soon.
-    assert time_to_fail > failure_after_host_disconnected_for_seconds
-    assert time_to_fail < failure_after_host_disconnected_for_seconds + 30
+        # Being disconnected from ZooKeeper a backup is expected to fail.
+        wait_status(initiator, "BACKUP_FAILED", backup_id=backup_id)
 
-    # Take care about other tests.
-    start_zookeeper_servers(zoo_nodes_to_stop)
-    use_separate_keepers_on_nodes(False)
+        time_to_fail = time.monotonic() - time_before_disconnection
+        error = get_error(initiator, backup_id=backup_id)
+        expected_errors = ["Lost connection .* timeout", "Distributed DDL task .* is not finished"]
+        assert any(re.search(expected_error, error) for expected_error in expected_errors)
+
+        # A backup is expected to fail, but it isn't expected to fail too soon.
+        print(f"Backup failed after {time_to_fail} seconds disconnection")
+        assert time_to_fail > 5
+        assert time_to_fail < 30
+
+    assert False
 
 
 # A backup must NOT be stopped if Zookeeper is disconnected shorter than `failure_after_host_disconnected_for_seconds`.

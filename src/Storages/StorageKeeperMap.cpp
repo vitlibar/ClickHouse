@@ -852,7 +852,7 @@ private:
         std::vector<std::string> data_children;
         {
             auto holder = with_retries->createRetriesControlHolder("getKeeperMapDataKeys");
-            holder.retries_ctl.retryLoop(
+            holder.retryLoop(
             [&, &zk = holder.faulty_zookeeper]()
             {
                 with_retries->renewZooKeeper(zk);
@@ -870,7 +870,7 @@ private:
 
             zkutil::ZooKeeper::MultiTryGetResponse data;
             auto holder = with_retries->createRetriesControlHolder("getKeeperMapDataKeys");
-            holder.retries_ctl.retryLoop(
+            holder.retryLoop(
             [&, &zk = holder.faulty_zookeeper]
             {
                 with_retries->renewZooKeeper(zk);
@@ -942,8 +942,7 @@ void StorageKeeperMap::backupData(BackupEntriesCollector & backup_entries_collec
             getLogger(fmt::format("StorageKeeperMapBackup ({})", getStorageID().getNameForLogs())),
             [&] { return getClient(); },
             BackupKeeperSettings::fromContext(backup_entries_collector.getContext()),
-            backup_entries_collector.getContext()->getProcessListElement(),
-            nullptr
+            backup_entries_collector.getContext()->getProcessListElement()
         );
 
         backup_entries_collector.addBackupEntries(
@@ -973,8 +972,7 @@ void StorageKeeperMap::restoreDataFromBackup(RestorerFromBackup & restorer, cons
         getLogger(fmt::format("StorageKeeperMapRestore ({})", getStorageID().getNameForLogs())),
         [&] { return getClient(); },
         BackupKeeperSettings::fromContext(restorer.getContext()),
-        restorer.getContext()->getProcessListElement(),
-        nullptr
+        restorer.getContext()->getProcessListElement()
     );
 
     bool allow_non_empty_tables = restorer.isNonEmptyTableAllowed();
@@ -983,7 +981,7 @@ void StorageKeeperMap::restoreDataFromBackup(RestorerFromBackup & restorer, cons
         Coordination::Stat data_stats;
 
         auto holder = with_retries->createRetriesControlHolder("checkKeeperMapData");
-        holder.retries_ctl.retryLoop(
+        holder.retryLoop(
         [&, &zk = holder.faulty_zookeeper]()
         {
             with_retries->renewZooKeeper(zk);
@@ -1043,7 +1041,7 @@ void StorageKeeperMap::restoreDataImpl(
     const auto flush_create_requests = [&]
     {
         auto holder = with_retries->createRetriesControlHolder("addKeeperMapData");
-        holder.retries_ctl.retryLoop(
+        holder.retryLoop(
         [&, &zk = holder.faulty_zookeeper]()
         {
             with_retries->renewZooKeeper(zk);
@@ -1065,7 +1063,7 @@ void StorageKeeperMap::restoreDataImpl(
         if (allow_non_empty_tables)
         {
             auto holder = with_retries->createRetriesControlHolder("addKeeperMapData");
-            holder.retries_ctl.retryLoop(
+            holder.retryLoop(
             [&, &zk = holder.faulty_zookeeper]()
             {
                 with_retries->renewZooKeeper(zk);

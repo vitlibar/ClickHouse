@@ -62,11 +62,13 @@ public:
     /// Each retryLoop is independent and it will execute f at least once
     void retryLoop(auto && f, auto && iteration_cleanup)
     {
+        LOG_INFO(::getLogger("!!!"), "retryLoop");
         current_iteration = 0;
         current_backoff_ms = retries_info.initial_backoff_ms;
 
         while (current_iteration == 0 || canTry())
         {
+            LOG_INFO(::getLogger("!!!"), "retryLoop - loop");
             /// reset the flag, it will be set to false in case of error
             iteration_succeeded = true;
             try
