@@ -13,10 +13,10 @@ public:
     BackupCoordinationCleaner(const String & zookeeper_path_, const WithRetries & with_retries_, LoggerPtr log_);
 
     void cleanup();
-    bool tryCleanup() noexcept;
+    bool tryCleanupAfterError() noexcept;
 
 private:
-    bool tryRemoveAllNodes(const WithRetries::Params & retries_params, bool throw_if_error);
+    bool tryRemoveAllNodes(bool throw_if_error, const WithRetries::Params & retries_params);
 
     const String zookeeper_path;
 
@@ -25,8 +25,12 @@ private:
 
     const LoggerPtr log;
 
-    bool succeeded TSA_GUARDED_BY(mutex) = false;
-    bool failed TSA_GUARDED_BY(mutex) = false;
+    struct CleanupResult
+    {
+        bool succeeded = false;
+        std::exception_ptr exception;
+    };
+    CleanupResult cleanup_result TSA_GUARDED_BY(mutex);
 
     std::mutex mutex;
 };

@@ -1,7 +1,5 @@
 <clickhouse>
     <backups>
-        <on_cluster_error_handling_timeout_sec>3</on_cluster_error_handling_timeout_sec>
-        <max_retries_while_handling_error>2</max_retries_while_handling_error>
         <sync_period_ms>1000</sync_period_ms>
         <consistent_metadata_snapshot_timeout>10000</consistent_metadata_snapshot_timeout>
         <create_table_timeout>3000</create_table_timeout>

@@ -83,8 +83,9 @@ private:
         const String & backup_name_for_logging,
         const BackupSettings & backup_settings,
         std::shared_ptr<IBackupCoordination> backup_coordination,
+        ContextMutablePtr context,
         const ClusterPtr & cluster,
-        ContextMutablePtr context);
+        bool & on_cluster_started);
 
     /// Builds file infos for specified backup entries.
     void buildFileInfosForBackupEntries(const BackupPtr & backup, const BackupEntries & backup_entries, const ReadSettings & read_settings, std::shared_ptr<IBackupCoordination> backup_coordination, QueryStatusPtr process_list_element);
@@ -104,13 +105,14 @@ private:
         const BackupInfo & backup_info,
         RestoreSettings restore_settings,
         std::shared_ptr<IRestoreCoordination> restore_coordination,
+        ContextMutablePtr context,
         const ClusterPtr & cluster,
-        ContextMutablePtr context);
+        bool & on_cluster_started);
 
     std::shared_ptr<IBackupCoordination> makeBackupCoordination(bool on_cluster_coordination, const BackupSettings & backup_settings, const ContextPtr & context) const;
     std::shared_ptr<IRestoreCoordination> makeRestoreCoordination(bool on_cluster_coordination, const RestoreSettings & restore_settings, const ContextPtr & context) const;
 
-    void startOnClusterOperation(const ASTBackupQuery & backup_or_restore_query, ContextMutablePtr context, const DDLQueryOnClusterParams & on_cluster_params, std::chrono::seconds on_cluster_initialization_timeout) const;
+    void startOnClusterOperation(const ASTBackupQuery & backup_or_restore_query, ContextMutablePtr context, const DDLQueryOnClusterParams & on_cluster_params) const;
 
     /// Run data restoring tasks which insert data to tables.
     void restoreTablesData(const BackupOperationID & restore_id, BackupPtr backup, DataRestoreTasks && tasks, ThreadPool & thread_pool, QueryStatusPtr process_list_element);

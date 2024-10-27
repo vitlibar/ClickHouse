@@ -21,23 +21,25 @@ class IBackupCoordination
 public:
     virtual ~IBackupCoordination() = default;
 
-    /// Cleans up all external data (e.g. nodes in ZooKeeper) this coordination is using.
-    virtual void cleanup() = 0;
-    virtual bool tryCleanup() noexcept = 0;
-
-    /// Sets that the current host finished its work. This is a part of cleanup().
-    /// The function sets its argument `all_hosts_finished` to true if all the other hosts finished their works too.
-    virtual void finish(bool & all_hosts_finished) = 0;
-    virtual bool tryFinish(bool & all_hosts_finished) noexcept = 0;
-
     /// Sets the current stage and waits for other hosts to come to this stage too.
-    virtual void setStage(const String & new_stage, const String & message) = 0;
-    virtual bool trySetError(std::exception_ptr exception) = 0;
-    virtual Strings waitForStage(const String & stage_to_wait, std::optional<std::chrono::milliseconds> timeout) = 0;
-    Strings waitForStage(const String & stage_to_wait) { return waitForStage(stage_to_wait, {}); }
+    virtual Strings setStage(const String & new_stage, const String & message, bool sync) = 0;
 
-    virtual std::chrono::seconds getOnClusterInitializationTimeout() const = 0;
-    virtual ZooKeeperRetriesInfo getOnClusterInitializationKeeperRetriesInfo() const = 0;
+    /// Lets other hosts know that the current host has encountered an error.
+    virtual bool trySetError(std::exception_ptr exception) = 0;
+
+    /// Lets other hosts know that the current host has finished its work.
+    virtual void finish() = 0;
+
+    /// Lets other hosts know that the current host has finished its work (as a part of error-handling process).
+    virtual bool tryFinishAfterError() noexcept = 0;
+
+    /// Waits until all the other hosts finish their work.
+    /// Stops waiting and throws an exception if another host encounters an error or if some host gets cancelled.
+    virtual void waitForOtherHostsToFinish() = 0;
+
+    /// Waits until all the other hosts finish their work (as a part of error-handling process).
+    /// Doesn't stops waiting if some host encounters an error or gets cancelled.
+    virtual bool tryWaitForOtherHostsToFinishAfterError() noexcept = 0;
 
     struct PartNameAndChecksum
     {
@@ -99,6 +101,8 @@ public:
 
     /// Starts writing a specified file, the function returns false if that file is already being written concurrently.
     virtual bool startWritingFile(size_t data_file_index) = 0;
+
+    virtual ZooKeeperRetriesInfo getOnClusterInitializationKeeperRetriesInfo() const = 0;
 };
 
 }

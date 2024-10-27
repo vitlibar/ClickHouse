@@ -1,7 +1,6 @@
 <clickhouse>
     <profiles>
         <default>
-            <backup_restore_on_cluster_initialization_timeout_sec>6</backup_restore_on_cluster_initialization_timeout_sec>
             <backup_restore_failure_after_host_disconnected_for_seconds>6</backup_restore_failure_after_host_disconnected_for_seconds>
         </default>
     </profiles>

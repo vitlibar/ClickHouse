@@ -31,17 +31,12 @@ public:
 
     ~BackupCoordinationLocal() override;
 
-    void cleanup() override;
-    bool tryCleanup() noexcept override;
-    void finish(bool & all_hosts_finished) override;
-    bool tryFinish(bool & all_hosts_finished) noexcept override;
-
-    void setStage(const String &, const String &) override {}
+    Strings setStage(const String &, const String &, bool) override { return {}; }
     bool trySetError(std::exception_ptr) override { return true; }
-    Strings waitForStage(const String &, std::optional<std::chrono::milliseconds>) override { return {}; }
-
-    std::chrono::seconds getOnClusterInitializationTimeout() const override { return {}; }
-    ZooKeeperRetriesInfo getOnClusterInitializationKeeperRetriesInfo() const override;
+    void finish() override {}
+    bool tryFinishAfterError() noexcept override { return true; }
+    void waitForOtherHostsToFinish() override {}
+    bool tryWaitForOtherHostsToFinishAfterError() noexcept override { return true; }
 
     void addReplicatedPartNames(const String & table_zk_path, const String & table_name_for_logs, const String & replica_name,
                                 const std::vector<PartNameAndChecksum> & part_names_and_checksums) override;
@@ -67,6 +62,8 @@ public:
     BackupFileInfos getFileInfos() const override;
     BackupFileInfos getFileInfosForAllHosts() const override;
     bool startWritingFile(size_t data_file_index) override;
+
+    ZooKeeperRetriesInfo getOnClusterInitializationKeeperRetriesInfo() const override;
 
 private:
     LoggerPtr const log;

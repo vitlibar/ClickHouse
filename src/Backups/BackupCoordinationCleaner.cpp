@@ -11,22 +11,26 @@ BackupCoordinationCleaner::BackupCoordinationCleaner(const String & zookeeper_pa
 
 void BackupCoordinationCleaner::cleanup()
 {
-    tryRemoveAllNodes(/* retries_params = */ {}, /* throw_if_error = */ true);
+    tryRemoveAllNodes(/* throw_if_error = */ true, /* retries_params = */ {});
 }
 
-bool BackupCoordinationCleaner::tryCleanup() noexcept
+bool BackupCoordinationCleaner::tryCleanupAfterError() noexcept
 {
-    return tryRemoveAllNodes(/* retries_params = */ {.error_handling = true}, /* throw_if_error = */ false);
+    return tryRemoveAllNodes(/* throw_if_error = */ false, /* retries_params = */ {.error_handling = true});
 }
 
-bool BackupCoordinationCleaner::tryRemoveAllNodes(const WithRetries::Params & retries_params, bool throw_if_error)
+bool BackupCoordinationCleaner::tryRemoveAllNodes(bool throw_if_error, const WithRetries::Params & retries_params)
 {
     {
         std::lock_guard lock{mutex};
-        if (succeeded)
+        if (cleanup_result.succeeded)
             return true;
-        if (failed)
+        if (cleanup_result.exception)
+        {
+            if (throw_if_error)
+                std::rethrow_exception(cleanup_result.exception);
             return false;
+        }
     }
 
     try
@@ -40,19 +44,19 @@ bool BackupCoordinationCleaner::tryRemoveAllNodes(const WithRetries::Params & re
         });
 
         std::lock_guard lock{mutex};
-        succeeded = true;
+        cleanup_result.succeeded = true;
         return true;
     }
     catch (...)
     {
+        LOG_TRACE(log, "Caught exception while removing nodes from ZooKeeper for this restore: {}",
+                  getCurrentExceptionMessage(/* with_stacktrace= */ false, /* check_embedded_stacktrace= */ true));
+
         std::lock_guard lock{mutex};
-        failed = true;
+        cleanup_result.exception = std::current_exception();
 
         if (throw_if_error)
             throw;
-
-        LOG_TRACE(log, "Caught exception while removing nodes from ZooKeeper for this restore: {}",
-                  getCurrentExceptionMessage(/* with_stacktrace= */ false, /* check_embedded_stacktrace= */ true));
         return false;
     }
 }

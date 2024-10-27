@@ -23,26 +23,6 @@ BackupCoordinationLocal::BackupCoordinationLocal(
 
 BackupCoordinationLocal::~BackupCoordinationLocal() = default;
 
-void BackupCoordinationLocal::finish(bool & all_hosts_finished)
-{
-    all_hosts_finished = true; /// There is only one host in case of BackupCoordinationLocal.
-}
-
-bool BackupCoordinationLocal::tryFinish(bool & all_hosts_finished) noexcept
-{
-    all_hosts_finished = true; /// There is only one host in case of BackupCoordinationLocal.
-    return true;
-}
-
-void BackupCoordinationLocal::cleanup()
-{
-}
-
-bool BackupCoordinationLocal::tryCleanup() noexcept
-{
-    return true;
-}
-
 ZooKeeperRetriesInfo BackupCoordinationLocal::getOnClusterInitializationKeeperRetriesInfo() const
 {
     return {};

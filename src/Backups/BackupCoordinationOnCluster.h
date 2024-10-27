@@ -37,17 +37,12 @@ public:
 
     ~BackupCoordinationOnCluster() override;
 
-    void cleanup() override;
-    bool tryCleanup() noexcept override;
-    void finish(bool & all_hosts_finished) override;
-    bool tryFinish(bool & all_hosts_finished) noexcept override;
-
-    void setStage(const String & new_stage, const String & message) override;
+    Strings setStage(const String & new_stage, const String & message, bool sync) override;
     bool trySetError(std::exception_ptr exception) override;
-    Strings waitForStage(const String & stage_to_wait, std::optional<std::chrono::milliseconds> timeout) override;
-
-    std::chrono::seconds getOnClusterInitializationTimeout() const override;
-    ZooKeeperRetriesInfo getOnClusterInitializationKeeperRetriesInfo() const override;
+    void finish() override;
+    bool tryFinishAfterError() noexcept override;
+    void waitForOtherHostsToFinish() override;
+    bool tryWaitForOtherHostsToFinishAfterError() noexcept override;
 
     void addReplicatedPartNames(
         const String & table_zk_path,
@@ -82,10 +77,14 @@ public:
     BackupFileInfos getFileInfosForAllHosts() const override;
     bool startWritingFile(size_t data_file_index) override;
 
+    ZooKeeperRetriesInfo getOnClusterInitializationKeeperRetriesInfo() const override;
+
+    static Strings excludeInitiator(const Strings & all_hosts);
     static size_t findCurrentHostIndex(const String & current_host, const Strings & all_hosts);
 
 private:
     void createRootNodes();
+    bool tryFinishImpl() noexcept;
 
     void serializeToMultipleZooKeeperNodes(const String & path, const String & value, const String & logging_name);
     String deserializeFromMultipleZooKeeperNodes(const String & path, const String & logging_name) const;
@@ -104,6 +103,7 @@ private:
     const BackupKeeperSettings keeper_settings;
     const UUID backup_uuid;
     const Strings all_hosts;
+    const Strings all_hosts_without_initiator;
     const String current_host;
     const size_t current_host_index;
     const bool plain_backup;

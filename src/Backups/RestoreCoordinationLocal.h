@@ -20,17 +20,12 @@ public:
     RestoreCoordinationLocal(const UUID & restore_uuid_, bool allow_concurrent_restore_, BackupConcurrencyCounters & concurrency_counters_);
     ~RestoreCoordinationLocal() override;
 
-    /// Cleans up all external data (e.g. nodes in ZooKeeper) this coordination is using.
-    void cleanup() override;
-    bool tryCleanup() noexcept override;
-
-    /// Sets the current stage and waits for other hosts to come to this stage too.
-    void setStage(const String &, const String &) override {}
+    Strings setStage(const String &, const String &, bool) override { return {}; }
     bool trySetError(std::exception_ptr) override { return true; }
-    Strings waitForStage(const String &, std::optional<std::chrono::milliseconds>) override { return {}; }
-
-    std::chrono::seconds getOnClusterInitializationTimeout() const override { return {}; }
-    ZooKeeperRetriesInfo getOnClusterInitializationKeeperRetriesInfo() const override;
+    void finish() override {}
+    bool tryFinishAfterError() noexcept override { return true; }
+    void waitForOtherHostsToFinish() override {}
+    bool tryWaitForOtherHostsToFinishAfterError() noexcept override { return true; }
 
     /// Starts creating a table in a replicated database. Returns false if there is another host which is already creating this table.
     bool acquireCreatingTableInReplicatedDatabase(const String & database_zk_path, const String & table_name) override;
@@ -54,6 +49,8 @@ public:
     /// Generates a new UUID for a table. The same UUID must be used for a replicated table on each replica,
     /// (because otherwise the macro "{uuid}" in the ZooKeeper path will not work correctly).
     void generateUUIDForTable(ASTCreateQuery & create_query) override;
+
+    ZooKeeperRetriesInfo getOnClusterInitializationKeeperRetriesInfo() const override;
 
 private:
     LoggerPtr const log;

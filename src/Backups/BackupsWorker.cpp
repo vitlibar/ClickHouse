@@ -61,34 +61,6 @@ namespace Stage = BackupCoordinationStage;
 
 namespace
 {
-    /// Returns true if this error comes from coordination of hosts during BACKUP ON CLUSTER / RESTORE ON CLUSTER.
-    /// (In that case we shouldn't pass this error to BackupCoordination/RestoreCoordination because that won't probably work.)
-    bool isCoordinationError(std::exception_ptr/* exception */)
-    {
-        return false;
-        /*
-        try
-        {
-            std::rethrow_exception(exception);
-        }
-        catch (zkutil::KeeperException & e)
-        {
-            if (isHardwareError(e.code))
-                return true;
-            return false;
-        }
-        catch (Exception & e)
-        {
-            if (e.code() == ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE)
-                return true;
-            return false;
-        }
-        catch (...)
-        {
-            return false;
-        }*/
-    }
-
     bool isFinishedSuccessfully(BackupStatus status)
     {
         return (status == BackupStatus::BACKUP_CREATED) || (status == BackupStatus::RESTORED);
@@ -372,6 +344,7 @@ struct BackupsWorker::BackupStarter
     String backup_id;
     String backup_name_for_logging;
     bool on_cluster;
+    bool on_cluster_started = false;
     bool is_internal_backup;
     std::shared_ptr<IBackupCoordination> backup_coordination;
     ClusterPtr cluster;
@@ -442,7 +415,8 @@ struct BackupsWorker::BackupStarter
     void doBackup()
     {
         backups_worker.doBackup(
-            backup, backup_query, backup_id, backup_name_for_logging, backup_settings, backup_coordination, cluster, backup_context);
+            backup, backup_query, backup_id, backup_name_for_logging, backup_settings, backup_coordination, backup_context,
+            cluster, on_cluster_started);
     }
 
     void onException()
@@ -457,18 +431,18 @@ struct BackupsWorker::BackupStarter
         if (backup && !backup->setIsCorrupted())
             should_remove_files_in_backup = false;
 
-        if (backup_coordination && !isCoordinationError(std::current_exception()))
+        if (backup_coordination && backup_coordination->trySetError(std::current_exception()))
         {
-            if (backup_coordination->trySetError(std::current_exception()))
-            {
-                bool all_hosts_finished = false;
-                if (backup_coordination->tryFinish(all_hosts_finished))
-                {
-                    if (should_remove_files_in_backup && all_hosts_finished)
-                        backup->tryRemoveAllFiles();
-                }
-                backup_coordination->tryCleanup();
-            }
+            bool other_hosts_finished;
+            if (!is_internal_backup && on_cluster_started)
+                other_hosts_finished = backup_coordination->tryWaitForOtherHostsToFinishAfterError();
+            else
+                other_hosts_finished = !is_internal_backup;
+
+            if (should_remove_files_in_backup && other_hosts_finished)
+                backup->tryRemoveAllFiles();
+            
+            backup_coordination->tryFinishAfterError();
         }
 
         backups_worker.setStatusSafe(backup_id, getBackupStatusFromCurrentException());
@@ -557,8 +531,9 @@ void BackupsWorker::doBackup(
     const String & backup_name_for_logging,
     const BackupSettings & backup_settings,
     std::shared_ptr<IBackupCoordination> backup_coordination,
+    ContextMutablePtr context,
     const ClusterPtr & cluster,
-    ContextMutablePtr context)
+    bool & on_cluster_started)
 {
     bool on_cluster = (cluster != nullptr);
 
@@ -581,11 +556,11 @@ void BackupsWorker::doBackup(
         params.retries_info = backup_coordination->getOnClusterInitializationKeeperRetriesInfo();
         backup_settings.copySettingsToQuery(*backup_query);
 
-        startOnClusterOperation(*backup_query, context, params, backup_coordination->getOnClusterInitializationTimeout());
+        startOnClusterOperation(*backup_query, context, params);
+        on_cluster_started = true;
 
         /// Wait until all the hosts have written their backup entries.
-        backup_coordination->waitForStage(Stage::COMPLETED);
-        backup_coordination->setStage(Stage::COMPLETED,"");
+        backup_coordination->waitForOtherHostsToFinish();
     }
     else
     {
@@ -610,7 +585,7 @@ void BackupsWorker::doBackup(
         writeBackupEntries(backup, std::move(backup_entries), backup_id, backup_coordination, backup_settings.internal, context->getProcessListElement());
 
         /// We have written our backup entries, we need to tell other hosts (they could be waiting for it).
-        backup_coordination->setStage(Stage::COMPLETED,"");
+        backup_coordination->setStage(Stage::COMPLETED, "", /* sync = */ false);
     }
 
     size_t num_files = 0;
@@ -634,7 +609,7 @@ void BackupsWorker::doBackup(
     backup.reset();
 
     /// The backup coordination is not needed anymore.
-    backup_coordination->cleanup();
+    backup_coordination->finish();
 
     /// NOTE: we need to update metadata again after backup->finalizeWriting(), because backup metadata is written there.
     setNumFilesAndSize(backup_id, num_files, total_size, num_entries, uncompressed_size, compressed_size, 0, 0);
@@ -647,8 +622,7 @@ void BackupsWorker::doBackup(
 
 void BackupsWorker::buildFileInfosForBackupEntries(const BackupPtr & backup, const BackupEntries & backup_entries, const ReadSettings & read_settings, std::shared_ptr<IBackupCoordination> backup_coordination, QueryStatusPtr process_list_element)
 {
-    backup_coordination->setStage(Stage::BUILDING_FILE_INFOS, "");
-    backup_coordination->waitForStage(Stage::BUILDING_FILE_INFOS);
+    backup_coordination->setStage(Stage::BUILDING_FILE_INFOS, "", /* sync = */ true);
     backup_coordination->addFileInfos(::DB::buildFileInfosForBackupEntries(backup_entries, backup->getBaseBackup(), read_settings, getThreadPool(ThreadPoolId::BACKUP_MAKE_FILES_LIST), process_list_element));
 }
 
@@ -662,8 +636,7 @@ void BackupsWorker::writeBackupEntries(
     QueryStatusPtr process_list_element)
 {
     LOG_TRACE(log, "{}, num backup entries={}", Stage::WRITING_BACKUP, backup_entries.size());
-    backup_coordination->setStage(Stage::WRITING_BACKUP, "");
-    backup_coordination->waitForStage(Stage::WRITING_BACKUP);
+    backup_coordination->setStage(Stage::WRITING_BACKUP, "", /* sync = */ true);
 
     auto file_infos = backup_coordination->getFileInfos();
     if (file_infos.size() != backup_entries.size())
@@ -758,6 +731,7 @@ struct BackupsWorker::RestoreStarter
     String restore_id;
     String backup_name_for_logging;
     bool on_cluster;
+    bool on_cluster_started = false;
     bool is_internal_restore;
     std::shared_ptr<IRestoreCoordination> restore_coordination;
     ClusterPtr cluster;
@@ -827,8 +801,9 @@ struct BackupsWorker::RestoreStarter
             backup_info,
             restore_settings,
             restore_coordination,
+            restore_context,
             cluster,
-            restore_context);
+            on_cluster_started);
     }
 
     void onException()
@@ -836,10 +811,12 @@ struct BackupsWorker::RestoreStarter
         /// Something bad happened, some data were not restored.
         tryLogCurrentException(backups_worker.log, fmt::format("Failed to restore from {} {}", (is_internal_restore ? "internal backup" : "backup"), backup_name_for_logging));
 
-        if (restore_coordination && !isCoordinationError(std::current_exception()))
+        if (restore_coordination && restore_coordination->trySetError(std::current_exception()))
         {
-            if (restore_coordination->trySetError(std::current_exception()))
-                restore_coordination->tryCleanup();
+            if (!is_internal_restore && on_cluster_started)
+                restore_coordination->tryWaitForOtherHostsToFinishAfterError();
+
+            restore_coordination->tryFinishAfterError();
         }
 
         backups_worker.setStatusSafe(restore_id, getRestoreStatusFromCurrentException());
@@ -918,8 +895,9 @@ void BackupsWorker::doRestore(
     const BackupInfo & backup_info,
     RestoreSettings restore_settings,
     std::shared_ptr<IRestoreCoordination> restore_coordination,
+    ContextMutablePtr context,
     const ClusterPtr & cluster,
-    ContextMutablePtr context)
+    bool & on_cluster_started)
 {
     maybeSleepForTesting();
 
@@ -960,11 +938,11 @@ void BackupsWorker::doRestore(
         params.retries_info = restore_coordination->getOnClusterInitializationKeeperRetriesInfo();
         restore_settings.copySettingsToQuery(*restore_query);
 
-        startOnClusterOperation(*restore_query, context, params, restore_coordination->getOnClusterInitializationTimeout());
+        startOnClusterOperation(*restore_query, context, params);
+        on_cluster_started = true;
 
         /// Wait until all the hosts have written their backup entries.
-        restore_coordination->waitForStage(Stage::COMPLETED);
-        restore_coordination->setStage(Stage::COMPLETED,"");
+        restore_coordination->waitForOtherHostsToFinish();
     }
     else
     {
@@ -986,24 +964,20 @@ void BackupsWorker::doRestore(
     }
 
     /// The restore coordination is not needed anymore.
-    restore_coordination->cleanup();
+    restore_coordination->finish();
 
     LOG_INFO(log, "Restored from {} {} successfully", (restore_settings.internal ? "internal backup" : "backup"), backup_name_for_logging);
     setStatus(restore_id, BackupStatus::RESTORED);
 }
 
 
-void BackupsWorker::startOnClusterOperation(const ASTBackupQuery & backup_or_restore_query, ContextMutablePtr context, const DDLQueryOnClusterParams & on_cluster_params, std::chrono::seconds on_cluster_initialization_timeout) const
+void BackupsWorker::startOnClusterOperation(const ASTBackupQuery & backup_or_restore_query, ContextMutablePtr context, const DDLQueryOnClusterParams & on_cluster_params) const
 {
-    Int64 distributed_ddl_task_timeout = on_cluster_initialization_timeout.count();
-    if (!distributed_ddl_task_timeout)
-        distributed_ddl_task_timeout = -1;
-    context->setSetting("distributed_ddl_task_timeout", Field{distributed_ddl_task_timeout});
-    context->setSetting("distributed_ddl_output_mode", Field{"none"});
+    context->setSetting("distributed_ddl_task_timeout", Field{0});
+    context->setSetting("distributed_ddl_output_mode", Field{"never_throw"});
 
     // executeDDLQueryOnCluster() will return without waiting for completion
-    BlockIO io = executeDDLQueryOnCluster(backup_or_restore_query.clone(), context, on_cluster_params);
-    CompletedPipelineExecutor{io.pipeline}.execute();
+    executeDDLQueryOnCluster(backup_or_restore_query.clone(), context, on_cluster_params);
 
     maybeSleepForTesting();
 }
@@ -1020,6 +994,7 @@ BackupsWorker::makeBackupCoordination(bool on_cluster_coordination, const Backup
 
         auto all_hosts = BackupSettings::Util::filterHostIDs(
             backup_settings.cluster_host_ids, backup_settings.shard_num, backup_settings.replica_num);
+        all_hosts.emplace_back(BackupCoordinationOnCluster::kInitiator);
 
         String current_host = backup_settings.internal ? backup_settings.host_id : String{BackupCoordinationOnCluster::kInitiator};
 
@@ -1058,6 +1033,7 @@ BackupsWorker::makeRestoreCoordination(bool on_cluster_coordination, const Resto
 
         auto all_hosts = BackupSettings::Util::filterHostIDs(
             restore_settings.cluster_host_ids, restore_settings.shard_num, restore_settings.replica_num);
+        all_hosts.emplace_back(BackupCoordinationOnCluster::kInitiator);
 
         String current_host = restore_settings.internal ? restore_settings.host_id : String{RestoreCoordinationOnCluster::kInitiator};
 

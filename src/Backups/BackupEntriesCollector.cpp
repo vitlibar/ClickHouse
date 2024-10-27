@@ -175,8 +175,7 @@ Strings BackupEntriesCollector::setStage(const String & new_stage, const String 
     checkIsQueryCancelled();
 
     current_stage = new_stage;
-    backup_coordination->setStage(new_stage, message);
-    return backup_coordination->waitForStage(new_stage);
+    return backup_coordination->setStage(new_stage, message, /* sync = */ true);
 }
 
 void BackupEntriesCollector::checkIsQueryCancelled() const

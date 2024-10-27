@@ -31,17 +31,12 @@ public:
 
     ~RestoreCoordinationOnCluster() override;
 
-    /// Cleans up all external data (e.g. nodes in ZooKeeper) this coordination is using.
-    void cleanup() override;
-    bool tryCleanup() noexcept override;
-
-    /// Sets the current stage and waits for other hosts to come to this stage too.
-    void setStage(const String & new_stage, const String & message) override;
+    Strings setStage(const String & new_stage, const String & message, bool sync) override;
     bool trySetError(std::exception_ptr exception) override;
-    Strings waitForStage(const String & stage_to_wait, std::optional<std::chrono::milliseconds> timeout) override;
-
-    std::chrono::seconds getOnClusterInitializationTimeout() const override;
-    ZooKeeperRetriesInfo getOnClusterInitializationKeeperRetriesInfo() const override;
+    void finish() override;
+    bool tryFinishAfterError() noexcept override;
+    void waitForOtherHostsToFinish() override;
+    bool tryWaitForOtherHostsToFinishAfterError() noexcept override;
 
     /// Starts creating a table in a replicated database. Returns false if there is another host which is already creating this table.
     bool acquireCreatingTableInReplicatedDatabase(const String & database_zk_path, const String & table_name) override;
@@ -66,14 +61,18 @@ public:
     /// (because otherwise the macro "{uuid}" in the ZooKeeper path will not work correctly).
     void generateUUIDForTable(ASTCreateQuery & create_query) override;
 
+    ZooKeeperRetriesInfo getOnClusterInitializationKeeperRetriesInfo() const override;
+
 private:
     void createRootNodes();
+    bool tryFinishImpl() noexcept;
 
     const String root_zookeeper_path;
     const BackupKeeperSettings keeper_settings;
     const UUID restore_uuid;
     const String zookeeper_path;
     const Strings all_hosts;
+    const Strings all_hosts_without_initiator;
     const String current_host;
     const size_t current_host_index;
     LoggerPtr const log;

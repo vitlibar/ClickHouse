@@ -18,15 +18,6 @@ RestoreCoordinationLocal::RestoreCoordinationLocal(
 
 RestoreCoordinationLocal::~RestoreCoordinationLocal() = default;
 
-void RestoreCoordinationLocal::cleanup()
-{
-}
-
-bool RestoreCoordinationLocal::tryCleanup() noexcept
-{
-    return true;
-}
-
 ZooKeeperRetriesInfo RestoreCoordinationLocal::getOnClusterInitializationKeeperRetriesInfo() const
 {
     return {};

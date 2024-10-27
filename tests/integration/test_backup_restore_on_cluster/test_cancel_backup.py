@@ -657,7 +657,8 @@ def test_short_disconnection_doesnt_stop_backup():
 
     backup_id = random_id()
     initiator.query(
-        f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC"
+        f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC",
+        settings={'backup_restore_failure_after_host_disconnected_for_seconds': 10}
     )
 
     assert get_status(initiator, backup_id=backup_id) == "CREATING_BACKUP"

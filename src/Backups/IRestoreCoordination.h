@@ -19,18 +19,25 @@ class IRestoreCoordination
 public:
     virtual ~IRestoreCoordination() = default;
 
-    /// Cleans up all external data (e.g. nodes in ZooKeeper) this coordination is using.
-    virtual void cleanup() = 0;
-    virtual bool tryCleanup() noexcept = 0;
-
     /// Sets the current stage and waits for other hosts to come to this stage too.
-    virtual void setStage(const String & new_stage, const String & message) = 0;
-    virtual bool trySetError(std::exception_ptr exception) = 0;
-    virtual Strings waitForStage(const String & stage_to_wait, std::optional<std::chrono::milliseconds> timeout) = 0;
-    Strings waitForStage(const String & stage_to_wait) { return waitForStage(stage_to_wait, {}); }
+    virtual Strings setStage(const String & new_stage, const String & message, bool sync) = 0;
 
-    virtual std::chrono::seconds getOnClusterInitializationTimeout() const = 0;
-    virtual ZooKeeperRetriesInfo getOnClusterInitializationKeeperRetriesInfo() const = 0;
+    /// Lets other hosts know that the current host has encountered an error.
+    virtual bool trySetError(std::exception_ptr exception) = 0;
+
+    /// Lets other hosts know that the current host has finished its work.
+    virtual void finish() = 0;
+
+    /// Lets other hosts know that the current host has finished its work (as a part of error-handling process).
+    virtual bool tryFinishAfterError() noexcept = 0;
+
+    /// Waits until all the other hosts finish their work.
+    /// Stops waiting and throws an exception if another host encounters an error or if some host gets cancelled.
+    virtual void waitForOtherHostsToFinish() = 0;
+
+    /// Waits until all the other hosts finish their work (as a part of error-handling process).
+    /// Doesn't stops waiting if some host encounters an error or gets cancelled.
+    virtual bool tryWaitForOtherHostsToFinishAfterError() noexcept = 0;
 
     /// Starts creating a table in a replicated database. Returns false if there is another host which is already creating this table.
     virtual bool acquireCreatingTableInReplicatedDatabase(const String & database_zk_path, const String & table_name) = 0;
@@ -54,6 +61,8 @@ public:
     /// Generates a new UUID for a table. The same UUID must be used for a replicated table on each replica,
     /// (because otherwise the macro "{uuid}" in the ZooKeeper path will not work correctly).
     virtual void generateUUIDForTable(ASTCreateQuery & create_query) = 0;
+
+    virtual ZooKeeperRetriesInfo getOnClusterInitializationKeeperRetriesInfo() const = 0;
 };
 
 }

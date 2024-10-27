@@ -9,10 +9,14 @@ namespace DB
 class BackupCoordinationStageSync
 {
 public:
+    /// Empty string as the current host is used to mark the initiator of a BACKUP ON CLUSTER query.
+    static const constexpr std::string_view kInitiator;
+
     BackupCoordinationStageSync(
         bool is_restore_,                    /// true if this is a RESTORE ON CLUSTER command, false if this is a BACKUP ON CLUSTER command
         const String & zookeeper_path_,      /// path to the "stage" folder in ZooKeeper
-        const String & current_host_,        /// the current host, or an empty string if it's the initiator of a BACKUP/RESTORE ON CLUSTER command
+        const String & current_host_,        /// the current host, or an empty string if it's the initiator of the BACKUP/RESTORE ON CLUSTER command
+        const Strings & all_hosts_,          /// all the hosts (including the initiator and the current host) performing the BACKUP/RESTORE ON CLUSTER command
         bool allow_concurrency_,             /// whether it's allowed to have concurrent backups or restores.
         const WithRetries & with_retries_,
         ThreadPoolCallbackRunnerUnsafe<void> schedule_,
@@ -24,33 +28,36 @@ public:
     /// Sets the stage of the current host and signal other hosts if there were other hosts waiting for that.
     void setStage(const String & stage, const String & stage_result = {});
 
-    /// Lets other hosts know that the current host has encountered an error.
-    bool trySetError(std::exception_ptr exception);
-
     /// Waits until all the specified hosts come to the specified stage.
     /// The function returns the results which specified hosts set when they came to the required stage.
     /// If it doesn't happen before the timeout then the function will stop waiting and throw an exception.
     Strings waitForHostsToReachStage(const String & stage_to_wait, const Strings & hosts, std::optional<std::chrono::milliseconds> timeout = {}) const;
 
-    /// Sets that the current host finished its work.
-    /// The function sets its argument `all_hosts_finished` to true if all the other hosts finished their works too.
-    void finish();
-    void finish(bool & all_hosts_finished);
+    /// Waits until all the other hosts finish their work.
+    /// Stops waiting and throws an exception if another host encounters an error or if some host gets cancelled.
+    void waitForOtherHostsToFinish() const;
 
-    /// The same as finish(), but without throwing an exception if something goes wrong.
-    bool tryFinish() noexcept;
-    bool tryFinish(bool & all_hosts_finished) noexcept;
+    /// Lets other host know that the current host has finished its work.
+    void finish(bool & other_hosts_also_finished);
 
-    /// Waits until other hosts finish their work.
-    /// This function must be called before calling function finish().
-    void waitForHostsToFinish(const Strings & hosts) const;
-    bool tryWaitForHostsToFinish(const Strings & hosts) const noexcept;
+    /// Lets other hosts know that the current host has encountered an error.
+    bool trySetError(std::exception_ptr exception) noexcept;
+
+    /// Waits until all the other hosts finish their work (as a part of error-handling process).
+    /// Doesn't stops waiting if some host encounters an error or gets cancelled.
+    bool tryWaitForOtherHostsToFinishAfterError() const noexcept;
+
+    /// Lets other host know that the current host has finished its work (as a part of error-handling process).
+    bool tryFinishAfterError(bool & other_hosts_also_finished) noexcept;
 
     /// Returns a printable name of a specific host. For empty host the function returns "initiator".
     static String getHostDesc(const String & host);
     static String getHostsDesc(const Strings & hosts);
 
 private:
+    /// Initializes the original state. It will be updated then with readCurrentState().
+    void initializeState();
+
     /// Creates the root node in ZooKeeper.
     void createRootNodes();
 
@@ -60,10 +67,6 @@ private:
 
     /// Recreates the 'alive' node if it doesn't exist. It's an ephemeral node so it's removed automatically after disconnections.
     void createAliveNode(Coordination::ZooKeeperWithFaultInjection::Ptr zookeeper);
-
-    /// Removes both 'start' and 'alive' nodes (used only in case of failed initialization).
-    bool tryRemoveStartAndAliveNodes();
-    void removeStartAndAliveNodes(Coordination::ZooKeeperWithFaultInjection::Ptr zookeeper);
 
     /// Checks that there is no concurrent backup or restore if `allow_concurrency` is false.
     void checkConcurrency(Coordination::ZooKeeperWithFaultInjection::Ptr zookeeper);
@@ -80,6 +83,9 @@ private:
     /// Lets other hosts know that the current host has encountered an error.
     bool trySetError(const Exception & exception);
     void setError(const Exception & exception);
+
+    /// Deserializes an error stored in the error node.
+    static std::pair<std::exception_ptr, String> parseErrorNode(const String & serialized_error);
 
     /// Reset the `connected` flag for each host.
     void resetConnectedFlag();
@@ -99,19 +105,22 @@ private:
     bool checkIfHostsReachStage(const Strings & hosts, const String & stage_to_wait, std::optional<std::chrono::milliseconds> timeout, bool throw_if_not_ready, Strings & results) const TSA_REQUIRES(mutex);
 
     /// Creates the 'finish' node.
-    bool tryFinishImpl(bool & all_hosts_finished, const WithRetries::Params & retries_params, bool throw_if_error);
-    void createFinishNodeAndRemoveAliveNode();
-    void createFinishNodeAndRemoveAliveNode(Coordination::ZooKeeperWithFaultInjection::Ptr zookeeper);
+    bool tryFinishImpl();
+    bool tryFinishImpl(bool & other_hosts_also_finished, bool throw_if_error, const WithRetries::Params & retries_params);
+    void createFinishNodeAndRemoveAliveNode(Coordination::ZooKeeperWithFaultInjection::Ptr zookeeper, bool & other_hosts_also_finished);
 
-    bool tryWaitForHostsToFinishImpl(const Strings & hosts, std::optional<std::chrono::seconds> timeout, bool throw_if_error) const;
+    /// Waits until all the other hosts finish their work.
+    bool tryWaitForOtherHostsToFinishImpl(bool throw_if_error, std::optional<std::chrono::seconds> timeout) const;
+    bool checkIfOtherHostsFinish(bool throw_if_error) const TSA_REQUIRES(mutex);
 
-    /// Used by waitForHostsToFinish() to check if everything is ready to return.
-    bool checkIfHostsFinish(const Strings & hosts, bool throw_if_error) const TSA_REQUIRES(mutex);
+    struct State;
+    Strings getUnfinishedOtherHosts(const State & state_) const;
 
     const bool is_restore;
     const String operation_name;
     const String current_host;
     const String current_host_desc;
+    const Strings all_hosts;
     const bool allow_concurrency;
 
     /// A reference to a field of the parent object which is either BackupCoordinationOnCluster or RestoreCoordinationOnCluster.
@@ -122,7 +131,7 @@ private:
     const LoggerPtr log;
 
     const std::chrono::seconds failure_after_host_disconnected_for_seconds;
-    const std::chrono::seconds error_handling_timeout;
+    const std::chrono::seconds finish_timeout_after_error;
     const std::chrono::milliseconds sync_period_ms;
     const size_t max_attempts_after_bad_version;
 
@@ -178,20 +187,20 @@ private:
     std::future<void> watching_thread_future;
     std::atomic<bool> should_stop_watching_thread = false;
 
-    struct FinishResult
-    {
-        bool succeeded = false;
-        bool failed = false;
-        bool all_hosts_finished = false;
-    };
-    FinishResult finish_result TSA_GUARDED_BY(mutex);
-
     struct WaitForOtherHostsToFinishResult
     {
         bool succeeded = false;
-        bool failed = false;
+        std::exception_ptr exception;
     };
     mutable WaitForOtherHostsToFinishResult wait_for_other_hosts_to_finish_result TSA_GUARDED_BY(mutex);
+
+    struct FinishResult
+    {
+        bool succeeded = false;
+        std::exception_ptr exception;
+        bool other_hosts_also_finished = false;
+    };
+    FinishResult finish_result TSA_GUARDED_BY(mutex);
 
     mutable std::mutex mutex;
 };

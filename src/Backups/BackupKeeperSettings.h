@@ -26,28 +26,19 @@ struct BackupKeeperSettings
     /// for the crashed host for unlimited time until the operation is explicitly cancelled with KILL QUERY).
     std::chrono::seconds failure_after_host_disconnected_for_seconds{3600};
 
-    /// How often the "stage" folder in ZooKeeper must be scanned in a background thread to track changes done by other hosts.
-    std::chrono::milliseconds sync_period_ms{5000};
-
-    /// The period of time during which all hosts participating in BACKUP ON CLUSTER or RESTORE ON CLUSTER should respond
-    /// to the initiator of the query that they have started working on it.
-    /// If some of the hosts don't respond for this period of time then the whole backup or restore is considered as failed.
-    /// Set to zero to disable (this can make the initiator to wait for unlimited amount of time until the operation is
-    /// explicitly cancelled with KILL QUERY).
-    std::chrono::seconds on_cluster_initialization_timeout{180};
-
     /// Maximum number of retries during the initialization of a BACKUP ON CLUSTER or RESTORE ON CLUSTER operation.
     /// Shouldn't be too big because if the operation is going to fail then it's better if it fails faster.
     UInt64 max_retries_while_initializing{20};
 
-    /// The period of time during which all hosts participating in BACKUP ON CLUSTER or RESTORE ON CLUSTER should react
-    /// to the 'error' node appeared in the stage folder and finish their work.
-    /// Shouldn't be too big because that timeout is just for cleanup after the operation has failed already.
-    std::chrono::seconds on_cluster_error_handling_timeout{300};
-
     /// Maximum number of retries while handling an error of a BACKUP ON CLUSTER or RESTORE ON CLUSTER operation.
     /// Shouldn't be too big because those retries are just for cleanup after the operation has failed already.
-    UInt64 max_retries_while_handling_error{10};
+    UInt64 max_retries_while_handling_error{20};
+
+    /// How long the initiator should wait for other host to handle the 'error' node and finish their work.
+    std::chrono::seconds finish_timeout_after_error{180};
+
+    /// How often the "stage" folder in ZooKeeper must be scanned in a background thread to track changes done by other hosts.
+    std::chrono::milliseconds sync_period_ms{5000};
 
     /// Number of attempts after getting error ZBADVERSION from ZooKeeper.
     size_t max_attempts_after_bad_version{10};

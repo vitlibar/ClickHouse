@@ -229,16 +229,7 @@ void RestorerFromBackup::setStage(const String & new_stage, const String & messa
     current_stage = new_stage;
 
     if (restore_coordination)
-    {
-        restore_coordination->setStage(new_stage, message);
-
-        /// The initiator of a RESTORE ON CLUSTER query waits for other hosts to complete their work (see waitForStage(Stage::COMPLETED) in BackupsWorker::doRestore),
-        /// but it's unnecessary for other hosts to wait for each others' completion.
-        bool need_wait = (new_stage != Stage::COMPLETED);
-
-        if (need_wait)
-            restore_coordination->waitForStage(new_stage);
-    }
+        restore_coordination->setStage(new_stage, message, /* sync = */ (new_stage != Stage::COMPLETED));
 }
 
 void RestorerFromBackup::schedule(std::function<void()> && task_, const char * thread_name_)
