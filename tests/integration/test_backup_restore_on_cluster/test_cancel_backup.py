@@ -1,17 +1,16 @@
 import os
 import random
-import re
 import time
 import uuid
+from helpers.cluster import ClickHouseCluster
+from helpers.config_manager import ConfigManager
 from helpers.network import PartitionManager
+from helpers.test_tools import TSV
 
 import pytest
 
-from helpers.cluster import ClickHouseCluster
-from helpers.test_tools import TSV, assert_eq_with_retry
 
 cluster = ClickHouseCluster(__file__)
-CONFIG_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "configs")
 
 main_configs = [
     "configs/backups_disk.xml",
@@ -302,34 +301,27 @@ def sleep(seconds):
     time.sleep(seconds)
 
 
-# Adds a configuration file to "config.d"
-def add_config(config_name):
-    for node in nodes:
-        node.copy_file_to_container(os.path.join(CONFIG_DIR, config_name),
-                                    os.path.join("/etc/clickhouse-server/config.d", config_name))
-    for node in nodes:
-        assert_eq_with_retry(node, "SYSTEM RELOAD CONFIG", "")
-
-
-# Removes a configuration file from "config.d"
-def remove_config(config_name):
-    for node in nodes:
-        node.remove_file_from_container(os.path.join("/etc/clickhouse-server/config.d", config_name))
-    for node in nodes:
-        assert_eq_with_retry(node, "SYSTEM RELOAD CONFIG", "")
-
-
 # Checks that BACKUP and RESTORE cleaned up properly with no trash left in ZooKeeper, backups folder, and logs.
 class NoTrashChecker:
     def __init__(self):
-        # Ensure this NoTrashChecker won't collect errors from a possible previous NoTrashChecker.
-        time.sleep(1)
+        self.expect_backups = []
+        self.expect_unfinished_backups = []
+        self.expect_errors = []
+        self.allow_errors = []
+        self.check_zookeeper = True
+
+        time.sleep(
+            1
+        )  # To ensure this NoTrashChecker won't collect errors from a possible previous NoTrashChecker.
         self.__start_time_for_collecting_errors = time.gmtime()
         self.__previous_list_of_backups = set(
             os.listdir(os.path.join(node1.cluster.instances_dir, "backups"))
         )
 
-    def check(self, expected_backups=[], expected_errors=[], allowed_errors=[]):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, type, value, traceback):
         nodes_in_zookeeper_query_result = node1.query(
             "SELECT name FROM system.zookeeper WHERE path = '/clickhouse/backups' "
             + "AND NOT (name == 'alive_tracker')"
@@ -350,15 +342,29 @@ class NoTrashChecker:
                         f"SELECT name FROM system.zookeeper WHERE path = '/clickhouse/backups/{node}/stage'"
                     )
                 )
-        assert nodes_in_zookeeper == []
+        if self.check_zookeeper:
+            assert nodes_in_zookeeper == []
 
         list_of_backups = set(
             os.listdir(os.path.join(node1.cluster.instances_dir, "backups"))
         )
         new_backups = list_of_backups.difference(self.__previous_list_of_backups)
+        unfinished_backups = set(
+            backup
+            for backup in new_backups
+            if not os.path.exists(
+                os.path.join(node1.cluster.instances_dir, "backups", backup, ".backup")
+            )
+        )
+        new_backups = set(
+            backup for backup in new_backups if backup not in unfinished_backups
+        )
         if new_backups:
             print(f"Found new backups: {new_backups}")
-        assert new_backups == set(expected_backups)
+        if unfinished_backups:
+            print(f"Found unfinished backups: {unfinished_backups}")
+        assert new_backups == set(self.expect_backups)
+        assert unfinished_backups == set(self.expect_unfinished_backups)
 
         all_errors = set()
         start_time = time.strftime(
@@ -383,10 +389,10 @@ class NoTrashChecker:
                     )
                 )
             for error in errors:
-                assert (error in expected_errors) or (error in allowed_errors)
+                assert (error in self.expect_errors) or (error in self.allow_errors)
                 all_errors.update(errors)
 
-        not_found_expected_errors = set(expected_errors).difference(all_errors)
+        not_found_expected_errors = set(self.expect_errors).difference(all_errors)
         if not_found_expected_errors:
             print(f"Not found expected errors: {not_found_expected_errors}")
             assert False
@@ -397,302 +403,304 @@ class NoTrashChecker:
 
 # Test that a BACKUP operation can be cancelled with KILL QUERY.
 def test_cancel_backup():
-    no_trash_checker = NoTrashChecker()
-    create_and_fill_table(random_node())
+    with NoTrashChecker() as no_trash_checker:
+        create_and_fill_table(random_node())
 
-    initiator = random_node()
-    print(f"Using {get_node_name(initiator)} as initiator")
+        initiator = random_node()
+        print(f"Using {get_node_name(initiator)} as initiator")
 
-    backup_id = random_id()
-    initiator.query(
-        f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC"
-    )
+        backup_id = random_id()
+        initiator.query(
+            f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC"
+        )
 
-    assert get_status(initiator, backup_id=backup_id) == "CREATING_BACKUP"
-    assert get_num_system_processes(initiator, backup_id=backup_id) >= 1
+        assert get_status(initiator, backup_id=backup_id) == "CREATING_BACKUP"
+        assert get_num_system_processes(initiator, backup_id=backup_id) >= 1
 
-    # We shouldn't wait too long here, because otherwise the backup might be completed before we cancel it.
-    random_sleep(5)
+        # We shouldn't wait too long here, because otherwise the backup might be completed before we cancel it.
+        random_sleep(5)
 
-    node_to_cancel, cancel_as_initiator = random.choice(
-        [(node1, False), (node2, False), (initiator, True)]
-    )
+        node_to_cancel, cancel_as_initiator = random.choice(
+            [(node1, False), (node2, False), (initiator, True)]
+        )
 
-    wait_num_system_processes(
-        node_to_cancel, "1+", backup_id=backup_id, is_initial_query=cancel_as_initiator
-    )
+        wait_num_system_processes(
+            node_to_cancel,
+            "1+",
+            backup_id=backup_id,
+            is_initial_query=cancel_as_initiator,
+        )
 
-    print(
-        f"Cancelling on {'initiator' if cancel_as_initiator else 'node'} {get_node_name(node_to_cancel)}"
-    )
+        print(
+            f"Cancelling on {'initiator' if cancel_as_initiator else 'node'} {get_node_name(node_to_cancel)}"
+        )
 
-    # The timeout is 2 seconds here because a backup must be cancelled quickly.
-    kill_query(
-        node_to_cancel,
-        backup_id=backup_id,
-        is_initial_query=cancel_as_initiator,
-        timeout=3,
-    )
+        # The timeout is 2 seconds here because a backup must be cancelled quickly.
+        kill_query(
+            node_to_cancel,
+            backup_id=backup_id,
+            is_initial_query=cancel_as_initiator,
+            timeout=3,
+        )
 
-    if cancel_as_initiator:
-        assert get_status(initiator, backup_id=backup_id) == "BACKUP_CANCELLED"
-    wait_status(initiator, "BACKUP_CANCELLED", backup_id=backup_id, timeout=3)
+        if cancel_as_initiator:
+            assert get_status(initiator, backup_id=backup_id) == "BACKUP_CANCELLED"
+        wait_status(initiator, "BACKUP_CANCELLED", backup_id=backup_id, timeout=3)
 
-    assert "QUERY_WAS_CANCELLED" in get_error(initiator, backup_id=backup_id)
-    assert get_num_system_processes(nodes, backup_id=backup_id) == 0
-    no_trash_checker.check(expected_errors=["QUERY_WAS_CANCELLED"])
+        assert "QUERY_WAS_CANCELLED" in get_error(initiator, backup_id=backup_id)
+        assert get_num_system_processes(nodes, backup_id=backup_id) == 0
+        no_trash_checker.expect_errors = ["QUERY_WAS_CANCELLED"]
 
 
 # Test that a RESTORE operation can be cancelled with KILL QUERY.
 def test_cancel_restore():
     # Make backup.
-    print("Will make backup successfully")
-    no_trash_checker = NoTrashChecker()
-    create_and_fill_table(random_node())
-    backup_id = random_id()
-    initiator = random_node()
-    print(f"Using {get_node_name(initiator)} as initiator")
-    initiator.query(
-        f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC"
-    )
-    wait_status(initiator, "BACKUP_CREATED", backup_id=backup_id)
-    assert get_num_system_processes(nodes, backup_id=backup_id) == 0
-    no_trash_checker.check(expected_backups=[backup_id])
+    with NoTrashChecker() as no_trash_checker:
+        print("Will make backup successfully")
+        backup_id = random_id()
+        create_and_fill_table(random_node())
+        initiator = random_node()
+        print(f"Using {get_node_name(initiator)} as initiator")
+        initiator.query(
+            f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC"
+        )
+        wait_status(initiator, "BACKUP_CREATED", backup_id=backup_id)
+        assert get_num_system_processes(nodes, backup_id=backup_id) == 0
+        no_trash_checker.expect_backups = [backup_id]
 
     # Dropping the table before restoring.
     node1.query("DROP TABLE tbl ON CLUSTER 'cluster' SYNC")
 
-    # Some delay before we cancel restoring.
-    print("Will cancel restoring")
-    no_trash_checker = NoTrashChecker()
+    # Cancel restoring.
+    with NoTrashChecker() as no_trash_checker:
+        print("Will cancel restoring")
+        initiator = random_node()
+        print(f"Using {get_node_name(initiator)} as initiator")
 
-    initiator = random_node()
-    print(f"Using {get_node_name(initiator)} as initiator")
+        restore_id = random_id()
+        initiator.query(
+            f"RESTORE TABLE tbl ON CLUSTER 'cluster' FROM {get_backup_name(backup_id)} SETTINGS id='{restore_id}' ASYNC"
+        )
 
-    restore_id = random_id()
-    initiator.query(
-        f"RESTORE TABLE tbl ON CLUSTER 'cluster' FROM {get_backup_name(backup_id)} SETTINGS id='{restore_id}' ASYNC"
-    )
+        assert get_status(initiator, restore_id=restore_id) == "RESTORING"
+        assert get_num_system_processes(initiator, restore_id=restore_id) >= 1
 
-    assert get_status(initiator, restore_id=restore_id) == "RESTORING"
-    assert get_num_system_processes(initiator, restore_id=restore_id) >= 1
+        # We shouldn't wait too long here, because otherwise the restore might be completed before we cancel it.
+        random_sleep(5)
 
-    # We shouldn't wait too long here, because otherwise the restore might be completed before we cancel it.
-    random_sleep(5)
+        node_to_cancel, cancel_as_initiator = random.choice(
+            [(node1, False), (node2, False), (initiator, True)]
+        )
 
-    node_to_cancel, cancel_as_initiator = random.choice(
-        [(node1, False), (node2, False), (initiator, True)]
-    )
+        wait_num_system_processes(
+            node_to_cancel,
+            "1+",
+            restore_id=restore_id,
+            is_initial_query=cancel_as_initiator,
+        )
 
-    wait_num_system_processes(
-        node_to_cancel,
-        "1+",
-        restore_id=restore_id,
-        is_initial_query=cancel_as_initiator,
-    )
+        print(
+            f"Cancelling on {'initiator' if cancel_as_initiator else 'node'} {get_node_name(node_to_cancel)}"
+        )
 
-    print(
-        f"Cancelling on {'initiator' if cancel_as_initiator else 'node'} {get_node_name(node_to_cancel)}"
-    )
+        # The timeout is 2 seconds here because a restore must be cancelled quickly.
+        kill_query(
+            node_to_cancel,
+            restore_id=restore_id,
+            is_initial_query=cancel_as_initiator,
+            timeout=3,
+        )
 
-    # The timeout is 2 seconds here because a restore must be cancelled quickly.
-    kill_query(
-        node_to_cancel,
-        restore_id=restore_id,
-        is_initial_query=cancel_as_initiator,
-        timeout=3,
-    )
+        if cancel_as_initiator:
+            assert get_status(initiator, restore_id=restore_id) == "RESTORE_CANCELLED"
+        wait_status(initiator, "RESTORE_CANCELLED", restore_id=restore_id, timeout=3)
 
-    if cancel_as_initiator:
-        assert get_status(initiator, restore_id=restore_id) == "RESTORE_CANCELLED"
-    wait_status(initiator, "RESTORE_CANCELLED", restore_id=restore_id, timeout=3)
-
-    assert "QUERY_WAS_CANCELLED" in get_error(initiator, restore_id=restore_id)
-    assert get_num_system_processes(nodes, restore_id=restore_id) == 0
-    no_trash_checker.check(expected_errors=["QUERY_WAS_CANCELLED"])
+        assert "QUERY_WAS_CANCELLED" in get_error(initiator, restore_id=restore_id)
+        assert get_num_system_processes(nodes, restore_id=restore_id) == 0
+        no_trash_checker.expect_errors = ["QUERY_WAS_CANCELLED"]
 
     # Restore successfully.
-    print("Will restore from backup successfully")
-    no_trash_checker = NoTrashChecker()
-    restore_id = random_id()
-    initiator = random_node()
-    print(f"Using {get_node_name(initiator)} as initiator")
+    with NoTrashChecker() as no_trash_checker:
+        print("Will restore from backup successfully")
+        restore_id = random_id()
+        initiator = random_node()
+        print(f"Using {get_node_name(initiator)} as initiator")
 
-    initiator.query(
-        f"RESTORE TABLE tbl ON CLUSTER 'cluster' FROM {get_backup_name(backup_id)} SETTINGS id='{restore_id}' ASYNC"
-    )
+        initiator.query(
+            f"RESTORE TABLE tbl ON CLUSTER 'cluster' FROM {get_backup_name(backup_id)} SETTINGS id='{restore_id}' ASYNC"
+        )
 
-    wait_status(initiator, "RESTORED", restore_id=restore_id)
-    assert get_num_system_processes(nodes, restore_id=restore_id) == 0
-    no_trash_checker.check()
+        wait_status(initiator, "RESTORED", restore_id=restore_id)
+        assert get_num_system_processes(nodes, restore_id=restore_id) == 0
 
 
 # Test that shutdown cancels a running backup and doesn't wait until it finishes.
 def test_shutdown_cancels_backup():
-    no_trash_checker = NoTrashChecker()
-    create_and_fill_table(random_node())
+    with NoTrashChecker() as no_trash_checker:
+        create_and_fill_table(random_node())
 
-    initiator = random_node()
-    print(f"Using {get_node_name(initiator)} as initiator")
+        initiator = random_node()
+        print(f"Using {get_node_name(initiator)} as initiator")
 
-    backup_id = random_id()
-    initiator.query(
-        f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC"
-    )
+        backup_id = random_id()
+        initiator.query(
+            f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC"
+        )
 
-    assert get_status(initiator, backup_id=backup_id) == "CREATING_BACKUP"
-    assert get_num_system_processes(initiator, backup_id=backup_id) >= 1
+        assert get_status(initiator, backup_id=backup_id) == "CREATING_BACKUP"
+        assert get_num_system_processes(initiator, backup_id=backup_id) >= 1
 
-    # We shouldn't wait too long here, because otherwise the backup might be completed before we cancel it.
-    random_sleep(5)
+        # We shouldn't wait too long here, because otherwise the backup might be completed before we cancel it.
+        random_sleep(5)
 
-    node_to_restart = random.choice([node1, node2])
-    wait_num_system_processes(node_to_restart, "1+", backup_id=backup_id)
+        node_to_restart = random.choice([node1, node2])
+        wait_num_system_processes(node_to_restart, "1+", backup_id=backup_id)
 
-    print(f"{get_node_name(node_to_restart)}: Restarting...")
-    node_to_restart.restart_clickhouse()  # Must cancel the backup.
-    print(f"{get_node_name(node_to_restart)}: Restarted")
+        print(f"{get_node_name(node_to_restart)}: Restarting...")
+        node_to_restart.restart_clickhouse()  # Must cancel the backup.
+        print(f"{get_node_name(node_to_restart)}: Restarted")
 
-    wait_num_system_processes(nodes, 0, backup_id=backup_id)
+        wait_num_system_processes(nodes, 0, backup_id=backup_id)
 
-    if initiator != node_to_restart:
-        assert get_status(initiator, backup_id=backup_id) == "BACKUP_CANCELLED"
-        assert "QUERY_WAS_CANCELLED" in get_error(initiator, backup_id=backup_id)
+        if initiator != node_to_restart:
+            assert get_status(initiator, backup_id=backup_id) == "BACKUP_CANCELLED"
+            assert "QUERY_WAS_CANCELLED" in get_error(initiator, backup_id=backup_id)
 
-    # The information about this cancelled backup must be stored in system.backup_log
-    initiator.query("SYSTEM FLUSH LOGS")
-    assert initiator.query(
-        f"SELECT status FROM system.backup_log WHERE id='{backup_id}' ORDER BY status"
-    ) == TSV(["CREATING_BACKUP", "BACKUP_CANCELLED"])
+        # The information about this cancelled backup must be stored in system.backup_log
+        initiator.query("SYSTEM FLUSH LOGS")
+        assert initiator.query(
+            f"SELECT status FROM system.backup_log WHERE id='{backup_id}' ORDER BY status"
+        ) == TSV(["CREATING_BACKUP", "BACKUP_CANCELLED"])
 
-    no_trash_checker.check(expected_errors=["QUERY_WAS_CANCELLED"])
+        no_trash_checker.expect_errors = ["QUERY_WAS_CANCELLED"]
 
 
 # After an error backup should clean the destination folder and used nodes in ZooKeeper.
 # No unexpected errors must be generated.
 def test_error_leaves_no_trash():
-    no_trash_checker = NoTrashChecker()
+    with NoTrashChecker() as no_trash_checker:
+        # We create table "tbl" on one node only in order to make "BACKUP TABLE tbl ON CLUSTER" fail
+        # (because of the non-existing table on another node).
+        create_and_fill_table(random_node(), on_cluster=False)
 
-    # We create table "tbl" on one node only in order to make "BACKUP TABLE tbl ON CLUSTER" fail
-    # (because of the non-existing table on another node).
-    create_and_fill_table(random_node(), on_cluster=False)
+        initiator = random_node()
+        print(f"Using {get_node_name(initiator)} as initiator")
 
-    initiator = random_node()
-    print(f"Using {get_node_name(initiator)} as initiator")
+        backup_id = random_id()
+        initiator.query(
+            f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC"
+        )
 
-    backup_id = random_id()
-    initiator.query(
-        f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC"
-    )
+        wait_status(initiator, "BACKUP_FAILED", backup_id=backup_id)
+        assert "UNKNOWN_TABLE" in get_error(initiator, backup_id=backup_id)
 
-    wait_status(initiator, "BACKUP_FAILED", backup_id=backup_id)
-    assert "UNKNOWN_TABLE" in get_error(initiator, backup_id=backup_id)
-
-    assert get_num_system_processes(nodes, backup_id=backup_id) == 0
-    no_trash_checker.check(expected_errors=["UNKNOWN_TABLE"])
+        assert get_num_system_processes(nodes, backup_id=backup_id) == 0
+        no_trash_checker.expect_errors = ["UNKNOWN_TABLE"]
 
 
 # A backup must be stopped if Zookeeper is disconnected longer than `failure_after_host_disconnected_for_seconds`.
 def test_long_disconnection_stops_backup():
-    add_config('faster_zk_disconnect_detect.xml')
-    create_and_fill_table(random_node(), num_parts=100)
+    with NoTrashChecker() as no_trash_checker, ConfigManager() as config_manager:
+        # Config "faster_zk_disconnect_detect.xml" is used in this test to decrease number of retries when reconnecting to ZooKeeper.
+        # Without this config this test can take several minutes (instead of seconds) to run.
+        #config_manager.add_main_config(nodes, "configs/faster_zk_disconnect_detect.xml")
 
-    initiator = random_node()
-    print(f"Using {get_node_name(initiator)} as initiator")
+        create_and_fill_table(random_node(), num_parts=100)
 
-    backup_id = random_id()
-    initiator.query(
-        f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC",
-        settings={'backup_restore_failure_after_host_disconnected_for_seconds': 5}
-    )
+        initiator = random_node()
+        print(f"Using {get_node_name(initiator)} as initiator")
 
-    assert get_status(initiator, backup_id=backup_id) == "CREATING_BACKUP"
-    assert get_num_system_processes(initiator, backup_id=backup_id) >= 1
-
-    if random.randint(0, 5) > 0:
-        random_sleep(5)
-
-    with PartitionManager() as pm:
-        time_before_disconnection = time.monotonic()
-
-        node_to_drop_zk_connection = random_node()
-        print(
-            f"Dropping connection between {get_node_name(node_to_drop_zk_connection)} and ZooKeeper"
-        )
-        pm.drop_instance_zk_connections(node_to_drop_zk_connection)
-
-        # Being disconnected from ZooKeeper a backup is expected to fail.
-        wait_status(initiator, "BACKUP_FAILED", backup_id=backup_id)
-
-        time_to_fail = time.monotonic() - time_before_disconnection
-        error = get_error(initiator, backup_id=backup_id)
-        print(f"error={error}")
-        expected_errors = [
-            "Lost connection .* timeout",
-            "Distributed DDL task .* is not finished",
-        ]
-        assert any(
-            re.search(expected_error, error) for expected_error in expected_errors
+        backup_id = random_id()
+        initiator.query(
+            f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC",
+            settings={"backup_restore_failure_after_host_disconnected_for_seconds": 5},
         )
 
-        # A backup is expected to fail, but it isn't expected to fail too soon.
-        print(f"Backup failed after {time_to_fail} seconds disconnection")
-        assert time_to_fail > 5
-        assert time_to_fail < 120
+        assert get_status(initiator, backup_id=backup_id) == "CREATING_BACKUP"
+        assert get_num_system_processes(initiator, backup_id=backup_id) >= 1
 
-    remove_config('faster_zk_disconnect_detect.xml')
-
-
-# A backup must NOT be stopped if Zookeeper is disconnected shorter than `failure_after_host_disconnected_for_seconds`.
-def test_short_disconnection_doesnt_stop_backup():
-    use_faster_zk_disconnect_detect = random.choice([True, False])
-    print(f"Using use_faster_zk_disconnect_detect = {use_faster_zk_disconnect_detect}")
-    if use_faster_zk_disconnect_detect:
-        add_config('faster_zk_disconnect_detect.xml')
-
-    no_trash_checker = NoTrashChecker()
-    create_and_fill_table(random_node())
-
-    initiator = random_node()
-    print(f"Using {get_node_name(initiator)} as initiator")
-
-    backup_id = random_id()
-    initiator.query(
-        f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC",
-        settings={'backup_restore_failure_after_host_disconnected_for_seconds': 10}
-    )
-
-    assert get_status(initiator, backup_id=backup_id) == "CREATING_BACKUP"
-    assert get_num_system_processes(initiator, backup_id=backup_id) >= 1
-
-    random_sleep(5)
-
-    # Dropping connection for less than `failure_after_host_disconnected_for_seconds`
-    with PartitionManager() as pm:
-        node_to_drop_zk_connection = random_node()
-        print(
-            f"Dropping connection between {get_node_name(node_to_drop_zk_connection)} and ZooKeeper"
-        )
-        pm.drop_instance_zk_connections(node_to_drop_zk_connection)
-        random_sleep(5)
-        print(
-            f"Restoring connection between {get_node_name(node_to_drop_zk_connection)} and ZooKeeper"
-        )
-
-    # Backup must be successful.
-    wait_status(initiator, "BACKUP_CREATED", backup_id=backup_id)
-    assert get_num_system_processes(nodes, backup_id=backup_id) == 0
-
-    no_trash_checker.check(
-        expected_backups=[backup_id],
-        allowed_errors=[
+        no_trash_checker.expect_unfinished_backups = [backup_id]
+        no_trash_checker.allow_errors = [
+            "FAILED_TO_SYNC_BACKUP_OR_RESTORE",
             "KEEPER_EXCEPTION",
             "SOCKET_TIMEOUT",
             "CANNOT_READ_ALL_DATA",
             "NETWORK_ERROR",
             "TABLE_IS_READ_ONLY",
-        ],
-    )
+        ]
+        no_trash_checker.check_zookeeper = False
 
-    if use_faster_zk_disconnect_detect:
-        remove_config('faster_zk_disconnect_detect.xml')
+        with PartitionManager() as pm:
+            random_sleep(5)
+
+            time_before_disconnection = time.monotonic()
+
+            node_to_drop_zk_connection = random_node()
+            print(
+                f"Dropping connection between {get_node_name(node_to_drop_zk_connection)} and ZooKeeper"
+            )
+            pm.drop_instance_zk_connections(node_to_drop_zk_connection)
+
+            # Being disconnected from ZooKeeper a backup is expected to fail.
+            wait_status(initiator, "BACKUP_FAILED", backup_id=backup_id)
+
+            time_to_fail = time.monotonic() - time_before_disconnection
+            error = get_error(initiator, backup_id=backup_id)
+            print(f"error={error}")
+            assert "Lost connection" in error
+
+            # A backup is expected to fail, but it isn't expected to fail too soon.
+            print(f"Backup failed after {time_to_fail} seconds disconnection")
+            assert time_to_fail > 5
+            assert time_to_fail < 30
+
+
+# A backup must NOT be stopped if Zookeeper is disconnected shorter than `failure_after_host_disconnected_for_seconds`.
+def test_short_disconnection_doesnt_stop_backup():
+    with NoTrashChecker() as no_trash_checker, ConfigManager() as config_manager:
+        use_faster_zk_disconnect_detect = random.choice([True, False])
+        if use_faster_zk_disconnect_detect:
+            print("Using faster_zk_disconnect_detect.xml")
+            config_manager.add_main_config(
+                nodes, "configs/faster_zk_disconnect_detect.xml"
+            )
+
+        create_and_fill_table(random_node())
+
+        initiator = random_node()
+        print(f"Using {get_node_name(initiator)} as initiator")
+
+        backup_id = random_id()
+        initiator.query(
+            f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC",
+            settings={"backup_restore_failure_after_host_disconnected_for_seconds": 10},
+        )
+
+        assert get_status(initiator, backup_id=backup_id) == "CREATING_BACKUP"
+        assert get_num_system_processes(initiator, backup_id=backup_id) >= 1
+
+        # Dropping connection for less than `failure_after_host_disconnected_for_seconds`
+        with PartitionManager() as pm:
+            random_sleep(5)
+            node_to_drop_zk_connection = random_node()
+            print(
+                f"Dropping connection between {get_node_name(node_to_drop_zk_connection)} and ZooKeeper"
+            )
+            pm.drop_instance_zk_connections(node_to_drop_zk_connection)
+            random_sleep(5)
+            print(
+                f"Restoring connection between {get_node_name(node_to_drop_zk_connection)} and ZooKeeper"
+            )
+
+        # Backup must be successful.
+        wait_status(initiator, "BACKUP_CREATED", backup_id=backup_id)
+        assert get_num_system_processes(nodes, backup_id=backup_id) == 0
+
+        no_trash_checker.expect_backups = [backup_id]
+        no_trash_checker.allow_errors = [
+            "KEEPER_EXCEPTION",
+            "SOCKET_TIMEOUT",
+            "CANNOT_READ_ALL_DATA",
+            "NETWORK_ERROR",
+            "TABLE_IS_READ_ONLY",
+        ]
