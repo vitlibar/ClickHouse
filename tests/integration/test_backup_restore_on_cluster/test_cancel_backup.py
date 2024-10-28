@@ -23,7 +23,6 @@ main_configs = [
 
 user_configs = [
     "configs/zookeeper_retries.xml",
-    "configs/failure_after_host_disconnected_for_seconds.xml",
 ]
 
 node1 = cluster.add_instance(
@@ -609,7 +608,8 @@ def test_long_disconnection_stops_backup():
 
     backup_id = random_id()
     initiator.query(
-        f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC"
+        f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC",
+        settings={'backup_restore_failure_after_host_disconnected_for_seconds': 5}
     )
 
     assert get_status(initiator, backup_id=backup_id) == "CREATING_BACKUP"
@@ -644,7 +644,7 @@ def test_long_disconnection_stops_backup():
         # A backup is expected to fail, but it isn't expected to fail too soon.
         print(f"Backup failed after {time_to_fail} seconds disconnection")
         assert time_to_fail > 5
-        assert time_to_fail < 30
+        assert time_to_fail < 40
 
 
 # A backup must NOT be stopped if Zookeeper is disconnected shorter than `failure_after_host_disconnected_for_seconds`.

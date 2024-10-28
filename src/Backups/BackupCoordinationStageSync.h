@@ -102,7 +102,7 @@ private:
     void cancelQueryIfDisconnectedTooLong();
 
     /// Used by waitForHostsToReachStage() to check if everything is ready to return.
-    bool checkIfHostsReachStage(const Strings & hosts, const String & stage_to_wait, std::optional<std::chrono::milliseconds> timeout, bool throw_if_not_ready, Strings & results) const TSA_REQUIRES(mutex);
+    bool checkIfHostsReachStage(const Strings & hosts, const String & stage_to_wait, std::optional<std::chrono::milliseconds> timeout, bool throw_if_unready, Strings & results) const TSA_REQUIRES(mutex);
 
     /// Creates the 'finish' node.
     bool tryFinishImpl();
@@ -111,10 +111,7 @@ private:
 
     /// Waits until all the other hosts finish their work.
     bool tryWaitForOtherHostsToFinishImpl(bool throw_if_error, std::optional<std::chrono::seconds> timeout) const;
-    bool checkIfOtherHostsFinish(bool throw_if_error) const TSA_REQUIRES(mutex);
-
-    struct State;
-    Strings getUnfinishedOtherHosts(const State & state_) const;
+    bool checkIfOtherHostsFinish(std::optional<std::chrono::milliseconds> timeout, bool throw_if_error, bool throw_if_unready) const TSA_REQUIRES(mutex);
 
     const bool is_restore;
     const String operation_name;
@@ -186,13 +183,6 @@ private:
 
     std::future<void> watching_thread_future;
     std::atomic<bool> should_stop_watching_thread = false;
-
-    struct WaitForOtherHostsToFinishResult
-    {
-        bool succeeded = false;
-        std::exception_ptr exception;
-    };
-    mutable WaitForOtherHostsToFinishResult wait_for_other_hosts_to_finish_result TSA_GUARDED_BY(mutex);
 
     struct FinishResult
     {
