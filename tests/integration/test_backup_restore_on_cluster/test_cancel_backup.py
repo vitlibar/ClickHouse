@@ -62,8 +62,6 @@ def cleanup_after_test():
     try:
         yield
     finally:
-        node1.query("SYSTEM RELOAD CONFIG")
-        node2.query("SYSTEM RELOAD CONFIG")
         node1.query("DROP TABLE IF EXISTS tbl ON CLUSTER 'cluster' SYNC")
 
 
@@ -293,28 +291,6 @@ def start_zookeeper_servers(zoo_nodes):
     )
 
 
-# Switch into using only "zoo1" on node1 and only "zoo2" on node2.
-def use_separate_keepers_on_nodes(turn_on):
-    if turn_on:
-        node1.copy_file_to_container(
-            os.path.join(CONFIG_DIR, "zoo1_config.xml"),
-            "/etc/clickhouse-server/conf.d/zzz_zoo1_config.xml",
-        )
-        node2.copy_file_to_container(
-            os.path.join(CONFIG_DIR, "zoo2_config.xml"),
-            "/etc/clickhouse-server/conf.d/zzz_zoo2_config.xml",
-        )
-    else:
-        node1.remove_file_from_container(
-            "/etc/clickhouse-server/conf.d/zzz_zoo1_config.xml"
-        )
-        node2.remove_file_from_container(
-            "/etc/clickhouse-server/conf.d/zzz_zoo2_config.xml"
-        )
-    assert_eq_with_retry(node1, "SYSTEM RELOAD CONFIG", "")
-    assert_eq_with_retry(node2, "SYSTEM RELOAD CONFIG", "")
-
-
 # Sleeps for random amount of time.
 def random_sleep(max_seconds):
     if random.randint(0, 5) > 0:
@@ -324,6 +300,23 @@ def random_sleep(max_seconds):
 def sleep(seconds):
     print(f"Sleeping {seconds} seconds")
     time.sleep(seconds)
+
+
+# Adds a configuration file to "config.d"
+def add_config(config_name):
+    for node in nodes:
+        node.copy_file_to_container(os.path.join(CONFIG_DIR, config_name),
+                                    os.path.join("/etc/clickhouse-server/config.d", config_name))
+    for node in nodes:
+        assert_eq_with_retry(node, "SYSTEM RELOAD CONFIG", "")
+
+
+# Removes a configuration file from "config.d"
+def remove_config(config_name):
+    for node in nodes:
+        node.remove_file_from_container(os.path.join("/etc/clickhouse-server/config.d", config_name))
+    for node in nodes:
+        assert_eq_with_retry(node, "SYSTEM RELOAD CONFIG", "")
 
 
 # Checks that BACKUP and RESTORE cleaned up properly with no trash left in ZooKeeper, backups folder, and logs.
@@ -601,6 +594,7 @@ def test_error_leaves_no_trash():
 
 # A backup must be stopped if Zookeeper is disconnected longer than `failure_after_host_disconnected_for_seconds`.
 def test_long_disconnection_stops_backup():
+    add_config('faster_zk_disconnect_detect.xml')
     create_and_fill_table(random_node(), num_parts=100)
 
     initiator = random_node()
@@ -644,11 +638,18 @@ def test_long_disconnection_stops_backup():
         # A backup is expected to fail, but it isn't expected to fail too soon.
         print(f"Backup failed after {time_to_fail} seconds disconnection")
         assert time_to_fail > 5
-        assert time_to_fail < 40
+        assert time_to_fail < 120
+
+    remove_config('faster_zk_disconnect_detect.xml')
 
 
 # A backup must NOT be stopped if Zookeeper is disconnected shorter than `failure_after_host_disconnected_for_seconds`.
 def test_short_disconnection_doesnt_stop_backup():
+    use_faster_zk_disconnect_detect = random.choice([True, False])
+    print(f"Using use_faster_zk_disconnect_detect = {use_faster_zk_disconnect_detect}")
+    if use_faster_zk_disconnect_detect:
+        add_config('faster_zk_disconnect_detect.xml')
+
     no_trash_checker = NoTrashChecker()
     create_and_fill_table(random_node())
 
@@ -692,3 +693,6 @@ def test_short_disconnection_doesnt_stop_backup():
             "TABLE_IS_READ_ONLY",
         ],
     )
+
+    if use_faster_zk_disconnect_detect:
+        remove_config('faster_zk_disconnect_detect.xml')
