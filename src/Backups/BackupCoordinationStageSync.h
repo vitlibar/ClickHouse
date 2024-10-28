@@ -102,7 +102,7 @@ private:
     void cancelQueryIfDisconnectedTooLong();
 
     /// Used by waitForHostsToReachStage() to check if everything is ready to return.
-    bool checkIfHostsReachStage(const Strings & hosts, const String & stage_to_wait, std::optional<std::chrono::milliseconds> timeout, bool throw_if_unready, Strings & results) const TSA_REQUIRES(mutex);
+    bool checkIfHostsReachStage(const Strings & hosts, const String & stage_to_wait, bool time_is_out, std::optional<std::chrono::milliseconds> timeout, Strings & results) const TSA_REQUIRES(mutex);
 
     /// Creates the 'finish' node.
     bool tryFinishImpl();
@@ -110,8 +110,8 @@ private:
     void createFinishNodeAndRemoveAliveNode(Coordination::ZooKeeperWithFaultInjection::Ptr zookeeper, bool & other_hosts_also_finished);
 
     /// Waits until all the other hosts finish their work.
-    bool tryWaitForOtherHostsToFinishImpl(bool throw_if_error, std::optional<std::chrono::seconds> timeout) const;
-    bool checkIfOtherHostsFinish(std::optional<std::chrono::milliseconds> timeout, bool throw_if_error, bool throw_if_unready) const TSA_REQUIRES(mutex);
+    bool tryWaitForOtherHostsToFinishImpl(const String & reason, bool throw_if_error, std::optional<std::chrono::seconds> timeout) const;
+    bool checkIfOtherHostsFinish(const String & reason, bool throw_if_error, bool time_is_out, std::optional<std::chrono::milliseconds> timeout) const TSA_REQUIRES(mutex);
 
     const bool is_restore;
     const String operation_name;

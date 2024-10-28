@@ -615,7 +615,7 @@ void BackupCoordinationStageSync::cancelQueryIfDisconnectedTooLong()
                     /// So here we're writingh the error to the `process_list_element` and let it to be thrown later
                     /// from `process_list_element->checkTimeLimit()`.
                     String message = fmt::format("The 'alive' node hasn't been updated in ZooKeeper for {} for {} "
-                                                 "which is more than the specified timeout {}. The last time the 'alive' node was detected at {}",
+                                                 "which is more than the specified timeout {}. Last time the 'alive' node was detected at {}",
                                                  getHostDesc(host), disconnected_duration, failure_after_host_disconnected_for_seconds,
                                                  host_info.last_connection_time);
                     LOG_WARNING(log, "Lost connection to {}: {}", getHostDesc(host), message);
@@ -732,19 +732,19 @@ Strings BackupCoordinationStageSync::waitForHostsToReachStage(const String & sta
     std::unique_lock lock{mutex};
 
     /// TSA_NO_THREAD_SAFETY_ANALYSIS is here because Clang Thread Safety Analysis doesn't understand std::unique_lock.
-    auto check_if_hosts_ready = [&](bool throw_if_unready) TSA_NO_THREAD_SAFETY_ANALYSIS
+    auto check_if_hosts_ready = [&](bool time_is_out) TSA_NO_THREAD_SAFETY_ANALYSIS
     {
-        return checkIfHostsReachStage(hosts, stage_to_wait, timeout, throw_if_unready, results);
+        return checkIfHostsReachStage(hosts, stage_to_wait, time_is_out, timeout, results);
     };
 
     if (timeout)
     {
-        if (!state_changed.wait_for(lock, *timeout, [&] { return check_if_hosts_ready(/* throw_if_unready = */ false); }))
-            check_if_hosts_ready(/* throw_if_unready = */ true);
+        if (!state_changed.wait_for(lock, *timeout, [&] { return check_if_hosts_ready(/* time_is_out = */ false); }))
+            check_if_hosts_ready(/* time_is_out = */ true);
     }
     else
     {
-        state_changed.wait(lock, [&] { return check_if_hosts_ready(/* throw_if_unready = */ false); });
+        state_changed.wait(lock, [&] { return check_if_hosts_ready(/* time_is_out = */ false); });
     }
 
     return results;
@@ -754,12 +754,12 @@ Strings BackupCoordinationStageSync::waitForHostsToReachStage(const String & sta
 bool BackupCoordinationStageSync::checkIfHostsReachStage(
     const Strings & hosts,
     const String & stage_to_wait,
+    bool time_is_out,
     std::optional<std::chrono::milliseconds> timeout,
-    bool throw_if_unready,
     Strings & results) const
 {
     if (should_stop_watching_thread)
-        throw Exception(ErrorCodes::LOGICAL_ERROR, "finish() was called while another thread is waiting for a stage");
+        throw Exception(ErrorCodes::LOGICAL_ERROR, "finish() was called while waiting for a stage");
 
     process_list_element->checkTimeLimit();
 
@@ -768,19 +768,8 @@ bool BackupCoordinationStageSync::checkIfHostsReachStage(
         const String & host = hosts[i];
         auto it = state.hosts.find(host);
 
-        bool never_connected = (it == state.hosts.end()) || !it->second.started;
-        if (never_connected)
-        {
-            if (throw_if_unready)
-            {
-                throw Exception(ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE, "Never connected to {}", getHostDesc(host));
-            }
-            else
-            {
-                LOG_TRACE(log, "Waiting for {} to connect", getHostDesc(host));
-                return false;
-            }
-        }
+        if (it == state.hosts.end())
+            throw Exception(ErrorCodes::LOGICAL_ERROR, "waitForHostsToReachStage() was called for unexpected {}, all hosts are {}", getHostDesc(host), getHostsDesc(all_hosts));
 
         const HostInfo & host_info = it->second;
         auto stage_it = host_info.stages.find(stage_to_wait);
@@ -792,42 +781,30 @@ bool BackupCoordinationStageSync::checkIfHostsReachStage(
 
         if (host_info.finished)
         {
-            throw Exception(ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE, "{} finished without coming to stage {}",
-                            getHostDesc(host), stage_to_wait);
+            throw Exception(ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE,
+                            "{} finished without coming to stage {}", getHostDesc(host), stage_to_wait);
         }
 
-        if (!host_info.connected)
-        {
-            if (throw_if_unready)
-            {
-                String timeout_desc = timeout ? fmt::format(" (timeout = {})", *timeout) : "";
-                throw Exception(ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE,
-                                "Couldn't reconnect to {} since {} ({} ago){}",
-                                getHostDesc(host), host_info.last_connection_time,
-                                std::chrono::steady_clock::now() - host_info.last_connection_time_monotonic,
-                                timeout_desc);
-            }
-            else
-            {
-                LOG_TRACE(log, "Waiting for {} to reconnect", getHostDesc(host));
-                return false;
-            }
-        }
+        String host_status;
+        if (!host_info.started)
+            host_status = fmt::format(": the host hasn't started working on this {} yet", operation_name);
+        else if (!host_info.connected)
+            host_status = fmt::format(": the host is currently disconnected, last connection was at {}", host_info.last_connection_time);
 
-        if (throw_if_unready)
+        if (!time_is_out)
         {
-            String timeout_desc = timeout ? fmt::format(" (timeout = {})", *timeout) : "";
-            throw Exception(ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE, "Waited for {} to reach stage {} too long{}",
-                            getHostDesc(host), stage_to_wait, timeout_desc);
+            LOG_TRACE(log, "Waiting for {} to reach stage {}{}", getHostDesc(host), stage_to_wait, host_status);
+            return false;
         }
         else
         {
-            LOG_TRACE(log, "Waiting for {} to reach stage {}", getHostDesc(host), stage_to_wait);
-            return false;
+            throw Exception(ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE,
+                            "Waited longer than timeout {} for {} to reach stage {}{}",
+                            *timeout, getHostDesc(host), stage_to_wait, host_status);
         }
     }
 
-    LOG_INFO(log, "All hosts reached stage {}", stage_to_wait);
+    LOG_INFO(log, "Hosts {} reached stage {}", getHostsDesc(hosts), stage_to_wait);
     return true;
 }
 
@@ -984,7 +961,7 @@ void BackupCoordinationStageSync::createFinishNodeAndRemoveAliveNode(Coordinatio
 
 void BackupCoordinationStageSync::waitForOtherHostsToFinish() const
 {
-    tryWaitForOtherHostsToFinishImpl(/* throw_if_error = */ true, /* timeout = */ {});
+    tryWaitForOtherHostsToFinishImpl(/* reason = */ "", /* throw_if_error = */ true, /* timeout = */ {});
 }
 
 
@@ -994,38 +971,39 @@ bool BackupCoordinationStageSync::tryWaitForOtherHostsToFinishAfterError() const
     if (finish_timeout_after_error.count() != 0)
         timeout = finish_timeout_after_error;
 
-    return tryWaitForOtherHostsToFinishImpl(/* throw_if_error = */ false, timeout);
+    String reason = fmt::format("{} needs other hosts to finish before it can cleanup", current_host_desc);
+    return tryWaitForOtherHostsToFinishImpl(reason, /* throw_if_error = */ false, timeout);
 }
 
 
-bool BackupCoordinationStageSync::tryWaitForOtherHostsToFinishImpl(bool throw_if_error, std::optional<std::chrono::seconds> timeout) const
+bool BackupCoordinationStageSync::tryWaitForOtherHostsToFinishImpl(const String & reason, bool throw_if_error, std::optional<std::chrono::seconds> timeout) const
 {
     std::unique_lock lock{mutex};
 
     /// TSA_NO_THREAD_SAFETY_ANALYSIS is here because Clang Thread Safety Analysis doesn't understand std::unique_lock.
-    auto check_if_other_hosts_finish = [&](bool throw_if_not_ready) TSA_NO_THREAD_SAFETY_ANALYSIS
+    auto check_if_other_hosts_finish = [&](bool time_is_out) TSA_NO_THREAD_SAFETY_ANALYSIS
     {
-        return checkIfOtherHostsFinish(timeout, throw_if_error, throw_if_not_ready);
+        return checkIfOtherHostsFinish(reason, throw_if_error, time_is_out, timeout);
     };
 
     if (timeout)
     {
-        if (state_changed.wait_for(lock, *timeout, [&] { return check_if_other_hosts_finish(/* throw_if_not_ready = */ false); }))
+        if (state_changed.wait_for(lock, *timeout, [&] { return check_if_other_hosts_finish(/* time_is_out = */ false); }))
             return true;
-        return check_if_other_hosts_finish(/* throw_if_not_ready = */ throw_if_error);
+        return check_if_other_hosts_finish(/* time_is_out = */ true);
     }
     else
     {
-        state_changed.wait(lock, [&] { return check_if_other_hosts_finish(/* throw_if_not_ready = */ false); });
+        state_changed.wait(lock, [&] { return check_if_other_hosts_finish(/* time_is_out = */ false); });
         return true;
     }
 }
 
 
-bool BackupCoordinationStageSync::checkIfOtherHostsFinish(std::optional<std::chrono::milliseconds> timeout, bool throw_if_error, bool throw_if_unready) const
+bool BackupCoordinationStageSync::checkIfOtherHostsFinish(const String & reason, bool throw_if_error, bool time_is_out, std::optional<std::chrono::milliseconds> timeout) const
 {
     if (should_stop_watching_thread)
-        throw Exception(ErrorCodes::LOGICAL_ERROR, "finish() was called while another thread is waiting for other hosts to finish");
+        throw Exception(ErrorCodes::LOGICAL_ERROR, "finish() was called while waiting for other hosts to finish");
 
     if (throw_if_error)
         process_list_element->checkTimeLimit();
@@ -1035,51 +1013,37 @@ bool BackupCoordinationStageSync::checkIfOtherHostsFinish(std::optional<std::chr
         if ((host == current_host) || host_info.finished)
             continue;
 
+        String host_status;
         if (!host_info.started)
-        {
-            if (throw_if_unready)
-            {
-                throw Exception(ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE, "Never connected to {}", getHostDesc(host));
-            }
-            else
-            {
-                LOG_TRACE(log, "Waiting for {} to connect", getHostDesc(host));
-                return false;
-            }
-        }
+            host_status = fmt::format(": the host hasn't started working on this {} yet", operation_name);
+        else if (!host_info.connected)
+            host_status = fmt::format(": the host is currently disconnected, last connection was at {}", host_info.last_connection_time);
 
-        if (!host_info.connected)
+        if (!time_is_out)
         {
-            if (throw_if_unready)
-            {
-                String timeout_desc = timeout ? fmt::format(" (timeout = {})", *timeout) : "";
-                throw Exception(ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE,
-                                "Couldn't reconnect to {} since {} ({} ago){}",
-                                getHostDesc(host), host_info.last_connection_time,
-                                std::chrono::steady_clock::now() - host_info.last_connection_time_monotonic,
-                                timeout_desc);
-            }
-            else
-            {
-                LOG_TRACE(log, "Waiting for {} to reconnect", getHostDesc(host));
-                return false;
-            }
-        }
-
-        if (throw_if_unready)
-        {
-            String timeout_desc = timeout ? fmt::format(" (timeout = {})", *timeout) : "";
-            throw Exception(ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE, "Waited for {} to finish too long{}",
-                            getHostDesc(host), timeout_desc);
+            String reason_text = reason.empty() ? "" : (" because " + reason);
+            LOG_TRACE(log, "Waiting for {} to finish{}{}", getHostDesc(host), reason_text, host_status);
+            return false;
         }
         else
         {
-            LOG_TRACE(log, "Waiting for {} to finish", getHostDesc(host));
-            return false;
+            String reason_text = reason.empty() ? "" : fmt::format(" (reason of waiting: {})", reason);
+            if (!throw_if_error)
+            {
+                LOG_INFO(log, "Waited longer than timeout {} for {} to finish{}{}",
+                          *timeout, getHostDesc(host), host_status, reason_text);
+                return false;
+            }
+            else
+            {
+                throw Exception(ErrorCodes::FAILED_TO_SYNC_BACKUP_OR_RESTORE,
+                                "Waited longer than timeout {} for {} to finish{}{}",
+                                *timeout, getHostDesc(host), host_status, reason_text);
+            }
         }
     }
 
-    LOG_TRACE(log, "All hosts finished working on this {}", operation_name);
+    LOG_TRACE(log, "Other hosts finished working on this {}", operation_name);
     return true;
 }
 
