@@ -229,7 +229,10 @@ void RestorerFromBackup::setStage(const String & new_stage, const String & messa
     current_stage = new_stage;
 
     if (restore_coordination)
+    {
+        /// There is no need to sync Stage::COMPLETED with other hosts because it's the last stage.
         restore_coordination->setStage(new_stage, message, /* sync = */ (new_stage != Stage::COMPLETED));
+    }
 }
 
 void RestorerFromBackup::schedule(std::function<void()> && task_, const char * thread_name_)

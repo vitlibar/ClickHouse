@@ -32,6 +32,7 @@ public:
     ~RestoreCoordinationOnCluster() override;
 
     Strings setStage(const String & new_stage, const String & message, bool sync) override;
+    void setRestoreQueryWasSentToOtherHosts() override;
     bool trySetError(std::exception_ptr exception) override;
     void finish() override;
     bool tryFinishAfterError() noexcept override;
@@ -81,8 +82,7 @@ private:
     BackupConcurrencyCheck concurrency_check;
     BackupCoordinationStageSync stage_sync;
     BackupCoordinationCleaner cleaner;
-
-    std::mutex mutex;
+    std::atomic<bool> restore_query_was_sent_to_other_hosts = false;
 };
 
 }

@@ -9,9 +9,6 @@ namespace DB
 class BackupCoordinationStageSync
 {
 public:
-    /// Empty string as the current host is used to mark the initiator of a BACKUP ON CLUSTER query.
-    static const constexpr std::string_view kInitiator;
-
     BackupCoordinationStageSync(
         bool is_restore_,                    /// true if this is a RESTORE ON CLUSTER command, false if this is a BACKUP ON CLUSTER command
         const String & zookeeper_path_,      /// path to the "stage" folder in ZooKeeper

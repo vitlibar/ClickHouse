@@ -38,6 +38,7 @@ public:
     ~BackupCoordinationOnCluster() override;
 
     Strings setStage(const String & new_stage, const String & message, bool sync) override;
+    void setBackupQueryWasSentToOtherHosts() override;
     bool trySetError(std::exception_ptr exception) override;
     void finish() override;
     bool tryFinishAfterError() noexcept override;
@@ -113,6 +114,7 @@ private:
     BackupConcurrencyCheck concurrency_check;
     BackupCoordinationStageSync stage_sync;
     BackupCoordinationCleaner cleaner;
+    std::atomic<bool> backup_query_was_sent_to_other_hosts = false;
 
     mutable std::optional<BackupCoordinationReplicatedTables> replicated_tables TSA_GUARDED_BY(replicated_tables_mutex);
     mutable std::optional<BackupCoordinationReplicatedAccess> replicated_access TSA_GUARDED_BY(replicated_access_mutex);

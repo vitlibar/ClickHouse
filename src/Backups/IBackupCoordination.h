@@ -24,6 +24,10 @@ public:
     /// Sets the current stage and waits for other hosts to come to this stage too.
     virtual Strings setStage(const String & new_stage, const String & message, bool sync) = 0;
 
+    /// Sets that the backup query was sent to other hosts.
+    /// Function waitForOtherHostsToFinish() will check that to find out if it should really wait or not.
+    virtual void setBackupQueryWasSentToOtherHosts() = 0;
+
     /// Lets other hosts know that the current host has encountered an error.
     virtual bool trySetError(std::exception_ptr exception) = 0;
 

@@ -84,8 +84,7 @@ private:
         const BackupSettings & backup_settings,
         std::shared_ptr<IBackupCoordination> backup_coordination,
         ContextMutablePtr context,
-        const ClusterPtr & cluster,
-        bool & on_cluster_started);
+        const ClusterPtr & cluster);
 
     /// Builds file infos for specified backup entries.
     void buildFileInfosForBackupEntries(const BackupPtr & backup, const BackupEntries & backup_entries, const ReadSettings & read_settings, std::shared_ptr<IBackupCoordination> backup_coordination, QueryStatusPtr process_list_element);
@@ -106,8 +105,7 @@ private:
         RestoreSettings restore_settings,
         std::shared_ptr<IRestoreCoordination> restore_coordination,
         ContextMutablePtr context,
-        const ClusterPtr & cluster,
-        bool & on_cluster_started);
+        const ClusterPtr & cluster);
 
     std::shared_ptr<IBackupCoordination> makeBackupCoordination(bool on_cluster_coordination, const BackupSettings & backup_settings, const ContextPtr & context) const;
     std::shared_ptr<IRestoreCoordination> makeRestoreCoordination(bool on_cluster_coordination, const RestoreSettings & restore_settings, const ContextPtr & context) const;

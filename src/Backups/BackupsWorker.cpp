@@ -344,7 +344,6 @@ struct BackupsWorker::BackupStarter
     String backup_id;
     String backup_name_for_logging;
     bool on_cluster;
-    bool on_cluster_started = false;
     bool is_internal_backup;
     std::shared_ptr<IBackupCoordination> backup_coordination;
     ClusterPtr cluster;
@@ -416,7 +415,7 @@ struct BackupsWorker::BackupStarter
     {
         backups_worker.doBackup(
             backup, backup_query, backup_id, backup_name_for_logging, backup_settings, backup_coordination, backup_context,
-            cluster, on_cluster_started);
+            cluster);
     }
 
     void onException()
@@ -433,11 +432,7 @@ struct BackupsWorker::BackupStarter
 
         if (backup_coordination && backup_coordination->trySetError(std::current_exception()))
         {
-            bool other_hosts_finished;
-            if (!is_internal_backup && on_cluster_started)
-                other_hosts_finished = backup_coordination->tryWaitForOtherHostsToFinishAfterError();
-            else
-                other_hosts_finished = !is_internal_backup;
+            bool other_hosts_finished = backup_coordination->tryWaitForOtherHostsToFinishAfterError();
 
             if (should_remove_files_in_backup && other_hosts_finished)
                 backup->tryRemoveAllFiles();
@@ -532,8 +527,7 @@ void BackupsWorker::doBackup(
     const BackupSettings & backup_settings,
     std::shared_ptr<IBackupCoordination> backup_coordination,
     ContextMutablePtr context,
-    const ClusterPtr & cluster,
-    bool & on_cluster_started)
+    const ClusterPtr & cluster)
 {
     bool on_cluster = (cluster != nullptr);
 
@@ -557,9 +551,9 @@ void BackupsWorker::doBackup(
         backup_settings.copySettingsToQuery(*backup_query);
 
         startOnClusterOperation(*backup_query, context, params);
-        on_cluster_started = true;
 
         /// Wait until all the hosts have written their backup entries.
+        backup_coordination->setBackupQueryWasSentToOtherHosts();
         backup_coordination->waitForOtherHostsToFinish();
     }
     else
@@ -584,7 +578,7 @@ void BackupsWorker::doBackup(
         buildFileInfosForBackupEntries(backup, backup_entries, read_settings, backup_coordination, context->getProcessListElement());
         writeBackupEntries(backup, std::move(backup_entries), backup_id, backup_coordination, backup_settings.internal, context->getProcessListElement());
 
-        /// We have written our backup entries, we need to tell other hosts (they could be waiting for it).
+        /// We have written our backup entries (there is no need to sync it with other hosts because it's the last stage).
         backup_coordination->setStage(Stage::COMPLETED, "", /* sync = */ false);
     }
 
@@ -731,7 +725,6 @@ struct BackupsWorker::RestoreStarter
     String restore_id;
     String backup_name_for_logging;
     bool on_cluster;
-    bool on_cluster_started = false;
     bool is_internal_restore;
     std::shared_ptr<IRestoreCoordination> restore_coordination;
     ClusterPtr cluster;
@@ -802,8 +795,7 @@ struct BackupsWorker::RestoreStarter
             restore_settings,
             restore_coordination,
             restore_context,
-            cluster,
-            on_cluster_started);
+            cluster);
     }
 
     void onException()
@@ -813,9 +805,7 @@ struct BackupsWorker::RestoreStarter
 
         if (restore_coordination && restore_coordination->trySetError(std::current_exception()))
         {
-            if (!is_internal_restore && on_cluster_started)
-                restore_coordination->tryWaitForOtherHostsToFinishAfterError();
-
+            restore_coordination->tryWaitForOtherHostsToFinishAfterError();
             restore_coordination->tryFinishAfterError();
         }
 
@@ -896,8 +886,7 @@ void BackupsWorker::doRestore(
     RestoreSettings restore_settings,
     std::shared_ptr<IRestoreCoordination> restore_coordination,
     ContextMutablePtr context,
-    const ClusterPtr & cluster,
-    bool & on_cluster_started)
+    const ClusterPtr & cluster)
 {
     maybeSleepForTesting();
 
@@ -939,9 +928,9 @@ void BackupsWorker::doRestore(
         restore_settings.copySettingsToQuery(*restore_query);
 
         startOnClusterOperation(*restore_query, context, params);
-        on_cluster_started = true;
 
-        /// Wait until all the hosts have written their backup entries.
+        /// Wait until all the hosts have done with their restoring work.
+        restore_coordination->setRestoreQueryWasSentToOtherHosts();
         restore_coordination->waitForOtherHostsToFinish();
     }
     else

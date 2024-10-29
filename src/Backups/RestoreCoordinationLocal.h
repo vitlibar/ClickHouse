@@ -21,6 +21,7 @@ public:
     ~RestoreCoordinationLocal() override;
 
     Strings setStage(const String &, const String &, bool) override { return {}; }
+    void setRestoreQueryWasSentToOtherHosts() override {}
     bool trySetError(std::exception_ptr) override { return true; }
     void finish() override {}
     bool tryFinishAfterError() noexcept override { return true; }

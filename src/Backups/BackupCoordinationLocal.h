@@ -32,6 +32,7 @@ public:
     ~BackupCoordinationLocal() override;
 
     Strings setStage(const String &, const String &, bool) override { return {}; }
+    void setBackupQueryWasSentToOtherHosts() override {}
     bool trySetError(std::exception_ptr) override { return true; }
     void finish() override {}
     bool tryFinishAfterError() noexcept override { return true; }

@@ -76,6 +76,11 @@ Strings RestoreCoordinationOnCluster::setStage(const String & new_stage, const S
     return stage_sync.waitForHostsToReachStage(new_stage, all_hosts_without_initiator);
 }
 
+void RestoreCoordinationOnCluster::setRestoreQueryWasSentToOtherHosts()
+{
+    restore_query_was_sent_to_other_hosts = true;
+}
+
 bool RestoreCoordinationOnCluster::trySetError(std::exception_ptr exception)
 {
     return stage_sync.trySetError(exception);
@@ -86,7 +91,7 @@ void RestoreCoordinationOnCluster::finish()
     bool other_hosts_also_finished = false;
     stage_sync.finish(other_hosts_also_finished);
 
-    if (other_hosts_also_finished)
+    if ((current_host == kInitiator) && (other_hosts_also_finished || !restore_query_was_sent_to_other_hosts))
         cleaner.cleanup();
 }
 
@@ -101,19 +106,28 @@ bool RestoreCoordinationOnCluster::tryFinishImpl() noexcept
     if (!stage_sync.tryFinishAfterError(other_hosts_also_finished))
         return false;
 
-    if (other_hosts_also_finished && !cleaner.tryCleanupAfterError())
-        return false;
+    if ((current_host == kInitiator) && (other_hosts_also_finished || !restore_query_was_sent_to_other_hosts))
+    {
+        if (!cleaner.tryCleanupAfterError())
+            return false;
+    }
 
     return true;
 }
 
 void RestoreCoordinationOnCluster::waitForOtherHostsToFinish()
 {
+    if ((current_host != kInitiator) || !restore_query_was_sent_to_other_hosts)
+        return;
     stage_sync.waitForOtherHostsToFinish();
 }
 
 bool RestoreCoordinationOnCluster::tryWaitForOtherHostsToFinishAfterError() noexcept
 {
+    if (current_host != kInitiator)
+        return false;
+    if (!restore_query_was_sent_to_other_hosts)
+        return true;
     return stage_sync.tryWaitForOtherHostsToFinishAfterError();
 }
 
