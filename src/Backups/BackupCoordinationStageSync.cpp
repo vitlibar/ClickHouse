@@ -971,7 +971,7 @@ bool BackupCoordinationStageSync::tryWaitForOtherHostsToFinishAfterError() const
     if (finish_timeout_after_error.count() != 0)
         timeout = finish_timeout_after_error;
 
-    String reason = fmt::format("{} needs other hosts to finish before it can cleanup", current_host_desc);
+    String reason = fmt::format("{} needs other hosts to finish before cleanup", current_host_desc);
     return tryWaitForOtherHostsToFinishImpl(reason, /* throw_if_error = */ false, timeout);
 }
 

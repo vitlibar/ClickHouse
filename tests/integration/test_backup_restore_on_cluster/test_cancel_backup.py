@@ -310,26 +310,35 @@ class NoTrashChecker:
         self.allow_errors = []
         self.check_zookeeper = True
 
-        time.sleep(
-            1
-        )  # To ensure this NoTrashChecker won't collect errors from a possible previous NoTrashChecker.
+        # Sleep 1 second to ensure this NoTrashChecker won't collect errors from a possible previous NoTrashChecker.
+        time.sleep(1)
+
         self.__start_time_for_collecting_errors = time.gmtime()
         self.__previous_list_of_backups = set(
             os.listdir(os.path.join(node1.cluster.instances_dir, "backups"))
+        )
+
+        self.__previous_list_of_znodes = set(
+            node1.query(
+                "SELECT name FROM system.zookeeper WHERE path = '/clickhouse/backups' "
+                + "AND NOT (name == 'alive_tracker')"
+            ).splitlines()
         )
 
     def __enter__(self):
         return self
 
     def __exit__(self, type, value, traceback):
-        nodes_in_zookeeper_query_result = node1.query(
-            "SELECT name FROM system.zookeeper WHERE path = '/clickhouse/backups' "
-            + "AND NOT (name == 'alive_tracker')"
+        list_of_znodes = set(
+            node1.query(
+                "SELECT name FROM system.zookeeper WHERE path = '/clickhouse/backups' "
+                + "AND NOT (name == 'alive_tracker')"
+            ).splitlines()
         )
-        nodes_in_zookeeper = nodes_in_zookeeper_query_result.splitlines()
-        if nodes_in_zookeeper:
-            print(f"Found nodes in ZooKeeper: {nodes_in_zookeeper}")
-            for node in nodes_in_zookeeper:
+        new_znodes = list_of_znodes.difference(self.__previous_list_of_znodes)
+        if new_znodes:
+            print(f"Found nodes in ZooKeeper: {new_znodes}")
+            for node in new_znodes:
                 print(
                     f"Nodes in '/clickhouse/backups/{node}':\n"
                     + node1.query(
@@ -343,7 +352,7 @@ class NoTrashChecker:
                     )
                 )
         if self.check_zookeeper:
-            assert nodes_in_zookeeper == []
+            assert new_znodes == set()
 
         list_of_backups = set(
             os.listdir(os.path.join(node1.cluster.instances_dir, "backups"))
@@ -400,6 +409,7 @@ class NoTrashChecker:
 
 __backup_id_of_successful_backup = None
 
+
 # Generates a backup which will be used to test RESTORE.
 def get_backup_id_of_successful_backup():
     global __backup_id_of_successful_backup
@@ -444,7 +454,7 @@ def test_cancel_backup():
         assert get_num_system_processes(initiator, backup_id=backup_id) >= 1
 
         # We shouldn't wait too long here, because otherwise the backup might be completed before we cancel it.
-        random_sleep(5)
+        random_sleep(3)
 
         node_to_cancel, cancel_as_initiator = random.choice(
             [(node1, False), (node2, False), (initiator, True)]
@@ -498,7 +508,7 @@ def test_cancel_restore():
         assert get_num_system_processes(initiator, restore_id=restore_id) >= 1
 
         # We shouldn't wait too long here, because otherwise the restore might be completed before we cancel it.
-        random_sleep(5)
+        random_sleep(3)
 
         node_to_cancel, cancel_as_initiator = random.choice(
             [(node1, False), (node2, False), (initiator, True)]
@@ -563,7 +573,7 @@ def test_shutdown_cancels_backup():
         assert get_num_system_processes(initiator, backup_id=backup_id) >= 1
 
         # We shouldn't wait too long here, because otherwise the backup might be completed before we cancel it.
-        random_sleep(5)
+        random_sleep(3)
 
         node_to_restart = random.choice([node1, node2])
         wait_num_system_processes(node_to_restart, "1+", backup_id=backup_id)
@@ -625,7 +635,7 @@ def test_long_disconnection_stops_backup():
         backup_id = random_id()
         initiator.query(
             f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC",
-            settings={"backup_restore_failure_after_host_disconnected_for_seconds": 5},
+            settings={"backup_restore_failure_after_host_disconnected_for_seconds": 3},
         )
 
         assert get_status(initiator, backup_id=backup_id) == "CREATING_BACKUP"
@@ -643,7 +653,7 @@ def test_long_disconnection_stops_backup():
         no_trash_checker.check_zookeeper = False
 
         with PartitionManager() as pm:
-            random_sleep(5)
+            random_sleep(3)
 
             time_before_disconnection = time.monotonic()
 
@@ -663,7 +673,7 @@ def test_long_disconnection_stops_backup():
 
             # A backup is expected to fail, but it isn't expected to fail too soon.
             print(f"Backup failed after {time_to_fail} seconds disconnection")
-            assert time_to_fail > 5
+            assert time_to_fail > 3
             assert time_to_fail < 30
 
 
@@ -685,7 +695,7 @@ def test_short_disconnection_doesnt_stop_backup():
         backup_id = random_id()
         initiator.query(
             f"BACKUP TABLE tbl ON CLUSTER 'cluster' TO {get_backup_name(backup_id)} SETTINGS id='{backup_id}' ASYNC",
-            settings={"backup_restore_failure_after_host_disconnected_for_seconds": 10},
+            settings={"backup_restore_failure_after_host_disconnected_for_seconds": 6},
         )
 
         assert get_status(initiator, backup_id=backup_id) == "CREATING_BACKUP"
@@ -693,13 +703,13 @@ def test_short_disconnection_doesnt_stop_backup():
 
         # Dropping connection for less than `failure_after_host_disconnected_for_seconds`
         with PartitionManager() as pm:
-            random_sleep(5)
+            random_sleep(3)
             node_to_drop_zk_connection = random_node()
             print(
                 f"Dropping connection between {get_node_name(node_to_drop_zk_connection)} and ZooKeeper"
             )
             pm.drop_instance_zk_connections(node_to_drop_zk_connection)
-            random_sleep(5)
+            random_sleep(3)
             print(
                 f"Restoring connection between {get_node_name(node_to_drop_zk_connection)} and ZooKeeper"
             )
@@ -738,7 +748,7 @@ def test_short_disconnection_doesnt_stop_restore():
         restore_id = random_id()
         initiator.query(
             f"RESTORE TABLE tbl ON CLUSTER 'cluster' FROM {get_backup_name(backup_id)} SETTINGS id='{restore_id}' ASYNC",
-            settings={"backup_restore_failure_after_host_disconnected_for_seconds": 10},
+            settings={"backup_restore_failure_after_host_disconnected_for_seconds": 6},
         )
 
         assert get_status(initiator, restore_id=restore_id) == "RESTORING"
@@ -746,13 +756,13 @@ def test_short_disconnection_doesnt_stop_restore():
 
         # Dropping connection for less than `failure_after_host_disconnected_for_seconds`
         with PartitionManager() as pm:
-            random_sleep(5)
+            random_sleep(3)
             node_to_drop_zk_connection = random_node()
             print(
                 f"Dropping connection between {get_node_name(node_to_drop_zk_connection)} and ZooKeeper"
             )
             pm.drop_instance_zk_connections(node_to_drop_zk_connection)
-            random_sleep(5)
+            random_sleep(3)
             print(
                 f"Restoring connection between {get_node_name(node_to_drop_zk_connection)} and ZooKeeper"
             )
