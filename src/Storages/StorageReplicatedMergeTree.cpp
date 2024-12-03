@@ -10382,7 +10382,10 @@ scope_guard StorageReplicatedMergeTree::allocateBlockNumbersForRestoringFromBack
         return {};
     }
 
-    return currently_restoring_from_backup->allocateBlockNumbers(part_infos, mutation_infos, check_table_is_empty, local_context);
+    auto get_zookeeper = [this] { return storage.getZooKeeper(); };
+    auto keeper_settings = WithRetries::KeeperSettings::fromContext(context_);
+    WithRetries with_retries{log, get_zookeeper, keeper_settings};
+    return currently_restoring_from_backup->allocateBlockNumbers(part_infos, mutation_infos, check_table_is_empty, local_context, with_retries);
 }
 
 void StorageReplicatedMergeTree::checkTableIsEmptyBeforeRestoringParts()

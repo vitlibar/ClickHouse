@@ -34,21 +34,23 @@ namespace
     public:
         TemporaryZookeeperNodes() = default;
 
-        explicit TemporaryZookeeperNodes(const ZooKeeperWithFaultInjectionPtr & zookeeper_, size_t max_multi_size_ = zkutil::MULTI_BATCH_SIZE)
-            : zookeeper(zookeeper_), max_multi_size(max_multi_size_)
+        explicit TemporaryZookeeperNodes(const WithRetries & with_retries_)
+            : with_retries(&with_retries_)
         {
         }
 
         TemporaryZookeeperNodes(TemporaryZookeeperNodes && src) noexcept { *this = std::move(src); }
-        ~TemporaryZookeeperNodes() { tryRemoveNodesNoThrow(); }
+        ~TemporaryZookeeperNodes() { removeNodes(); }
 
         TemporaryZookeeperNodes & operator=(TemporaryZookeeperNodes && src) noexcept
         {
             if (this == &src)
                 return *this;
-            tryRemoveNodesNoThrow();
+            removeNodes();
             if (!zookeeper)
                 zookeeper = src.zookeeper;
+            if (!with_retries)
+                with_retries = src.with_retries;
             paths = std::move(src.paths);
             src.paths.clear();
             return *this;
@@ -64,8 +66,10 @@ namespace
         void join(TemporaryZookeeperNodes && other)
         {
             if (!zookeeper)
-                zookeeper = other.zookeeper;
-            insertAtEnd(paths, other.paths);
+                zookeeper = src.zookeeper;
+            if (!with_retries)
+                with_retries = src.with_retries;
+            insertAtEnd(paths, std::move(other.paths));
             other.paths.clear();
         }
 
@@ -74,49 +78,66 @@ namespace
             if (paths.empty())
                 return;
 
-            if (!zookeeper)
+            if (with_retries)
+            {
+                auto holder = with_retries->createRetriesControlHolder("removeNodes");
+                holder.retries_ctl.retryLoop([&, &zk = holder.faulty_zookeeper]()
+                {
+                    with_retries->renewZooKeeper(zk);
+
+                    if (paths.empty())
+                        return;
+
+                    removeNodesImpl(zk, with_retries->getKeeperSettings().batch_size_for_keeper_multi);
+                });
+            }
+            else if (zookeeper)
+            {
+                removeNodesImpl(zookeeper, zkutil::MULTI_BATCH_SIZE);
+            }
+            else
+            {
                 throw Exception(ErrorCodes::LOGICAL_ERROR, "No ZooKeeper");
-
-            size_t pos = 0;
-            while (pos < paths.size())
-            {
-                size_t count = std::min(paths.size() - pos, max_multi_size);
-                Coordination::Requests ops;
-                for (size_t i = 0; i != count; ++i)
-                    ops.push_back(zkutil::makeRemoveRequest(paths[pos++], -1));
-                zookeeper->multi(ops);
-            }
-
-            paths.clear();
-        }
-
-        void tryRemoveNodesNoThrow() noexcept
-        {
-            if (paths.empty())
-                return;
-
-            try
-            {
-                std::vector<zkutil::ZooKeeper::FutureRemove> futures;
-                futures.reserve(paths.size());
-                for (const auto & path : paths)
-                    futures.push_back(zookeeper->asyncTryRemoveNoThrow(path));
-
-                for (auto & future : futures)
-                    future.get();
-
-                paths.clear();
-            }
-            catch (...)
-            {
-                tryLogCurrentException(__PRETTY_FUNCTION__);
             }
         }
 
     private:
-        std::vector<String> paths;
+        void removeNodesImpl(ZooKeeperWithFaultInjectionPtr zk, size_t batch_size_for_keeper_multi)
+        {
+            while (!paths.empty())
+            {
+                size_t count = std::min(paths.size(), batch_size_for_keeper_multi);
+                Coordination::Requests requests;
+                requests.reserve(count);
+                for (size_t i = 0; i != count; ++i)
+                    requests.push_back(zkutil::makeRemoveRequest(paths[i], -1));
+                
+                Coordination::Responses responses;
+                auto code = zookeeper->tryMultiNoThrow(requests, responses);
+
+                if (code == Coordination::Error::ZOK)
+                {
+                    paths.erase(paths.begin(), paths.begin() + count);
+                    continue;
+                }
+
+                for (const auto & response : responses)
+                {
+                    if ((response.code != Coordination::Error::ZOK) && (response.code != Coordination::Error::ZNONODE))
+                        zkutil::KeeperMultiException::check(code, requests, responses)
+                }
+
+                for (int i = count - 1; i >= 0; --i)
+                {
+                    if (responses[i].code == Coordination::Error::ZNONODE)
+                        paths.erase(paths.begin() + i);
+                }
+            }
+        }
+
+        const WithRetries * with_retries = nullptr;
         ZooKeeperWithFaultInjectionPtr zookeeper;
-        size_t max_multi_size;
+        std::vector<String> paths;
     };
 }
 
@@ -137,14 +158,14 @@ public:
         std::vector<MergeTreePartInfo> & part_infos_,
         std::vector<MutationInfoFromBackup> & mutation_infos_,
         CheckForNoPartsReason check_for_no_parts_reason_,
-        const ZooKeeperWithFaultInjectionPtr & zookeeper_,
-        const ContextPtr & context_) const
+        const ContextPtr & context_,
+        const WithRetries & with_retries_) const
     {
         /// Check the table has no existing parts if it's necessary.
         /// If a backup contains mutations the table must have no existing parts,
         /// otherwise mutations from the backup could be applied to existing parts which is wrong.
         if (check_for_no_parts_reason_ != CheckForNoPartsReason::NONE)
-            checkNoPartsExist(zookeeper_, {}, check_for_no_parts_reason_);
+            checkNoPartsExist(check_for_no_parts_reason_, {}, with_retries_);
 
         LOG_INFO(log, "Creating ephemeral nodes to allocate block numbers and mutation numbers for {} parts and {} mutations",
                  part_infos_.size(), mutation_infos_.size());
@@ -160,10 +181,10 @@ public:
         {
             /// Create partition nodes if they were not created before.
             num_partitions = partitions_and_num_block_numbers.size();
-            createPartitionNodes(partitions_and_num_block_numbers, zookeeper_);
+            createPartitionNodes(partitions_and_num_block_numbers, with_retries_);
 
             /// Create block number nodes in all partitions.
-            auto block_number_nodes = createBlockNumberNodes(partitions_and_num_block_numbers, zookeeper_);
+            auto block_number_nodes = createBlockNumberNodes(partitions_and_num_block_numbers, with_retries_);
 
             /// Extract block numbers from the name of the block number nodes.
             std::vector<BlockNumbers> block_numbers;
@@ -186,7 +207,7 @@ public:
 
         auto do_allocate_mutation_numbers = [&](size_t num_mutations)
         {
-            auto mutation_number_nodes = createMutationNumberNodes(num_mutations, zookeeper_);
+            auto mutation_number_nodes = createMutationNumberNodes(num_mutations, with_retries_);
             auto mutation_numbers = extractMutationNumbersFromPaths(mutation_number_nodes);
             temp_nodes.join(std::exchange(mutation_number_nodes, {}));
             return mutation_numbers;
@@ -204,7 +225,7 @@ public:
 
         /// Check the table has no existing parts again to be sure no parts were added while we were allocating block numbers.
         if (check_for_no_parts_reason_ != CheckForNoPartsReason::NONE)
-            checkNoPartsExist(zookeeper_, temp_nodes.getPaths(), check_for_no_parts_reason_);
+            checkNoPartsExist(check_for_no_parts_reason_, temp_nodes.getPaths(), with_retries_);
 
         LOG_INFO(log, "{} ephemeral nodes created to allocate {} block numbers in {} partitions and {} mutation numbers",
             temp_nodes.size(), total_num_block_numbers, num_partitions, mutation_infos_.size());
@@ -222,47 +243,75 @@ private:
     /// Creates nodes "block_numbers/<partition_id>" for each partition. Some of these nodes can already exist.
     void createPartitionNodes(
         const std::vector<PartitionIDAndNumBlockNumbers> & partitions_and_num_block_numbers,
-        const ZooKeeperWithFaultInjectionPtr & zookeeper) const
+        const WithRetries & with_retries) const
     {
         size_t num_partitions = partitions_and_num_block_numbers.size();
         if (!num_partitions)
             return;
 
-        String block_numbers_path = fs::path(storage.zookeeper_path) / "block_numbers";
+        /// Make requests for each partition.
+        std::vector<Coordination::Requests> requests;
+        requests.reserve(num_partitions);
 
-        std::vector<Coordination::Requests> ops;
-        std::vector<std::future<Coordination::MultiResponse>> futures;
-        ops.resize(num_partitions);
-        futures.resize(num_partitions);
-
-        /// Make requests, run then asynchronously.
         for (size_t i = 0; i != num_partitions; ++i)
         {
             const String & partition_id = partitions_and_num_block_numbers[i].partition_id;
-            ops[i] = storage.getPartitionNodeCreateOps(partition_id);
-            futures[i] = zookeeper->asyncTryMultiNoThrow(ops[i]);
+            requests[i] = storage.getPartitionNodeCreateOps(partition_id);
+            /// requests[i] is allowed to be empty here if a node for this partition is already created.
         }
 
-        /// Check the results of those requests.
-        for (size_t i = 0; i != num_partitions; ++i)
+        /// We run requests asynchronously with retries.
+        auto holder = with_retries.createRetriesControlHolder("createPartitionNodes");
+        holder.retries_ctl.retryLoop([&, &zookeeper = holder.faulty_zookeeper]()
         {
-            if (!ops[i].empty()) /// `ops` is empty if the partition node already exist
+            with_retries.renewZooKeeper(zookeeper);
+
+            /// Run requests asynchronously.
+            std::vector<std::pair<size_t, std::future<Coordination::MultiResponse>>> futures;
+            futures.reserve(num_partitions);
+            for (size_t i = 0; num_partitions; ++i)
             {
-                auto response = futures[i].get();
-                auto code = response.error;
-                if ((code != Coordination::Error::ZOK) && (code != Coordination::Error::ZNODEEXISTS))
-                    zkutil::KeeperMultiException::check(code, ops[i], response.responses);
+                if (!requests[i].empty())
+                    futures.emplace_back(i, zookeeper->asyncTryMultiNoThrow(requests));
             }
-        }
+
+            std::optional<Coordination::Error> failure_code;
+            Coordination::Requests failure_requests;
+            Coordination::Responses failure_responses;
+
+            for (size_t j = 0; j != futures.size(); ++j)
+            {
+                auto & future = futures[j].second;
+                auto response = future.get();
+                size_t partition_index = futures[j].first;
+                auto code = response.error;
+
+                /// ZNODEEXISTS is ok because a node for this partition could be created before.
+                if ((code == Coordination::Error::ZOK) || (code == Coordination::Error::ZNODEEXISTS))
+                {
+                    /// If we need to retry (because other futures can be not ok) this partition shouldn't be retried.
+                    requests[partition_index].clear();
+                }
+                else if (!failure_code)
+                {
+                    failure_code = code;
+                    failure_requests = requests[partition_index];
+                    failure_responses = response.responses;
+                }
+            }
+
+            if (failure_code)
+                zkutil::KeeperMultiException::check(*failure_code, failure_requests, failure_responses)
+        });
     }
 
     /// Creates multiple sequential ephemeral nodes like "block_numbers/<partition_id>/block-0000000321" to allocate block numbers.
     std::vector<TemporaryZookeeperNodes> createBlockNumberNodes(
         const std::vector<PartitionIDAndNumBlockNumbers> & partitions_and_num_block_numbers,
-        const ZooKeeperWithFaultInjectionPtr & zookeeper) const
+        const WithRetries & with_retries) const
     {
         return createBlockNumberNodesImpl(
-            partitions_and_num_block_numbers, String{fs::path(storage.zookeeper_path) / "block_numbers"} + "/", "/block-", zookeeper);
+            partitions_and_num_block_numbers, String{fs::path(storage.zookeeper_path) / "block_numbers"} + "/", "/block-", with_retries);
     }
 
     /// A generalized version of createBlockNumberNodes() so we can use it to create mutation numbers too.
@@ -270,35 +319,46 @@ private:
         const std::vector<PartitionIDAndNumBlockNumbers> & partitions_and_num_block_numbers,
         const String & path_part_before_partition_id,
         const String & path_part_after_partition_id,
-        const ZooKeeperWithFaultInjectionPtr & zookeeper) const
+        const WithRetries & with_retries) const
     {
         size_t num_partitions = partitions_and_num_block_numbers.size();
         if (!num_partitions)
             return {};
 
-        size_t num_ready_partitions = 0;
-
         std::vector<TemporaryZookeeperNodes> res;
         res.reserve(num_partitions);
         for (size_t i = 0; i != num_partitions; ++i)
-            res.emplace_back(TemporaryZookeeperNodes{zookeeper});
+            res.emplace_back(TemporaryZookeeperNodes{with_retries});
+
+        /// We generate all block numbers for the first partition, then all block numbers for the second partition, and so on.
+        size_t num_ready_partitions = 0;
 
         /// There can be many block numbers in many partitions.
-        Coordination::Requests ops;
+        const size_t batch_size_for_keeper_multi = with_retries.getKeeperSettings().batch_size_for_keeper_multi;
 
+        constexpr size_t num_reserved_requests = 1; /// the last request is a check request
+
+        Coordination::Requests requests;
+
+        /// Called to execute the create requests we've collected already.
         const auto flush_create_requests = [&]
         {
             /// Check that table is not being dropped ("host" is the first node that is removed on replica drop)
-            ops.push_back(zkutil::makeCheckRequest(fs::path(storage.replica_path) / "host", -1));
+            requests.push_back(zkutil::makeCheckRequest(fs::path(storage.replica_path) / "host", -1));
 
             Coordination::Responses responses;
 
-            responses = zookeeper->multi(ops);
+            auto holder = with_retries.createRetriesControlHolder("createBlockNumberNodes");
+            holder.retries_ctl.retryLoop([&, &zookeeper = holder.faulty_zookeeper]()
+            {
+                with_retries.renewZooKeeper(zookeeper);
+                responses = zookeeper->multi(requests);
+            });
 
             if (responses.size() < 2)
                 throw Exception(ErrorCodes::LOGICAL_ERROR, "Number of responses for the multi request must >= 2");
 
-            size_t num_create_requests = responses.size() - 1; /// the last request is a check request
+            size_t num_create_requests = responses.size() - num_reserved_requests; /// the last request is a check request
             for (size_t j = 0; j != num_create_requests; ++j)
             {
                 const auto * response = dynamic_cast<const Coordination::CreateResponse *>(responses[j].get());
@@ -308,42 +368,48 @@ private:
                 while (res[num_ready_partitions].size() == partitions_and_num_block_numbers[num_ready_partitions].num_block_numbers)
                     ++num_ready_partitions;
 
-                /// Collect the created paths.
-                temp_nodes[num_ready_partitions].addPath(response->path_created);
+                chassert(num_ready_partitions < num_partitions);
+
+                /// Add the paths to the created paths to `res`.
+                res.at(num_ready_partitions).addPath(response->path_created);
             }
 
-            ops.clear();
+            requests.clear();
         };
 
+        /// We collect create requests up to `batch_size_for_keeper_multi` in this list, then execute them, then collect again.
         for (size_t i = 0; i != num_partitions; ++i)
         {
             const String & partition_id = partitions_and_num_block_numbers[i].partition_id;
             size_t num_block_numbers = partitions_and_num_block_numbers[i].num_block_numbers;
+
             String full_prefix = path_part_before_partition_id + partition_id + path_part_after_partition_id;
 
             for (size_t j = 0; j != num_block_numbers; ++j)
             {
-                ops.push_back(zkutil::makeCreateRequest(full_prefix, "", zkutil::CreateMode::EphemeralSequential));
-                if (ops.size() + 1 >= zkutil::MULTI_BATCH_SIZE)
+                requests.push_back(zkutil::makeCreateRequest(full_prefix, "", zkutil::CreateMode::EphemeralSequential));
+                if (requests.size() + num_reserved_requests >= batch_size_for_keeper_multi)
                     flush_create_requests();
             }
         }
 
-        if (!ops.empty())
+        if (!requests.empty())
             flush_create_requests();
 
-        /// No partition needs more block numbers, everything is ready.
+        /// Everything is ready.
+        /// If the last partition got all block numbers then all the previous partitions got their block numbers too.
+        chassert(res.back().size() == partitions_and_num_block_numbers.back().num_block_numbers);
         return res;
     }
 
     /// Creates multiple sequential ephemeral nodes like "mutations/mutation-placeholder-0000000321" to allocate mutation numbers.
-    TemporaryZookeeperNodes createMutationNumberNodes(size_t num_mutations, const ZooKeeperWithFaultInjectionPtr & zookeeper) const
+    TemporaryZookeeperNodes createMutationNumberNodes(size_t num_mutations, const WithRetries & with_retries) const
     {
         auto temp_nodes = createBlockNumberNodesImpl(
             {PartitionIDAndNumBlockNumbers{"", num_mutations}},
             fs::path(storage.zookeeper_path) / "mutations" / kMutationPlaceholderPrefix,
             "",
-            zookeeper);
+            with_retries);
         return std::move(temp_nodes[0]);
     }
 
@@ -401,29 +467,49 @@ private:
 
     /// Checks that there no parts exist in the table.
     /// The function also checks that no parts will be inserted / attached soon due to a concurrent process.
-    void checkNoPartsExist(const ZooKeeperWithFaultInjectionPtr & zookeeper, const Strings & ignore_block_number_zk_paths, CheckForNoPartsReason reason) const
+    void checkNoPartsExist(CheckForNoPartsReason reason, const Strings & ignore_block_number_zk_paths, const WithRetries & with_retries) const
     {
         if (reason == CheckForNoPartsReason::NONE)
             return;
 
         LOG_INFO(log, "Checking that no parts exist in the table before restoring its data (reason: {})", magic_enum::enum_name(reason));
 
-        /// The order of checks is important:
-        /// an INSERT command first allocates a block number, then it creates a log entry, and finally it replicates the part into all replicas.
-        /// That's why it's more reliable to check first block numbers, then the replication queue and finally the current replica itself.
+        std::optional<String> part_on_replica;
+        std::optional<String> part_in_replication_queue;
+        std::optional<String> restoring_part;
+        std::optional<std::pair<Int64, String>> allocated_block_number;
 
-        auto allocated_block_number = findAnyAllocatedBlockNumber(zookeeper, ignore_block_number_zk_paths);
+        auto holder = with_retries.createRetriesControlHolder("checkNoPartsExist");
+        holder.retries_ctl.retryLoop([&, &zookeeper = holder.faulty_zookeeper]()
+        {
+            with_retries.renewZooKeeper(zookeeper);
 
-        auto part_name_in_queue = findAnyPartInReplicationQueue(zookeeper);
+            /// INSERT command first allocates a block number, then it creates a log entry, and finally it replicates the part into all replicas.
+            /// That's why it's more reliable to check both block numbers, the replication queue, and the current replica itself.
 
-        if (auto part_name_on_replica = findAnyPartOnReplica())
-            throwTableIsNotEmpty(reason, fmt::format("part {} exists", *part_name_on_replica));
+            part_on_replica = findAnyPartOnReplica();
+            if (part_on_replica)
+                return;
 
-        if (part_name_in_queue)
-            throwTableIsNotEmpty(reason, fmt::format("part {} exists on some replicas", *part_name_in_queue));
+            part_in_replication_queue = findAnyPartInReplicationQueue(zookeeper);
+            if (part_in_replication_queue)
+                return;
 
-        if (auto restoring_part_name = findAnyRestoringPart(zookeeper))
-            throwTableIsNotEmpty(reason, fmt::format("concurrent RESTORE is creating part {}", *restoring_part_name));
+            restoring_part_name = findAnyRestoringPart(zookeeper);
+            if (restoring_part_name)
+                return;
+
+            allocated_block_number = findAnyAllocatedBlockNumber(zookeeper, ignore_block_number_zk_paths);
+        });
+
+        if (part_on_replica)
+            throwTableIsNotEmpty(reason, fmt::format("part {} exists", *part_on_replica));
+
+        if (part_in_replication_queue)
+            throwTableIsNotEmpty(reason, fmt::format("part {} exists on some replicas", *part_in_replication_queue));
+
+        if (restoring_part)
+            throwTableIsNotEmpty(reason, fmt::format("concurrent RESTORE is creating part {}", *restoring_part));
 
         if (allocated_block_number)
             throwTableIsNotEmpty(reason, fmt::format("concurrent INSERT or ATTACH is using block number {} in partition {}", allocated_block_number->first, allocated_block_number->second));
@@ -588,8 +674,7 @@ public:
     scope_guard addEntry(
         const std::vector<MergeTreePartInfo> & part_infos_,
         const std::vector<MutationInfoFromBackup> & mutation_infos_,
-        const ZooKeeperWithFaultInjectionPtr & zookeeper_,
-        const WithRetries::KeeperSettings & keeper_settings_)
+        const WithRetries & with_retries_)
     {
         /// Make an entry to keep information about parts and mutations being restored.
         Entry entry;
@@ -843,34 +928,26 @@ private:
     }
 
     /// Writes an entry to ZooKeeper.
-    void saveEntryToZookeeper(const Strings & serialization_paths, const Strings & entry_as_string_parts, const ZooKeeperWithFaultInjectionPtr & zookeeper) const
+    void saveEntryToZookeeper(const Strings & serialization_paths, const Strings & entry_as_string_parts, const WithRetries & with_retries) const
     {
         LOG_INFO(log, "Saving info about currently restoring parts to ZooKeeper to {}", boost::algorithm::join(serialization_paths, ", "));
+        chassert(serialization_paths.size() == entry_as_string_parts.size());
 
-        try
+        for (size_t i = 0; i != serialization_paths.size(); ++i)
         {
-            chassert(serialization_paths.size() == entry_as_string_parts.size());
-            std::vector<zkutil::ZooKeeper::FutureMulti> futures;
-
-            for (size_t i = 0; i != serialization_paths.size(); ++i)
+            auto holder = with_retries.createRetriesControlHolder("saveEntryToZookeeper");
+            holder.retries_ctl.retryLoop([&, &zookeeper = holder.faulty_zookeeper]()
             {
-                Coordination::Requests ops;
+                with_retries.renewZooKeeper(zookeeper);
 
-                ops.push_back(zkutil::makeCreateRequest(serialization_paths[i], entry_as_string_parts[i], zkutil::CreateMode::Persistent));
+                Coordination::Requests requests;
+                requests.push_back(zkutil::makeCreateRequest(serialization_paths[i], entry_as_string_parts[i], zkutil::CreateMode::Persistent));
 
                 /// Check that table is not being dropped ("host" is the first node that is removed on replica drop)
-                ops.push_back(zkutil::makeCheckRequest(fs::path(storage.replica_path) / "host", -1));
+                requests.push_back(zkutil::makeCheckRequest(fs::path(storage.replica_path) / "host", -1));
 
-                futures.emplace_back(zookeeper->asyncMulti(ops));
-            }
-
-            for (auto & future : futures)
-                future.get();
-        }
-        catch (...)
-        {
-            LOG_WARNING(log, "Failed to save info about currently restoring parts to ZooKeeper to {}", boost::algorithm::join(serialization_paths, ", "));
-            throw;
+                zookeeper->multi(requests);
+            });
         }
     }
 
@@ -1070,14 +1147,10 @@ scope_guard ReplicatedMergeTreeCurrentlyRestoringFromBackup::allocateBlockNumber
     std::vector<MergeTreePartInfo> & part_infos_,
     std::vector<MutationInfoFromBackup> & mutation_infos_,
     bool check_table_is_empty_,
-    const ContextPtr & context_)
+    const ContextPtr & context_,
+    WithRetries & with_retries_);
 {
     auto check_for_no_parts_reason = MergeTreeCurrentlyRestoringFromBackup::getCheckForNoPartsReason(check_table_is_empty_, !mutation_infos_.empty());
-
-    auto get_zookeeper = [this] { return storage.getZooKeeper(); };
-    auto keeper_settings = WithRetries::KeeperSettings::fromContext(context_);
-    WithRetries with_retries{log, get_zookeeper, keeper_settings};
-    auto holder = with_retries.createRetriesControlHolder("allocateBlockNumbersForReplicated");
 
     scope_guard remove_entry;
 
@@ -1087,20 +1160,6 @@ scope_guard ReplicatedMergeTreeCurrentlyRestoringFromBackup::allocateBlockNumber
         remove_entry = {};
 
         with_retries.renewZooKeeper(zookeeper);
-
-        if (storage.is_readonly)
-        {
-            /// Stop retries if in shutdown
-            if (storage.shutdown_called)
-                throw Exception(ErrorCodes::TABLE_IS_READ_ONLY, "Table is in readonly mode due to shutdown: replica_path={}", storage.replica_path);
-
-            /// If we are not going to check that there are no parts exists then it's okay to be in read-only mode.
-            if (check_for_no_parts_reason != CheckForNoPartsReason::NONE)
-            {
-                holder.retries_ctl.setUserError(ErrorCodes::TABLE_IS_READ_ONLY, "Table is in readonly mode: replica_path={}", storage.replica_path);
-                return;
-            }
-        }
 
         /// Create temporary zookeeper nodes to allocate block numbers and mutation numbers.
         auto temp_nodes = block_numbers_allocator->allocateBlockNumbers(

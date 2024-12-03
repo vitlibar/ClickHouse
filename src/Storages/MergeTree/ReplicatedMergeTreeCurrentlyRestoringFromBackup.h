@@ -46,7 +46,8 @@ public:
         std::vector<MergeTreePartInfo> & part_infos_,
         std::vector<MutationInfoFromBackup> & mutation_infos_,
         bool check_table_is_empty_,
-        const ContextPtr & context_);
+        const ContextPtr & context_,
+        const WithRetries & with_retries_);
 
     /// Rereads information about currently restoring parts from ZooKeeper.
     /// Unlike allocateBlockNumbers(), this function doesn't use retries: if it can't connect to ZooKeeper it just throws an exception.
