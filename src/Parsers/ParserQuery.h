@@ -9,7 +9,6 @@ namespace DB
 class ParserQuery : public IParserBase
 {
 private:
-    const char * end;
     bool allow_settings_after_format_in_insert = false;
     bool implicit_select = false;
 
@@ -19,9 +18,8 @@ private:
     bool parseImpl(Pos & pos, ASTPtr & node, Expected & expected) override;
 
 public:
-    explicit ParserQuery(const char * end_, bool allow_settings_after_format_in_insert_ = false, bool implicit_select_ = false)
-        : end(end_)
-        , allow_settings_after_format_in_insert(allow_settings_after_format_in_insert_)
+    explicit ParserQuery(bool allow_settings_after_format_in_insert_ = false, bool implicit_select_ = false)
+        : allow_settings_after_format_in_insert(allow_settings_after_format_in_insert_)
         , implicit_select(implicit_select_)
     {
     }

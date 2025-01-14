@@ -14,7 +14,7 @@ namespace DB
 
 bool ParserKQLStatement::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
 {
-    ParserKQLWithOutput query_with_output_p(end, allow_settings_after_format_in_insert);
+    ParserKQLWithOutput query_with_output_p(allow_settings_after_format_in_insert);
     ParserSetQuery set_p;
 
     bool res = query_with_output_p.parse(pos, node, expected) || set_p.parse(pos, node, expected);

@@ -43,9 +43,9 @@ namespace DB
 bool ParserQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
 {
     /// QueryWithOutput includes SELECT, SELECT with UNION ALL, SHOW, and similar:
-    ParserQueryWithOutput query_with_output_p(end, allow_settings_after_format_in_insert);
+    ParserQueryWithOutput query_with_output_p(allow_settings_after_format_in_insert);
 
-    ParserInsertQuery insert_p(end, allow_settings_after_format_in_insert);
+    ParserInsertQuery insert_p(allow_settings_after_format_in_insert);
     ParserUseQuery use_p;
     ParserSetQuery set_p;
     ParserSystemQuery system_p;
@@ -106,7 +106,7 @@ bool ParserQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
 
     if (res && allow_in_parallel_with)
     {
-        ParserQuery subquery_p{end, allow_settings_after_format_in_insert, implicit_select};
+        ParserQuery subquery_p{allow_settings_after_format_in_insert, implicit_select};
         subquery_p.allow_in_parallel_with = false;
         ParserParallelWithQuery in_parallel_with_query_p(subquery_p, node);
         in_parallel_with_query_p.parse(pos, node, expected);

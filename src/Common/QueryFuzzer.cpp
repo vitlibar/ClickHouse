@@ -830,7 +830,7 @@ static ASTPtr tryParseInsertQuery(const String & full_query)
     const char * pos = full_query.data();
     const char * end = full_query.data() + full_query.size();
 
-    ParserInsertQuery parser(end, false);
+    ParserInsertQuery parser(false);
     String message;
 
     return tryParseQuery(parser, pos, end, message, false, "", false,

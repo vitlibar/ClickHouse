@@ -174,12 +174,12 @@ void LocalConnection::sendQuery(
 
         std::unique_ptr<IParserBase> parser;
         if (dialect == Dialect::kusto)
-            parser = std::make_unique<ParserKQLStatement>(end, settings[Setting::allow_settings_after_format_in_insert]);
+            parser = std::make_unique<ParserKQLStatement>(settings[Setting::allow_settings_after_format_in_insert]);
         else if (dialect == Dialect::prql)
             parser
                 = std::make_unique<ParserPRQLQuery>(settings[Setting::max_query_size], settings[Setting::max_parser_depth], settings[Setting::max_parser_backtracks]);
         else
-            parser = std::make_unique<ParserQuery>(end, settings[Setting::allow_settings_after_format_in_insert], settings[Setting::implicit_select]);
+            parser = std::make_unique<ParserQuery>(settings[Setting::allow_settings_after_format_in_insert], settings[Setting::implicit_select]);
 
         ASTPtr parsed_query;
         if (dialect == Dialect::kusto)

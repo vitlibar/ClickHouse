@@ -54,6 +54,7 @@ public:
         }
     }
 
+    /// Rightmost token we had looked.
     const Token & max()
     {
         if (data.empty())
@@ -61,10 +62,28 @@ public:
         return data[max_pos];
     }
 
-    void reset()
+    void resetMax()
     {
         max_pos = 0;
     }
+
+    /// Replaces a parsed token with a manually adjusted token with its type or the end position changed.
+    void adjustToken(size_t index, const Token & new_token)
+    {
+        Token old_token = (*this)[index];
+        data[index].type = new_token.type;
+        if (new_token.end != old_token.end)
+        {
+            const char * new_end = std::max(old_token.begin, std::min(new_token.end, getEndOfStream()));
+            data[index].end = new_end;
+            data.erase(data.begin() + index + 1, data.end());
+            max_pos = index;
+            lexer.setPosition(new_end);
+        }
+    }
+
+    /// Returns the end of the input stream.
+    const char * getEndOfStream() const { return lexer.getEnd(); }
 };
 
 
@@ -102,6 +121,12 @@ public:
 
     /// Rightmost token we had looked.
     ALWAYS_INLINE const Token & max() { return tokens->max(); }
+
+    /// Replaces a parsed token with a manually adjusted token with its type or the end position changed.
+    ALWAYS_INLINE void adjustToken(const Token & new_token) { tokens->adjustToken(index, new_token); }
+
+    /// Returns the end of the input stream.
+    ALWAYS_INLINE const char * getEndOfStream() const { return tokens->getEndOfStream(); }
 };
 
 

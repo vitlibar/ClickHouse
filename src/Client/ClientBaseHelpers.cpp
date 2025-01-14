@@ -159,7 +159,7 @@ void highlight(const String & query, std::vector<replxx::Replxx::Color> & colors
     /// We don't do highlighting for foreign dialects, such as PRQL and Kusto.
     /// Only normal ClickHouse SQL queries are highlighted.
 
-    ParserQuery parser(end, false, context.getSettingsRef()[Setting::implicit_select]);
+    ParserQuery parser(false, context.getSettingsRef()[Setting::implicit_select]);
     ASTPtr ast;
     bool parse_res = false;
 

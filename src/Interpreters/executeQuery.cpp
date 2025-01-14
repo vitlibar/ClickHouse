@@ -927,7 +927,7 @@ static std::tuple<ASTPtr, BlockIO> executeQueryImpl(
     {
         if (settings[Setting::dialect] == Dialect::kusto && !internal)
         {
-            ParserKQLStatement parser(end, settings[Setting::allow_settings_after_format_in_insert]);
+            ParserKQLStatement parser(settings[Setting::allow_settings_after_format_in_insert]);
             /// TODO: parser should fail early when max_query_size limit is reached.
             ast = parseKQLQuery(parser, begin, end, "", max_query_size, settings[Setting::max_parser_depth], settings[Setting::max_parser_backtracks]);
         }
@@ -938,7 +938,7 @@ static std::tuple<ASTPtr, BlockIO> executeQueryImpl(
         }
         else
         {
-            ParserQuery parser(end, settings[Setting::allow_settings_after_format_in_insert], settings[Setting::implicit_select]);
+            ParserQuery parser(settings[Setting::allow_settings_after_format_in_insert], settings[Setting::implicit_select]);
             /// TODO: parser should fail early when max_query_size limit is reached.
             ast = parseQuery(parser, begin, end, "", max_query_size, settings[Setting::max_parser_depth], settings[Setting::max_parser_backtracks]);
 

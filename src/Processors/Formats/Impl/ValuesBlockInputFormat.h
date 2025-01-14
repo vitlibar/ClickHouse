@@ -46,6 +46,10 @@ public:
 
     static bool skipToNextRow(ReadBuffer * buf, size_t min_chunk_bytes, int balance);
 
+    /// Finds the end of data when the data is inlined in a query (INSERT INTO ... VALUES data).
+    /// If there is no data the function returns `begin`. If the data don't end before `end` then the function returns `end`.
+    static const char * findEndOfInlineData(const char * begin, const char * end);
+
 private:
     ValuesBlockInputFormat(std::unique_ptr<PeekableReadBuffer> buf_, const Block & header_, const RowInputFormatParams & params_,
                            const FormatSettings & format_settings_);

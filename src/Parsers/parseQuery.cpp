@@ -15,6 +15,8 @@
 #include <IO/WriteBufferFromString.h>
 #include <IO/Operators.h>
 
+#include <Common/logger_useful.h>
+
 
 namespace DB
 {
@@ -263,6 +265,12 @@ ASTPtr tryParseQuery(
     bool skip_insignificant)
 {
     const char * query_begin = _out_query_end;
+
+    /* LOG_INFO(getLogger("!!!"), "tryParseQuery: begin = {}, end = {}, query = {}",
+        reinterpret_cast<size_t>(reinterpret_cast<const void *>(query_begin)),
+        reinterpret_cast<size_t>(reinterpret_cast<const void *>(all_queries_end)),
+        String(query_begin, all_queries_end)); */
+
     Tokens tokens(query_begin, all_queries_end, max_query_size, skip_insignificant);
     /// NOTE: consider use UInt32 for max_parser_depth setting.
     IParser::Pos token_iterator(tokens, static_cast<uint32_t>(max_parser_depth), static_cast<uint32_t>(max_parser_backtracks));
@@ -308,7 +316,7 @@ ASTPtr tryParseQuery(
         }
 
         /// We should not spoil the info about maximum parsed position in the original iterator.
-        tokens.reset();
+        tokens.resetMax();
     }
 
     ASTPtr res;
@@ -457,7 +465,7 @@ std::pair<const char *, bool> splitMultipartQuery(
     const char * pos = begin; /// parser moves pos from begin to the end of current query
     const char * end = begin + queries.size();
 
-    ParserQuery parser(end, allow_settings_after_format_in_insert, implicit_select);
+    ParserQuery parser(allow_settings_after_format_in_insert, implicit_select);
 
     queries_list.clear();
 

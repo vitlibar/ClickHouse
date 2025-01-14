@@ -113,7 +113,7 @@ private:
             const char * begin = reinterpret_cast<const char *>(&data[prev_offset]);
             const char * end = begin + offsets[i] - prev_offset - 1;
 
-            ParserQuery parser(end, false, implicit_select);
+            ParserQuery parser(false, implicit_select);
             ASTPtr ast;
             WriteBufferFromOwnString buf;
 

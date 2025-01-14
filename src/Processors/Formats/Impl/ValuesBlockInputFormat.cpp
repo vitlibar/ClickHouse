@@ -105,6 +105,74 @@ bool ValuesBlockInputFormat::skipToNextRow(ReadBuffer * buf, size_t min_chunk_by
     return true;
 }
 
+const char * ValuesBlockInputFormat::findEndOfInlineData(const char * begin, const char * end)
+{
+    const char * pos = begin;
+    int balance = 0;
+    bool quoted = false;
+
+    while (pos < end && isWhitespaceASCII(*pos))
+        ++pos;
+
+    /// First character should be '('.
+    if (pos == end || *pos != '(')
+        return begin;
+
+    /// Skip '('
+    ++pos;
+    ++balance;
+
+    while (pos < end)
+    {
+        pos = find_first_symbols<'\\', '\'', ')', '('>(pos, end);
+        if (pos == end)
+            break;
+        if (*pos == '\\')
+        {
+            ++pos;
+            if (pos < end)
+                ++pos;
+        }
+        else if (*pos == '\'')
+        {
+            quoted ^= true;
+            ++pos;
+        }
+        else if (*pos == '(')
+        {
+            ++pos;
+            if (!quoted)
+                ++balance;
+        }
+        else if (*pos == ')')
+        {
+            ++pos;
+            if (!quoted)
+            {
+                --balance;
+                if (balance == 0)
+                {
+                    while (pos < end && isWhitespaceASCII(*pos))
+                        ++pos;
+                    if (pos == end || *pos != ',')
+                        break;
+                    /// Skip ','
+                    ++pos;
+                    while (pos < end && isWhitespaceASCII(*pos))
+                        ++pos;
+                    if (pos == end || *pos != '(')
+                        break;
+                    /// Skip '('
+                    ++pos;
+                    ++balance;
+                }
+            }
+        }
+    }
+
+    return pos;
+}
+
 Chunk ValuesBlockInputFormat::read()
 {
     if (total_rows == 0)

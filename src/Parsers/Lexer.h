@@ -60,6 +60,8 @@ namespace DB
     M(At)                     /** @. Used for specifying user names and also for MySQL-style variables. */ \
     M(DoubleAt)               /** @@. Used for MySQL-style global variables. */ \
     \
+    M(InlineData)             /** Inline data is used in INSERT commands after VALUES or FORMAT: INSERT INTO ... VALUES data */ \
+    \
     /** Order is important. EndOfStream goes after all usual tokens, and special error tokens goes after EndOfStream. */ \
     \
     M(EndOfStream) \
@@ -111,6 +113,11 @@ public:
     Lexer(const char * begin_, const char * end_, size_t max_query_size_ = 0)
             : begin(begin_), pos(begin_), end(end_), max_query_size(max_query_size_) {}
     Token nextToken();
+
+    const char * getBegin() const { return begin; }
+    const char * getEnd() const { return end; }
+    const char * getPosition() const { return pos; }
+    void setPosition(const char * new_pos) { pos = new_pos; }
 
 private:
     const char * const begin;

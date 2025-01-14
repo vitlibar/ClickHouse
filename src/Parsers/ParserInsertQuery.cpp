@@ -14,6 +14,7 @@
 #include <Parsers/InsertQuerySettingsPushDownVisitor.h>
 #include <Common/typeid_cast.h>
 #include "Parsers/IAST_fwd.h"
+#include <Processors/Formats/Impl/ValuesBlockInputFormat.h>
 
 
 namespace DB
@@ -61,9 +62,6 @@ bool ParserInsertQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
     ASTPtr partition_by_expr;
     ASTPtr compression;
     ASTPtr with_expression_list;
-
-    /// Insertion data
-    const char * data = nullptr;
 
     if (s_with.ignore(pos, expected))
     {
@@ -159,11 +157,6 @@ bool ParserInsertQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
     /// After FROM INFILE we expect FORMAT, SELECT, WITH or nothing.
     if (!infile && s_values.ignore(pos, expected))
     {
-        /// If VALUES is defined in query, everything except setting will be parsed as data,
-        /// and if values followed by semicolon, the data should be null.
-        if (pos->type != TokenType::Semicolon)
-            data = pos->begin;
-
         format_str = "Values";
     }
     else if (s_format.ignore(pos, expected))
@@ -213,7 +206,7 @@ bool ParserInsertQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
     /// hence it is done only under option.
     ///
     /// Refs: https://github.com/ClickHouse/ClickHouse/issues/35100
-    if (allow_settings_after_format_in_insert && s_settings.ignore(pos, expected))
+    if ((allow_settings_after_format_in_insert || (format_str == "Values")) && s_settings.ignore(pos, expected))
     {
         if (settings_ast)
             throw Exception(ErrorCodes::SYNTAX_ERROR,
@@ -224,10 +217,6 @@ bool ParserInsertQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
         ParserSetQuery parser_settings(true);
         if (!parser_settings.parse(pos, settings_ast, expected))
             return false;
-        /// In case of INSERT INTO ... VALUES SETTINGS ... (...), (...), ...
-        /// we should move data pointer after all settings.
-        if (data != nullptr)
-            data = pos->begin;
     }
 
     if (select)
@@ -237,15 +226,16 @@ bool ParserInsertQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
         InsertQuerySettingsPushDownVisitor(visitor_data).visit(select);
     }
 
-    /// In case of defined format, data follows it.
-    if (format && !infile)
+    const char * data = nullptr;
+    const char * end = nullptr;
+
+    /// In case of an explicitly defined format or if the "VALUES" keyword is found, data follows it.
+    if (!infile && (format || !format_str.empty()))
     {
-        Pos last_token = pos;
-        --last_token;
-        data = last_token->end;
+        data = pos->begin;
 
         /// If format name is followed by ';' (end of query symbol) there is no data to insert.
-        if (data < end && *data == ';')
+        if (data < end && *data == ';' && (format_str != "Values"))
             throw Exception(ErrorCodes::SYNTAX_ERROR, "You have excessive ';' symbol before data for INSERT.\n"
                                     "Example:\n\n"
                                     "INSERT INTO t (x, y) FORMAT TabSeparated\n"
@@ -259,12 +249,48 @@ bool ParserInsertQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
             ++data;
 
         /// Data starts after the first newline, if there is one, or after all the whitespace characters, otherwise.
-
         if (data < end && *data == '\r')
             ++data;
 
         if (data < end && *data == '\n')
             ++data;
+
+        if (format_str == "Values")
+            end = ValuesBlockInputFormat::findEndOfInlineData(data, pos.getEndOfStream());
+        else
+            end = pos.getEndOfStream();
+
+        if (data == end)
+        {
+            data = end = nullptr;
+        }
+        else
+        {
+            Token inline_data = *pos;
+            inline_data.end = end;
+            inline_data.type = TokenType::InlineData;
+            pos.adjustToken(inline_data);
+            ++pos;
+        }
+
+        /* LOG_INFO(getLogger("!!!"), "ParserInsertQuery: data = {}, end = {}, data_str = {}",
+            reinterpret_cast<size_t>(reinterpret_cast<const void *>(data)),
+            reinterpret_cast<size_t>(reinterpret_cast<const void *>(end)),
+            data ? String(data, end) : "NULL"); */
+    }
+
+    /// Allow SETTINGS after "VALUES data".
+    if (s_settings.ignore(pos, expected))
+    {
+        if (settings_ast)
+            throw Exception(ErrorCodes::SYNTAX_ERROR,
+                            "You have SETTINGS before and after FORMAT, this is not allowed. "
+                            "Consider switching to SETTINGS before FORMAT and disable allow_settings_after_format_in_insert.");
+
+        /// Settings are written like SET query, so parse them with ParserSetQuery
+        ParserSetQuery parser_settings(true);
+        if (!parser_settings.parse(pos, settings_ast, expected))
+            return false;
     }
 
     /// Create query and fill its fields.
@@ -305,7 +331,7 @@ bool ParserInsertQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
     query->format = std::move(format_str);
     query->select = select;
     query->settings_ast = settings_ast;
-    query->data = data != end ? data : nullptr;
+    query->data = data;
     query->end = end;
 
     if (columns)
