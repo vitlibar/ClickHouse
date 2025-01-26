@@ -64,6 +64,7 @@ void registerDataLakeTableFunctions(TableFunctionFactory & factory);
 void registerDataLakeClusterTableFunctions(TableFunctionFactory & factory);
 
 void registerTableFunctionTimeSeries(TableFunctionFactory & factory);
+void registerTableFunctionPrometheusQuery(TableFunctionFactory & factory);
 
 void registerTableFunctions();
 

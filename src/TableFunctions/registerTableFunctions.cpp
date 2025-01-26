@@ -58,7 +58,9 @@ void registerTableFunctions()
 
     registerTableFunctionFormat(factory);
     registerTableFunctionExplain(factory);
+
     registerTableFunctionTimeSeries(factory);
+    registerTableFunctionPrometheusQuery(factory);
 
     registerTableFunctionObjectStorage(factory);
     registerTableFunctionObjectStorageCluster(factory);
