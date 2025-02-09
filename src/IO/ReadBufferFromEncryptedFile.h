@@ -19,7 +19,8 @@ public:
         std::unique_ptr<ReadBufferFromFileBase> in_,
         const String & key_,
         const FileEncryption::Header & header_,
-        size_t offset_ = 0);
+        size_t offset_,
+        bool verbose_logging_);
 
     off_t seek(off_t off, int whence) override;
     off_t getPosition() override;
@@ -45,6 +46,7 @@ private:
     FileEncryption::Encryptor encryptor;
 
     LoggerPtr log;
+    bool verbose_logging = false;
 };
 
 }

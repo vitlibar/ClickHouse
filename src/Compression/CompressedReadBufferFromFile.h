@@ -28,6 +28,7 @@ private:
     size_t size_compressed = 0;
 
     LoggerPtr log;
+    bool verbose_logging;
 
     /// This field inherited from ReadBuffer. It's used to perform "lazy" seek, so in seek() call we:
     /// 1) actually seek only underlying compressed file_in to offset_in_compressed_file;
@@ -47,7 +48,7 @@ private:
     void prefetch(Priority priority) override;
 
 public:
-    explicit CompressedReadBufferFromFile(std::unique_ptr<ReadBufferFromFileBase> buf, bool allow_different_codecs_ = false);
+    explicit CompressedReadBufferFromFile(std::unique_ptr<ReadBufferFromFileBase> buf, bool allow_different_codecs_, bool verbose_logging_);
 
     /// Seek is lazy in some sense. We move position in compressed file_in to offset_in_compressed_file, but don't
     /// read data into working_buffer and don't shift our position to offset_in_decompressed_block. Instead

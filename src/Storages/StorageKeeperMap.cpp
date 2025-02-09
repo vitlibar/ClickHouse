@@ -1032,7 +1032,7 @@ void StorageKeeperMap::restoreDataImpl(
         in = createReadBufferFromFileBase(temp_data_file->getAbsolutePath(), {});
     }
     std::unique_ptr<ReadBufferFromFileBase> in_from_file{static_cast<ReadBufferFromFileBase *>(in.release())};
-    CompressedReadBufferFromFile compressed_in{std::move(in_from_file)};
+    CompressedReadBufferFromFile compressed_in{std::move(in_from_file), false, false};
     fs::path data_path_fs(zk_data_path);
 
     auto max_multi_size = with_retries->getKeeperSettings().batch_size_for_multi;

@@ -28,7 +28,9 @@ bool CompressedReadBufferFromFile::nextImpl()
             return false;
 
         compressed_data_read_ok = true;
-        LOG_TEST(log, "Decompressing {} bytes from {}", size_compressed, file_in.getFileName());
+
+        if (verbose_logging)
+            LOG_DEBUG(log, "Decompressing {} bytes from {}", size_compressed, file_in.getFileName());
 
         auto additional_size_at_the_end_of_buffer = codec->getAdditionalSizeAtTheEndOfBuffer();
 
@@ -61,11 +63,12 @@ bool CompressedReadBufferFromFile::nextImpl()
 }
 
 
-CompressedReadBufferFromFile::CompressedReadBufferFromFile(std::unique_ptr<ReadBufferFromFileBase> buf, bool allow_different_codecs_)
+CompressedReadBufferFromFile::CompressedReadBufferFromFile(std::unique_ptr<ReadBufferFromFileBase> buf, bool allow_different_codecs_, bool verbose_logging_)
     : BufferWithOwnMemory<ReadBuffer>(0)
     , p_file_in(std::move(buf))
     , file_in(*p_file_in)
     , log(getLogger("CompressedReadBufferFromFile"))
+    , verbose_logging(verbose_logging_)
 {
     compressed_in = &file_in;
     allow_different_codecs = allow_different_codecs_;
@@ -96,7 +99,9 @@ void CompressedReadBufferFromFile::seek(size_t offset_in_compressed_file, size_t
     else /// Our seek outside working buffer, so perform "lazy seek"
     {
         /// Actually seek compressed file
-        LOG_TEST(log, "Seek to position {} in compressed file {}", offset_in_compressed_file, file_in.getFileName());
+        if (verbose_logging)
+            LOG_DEBUG(log, "Seek to position {} in compressed file {}", offset_in_compressed_file, file_in.getFileName());
+
         file_in.seek(offset_in_compressed_file, SEEK_SET);
         /// We will discard our working_buffer, but have to account rest bytes
         bytes += offset();
@@ -131,7 +136,8 @@ size_t CompressedReadBufferFromFile::readBig(char * to, size_t n)
                 break;
             size_compressed = 0; /// file_in no longer points to the end of the block in working_buffer.
 
-            LOG_TEST(log, "Decompressing {} bytes from {}", new_size_compressed, file_in.getFileName());
+            if (verbose_logging)
+                LOG_DEBUG(log, "Decompressing {} bytes from {}", new_size_compressed, file_in.getFileName());
 
             auto additional_size_at_the_end_of_buffer = codec->getAdditionalSizeAtTheEndOfBuffer();
 

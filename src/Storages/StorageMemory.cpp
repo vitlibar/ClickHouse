@@ -564,7 +564,7 @@ void StorageMemory::restoreDataImpl(const BackupPtr & backup, const String & dat
             in = createReadBufferFromFileBase(temp_data_file->getAbsolutePath(), {});
         }
         std::unique_ptr<ReadBufferFromFileBase> in_from_file{static_cast<ReadBufferFromFileBase *>(in.release())};
-        CompressedReadBufferFromFile compressed_in{std::move(in_from_file)};
+        CompressedReadBufferFromFile compressed_in{std::move(in_from_file), false, false};
         NativeReader block_in{compressed_in, 0, index.blocks.begin(), index.blocks.end()};
 
         while (auto block = block_in.read())

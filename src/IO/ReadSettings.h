@@ -93,6 +93,9 @@ struct ReadSettings
     DistributedCacheSettings distributed_cache_settings;
     std::optional<FileCacheUserInfo> filecache_user_info;
 
+    bool verbose_decompression_logging = false;
+    bool verbose_decryption_logging = false;
+
     ReadSettings adjustBufferSize(size_t file_size) const
     {
         ReadSettings res = *this;

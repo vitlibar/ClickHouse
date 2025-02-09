@@ -102,7 +102,7 @@ void MergeTreeReaderStream::init()
                 path_prefix + data_file_extension,
                 read_settings,
                 estimated_sum_mark_range_bytes,
-                std::nullopt), settings.allow_different_codecs);
+                std::nullopt), settings.allow_different_codecs, read_settings.verbose_decompression_logging);
 
         if (profile_callback)
             buffer->setProfileCallback(profile_callback, clock_type);

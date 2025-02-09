@@ -5054,6 +5054,13 @@ Maximum memory usage for prefetches.
 Maximum number of prefetches. Zero means unlimited. A setting `filesystem_prefetches_max_memory_usage` is more recommended if you want to limit the number of prefetches
 )", 0) \
     \
+    DECLARE(Bool, enable_verbose_logging_for_decompression_and_decryption, false, R"(
+Enables verbose logging while decompressing and decrypting some files.
+That includes files compressed by our codecs, such as the `data.bin` file in a MergeTree part,
+and also encrypted files stored on an [encrypted disk](../storing-data.md#encrypted-virtual-file-system).
+Should be used only for testing or debugging, not recommended to be turned on by default.
+)", 0) \
+    \
     DECLARE(UInt64, use_structure_from_insertion_table_in_table_functions, 2, R"(
 Use structure from insertion table instead of schema inference from data. Possible values: 0 - disabled, 1 - enabled, 2 - auto
 )", 0) \

@@ -248,6 +248,7 @@ namespace Setting
     extern const SettingsBool filesystem_cache_skip_download_if_exceeds_per_query_cache_write_limit;
     extern const SettingsBool s3_allow_parallel_part_upload;
     extern const SettingsBool use_page_cache_for_disks_without_file_cache;
+    extern const SettingsBool enable_verbose_logging_for_decompression_and_decryption;
     extern const SettingsUInt64 use_structure_from_insertion_table_in_table_functions;
     extern const SettingsString workload;
     extern const SettingsString compatibility;
@@ -6005,6 +6006,9 @@ ReadSettings Context::getReadSettings() const
     res.direct_io_threshold = settings_ref[Setting::min_bytes_to_use_direct_io];
     res.mmap_threshold = settings_ref[Setting::min_bytes_to_use_mmap_io];
     res.priority = Priority{settings_ref[Setting::read_priority]};
+
+    res.verbose_decompression_logging = settings_ref[Setting::enable_verbose_logging_for_decompression_and_decryption];
+    res.verbose_decryption_logging = res.verbose_decompression_logging;
 
     res.remote_throttler = getRemoteReadThrottler();
     res.local_throttler = getLocalReadThrottler();

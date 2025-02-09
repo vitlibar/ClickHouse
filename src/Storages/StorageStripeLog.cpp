@@ -168,7 +168,7 @@ private:
             started = true;
 
             String data_file_path = storage.table_path + "data.bin";
-            data_in.emplace(storage.disk->readFile(data_file_path, read_settings.adjustBufferSize(file_size)));
+            data_in.emplace(storage.disk->readFile(data_file_path, read_settings.adjustBufferSize(file_size)), false, read_settings.verbose_decompression_logging);
             block_in.emplace(*data_in, 0, index_begin, index_end);
         }
     }
@@ -478,7 +478,8 @@ void StorageStripeLog::loadIndices(const WriteLock & lock /* already locked excl
 
     if (disk->existsFile(index_file_path))
     {
-        CompressedReadBufferFromFile index_in(disk->readFile(index_file_path, getContext()->getReadSettings().adjustBufferSize(4096)));
+        auto read_settings = getContext()->getReadSettings().adjustBufferSize(4096);
+        CompressedReadBufferFromFile index_in(disk->readFile(index_file_path, read_settings), false, read_settings.verbose_decompression_logging);
         indices.read(index_in);
     }
 

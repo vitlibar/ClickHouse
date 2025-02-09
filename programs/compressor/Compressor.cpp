@@ -188,7 +188,7 @@ int mainEntryClickHouseCompressor(int argc, char ** argv)
 
             if (offset_in_compressed_file || offset_in_decompressed_block)
             {
-                CompressedReadBufferFromFile compressed_file(std::move(rb));
+                CompressedReadBufferFromFile compressed_file(std::move(rb), false, false);
                 compressed_file.seek(offset_in_compressed_file, offset_in_decompressed_block);
                 copyData(compressed_file, *wb);
             }

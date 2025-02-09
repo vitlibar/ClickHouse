@@ -148,13 +148,14 @@ void MergeTreeDataPartWide::loadIndexGranularityImpl(
     }
     else
     {
-        auto marks_file = data_part_storage_.readFile(marks_file_path, getReadSettings().adjustBufferSize(marks_file_size), marks_file_size, std::nullopt);
+        auto read_settings = getReadSettings().adjustBufferSize(marks_file_size);
+        auto marks_file = data_part_storage_.readFile(marks_file_path, read_settings, marks_file_size, std::nullopt);
 
         std::unique_ptr<ReadBuffer> marks_reader;
         if (!index_granularity_info_.mark_type.compressed)
             marks_reader = std::move(marks_file);
         else
-            marks_reader = std::make_unique<CompressedReadBufferFromFile>(std::move(marks_file));
+            marks_reader = std::make_unique<CompressedReadBufferFromFile>(std::move(marks_file), false, read_settings.verbose_decompression_logging);
 
         size_t marks_count = 0;
 

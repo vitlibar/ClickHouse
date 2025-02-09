@@ -157,7 +157,7 @@ MarkCache::MappedPtr MergeTreeMarksLoader::loadMarksImpl()
     if (!index_granularity_info.mark_type.compressed)
         reader = std::move(buffer);
     else
-        reader = std::make_unique<CompressedReadBufferFromFile>(std::move(buffer));
+        reader = std::make_unique<CompressedReadBufferFromFile>(std::move(buffer), false, read_settings.verbose_decompression_logging);
 
     if (!index_granularity_info.mark_type.adaptive)
     {

@@ -18,15 +18,20 @@ ReadBufferFromEncryptedFile::ReadBufferFromEncryptedFile(
     std::unique_ptr<ReadBufferFromFileBase> in_,
     const String & key_,
     const FileEncryption::Header & header_,
-    size_t offset_)
+    size_t offset_,
+    bool verbose_logging_)
     : ReadBufferFromFileBase(buffer_size_, nullptr, 0)
     , in(std::move(in_))
     , encrypted_buffer(buffer_size_)
     , encryptor(header_.algorithm, key_, header_.init_vector)
     , log(getLogger("ReadBufferFromEncryptedFile"))
+    , verbose_logging(verbose_logging_)
 {
     offset = offset_;
     need_seek = true;
+
+    if (verbose_logging)
+        LOG_DEBUG(log, "Decrypting {}: version={}, algorithm={}", getFileName(), header_.version, toString(header_.algorithm));
 }
 
 off_t ReadBufferFromEncryptedFile::seek(off_t off, int whence)
@@ -105,7 +110,8 @@ bool ReadBufferFromEncryptedFile::nextImpl()
     }
 
     chassert(bytes_read > 0);
-    LOG_TEST(log, "Decrypting bytes {}..{} from {}", offset, offset + bytes_read - 1, getFileName());
+    if (verbose_logging)
+        LOG_DEBUG(log, "Decrypting bytes {}..{} from {}", offset, offset + bytes_read - 1, getFileName());
 
     /// The used cipher algorithms generate the same number of bytes in output as it were in input,
     /// so after deciphering the numbers of bytes will be still `bytes_read`.

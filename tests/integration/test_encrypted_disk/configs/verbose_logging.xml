@@ -1,0 +1,7 @@
+<clickhouse>
+    <profiles>
+        <default>
+            <enable_verbose_logging_for_decompression_and_decryption>1</enable_verbose_logging_for_decompression_and_decryption>
+        </default>
+    </profiles>
+</clickhouse>
