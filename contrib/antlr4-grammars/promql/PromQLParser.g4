@@ -92,12 +92,17 @@ vectorMatchOp
     ;
 
 subqueryOp
-    : SUBQUERY_RANGE offsetOp?
+    : subqueryRange offsetOp?
     ;
 
+subqueryRange
+    : LEFT_BRACKET duration COLON duration? RIGHT_BRACKET;
+
 offsetOp
-    : OFFSET DURATION
+    : OFFSET duration
     ;
+
+duration : DURATION;
 
 vector
     : function_
@@ -136,12 +141,14 @@ labelMatcherList
     ;
 
 matrixSelector
-    : instantSelector TIME_RANGE
-    ;
+    : instantSelector timeRange;
+
+timeRange
+    : LEFT_BRACKET duration RIGHT_BRACKET;
 
 offset
-    : instantSelector OFFSET DURATION
-    | matrixSelector OFFSET DURATION
+    : instantSelector offsetOp
+    | matrixSelector offsetOp
     ;
 
 // Functions
