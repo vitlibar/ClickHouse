@@ -84,6 +84,22 @@ const DecimalField<T> & DecimalField<T>::operator -= (const DecimalField<T> & r)
     return *this;
 }
 
+template <is_decimal T>
+DecimalField<T> DecimalField<T>::operator + (const DecimalField<T> & r) const
+{
+    auto res = *this;
+    res += r;
+    return res;
+}
+
+template <is_decimal T>
+DecimalField<T> DecimalField<T>::operator - (const DecimalField<T> & r) const
+{
+    auto res = *this;
+    res -= r;
+    return res;
+}
+
 bool Field::operator< (const Field & rhs) const
 {
     if (which < rhs.which)

@@ -89,8 +89,7 @@ private:
 };
 
 
-template <typename... Args>
-std::shared_ptr<ASTFunction> makeASTFunction(const String & name, Args &&... args)
+inline std::shared_ptr<ASTFunction> makeASTFunction(const String & name, ASTs && args)
 {
     auto function = std::make_shared<ASTFunction>();
 
@@ -98,9 +97,15 @@ std::shared_ptr<ASTFunction> makeASTFunction(const String & name, Args &&... arg
     function->arguments = std::make_shared<ASTExpressionList>();
     function->children.push_back(function->arguments);
 
-    function->arguments->children = { std::forward<Args>(args)... };
+    function->arguments->children = std::move(args);
 
     return function;
+}
+
+template <typename... Args>
+std::shared_ptr<ASTFunction> makeASTFunction(const String & name, Args &&... args)
+{
+    return makeASTFunction(name, ASTs{ std::forward<Args>(args)... });
 }
 
 /// ASTFunction Helpers: hide casts and semantic.

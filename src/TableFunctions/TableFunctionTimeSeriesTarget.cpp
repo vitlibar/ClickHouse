@@ -1,4 +1,4 @@
-#include <TableFunctions/TableFunctionTimeSeries.h>
+#include <TableFunctions/TableFunctionTimeSeriesTarget.h>
 
 #include <Interpreters/Context.h>
 #include <Interpreters/DatabaseCatalog.h>

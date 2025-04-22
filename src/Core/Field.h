@@ -143,6 +143,8 @@ public:
 
     const DecimalField<T> & operator += (const DecimalField<T> & r);
     const DecimalField<T> & operator -= (const DecimalField<T> & r);
+    DecimalField<T> operator + (const DecimalField<T> & r) const;
+    DecimalField<T> operator - (const DecimalField<T> & r) const;
 
 private:
     T dec;
