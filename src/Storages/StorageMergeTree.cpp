@@ -264,6 +264,10 @@ void StorageMergeTree::read(
     size_t max_block_size,
     size_t num_streams)
 {
+    LOG_INFO(getLogger("!!!"), "StorageMergeTree::read: column_names = {}, query_info = {}, "
+                               "processed_stage = {}, max_block_size = {}, num_streams = {}",
+             column_names, query_info.toString(), processed_stage, max_block_size, num_streams);
+
     const auto & settings = local_context->getSettingsRef();
     /// reading step for parallel replicas with new analyzer is built in Planner, so don't do it here
     if (local_context->canUseParallelReplicasOnInitiator() && settings[Setting::parallel_replicas_for_non_replicated_merge_tree]

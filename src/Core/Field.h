@@ -116,6 +116,11 @@ public:
     T getScaleMultiplier() const;
     UInt32 getScale() const { return scale; }
 
+    explicit operator bool() const { return dec.value != 0; }
+
+    template <std::floating_point F>
+    explicit operator F() const;
+
     template <typename U>
     bool operator < (const DecimalField<U> & r) const
     {
@@ -141,8 +146,37 @@ public:
     template <typename U> bool operator >= (const DecimalField<U> & r) const { return r <= * this; }
     template <typename U> bool operator != (const DecimalField<U> & r) const { return !(*this == r); }
 
-    const DecimalField<T> & operator += (const DecimalField<T> & r);
-    const DecimalField<T> & operator -= (const DecimalField<T> & r);
+    template <is_decimal_not_time U>
+    const DecimalField<T> & operator += (const DecimalField<U> & r);
+
+    template <is_decimal_not_time U>
+    const DecimalField<T> & operator -= (const DecimalField<U> & r);
+
+    template <typename U>
+    using SumResultType = std::enable_if_t<is_decimal_not_time<T> || is_decimal_not_time<U>,
+                                           DecimalField<std::conditional_t<is_decimal_time<T>, T,
+                                                        std::conditional_t<is_decimal_time<U>, U,
+                                                        std::conditional_t<(sizeof(typename T::NativeType) > sizeof(typename U::NativeType)), T, U>>>>>;
+
+    template <typename U>
+    using DiffResultType = std::enable_if_t<is_decimal_time<T> || is_decimal_not_time<U>,
+                                            DecimalField<std::conditional_t<is_decimal_time<T> && is_decimal_time<U>, Decimal64,
+                                                         std::conditional_t<is_decimal_time<T>, T,
+                                                         std::conditional_t<(sizeof(typename T::NativeType) > sizeof(typename U::NativeType)), T, U>>>>>;
+
+    template <typename U>
+    SumResultType<U> operator + (const DecimalField<U> & r) const;
+
+    template <typename U>
+    DiffResultType<U> operator - (const DecimalField<U> & r) const;
+
+    DecimalField<T> operator + () const { return *this; }
+
+    template <typename U>
+    using NegateResultType = std::enable_if_t<is_decimal_not_time<U>, DecimalField<U>>;
+
+    template <typename U>
+    friend NegateResultType<U> operator - (const DecimalField<U> & r);
 
 private:
     T dec;

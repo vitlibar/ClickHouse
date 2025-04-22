@@ -1,13 +1,16 @@
 #pragma once
 
 #include <TableFunctions/ITableFunction.h>
-#include <Storages/StorageTimeSeries.h>
+#include <Interpreters/StorageID.h>
 
 
 namespace DB
 {
+#if 0
+class PrometheusQueryTree;
+#endif
 
-/// Table function prometheusQuery('mydb', 'ts_table', 'query') executes a prometheus query on a TimeSeries table.
+/// Table function prometheusQuery('query', 'mydb', 'ts_table') executes a prometheus query on a TimeSeries table.
 /// This table function can execute either instant or range queries.
 class TableFunctionPrometheusQuery : public ITableFunction
 {
@@ -26,10 +29,13 @@ private:
         bool is_insert_query) const override;
 
     ColumnsDescription getActualTableStructure(ContextPtr context, bool is_insert_query) const override;
-    const char * getStorageTypeName() const override;
 
+    const char * getStorageTypeName() const override { return "PrometheusQuery"; }
+
+#if 0
+    std::shared_ptr<PrometheusQueryTree> promql_query;
+#endif
     StorageID time_series_storage_id = StorageID::createEmpty();
-    String promql_query;
 };
 
 }

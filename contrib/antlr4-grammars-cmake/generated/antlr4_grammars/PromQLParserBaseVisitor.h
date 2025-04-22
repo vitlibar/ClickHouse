@@ -61,6 +61,14 @@ public:
     return visitChildren(ctx);
   }
 
+  virtual std::any visitOffsetAt(PromQLParser::OffsetAtContext *ctx) override {
+    return visitChildren(ctx);
+  }
+
+  virtual std::any visitAtOp(PromQLParser::AtOpContext *ctx) override {
+    return visitChildren(ctx);
+  }
+
   virtual std::any visitOffsetOp(PromQLParser::OffsetOpContext *ctx) override {
     return visitChildren(ctx);
   }
@@ -89,11 +97,11 @@ public:
     return visitChildren(ctx);
   }
 
-  virtual std::any visitMatrixSelector(PromQLParser::MatrixSelectorContext *ctx) override {
+  virtual std::any visitRangeSelector(PromQLParser::RangeSelectorContext *ctx) override {
     return visitChildren(ctx);
   }
 
-  virtual std::any visitOffset(PromQLParser::OffsetContext *ctx) override {
+  virtual std::any visitSelectorWithOffset(PromQLParser::SelectorWithOffsetContext *ctx) override {
     return visitChildren(ctx);
   }
 
@@ -142,6 +150,10 @@ public:
   }
 
   virtual std::any visitLabelName(PromQLParser::LabelNameContext *ctx) override {
+    return visitChildren(ctx);
+  }
+
+  virtual std::any visitMetricName(PromQLParser::MetricNameContext *ctx) override {
     return visitChildren(ctx);
   }
 

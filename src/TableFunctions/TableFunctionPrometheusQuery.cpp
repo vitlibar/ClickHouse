@@ -1,37 +1,14 @@
 #include <TableFunctions/TableFunctionPrometheusQuery.h>
 
-#include <Common/logger_useful.h>
-#include <DataTypes/DataTypeArray.h>
-#include <DataTypes/DataTypeDateTime64.h>
-#include <DataTypes/DataTypeString.h>
-#include <DataTypes/DataTypeTuple.h>
-#include <DataTypes/DataTypesNumber.h>
 #include <Interpreters/Context.h>
-#include <Interpreters/DatabaseCatalog.h>
 #include <Interpreters/evaluateConstantExpression.h>
 #include <Parsers/ASTFunction.h>
 #include <Parsers/ASTIdentifier.h>
-#include <Storages/StorageNull.h>
-#include <Storages/StorageTimeSeries.h>
+#include <Parsers/Prometheus/PrometheusQueryTree.h>
 #include <Storages/checkAndGetLiteralArgument.h>
+#include <Storages/StoragePrometheusQuery.h>
+#include <Storages/TimeSeries/PrometheusQueryResultColumnsDesc.h>
 #include <TableFunctions/TableFunctionFactory.h>
-
-#include "config.h"
-
-#if USE_ANTLR4_GRAMMARS
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdocumentation"
-#pragma clang diagnostic ignored "-Wdocumentation-deprecated-sync"
-#pragma clang diagnostic ignored "-Wdocumentation-html"
-#pragma clang diagnostic ignored "-Wextra-semi"
-#pragma clang diagnostic ignored "-Winconsistent-missing-destructor-override"
-#pragma clang diagnostic ignored "-Wshadow-field"
-#pragma clang diagnostic ignored "-Wshadow-field-in-constructor"
-#pragma clang diagnostic ignored "-Wsuggest-destructor-override"
-#include <antlr4_grammars/PromQLLexer.h>
-#include <antlr4_grammars/PromQLParser.h>
-#pragma clang diagnostic pop
-#endif
 
 
 namespace DB
@@ -42,47 +19,6 @@ namespace ErrorCodes
     extern const int BAD_ARGUMENTS;
     extern const int LOGICAL_ERROR;
     extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
-    extern const int CANNOT_PARSE_PROMQL_QUERY;
-    extern const int SUPPORT_IS_DISABLED;
-}
-
-
-namespace
-{
-#if USE_ANTLR4_GRAMMARS
-    class PromQLErrorListener : public antlr4::BaseErrorListener
-    {
-    public:
-        void syntaxError(antlr4::Recognizer * /*recognizer*/, antlr4::Token * /*offendingSymbol*/,
-            size_t line, size_t charPositionInLine, const std::string &msg, std::exception_ptr /*e*/) override
-        {
-            throw Exception(ErrorCodes::CANNOT_PARSE_PROMQL_QUERY,
-                            "Syntax error: {} while parsing PromQL query (line {}, column {})",
-                            msg, line, charPositionInLine + 1);
-        }
-    };
-
-    void checkPromQLSyntax(const String & promql_query)
-    {
-        antlr4::ANTLRInputStream input{promql_query};
-        PromQLErrorListener error_listener;
-
-        antlr4_grammars::PromQLLexer lexer{&input};
-        lexer.removeErrorListeners();
-        lexer.addErrorListener(&error_listener);
-        antlr4::CommonTokenStream tokens(&lexer);
-
-        antlr4_grammars::PromQLParser parser{&tokens};
-        parser.removeErrorListeners();
-        parser.addErrorListener(&error_listener);
-
-        auto * expression = parser.expression();
-        chassert(expression);
-
-        String info = expression->toStringTree(&parser, true);
-        LOG_INFO(getLogger("TableFunctionPrometheusQuery"), "Parsed PromQL query: {}", info);
-    }
-#endif
 }
 
 
@@ -99,10 +35,15 @@ void TableFunctionPrometheusQuery::parseArguments(const ASTPtr & ast_function, C
         throw Exception(ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH,
                         "Table function '{}' requires one or two arguments: {}([database, ] time_series_table)", name, name);
 
+    String promql_query_str = checkAndGetLiteralArgument<String>(evaluateConstantExpressionOrIdentifierAsLiteral(args[0], context), "promql_query");
+#if 0
+    promql_query = std::make_shared<PrometheusQueryTree>(promql_query_str);
+#endif
+
     if (args.size() == 2)
     {
         /// prometheusQuery( [my_db.]my_time_series_table )
-        if (const auto * id = args[0]->as<ASTIdentifier>())
+        if (const auto * id = args[1]->as<ASTIdentifier>())
         {
             if (auto table_id = id->createTable())
                 time_series_storage_id = table_id->getTableId();
@@ -111,7 +52,7 @@ void TableFunctionPrometheusQuery::parseArguments(const ASTPtr & ast_function, C
 
     if (time_series_storage_id.empty())
     {
-        for (size_t i = 0; i != args.size() - 1; ++i)
+        for (size_t i = 1; i != args.size(); ++i)
         {
             auto & arg = args[i];
             arg = evaluateConstantExpressionOrIdentifierAsLiteral(arg, context);
@@ -120,13 +61,13 @@ void TableFunctionPrometheusQuery::parseArguments(const ASTPtr & ast_function, C
         if (args.size() == 2)
         {
             /// prometheusQuery( 'my_time_series_table', 'promql_query' )
-            time_series_storage_id.table_name = checkAndGetLiteralArgument<String>(args[0], "table_name");
+            time_series_storage_id.table_name = checkAndGetLiteralArgument<String>(args[1], "table_name");
         }
         else
         {
             /// timeSeriesMetrics( 'mydb', 'my_time_series_table', 'promql_query' )
-            time_series_storage_id.database_name = checkAndGetLiteralArgument<String>(args[0], "database_name");
-            time_series_storage_id.table_name = checkAndGetLiteralArgument<String>(args[1], "table_name");
+            time_series_storage_id.database_name = checkAndGetLiteralArgument<String>(args[1], "database_name");
+            time_series_storage_id.table_name = checkAndGetLiteralArgument<String>(args[2], "table_name");
         }
     }
 
@@ -134,28 +75,15 @@ void TableFunctionPrometheusQuery::parseArguments(const ASTPtr & ast_function, C
         throw Exception(ErrorCodes::BAD_ARGUMENTS, "Couldn't get a table name from the arguments of the {} table function", name);
 
     time_series_storage_id = context->resolveStorageID(time_series_storage_id);
-
-    auto & last_arg = args[args.size() - 1];
-    last_arg = evaluateConstantExpressionOrIdentifierAsLiteral(last_arg, context);
-    promql_query = checkAndGetLiteralArgument<String>(last_arg, "promql_query");
 }
 
 
 ColumnsDescription TableFunctionPrometheusQuery::getActualTableStructure(ContextPtr /* context */, bool /* is_insert_query */) const
 {
-    return ColumnsDescription(NamesAndTypesList({
-                {"metric_name", std::make_shared<DataTypeString>()},
-                {"tags", std::make_shared<DataTypeArray>(std::make_shared<DataTypeString>())},
-                {"time_series", std::make_shared<DataTypeArray>(std::make_shared<DataTypeTuple>(
-                    DataTypes{std::make_shared<DataTypeDateTime64>(3), std::make_shared<DataTypeFloat64>()},
-                    Strings{"timestamp", "value"}))},
-            }));
-}
-
-
-const char * TableFunctionPrometheusQuery::getStorageTypeName() const
-{
-    return "Null";
+    return {};
+#if 0
+    return getPrometheusQueryResultColumnsDesc(*promql_query, time_series_storage_id, context);
+#endif
 }
 
 
@@ -166,18 +94,12 @@ StoragePtr TableFunctionPrometheusQuery::executeImpl(
     ColumnsDescription /* cached_columns */,
     bool /* is_insert_query */) const
 {
-#if USE_ANTLR4_GRAMMARS
-
-    /// TODO
-    checkPromQLSyntax(promql_query);
-
-    ColumnsDescription columns = getActualTableStructure(context, /* is_insert_query = */ false);
-    auto res = std::make_shared<StorageNull>(StorageID(getDatabaseName(), table_name), columns, ConstraintsDescription(), String{});
+    return nullptr;
+#if 0
+    auto res = std::make_shared<StoragePrometheusQuery>(
+        StorageID(getDatabaseName(), table_name), promql_query, time_series_storage_id, context);
     res->startup();
     return res;
-
-#else
-    throw Exception(ErrorCodes::SUPPORT_IS_DISABLED, "ANTLR4 support is disabled");
 #endif
 }
 
@@ -187,7 +109,7 @@ void registerTableFunctionPrometheusQuery(TableFunctionFactory & factory)
     factory.registerFunction<TableFunctionPrometheusQuery>(
         {.documentation = {
             .description=R"(Executes a prometheus query on a TimeSeries table.)",
-            .examples{{"prometheusQuery", "SELECT * from prometheusQuery('mydb', 'time_series_table', 'http_requests_total{job=\"prometheus\",group=\"canary\"}');", ""}},
+            .examples{{"prometheusQuery", "SELECT * from prometheusQuery('http_requests_total{job=\"prometheus\",group=\"canary\"}', 'mydb', 'time_series_table', );", ""}},
             .category{""}}
         });
 }

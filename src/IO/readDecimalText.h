@@ -199,6 +199,21 @@ inline bool tryReadDecimalText(ReadBuffer & buf, T & x, uint32_t precision, uint
 }
 
 template <typename T>
+inline void parseDecimal(std::string_view str, T & x, uint32_t precision, uint32_t & scale)
+{
+    ReadBufferFromMemory buf{std::move(str)};
+    readDecimalText(buf, x, precision, scale);
+    assertEOF(buf);
+}
+
+template <typename T>
+inline bool tryParseDecimal(std::string_view str, T & x, uint32_t precision, uint32_t & scale)
+{
+    ReadBufferFromMemory buf{std::move(str)};
+    return tryReadDecimalText(buf, x, precision, scale) && buf.eof();
+}
+
+template <typename T>
 inline void readCSVDecimalText(ReadBuffer & buf, T & x, uint32_t precision, uint32_t & scale)
 {
     if (buf.eof())

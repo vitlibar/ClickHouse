@@ -39,4 +39,23 @@ std::unordered_map<std::string, ColumnWithTypeAndName> SelectQueryInfo::buildNod
     return node_name_to_input_node_column;
 }
 
+String SelectQueryInfo::toString() const
+{
+    String str = "SelectQueryInfo(\n";
+    if (query)
+        str += fmt::format("query = {}\n", query->formatForLogging());
+    if (view_query)
+        str += fmt::format("view_query = {}\n", view_query->formatForLogging());
+    if (query_tree)
+        str += fmt::format("query_tree = {}\n", query_tree->dumpTree());
+    if (planner_context)
+        str += fmt::format("planner_context != 0\n");
+    if (table_expression)
+        str += fmt::format("table_expression != 0\n");
+    if (storage_limits)
+        str += fmt::format("storage_limits != 0\n");
+    str += ")";
+    return str;
+}
+
 }

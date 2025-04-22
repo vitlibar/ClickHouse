@@ -226,5 +226,7 @@ struct SelectQueryInfo
     /// This function generates a map that maps the unique names to table column names,
     /// for the current table (`table_expression`).
     std::unordered_map<std::string, ColumnWithTypeAndName> buildNodeNameToInputNodeColumn() const;
+
+    String toString() const;
 };
 }

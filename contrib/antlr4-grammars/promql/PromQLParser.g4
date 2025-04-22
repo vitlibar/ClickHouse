@@ -52,8 +52,6 @@ vectorOperation
     | vectorOperation compareOp vectorOperation
     | vectorOperation andUnlessOp vectorOperation
     | vectorOperation orOp vectorOperation
-    | vectorOperation vectorMatchOp vectorOperation
-    | vectorOperation AT vectorOperation
     | vector
     ;
 
@@ -92,24 +90,24 @@ vectorMatchOp
     ;
 
 subqueryOp
-    : subqueryRange offsetOp?
+    : SUBQUERY_RANGE offsetAt?
     ;
 
-subqueryRange
-    : LEFT_BRACKET duration COLON duration? RIGHT_BRACKET;
-
-offsetOp
-    : OFFSET duration
+offsetAt
+    : (offsetOp atOp?)
+    | (atOp offsetOp?)
     ;
 
-duration : DURATION;
+atOp: AT SCALAR;
+
+offsetOp: OFFSET SCALAR;
 
 vector
     : function_
     | aggregation
     | instantSelector
-    | matrixSelector
-    | offset
+    | rangeSelector
+    | selectorWithOffset
     | literal
     | parens
     ;
@@ -121,7 +119,7 @@ parens
 // Selectors
 
 instantSelector
-    : METRIC_NAME (LEFT_BRACE labelMatcherList? RIGHT_BRACE)?
+    : metricName (LEFT_BRACE labelMatcherList? RIGHT_BRACE)?
     | LEFT_BRACE labelMatcherList RIGHT_BRACE
     ;
 
@@ -140,15 +138,12 @@ labelMatcherList
     : labelMatcher (COMMA labelMatcher)* COMMA?
     ;
 
-matrixSelector
-    : instantSelector timeRange;
+rangeSelector
+    : instantSelector TIME_RANGE;
 
-timeRange
-    : LEFT_BRACKET duration RIGHT_BRACKET;
-
-offset
-    : instantSelector offsetOp
-    | matrixSelector offsetOp
+selectorWithOffset
+    : instantSelector offsetAt
+    | rangeSelector offsetAt
     ;
 
 // Functions
@@ -207,9 +202,14 @@ groupRight
 // Label names
 
 labelName
-    : keyword
+    : LABEL_NAME
     | METRIC_NAME
-    | LABEL_NAME
+    | keyword
+    ;
+
+metricName
+    : METRIC_NAME
+    | keyword
     ;
 
 labelNameList
@@ -233,6 +233,6 @@ keyword
     ;
 
 literal
-    : NUMBER
+    : SCALAR
     | STRING
     ;

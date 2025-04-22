@@ -84,6 +84,37 @@ const DecimalField<T> & DecimalField<T>::operator -= (const DecimalField<T> & r)
     return *this;
 }
 
+template <is_decimal T>
+DecimalField<T> DecimalField<T>::operator + (const DecimalField<T> & r) const
+{
+    auto res = *this;
+    res += r;
+    return res;
+}
+
+template <is_decimal T>
+DecimalField<T> DecimalField<T>::operator - (const DecimalField<T> & r) const
+{
+    auto res = *this;
+    res -= r;
+    return res;
+}
+
+template <is_decimal T>
+DecimalField<T> DecimalField<T>::operator - () const
+{
+    auto res = *this;
+    res.dec = -res.dec;
+    return res;
+}
+
+template <is_decimal T>
+template <std::floating_point F>
+DecimalField<T>::operator F() const
+{
+    return DecimalUtils::convertTo<F>(dec.value, scale);
+}
+
 bool Field::operator< (const Field & rhs) const
 {
     if (which < rhs.which)
