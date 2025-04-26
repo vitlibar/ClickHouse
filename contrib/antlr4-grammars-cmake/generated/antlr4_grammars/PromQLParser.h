@@ -119,7 +119,6 @@ public:
     AndUnlessOpContext *andUnlessOp();
     OrOpContext *orOp();
     VectorMatchOpContext *vectorMatchOp();
-    antlr4::tree::TerminalNode *AT();
     SubqueryOpContext *subqueryOp();
 
     virtual void enterRule(antlr4::tree::ParseTreeListener *listener) override;
@@ -292,6 +291,9 @@ public:
     virtual size_t getRuleIndex() const override;
     antlr4::tree::TerminalNode *OFFSET();
     antlr4::tree::TerminalNode *DURATION();
+    antlr4::tree::TerminalNode *SUB();
+    antlr4::tree::TerminalNode *AT();
+    LiteralContext *literal();
 
     virtual void enterRule(antlr4::tree::ParseTreeListener *listener) override;
     virtual void exitRule(antlr4::tree::ParseTreeListener *listener) override;
@@ -432,8 +434,7 @@ public:
     OffsetContext(antlr4::ParserRuleContext *parent, size_t invokingState);
     virtual size_t getRuleIndex() const override;
     InstantSelectorContext *instantSelector();
-    antlr4::tree::TerminalNode *OFFSET();
-    antlr4::tree::TerminalNode *DURATION();
+    OffsetOpContext *offsetOp();
     MatrixSelectorContext *matrixSelector();
 
     virtual void enterRule(antlr4::tree::ParseTreeListener *listener) override;

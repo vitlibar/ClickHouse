@@ -5,7 +5,7 @@
 
 namespace DB
 {
-class ParsedPrometheusQuery;
+class PrometheusQueryTree;
 
 /// Executes a query in the prometheus query language, and reads the result of it.
 /// This storage is used only with table function prometheusQuery().
@@ -14,7 +14,7 @@ class StoragePrometheusQuery final : public IStorage
 public:
     StoragePrometheusQuery(
         const StorageID & table_id_,
-        std::shared_ptr<const ParsedPrometheusQuery> parsed_promql_query_,
+        std::shared_ptr<const PrometheusQueryTree> promql_query_,
         const StorageID & time_series_storage_id_,
         const ContextPtr & local_context);
 
@@ -31,7 +31,7 @@ public:
         size_t /*num_streams*/) override;
 
 private:
-    std::shared_ptr<const ParsedPrometheusQuery> parsed_promql_query;
+    std::shared_ptr<const PrometheusQueryTree> promql_query;
     StorageID time_series_storage_id = StorageID::createEmpty();
 };
 

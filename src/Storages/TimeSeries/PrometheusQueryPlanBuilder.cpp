@@ -1,4 +1,5 @@
-#include <Storages/TimeSeries/buildQueryPlanForPrometheusQuery.h>
+#if 0
+#include <Storages/TimeSeries/PrometheusQueryPlanBuilder.h>
 
 #include <Interpreters/DatabaseCatalog.h>
 #include <Storages/SelectQueryInfo.h>
@@ -43,3 +44,4 @@ void PrometheusQueryPlanBuilder::buildQueryPlan(
 }
 
 }
+#endif

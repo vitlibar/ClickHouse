@@ -4,10 +4,10 @@
 #include <Interpreters/evaluateConstantExpression.h>
 #include <Parsers/ASTFunction.h>
 #include <Parsers/ASTIdentifier.h>
+#include <Parsers/Prometheus/PrometheusQueryTree.h>
 #include <Storages/checkAndGetLiteralArgument.h>
 #include <Storages/StoragePrometheusQuery.h>
-#include <Storages/TimeSeries/ParsedPrometheusQuery.h>
-#include <Storages/TimeSeries/getPrometheusQueryOutputColumnsDesc.h>
+#include <Storages/TimeSeries/PrometheusQueryResultColumnsDesc.h>
 #include <TableFunctions/TableFunctionFactory.h>
 
 
@@ -36,8 +36,8 @@ void TableFunctionPrometheusQuery::parseArguments(const ASTPtr & ast_function, C
         throw Exception(ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH,
                         "Table function '{}' requires one or two arguments: {}([database, ] time_series_table)", name, name);
 
-    String promql_query = checkAndGetLiteralArgument<String>(evaluateConstantExpressionOrIdentifierAsLiteral(args[0], context), "promql_query");
-    parsed_promql_query = std::make_shared<ParsedPrometheusQuery>(promql_query);
+    String promql_query_str = checkAndGetLiteralArgument<String>(evaluateConstantExpressionOrIdentifierAsLiteral(args[0], context), "promql_query");
+    promql_query = std::make_shared<PrometheusQueryTree>(PrometheusQueryTree::parseQuery(promql_query_str));
 
     if (args.size() == 2)
     {
@@ -79,7 +79,7 @@ void TableFunctionPrometheusQuery::parseArguments(const ASTPtr & ast_function, C
 
 ColumnsDescription TableFunctionPrometheusQuery::getActualTableStructure(ContextPtr context, bool /* is_insert_query */) const
 {
-    return getPrometheusQueryOutputColumnsDesc(*parsed_promql_query, time_series_storage_id, context);
+    return getPrometheusQueryResultColumnsDesc(*promql_query, time_series_storage_id, context);
 }
 
 
@@ -92,7 +92,7 @@ StoragePtr TableFunctionPrometheusQuery::executeImpl(
 {
 #if USE_ANTLR4_GRAMMARS
     auto res = std::make_shared<StoragePrometheusQuery>(
-        StorageID(getDatabaseName(), table_name), parsed_promql_query, time_series_storage_id, context);
+        StorageID(getDatabaseName(), table_name), promql_query, time_series_storage_id, context);
     res->startup();
     return res;
 #else

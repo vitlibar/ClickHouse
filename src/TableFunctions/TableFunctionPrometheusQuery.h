@@ -6,7 +6,7 @@
 
 namespace DB
 {
-class ParsedPrometheusQuery;
+class PrometheusQueryTree;
 
 /// Table function prometheusQuery('query', 'mydb', 'ts_table') executes a prometheus query on a TimeSeries table.
 /// This table function can execute either instant or range queries.
@@ -30,7 +30,7 @@ private:
 
     const char * getStorageTypeName() const override { return "PrometheusQuery"; }
 
-    std::shared_ptr<ParsedPrometheusQuery> parsed_promql_query;
+    std::shared_ptr<PrometheusQueryTree> promql_query;
     StorageID time_series_storage_id = StorageID::createEmpty();
 };
 

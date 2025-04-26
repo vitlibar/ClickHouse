@@ -53,7 +53,6 @@ vectorOperation
     | vectorOperation andUnlessOp vectorOperation
     | vectorOperation orOp vectorOperation
     | vectorOperation vectorMatchOp vectorOperation
-    | vectorOperation AT vectorOperation
     | vector
     ;
 
@@ -92,17 +91,13 @@ vectorMatchOp
     ;
 
 subqueryOp
-    : subqueryRange offsetOp?
+    : SUBQUERY_RANGE offsetOp?
     ;
-
-subqueryRange
-    : LEFT_BRACKET duration COLON duration? RIGHT_BRACKET;
 
 offsetOp
-    : OFFSET duration
+    : OFFSET SUB? DURATION (AT literal)?
+    | AT literal (OFFSET SUB? DURATION)?
     ;
-
-duration : DURATION;
 
 vector
     : function_
@@ -141,10 +136,7 @@ labelMatcherList
     ;
 
 matrixSelector
-    : instantSelector timeRange;
-
-timeRange
-    : LEFT_BRACKET duration RIGHT_BRACKET;
+    : instantSelector TIME_RANGE;
 
 offset
     : instantSelector offsetOp

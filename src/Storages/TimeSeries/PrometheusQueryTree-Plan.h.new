@@ -1,0 +1,248 @@
+#pragma once
+
+
+namespace DB
+{
+
+/// This tree represents how we execute a prometheus query.
+class PrometheusQueryTree
+{
+public:
+    using ScalarType = Float64;
+    using TimeType = DecimalField<DateTime64>;
+
+    enum class MatcherType { EQ /* = */, NE /* != */, RE /* =~ */, NRE /* !~ */};
+
+    struct Matcher
+    {
+        String tag_name;
+        String tag_value;
+        MatcherType matcher_type;
+        String toString() const;
+    };
+
+    /// A time range [min_time .. max_time].
+    struct TimeRange
+    {
+        TimeType min_time;
+        TimeType max_time;
+        String toString() const;
+    };
+
+    struct Node
+    {
+        virtual ~Node() = default;
+    };
+
+    /// Immediately produces a scalar result without reading any data.
+    /// This node is used when we don't need to read any data because we know the result already.
+    /// Examples: `2+2*2`, `pi()`, `time()`.
+    struct PrecalculatedScalar : public Node
+    {
+        ScalarType scalar;
+    };
+
+    /// Immediately produces a string result.
+    /// This node is used only when a promql query consists of one string.
+    /// Example: "abc".
+    struct StringLiteral : public Node
+    {
+        String literal;
+    };
+
+    /// Finds all IDs in the tags table and cache them in the query execution context;
+    /// then reads all the data corresponding to those IDs from the data table.
+    /// Produces columns `id`, `time`, `value`.
+    /// This node is always the root of the tree.
+    struct ReadAll : public Node
+    {
+        std::vector<MatchersAndTimeRanges> all_matchers_and_time_ranges;
+    };
+
+    /// Filters the data received from the ReadAll node.
+    /// A filter node leaves only rows related a particular part of the query.
+    /// For example, there are two Filter nodes in `http_errors{code="500"} / ignoring(code) http_requests` -
+    /// one for `http_errors{code="500"}` and one for `http_requests`.
+    struct Filter : public Node
+    {
+        Node * input;
+        MatchersAndTimeRanges matchers_and_time_ranges;
+    };
+
+    /// Transforms the `value` column by applying some function.
+    /// This node never changes the number of rows or use one row to calculate another row.
+    struct ValueTransform : public Node
+    {
+        Node * input;
+    };
+    
+    /// Transforms the `value` column by applying some function.
+    /// It never changes the number of rows or use one row to calculate another row.
+    /// This node is used to evaluate simple functions like
+    /// abs(), ceil(), clamp(), day_of_month(), day_of_week(), day_of_year(), days_in_month(),
+    /// exp(), floor(), hour(), ln(), log2(), log10(), minute(), month(), round(), sgn(), sqrt(),
+    /// timestamp(), year(), trigonometric functions.
+    struct SimpleFunction : public ValueTransform
+    {
+        String function_name; /// e.g. "abs"
+    };
+    
+    enum class BinaryOperatorSide { LEFT, RIGHT };
+
+    /// Transform the `value` column by applying some vector-scalar or scalar-vector binary operator.
+    /// It never changes the number of rows or use one row to calculate another row.
+    /// This is used to evaluate all binary operators:
+    /// arithmetic (+-*/%^), comparison (== != > < >= <=), logical (and or unless), atan2.
+    struct BinaryOperatorWithScalar : public ValueTransform
+    {
+        String operator_name; /// e.g. '*' or '==' or 'unless'
+        ScalarType scalar;
+        BinaryOperatorSide scalar_side; /// Is it a "<vector> op <scalar>" operation or "<scalar> op <vector>" operation?
+    };
+
+    /// Transforms the `id` column by adding or removing some tags.
+    /// It never changes the number of rows, or use one row to calculate another row.
+    /// This node actually just replaces some values in the `id` column.
+    struct IdTransform : public Node
+    {
+        Node * input;    
+    };
+
+    /// Replaces values in the `id` column to represent removing some tags.
+    struct RemoveTags : public IdTransform
+    {
+        /// The names of tags we want to remove.
+        /// The metric name can be removed as well by adding "__name__" to this list.
+        Strings tags_to_remove;
+
+        /// The names of tags we want to keep.
+        /// Either `tags_to_remove` or `tags_to_keep` can be set but not both of them.
+        std::optional<Strings> tags_to_keep;
+    };
+
+    /// Implements the logic of the label_join() promql function
+    struct LabelJoinNode : public IdTransform
+    {
+        String dst_label;
+        String separator;
+        Strings src_labels;
+    };
+
+    /// Implements the logic of the label_replace() promql function.
+    struct LabelReplaceNode : public IdTransform
+    {
+        String dst_label;
+        String replacement;
+        String src_label;
+        String regex;
+    };
+
+    /// Aggregates the data with same id and time.
+    /// This aggregation is used to:
+    /// - Evaluate functions like "<aggr-op>(<vector expression>) [without|by (<label list>)]".
+    ///   In this case this node is used after a RemoveTags node which either removes the labels listed in the `without` clause
+    ///   or drops labels not listed in the by clause.
+    /// - Evaluate function absent().
+    /// - Evaluate function scalar().
+    ///   In fact we evaluate scalar(x) as vector(scalar(x)) and we keep the timestamp of `x`
+    ///   (in order to be able to calculate something like max_over_time(vector(scalar(rate(counter[1m])))[1h:1m]).
+    ///
+    /// An Aggregation node transforms data in these four steps:
+    /// 1. Sort rows in each chunk by `id`, `time` to be able to do some preaggregation.
+    /// 2. Do some preaggregation, which means we calculate some aggregation data for the data in each chunk and store them
+    ///    in a new column named `aggregation_data`. Column `value` is not needed after that, so we can remove it.
+    ///    The type of aggregation data depends on the aggregation function we use.
+    ///    For example for "avg" it's the number of values and their total sum.
+    /// 3. Sort the data in all the preaggregated chunks by `id`, `time` to make the aggregated data for each aggregation become adjacent.
+    /// 4. Finalize the aggregation - add a new column with the result of aggregation named `value`.
+    ///    Column `aggregation_data` is not needed after that, so we can remove it.
+    struct Aggregation : public Node
+    {
+        Node * input;
+        String function_name; /// Type of aggregation, e.g. "avg".
+        ScalarType parameter; /// E.g. k for topk()
+    };
+
+    /// Aggregates the data data over specified time ranges.
+    /// This aggregation is used to:
+    /// - Evaluate "<aggregation>_over_time()" functions.
+    /// - Evaluate the instant selector (it's actually the same as function `last_over_time()`).
+    /// - Evaluate functions absent_over_time(), delta(), deriv(), idelta(), irate(), predict_linear().
+    /// - Evaluate functions changes(), increase(), rate(), resets() - after SortByIdAndTime node.
+    ///   Here SortByIdAndTime node is necessary to ensure that multiple chunks don't have overlapping time ranges
+    ///   (because for example for changes() we can't sum up the number of changes calculated in different chunks for overlapping time ranges).
+    ///
+    /// An AggregationOverTime node transforms data in these 5 steps:
+    /// 1. Find time ranges for each time point in the `input` - this will add a new column named `max_time` for each time point
+    ///    (we don't need to store `min_time` for these time ranges because all time ranges have the same duration).
+    ///    There can be multiple `max_time` for one time point, so this step can produce more rows than it was before.
+    /// 2. Sort rows in each chunk by `id`, `max_time` to be able to do some preaggregation.
+    /// 3. Do some preaggregation, which means we calculate some aggregation data for the data in each chunk and store them
+    ///    in a new column named `aggregation_data`. Columns `timestamp`, `value` are not needed after that, so we can remove it.
+    ///    The type of aggregation data depends on the aggregation function we use.
+    ///    For example for "avg" it's the number of values and their total sum.
+    /// 4. Sort the data in all the preaggregated chunks by `id`, `max_time` to make the aggregated data for each aggregation become adjacent.
+    /// 5. Finalize the aggregation - rename the `max_time` column to `time`, add a new column with the result of aggregation named `value`.
+    ///    The column `aggregation_data` is not needed any longer, so we can remove it.
+    struct AggregationOverTime : public Node
+    {
+        Node * input;
+        std::function<void(TimeRanges &, TimeType)> get_time_ranges;
+
+        
+        String function_name; /// Type of aggregation, e.g. "avg" or "min"
+        ScalarType parameter;
+    };
+
+    /// Performs a binary operation between two vectors:
+    /// <vector expr> <bin-op> [ignoring/on(<label list>)] <vector expr>
+    /// This is used to evaluate all binary operators:
+    /// arithmetic (+-*/%^), comparison (== != > < >= <=), logical (and or unless), atan2.
+    /// This node is put after RemoveTags and SortByIdAndTime nodes for both operands.
+    
+    /// Other types of binary operators (scalar-scalar)
+    /// Binary operators between a vector and a scalar are performed by BinaryOperatorWithScalar node
+    struct BinaryOperator
+    {
+        Node * left;
+        Node * right;
+        String operator_name;
+        bool treat_left_as_scalar = false;
+        bool treat_right_as_scalar = false;
+        bool many_to_one = false; /// group_left
+        bool one_to_many = false; /// group_right
+        Strings extra_labels;
+    };
+
+    /// Sorts the data in all the chunks by `id`, `time`.
+    /// This node is needed to ensure that chunks don't have overlapping time ranges.
+    /// This sorting is required to perform before executing functions like changes(), rate().
+    struct SortByIdAndTime : public Node
+    {
+        Node * input;
+        
+    };
+
+    /// Sorts the result instant vector by values.
+    struct SortByValue : public Node
+    {
+        Node * input;
+        
+        /// Descending order?
+        bool desc = false;
+    };
+
+    /// Sorts the result instant vector by labels.
+    struct SortByLabel : public Node
+    {
+        Node * input;
+        String labels;
+        bool desc = false; /// Descending order?
+    };
+    
+
+
+
+};
+
+}

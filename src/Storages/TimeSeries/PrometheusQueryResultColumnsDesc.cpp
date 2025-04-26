@@ -1,27 +1,28 @@
-#include <Storages/TimeSeries/getPrometheusQueryResultColumnsDesc.h>
+#include <Storages/TimeSeries/PrometheusQueryResultColumnsDesc.h>
 
 #include <DataTypes/DataTypeArray.h>
 #include <DataTypes/DataTypeString.h>
 #include <DataTypes/DataTypeTuple.h>
 #include <Interpreters/DatabaseCatalog.h>
+#include <Parsers/Prometheus/PrometheusQueryResultType.h>
+#include <Parsers/Prometheus/PrometheusQueryTree.h>
 #include <Storages/ColumnsDescription.h>
 #include <Storages/StorageInMemoryMetadata.h>
 #include <Storages/StorageTimeSeries.h>
-#include <Storages/TimeSeries/ParsedPrometheusQuery.h>
 
 
 namespace DB
 {
-using ResultType = ParsedPrometheusQuery::ResultType;
+using ResultType = PrometheusQueryResultType;
 
-ColumnsDescription getPrometheusQueryOutputColumnsDesc(
-    const ParsedPrometheusQuery & parsed_promql_query, const StorageID & time_series_storage_id, const ContextPtr & context)
+ColumnsDescription getPrometheusQueryResultColumnsDesc(
+    const PrometheusQueryTree & promql_query, const StorageID & time_series_storage_id, const ContextPtr & context)
 {
     StorageMetadataPtr data_table_metadata;
     DataTypePtr time_type;
     DataTypePtr scalar_type;
 
-    auto result_type = parsed_promql_query.getResultType();
+    auto result_type = promql_query.getResultType();
 
     if ((result_type == ResultType::INSTANT_VECTOR) || (result_type == ResultType::RANGE_VECTOR) || (result_type == ResultType::SCALAR))
     {
