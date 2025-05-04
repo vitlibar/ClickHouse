@@ -19,7 +19,6 @@ namespace ErrorCodes
     extern const int BAD_ARGUMENTS;
     extern const int LOGICAL_ERROR;
     extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
-    extern const int SUPPORT_IS_DISABLED;
 }
 
 
@@ -37,7 +36,7 @@ void TableFunctionPrometheusQuery::parseArguments(const ASTPtr & ast_function, C
                         "Table function '{}' requires one or two arguments: {}([database, ] time_series_table)", name, name);
 
     String promql_query_str = checkAndGetLiteralArgument<String>(evaluateConstantExpressionOrIdentifierAsLiteral(args[0], context), "promql_query");
-    promql_query = std::make_shared<PrometheusQueryTree>(PrometheusQueryTree::parseQuery(promql_query_str));
+    promql_query = std::make_shared<PrometheusQueryTree>(promql_query_str);
 
     if (args.size() == 2)
     {
@@ -90,14 +89,10 @@ StoragePtr TableFunctionPrometheusQuery::executeImpl(
     ColumnsDescription /* cached_columns */,
     bool /* is_insert_query */) const
 {
-#if USE_ANTLR4_GRAMMARS
     auto res = std::make_shared<StoragePrometheusQuery>(
         StorageID(getDatabaseName(), table_name), promql_query, time_series_storage_id, context);
     res->startup();
     return res;
-#else
-    throw Exception(ErrorCodes::SUPPORT_IS_DISABLED, "ANTLR4 support is disabled");
-#endif
 }
 
 

@@ -35,10 +35,12 @@ public:
     {
     public:
         NodeType node_type;
-        std::string_view promql; /// Part of the promql query which this node represents with its children.
-        ResultType result_type;  /// The data type this node with its children evaluates to.
-        std::vector<const Node *> children; /// E.g. arguments for a function, matchers for selectors.
+        size_t start_pos = String::npos; /// Start position of the promql query's part which this node represents with its children.
+        size_t length = 0;               /// Length of the promql query's part which this node represents with its children.
+        ResultType result_type;          /// The data type this node with its children evaluates to.
+        std::vector<const Node *> children;  /// E.g. arguments for a function, matchers for selectors.
         const Node * parent = nullptr;
+        Node() = default;
         Node(const Node &) = default;
         virtual ~Node() = default;
         virtual String dumpTree(size_t indent) const = 0;
@@ -181,11 +183,15 @@ public:
     PrometheusQueryTree & operator=(const PrometheusQueryTree & src);
     PrometheusQueryTree & operator=(PrometheusQueryTree && src);
 
+    explicit PrometheusQueryTree(const String & promql_query_) { parse(promql_query_); }
+
     /// Parses a promql query.
     /// This function throws an exception if something is wrong with the syntax.
-    static PrometheusQueryTree parse(const String & promql_query_);
+    void parse(const String & promql_query_);
 
-    bool tryParse(const String & promql_query_);
+    /// Tries to parse a promql query. Returns true if successful.
+    /// If it isn't successful the function sets `error_pos` and `error_message` and returns false.
+    bool tryParse(const String & promql_query_, size_t & error_pos, String & error_message);
 
     bool empty() const { return nodes.empty(); }
     size_t size() const { return nodes.size(); }
@@ -193,8 +199,11 @@ public:
     /// Returns the root node.
     const Node * getRoot() const { return root; }
 
-    /// Outputs the tree to string as a promql query.
-    const String & toString() const { return promql_query; }
+    /// Returns the promql query which was parsed to build this tree.
+    const String & getPromQLQuery() const { return promql_query; }
+
+    /// Returns a part of the promql query corresponding to a specific node of this tree.
+    std::string_view getPromQL(const Node * node) const { return std::string_view{getPromQLQuery()}.substr(node->start_pos, node->length); }
 
     /// Returns the type of the query's returning value.
     ResultType getResultType() const;
@@ -203,6 +212,7 @@ public:
     String dumpTree(size_t indent = 0) const;
 
 private:
+    class ErrorListener;
     class Builder;
     std::vector<std::unique_ptr<Node>> nodes;
     const Node * root = nullptr;

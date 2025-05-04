@@ -3,6 +3,7 @@
 #include <Parsers/Prometheus/PrometheusQueryTree.h>
 #include <Storages/TimeSeries/PrometheusQueryPlanBuilder.h>
 #include <Storages/TimeSeries/PrometheusQueryResultColumnsDesc.h>
+#include <Common/logger_useful.h>
 
 
 namespace DB
@@ -17,6 +18,8 @@ StoragePrometheusQuery::StoragePrometheusQuery(
     , promql_query(promql_query_)
     , time_series_storage_id(time_series_storage_id_)
 {
+    LOG_INFO(getLogger("!!!"), "StoragePrometheusQuery: promql_query =\n{}", promql_query_->dumpTree());
+
     StorageInMemoryMetadata storage_metadata;
     storage_metadata.setColumns(getPrometheusQueryResultColumnsDesc(*promql_query, time_series_storage_id, local_context));
     setInMemoryMetadata(storage_metadata);
