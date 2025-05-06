@@ -1021,6 +1021,34 @@ private:
         return nodes.emplace_back(std::move(new_node)).get();
     }
 
+    Node * makeMatcher(PromQLParser::LabelMatcherContext * ctx)
+    {
+        auto new_node = std::make_unique<Matcher>();
+        nodes.reserve(nodes.size() + 1);
+        new_node->node_type = NodeType::Matcher;
+        new_node->result_type = ResultType::SCALAR;
+        new_node->start_pos = ctx->start->getStartIndex();
+        new_node->length = ctx->stop->getStopIndex() - new_node->start_pos + 1;
+        new_node->label_name = ctx->labelName()->getText();
+        size_t error_pos = String::npos;
+        String error_message;
+        if (!tryParseStringLiteral(ctx->STRING(), new_node->label_value, error_pos, error_message))
+        {
+            error_listener.setError(new_node->start_pos + error_pos, error_message);
+            return nullptr;
+        }
+        auto * op = ctx->labelMatcherOperator();
+        if (op->EQ())
+            new_node->matcher_type = MatcherType::EQ;
+        else if (op->NE())
+            new_node->matcher_type = MatcherType::NE;
+        else if (op->RE())
+            new_node->matcher_type = MatcherType::RE;
+        else if (op->NRE())
+            new_node->matcher_type = MatcherType::NRE;
+        return nodes.emplace_back(std::move(new_node)).get();
+    }
+
     std::any visitLiteral(antlr4_grammars::PromQLParser::LiteralContext * ctx) override
     {
         if (auto * scalar = ctx->SCALAR())
@@ -1030,6 +1058,11 @@ private:
             return makeStringLiteral(string);
 
         return nullptr;
+    }
+
+    std::any visitLabelMatcher(PromQLParser::LabelMatcherContext * ctx) override
+    {
+        return makeMatcher(ctx);
     }
 
 #if 0
