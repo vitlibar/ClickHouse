@@ -441,8 +441,13 @@ ReturnType readIntTextImpl(T & x, ReadBuffer & buf)
             case 'E': [[fallthrough]];
             case 'F':
             {
-                digit = c - ('A' - 10);
-                goto handle_digit;
+                if constexpr (base > 10)
+                {
+                    digit = c - ('A' - 10);
+                    goto handle_digit;
+                }
+                else
+                    goto end;
             }
             case 'a': [[fallthrough]];
             case 'b': [[fallthrough]];
@@ -451,16 +456,22 @@ ReturnType readIntTextImpl(T & x, ReadBuffer & buf)
             case 'e': [[fallthrough]];
             case 'f':
             {
-                digit = c - ('a' - 10);
-                goto handle_digit;
+                if constexpr (base > 10)
+                {
+                    digit = c - ('a' - 10);
+                    goto handle_digit;
+                }
+                else
+                    goto end;
             }
             default:
             {
                 goto end;
             }
+
 handle_digit:
             has_number = true;
-            if constexpr (base < 10)
+            if constexpr (base != 10)
             {
                 if (digit >= base)
                 {
@@ -476,9 +487,9 @@ handle_digit:
                 /// number of decimal digits so far is close to the max for given type.
                 /// Example: 20 * 10 will overflow Int8.
                 constexpr size_t max_digits = (base == 10) ? std::numeric_limits<T>::max_digits10 : (
-                                              (base == 16) ? (sizeof(T) * 2) : (
-                                              (base == 8) ? ((sizeof(T) * 8 + 2) / 3) :
-                                           /* (base == 2) */ (sizeof(T) * 8)));
+                                              (base == 2) ? std::numeric_limits<T>::digits : (
+                                              (base == 8) ? ((std::numeric_limits<T>::digits + 2) / 3) : (
+                                              (base == 16) ? ((std::numeric_limits<T>::digits + 3) / 4) : 0)));
 
                 if (buf.count() - initial_pos + 1 >= max_digits)
                 {
@@ -558,18 +569,20 @@ bool tryReadIntText(T & x, ReadBuffer & buf)
 }
 
 template <int base = 10, ReadIntTextCheckOverflow check_overflow = ReadIntTextCheckOverflow::CHECK_OVERFLOW, typename T>
-void readIntText(T & x, std::string_view str)
+T parseInt(std::string_view str)
 {
+    T res;
     ReadBufferFromMemory buf{std::move(str)};
-    readIntText<base, check_overflow>(x, buf);
+    readIntText<base, check_overflow>(res, buf);
     assertEOF(buf);
+    return res;
 }
 
 template <int base = 10, ReadIntTextCheckOverflow check_overflow = ReadIntTextCheckOverflow::CHECK_OVERFLOW, typename T>
-bool tryReadIntText(T & x, std::string_view str)
+bool tryParseInt(T & res, std::string_view str)
 {
     ReadBufferFromMemory buf{std::move(str)};
-    return tryReadIntText<base, check_overflow>(x, buf) && buf.eof();
+    return tryReadIntText<base, check_overflow>(res, buf) && buf.eof();
 }
 
 

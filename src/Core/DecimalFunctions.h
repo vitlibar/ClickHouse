@@ -392,7 +392,7 @@ ReturnType rescaleImpl(const DecimalType & decimal, UInt32 scale, UInt32 new_sca
         result = decimal / scaleMultiplier<DecimalType>(new_scale - scale);
         return ReturnType(true);
     }
-    if (mulOverflow(decimal, scaleMultiplier<DecimalType>(scale - new_scale), result))
+    if (common::mulOverflow(decimal.value, scaleMultiplier<DecimalType>(scale - new_scale), result.value))
     {
         if constexpr (throw_exception)
             throw Exception(ErrorCodes::DECIMAL_OVERFLOW, "Convert overflow");

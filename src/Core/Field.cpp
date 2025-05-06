@@ -100,6 +100,14 @@ DecimalField<T> DecimalField<T>::operator - (const DecimalField<T> & r) const
     return res;
 }
 
+template <is_decimal T>
+DecimalField<T> DecimalField<T>::operator - () const
+{
+    auto res = *this;
+    res.dec = -res.dec;
+    return res;
+}
+
 bool Field::operator< (const Field & rhs) const
 {
     if (which < rhs.which)

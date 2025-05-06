@@ -344,7 +344,7 @@ namespace
         String str = removeUnderscoresBetweenDigits(input_without_prefix, /* is_hex = */ true);
         /// Parse hexadecimal number.
         Int64 value;
-        if (!tryReadIntText</* base = 16 */>(value, str))
+        if (!tryParseInt</* base = 16 */>(value, str))
         {
             error_message = fmt::format("Couldn't parse a hexadecimal number from {}", quoteString(input_without_prefix));
             error_pos = 2;
@@ -484,9 +484,9 @@ namespace
         if constexpr(std::is_same_v<ScalarType, DecimalField<DateTime64>>)
         {
             DateTime64 value;
-            UInt32 precision = 18;
+            UInt32 default_precision = std::numeric_limits<Int64>::digits10;
             UInt32 scale;
-            if (!tryReadDecimalText(str, value, precision, scale))
+            if (!tryParseDecimal(str, value, default_precision, scale))
             {
                 error_message = fmt::format("Couldn't parse a duration from {} ", quoteString(input));
                 error_pos = 0;
@@ -566,21 +566,104 @@ namespace
     /// Parses a time range as how it's used in a range selector: "[1h30m]".
     bool tryParseTimeRange(std::string_view input, DecimalField<DateTime64> & range, size_t & error_pos, String & error_message)
     {
-        if ((input.length() < 2) || (input[0] != '[') || (input[input.length() - 1] != ']')
+        /// Check opening and closing brackets.
+        if (input.empty() || (input[0] != '['))
         {
-
+            error_message = "Time range should start with an opening bracket [";
+            error_pos = 0;
+            return false;
         }
-
-        std
-        if (tryParseScalarLiteral(in))
+        if (input.length() < 2 || (input[input.length() - 1] != ']'))
+        {
+            error_message = "Time range should end with a closing bracket ]";
+            error_pos = input.length() - 1;
+            return false;
+        }
+        /// Skip spaces.
+        size_t start_pos = 1;
+        while (start_pos != input.length() && std::isspace(start_pos))
+        {
+            ++start_pos;
+        }
+        size_t end_pos = input.length() - 1;
+        while (end_pos != start_pos && std::isspace(end_pos - 1))
+        {
+            --end_pos;
+        }
+        /// Parse a scalar between the brackets.
+        std::string_view range_as_str = input.substr(start_pos, end_pos - start_pos);
+        if (!tryParseScalarLiteral(range_as_str, range, /* allow_sign = */ false, error_pos, error_message))
+        {
+            error_pos += start_pos;
+            return false;
+        }
+        return true;
     }
 
-    /// Parses a time range as how it's used in a subquery: "[1h:5m]".
-    bool tryParseSubqueryRange(std::string_view input,
-                               std::pair<DecimalField<DateTime64>, std::optional<DecimalField<DateTime64>>> & range_and_resolution,
-                               size_t & error_pos, String & error_message)
+    /// Parses a time range as how it's used in a subquery: "[1h:5m]" or "[1h:]".
+    bool tryParseSubqueryRangeImpl(std::string_view input,
+                                   std::pair<DecimalField<DateTime64>, std::optional<DecimalField<DateTime64>>> & range_and_resolution,
+                                   size_t & error_pos, String & error_message)
     {
-
+        /// Check opening and closing brackets.
+        if (input.empty() || (input[0] != '['))
+        {
+            error_message = "Subquery range should start with an opening bracket [";
+            error_pos = 0;
+            return false;
+        }
+        if (input.length() < 2 || (input[input.length() - 1] != ']'))
+        {
+            error_message = "Subquery range should end with a closing bracket ]";
+            error_pos = input.length() - 1;
+            return false;
+        }
+        /// Find a colon between the brackets.
+        size_t colon_pos = input.find(':', 1);
+        if (colon_pos == String::npos)
+        {
+            error_message = "Not found colon : in the subquery range";
+            error_pos = input.length() - 1;
+            return false;
+        }
+        /// Skip spaces.
+        size_t range_start_pos = 1;
+        while (range_start_pos != input.length() && std::isspace(range_start_pos))
+        {
+            ++range_start_pos;
+        }
+        size_t range_end_pos = colon_pos;
+        while (range_end_pos != range_start_pos && std::isspace(range_end_pos - 1))
+        {
+            --range_end_pos;
+        }
+        size_t resolution_start_pos = colon_pos + 1;
+        while (resolution_start_pos != input.length() && std::isspace(resolution_start_pos))
+        {
+            ++resolution_start_pos;
+        }
+        size_t resolution_end_pos = input.length() - 1;
+        while (resolution_end_pos != resolution_start_pos && std::isspace(resolution_end_pos - 1))
+        {
+            --resolution_end_pos;
+        }
+        /// Parse a scalar between the brackets and the colon.
+        std::string_view range_as_str = input.substr(range_start_pos, range_end_pos - range_start_pos);
+        std::string_view resolution_as_str = input.substr(resolution_start_pos, resolution_end_pos - resolution_start_pos);
+        DecimalField<DateTime64> range;
+        std::optional<DecimalField<DateTime64>> resolution;
+        if (!tryParseScalarLiteral(range_as_str, range, /* allow_sign = */ false, error_pos, error_message))
+        {
+            error_pos += range_start_pos;
+            return false;
+        }
+        if (!resolution_as_str.empty() && !tryParseScalarLiteral(resolution_as_str, resolution.emplace(), /* allow_sign = */ false, error_pos, error_message))
+        {
+            error_pos += resolution_start_pos;
+            return false;
+        }
+        range_and_resolution = std::make_pair(range, resolution);
+        return true;
     }
 
     /// Parses escape sequences in a string literal and replaces them with the characters which they mean.
@@ -632,7 +715,7 @@ namespace
                         return false;
                     }
                     char byte;
-                    if (!tryReadIntText</* base = */ 16>(byte, input.substr(pos + 2, 2)))
+                    if (!tryParseInt</* base = */ 16>(byte, input.substr(pos + 2, 2)))
                     {
                         error_message = fmt::format("Invalid escape sequence {}", input.substr(pos, 4));
                         error_pos = pos;
@@ -660,7 +743,7 @@ namespace
                         return false;
                     }
                     UInt16 byte;
-                    if (!tryReadIntText</* base = */ 8>(byte, input.substr(pos + 1, 3)))
+                    if (!tryParseInt</* base = */ 8>(byte, input.substr(pos + 1, 3)))
                     {
                         error_message = fmt::format("Invalid escape sequence {}", input.substr(pos, 4));
                         error_pos = pos;
@@ -687,7 +770,7 @@ namespace
                         return false;
                     }
                     UInt16 code_point;
-                    if (!tryReadIntText</* base = */ 16>(code_point, input.substr(pos + 2, 4)))
+                    if (!tryParseInt</* base = */ 16>(code_point, input.substr(pos + 2, 4)))
                     {
                         error_message = fmt::format("Invalid escape sequence {}", input.substr(pos, 6));
                         error_pos = pos;
@@ -710,7 +793,7 @@ namespace
                         return false;
                     }
                     UInt32 code_point;
-                    if (!tryReadIntText</* base = */ 16>(code_point, input.substr(pos + 2, 8)))
+                    if (!tryParseInt</* base = */ 16>(code_point, input.substr(pos + 2, 8)))
                     {
                         error_message = fmt::format("Invalid escape sequence {}", input.substr(pos, 10));
                         error_pos = pos;

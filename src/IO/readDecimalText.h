@@ -199,7 +199,7 @@ inline bool tryReadDecimalText(ReadBuffer & buf, T & x, uint32_t precision, uint
 }
 
 template <typename T>
-inline void readDecimalText(std::string_view str, T & x, uint32_t precision, uint32_t & scale)
+inline void parseDecimal(std::string_view str, T & x, uint32_t precision, uint32_t & scale)
 {
     ReadBufferFromMemory buf{std::move(str)};
     readDecimalText(buf, x, precision, scale);
@@ -207,7 +207,7 @@ inline void readDecimalText(std::string_view str, T & x, uint32_t precision, uin
 }
 
 template <typename T>
-inline bool tryReadDecimalText(std::string_view str, T & x, uint32_t precision, uint32_t & scale)
+inline bool tryParseDecimal(std::string_view str, T & x, uint32_t precision, uint32_t & scale)
 {
     ReadBufferFromMemory buf{std::move(str)};
     return tryReadDecimalText(buf, x, precision, scale) && buf.eof();
