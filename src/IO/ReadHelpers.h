@@ -349,7 +349,7 @@ enum class ReadIntTextCheckOverflow : uint8_t
     CHECK_OVERFLOW,
 };
 
-template <typename T, typename ReturnType = void, ReadIntTextCheckOverflow check_overflow = ReadIntTextCheckOverflow::DO_NOT_CHECK_OVERFLOW>
+template <typename T, typename ReturnType = void, int base = 10, ReadIntTextCheckOverflow check_overflow = ReadIntTextCheckOverflow::DO_NOT_CHECK_OVERFLOW>
 ReturnType readIntTextImpl(T & x, ReadBuffer & buf)
 {
     using UnsignedT = make_unsigned_t<T>;
@@ -369,9 +369,11 @@ ReturnType readIntTextImpl(T & x, ReadBuffer & buf)
     const size_t initial_pos = buf.count();
     bool has_sign = false;
     bool has_number = false;
-    while (!buf.eof())
+    for (; !buf.eof(); ++buf.position())
     {
-        switch (*buf.position())
+        char c = *buf.position();
+        char digit;
+        switch (c)
         {
             case '+':
             {
@@ -390,7 +392,7 @@ ReturnType readIntTextImpl(T & x, ReadBuffer & buf)
                 }
 
                 has_sign = true;
-                break;
+                continue;
             }
             case '-':
             {
@@ -416,7 +418,7 @@ ReturnType readIntTextImpl(T & x, ReadBuffer & buf)
                         return ReturnType(false);
                 }
                 has_sign = true;
-                break;
+                continue;
             }
             case '0': [[fallthrough]];
             case '1': [[fallthrough]];
@@ -429,44 +431,81 @@ ReturnType readIntTextImpl(T & x, ReadBuffer & buf)
             case '8': [[fallthrough]];
             case '9':
             {
-                has_number = true;
-                if constexpr (check_overflow == ReadIntTextCheckOverflow::CHECK_OVERFLOW && !is_big_int_v<T>)
-                {
-                    /// Perform relativelly slow overflow check only when
-                    /// number of decimal digits so far is close to the max for given type.
-                    /// Example: 20 * 10 will overflow Int8.
-
-                    if (buf.count() - initial_pos + 1 >= std::numeric_limits<T>::max_digits10)
-                    {
-                        if (negative)
-                        {
-                            T signed_res = -res;
-                            if (common::mulOverflow<T>(signed_res, 10, signed_res) ||
-                                common::subOverflow<T>(signed_res, (*buf.position() - '0'), signed_res))
-                                return ReturnType(false);
-
-                            res = -static_cast<UnsignedT>(signed_res);
-                        }
-                        else
-                        {
-                            T signed_res = res;
-                            if (common::mulOverflow<T>(signed_res, 10, signed_res) ||
-                                common::addOverflow<T>(signed_res, (*buf.position() - '0'), signed_res))
-                                return ReturnType(false);
-
-                            res = signed_res;
-                        }
-                        break;
-                    }
-                }
-                res *= 10;
-                res += *buf.position() - '0';
-                break;
+                digit = c - '0';
+                goto handle_digit;
+            }
+            case 'A': [[fallthrough]];
+            case 'B': [[fallthrough]];
+            case 'C': [[fallthrough]];
+            case 'D': [[fallthrough]];
+            case 'E': [[fallthrough]];
+            case 'F':
+            {
+                digit = c - ('A' - 10);
+                goto handle_digit;
+            }
+            case 'a': [[fallthrough]];
+            case 'b': [[fallthrough]];
+            case 'c': [[fallthrough]];
+            case 'd': [[fallthrough]];
+            case 'e': [[fallthrough]];
+            case 'f':
+            {
+                digit = c - ('a' - 10);
+                goto handle_digit;
             }
             default:
+            {
                 goto end;
+            }
+handle_digit:
+            has_number = true;
+            if constexpr (base < 10)
+            {
+                if (digit >= base)
+                {
+                    if constexpr (throw_exception)
+                        throw Exception(ErrorCodes::CANNOT_PARSE_NUMBER, "'{}' is not a digit for base {}", c, base);
+                    else
+                        return ReturnType(false);
+                }
+            }
+            if constexpr (check_overflow == ReadIntTextCheckOverflow::CHECK_OVERFLOW && !is_big_int_v<T>)
+            {
+                /// Perform relativelly slow overflow check only when
+                /// number of decimal digits so far is close to the max for given type.
+                /// Example: 20 * 10 will overflow Int8.
+                constexpr size_t max_digits = (base == 10) ? std::numeric_limits<T>::max_digits10 : (
+                                              (base == 16) ? (sizeof(T) * 2) : (
+                                              (base == 8) ? ((sizeof(T) * 8 + 2) / 3) :
+                                           /* (base == 2) */ (sizeof(T) * 8)));
+
+                if (buf.count() - initial_pos + 1 >= max_digits)
+                {
+                    if (negative)
+                    {
+                        T signed_res = -res;
+                        if (common::mulOverflow<T>(signed_res, base, signed_res) ||
+                            common::subOverflow<T>(signed_res, digit, signed_res))
+                            return ReturnType(false);
+
+                        res = -static_cast<UnsignedT>(signed_res);
+                    }
+                    else
+                    {
+                        T signed_res = res;
+                        if (common::mulOverflow<T>(signed_res, base, signed_res) ||
+                            common::addOverflow<T>(signed_res, digit, signed_res))
+                            return ReturnType(false);
+
+                        res = signed_res;
+                    }
+                    break;
+                }
+            }
+            res *= base;
+            res += digit;
         }
-        ++buf.position();
     }
 
 end:
@@ -496,26 +535,41 @@ end:
     return ReturnType(true);
 }
 
-template <ReadIntTextCheckOverflow check_overflow = ReadIntTextCheckOverflow::DO_NOT_CHECK_OVERFLOW, typename T>
+template <int base = 10, ReadIntTextCheckOverflow check_overflow = ReadIntTextCheckOverflow::DO_NOT_CHECK_OVERFLOW, typename T>
 void readIntText(T & x, ReadBuffer & buf)
 {
     if constexpr (is_decimal<T>)
     {
-        readIntText<check_overflow>(x.value, buf);
+        readIntText<base, check_overflow>(x.value, buf);
     }
     else
     {
-        readIntTextImpl<T, void, check_overflow>(x, buf);
+        readIntTextImpl<T, void, base, check_overflow>(x, buf);
     }
 }
 
-template <ReadIntTextCheckOverflow check_overflow = ReadIntTextCheckOverflow::CHECK_OVERFLOW, typename T>
+template <int base = 10, ReadIntTextCheckOverflow check_overflow = ReadIntTextCheckOverflow::CHECK_OVERFLOW, typename T>
 bool tryReadIntText(T & x, ReadBuffer & buf)
 {
     if constexpr (is_decimal<T>)
-        return tryReadIntText<check_overflow>(x.value, buf);
+        return tryReadIntText<base, check_overflow>(x.value, buf);
     else
-        return readIntTextImpl<T, bool, check_overflow>(x, buf);
+        return readIntTextImpl<T, bool, base, check_overflow>(x, buf);
+}
+
+template <int base = 10, ReadIntTextCheckOverflow check_overflow = ReadIntTextCheckOverflow::CHECK_OVERFLOW, typename T>
+void readIntText(T & x, std::string_view str)
+{
+    ReadBufferFromMemory buf{std::move(str)};
+    readIntText<base, check_overflow>(x, buf);
+    assertEOF(buf);
+}
+
+template <int base = 10, ReadIntTextCheckOverflow check_overflow = ReadIntTextCheckOverflow::CHECK_OVERFLOW, typename T>
+bool tryReadIntText(T & x, std::string_view str)
+{
+    ReadBufferFromMemory buf{std::move(str)};
+    return tryReadIntText<base, check_overflow>(x, buf) && buf.eof();
 }
 
 
@@ -1108,7 +1162,7 @@ inline ReturnType readDateTimeTextImpl(time_t & datetime, ReadBuffer & buf, cons
             return ReturnType(true);
         }
         /// Why not readIntTextUnsafe? Because for needs of AdFox, parsing of unix timestamp with leading zeros is supported: 000...NNNN.
-        return readIntTextImpl<time_t, ReturnType, ReadIntTextCheckOverflow::CHECK_OVERFLOW>(datetime, buf);
+        return readIntTextImpl<time_t, ReturnType, 10, ReadIntTextCheckOverflow::CHECK_OVERFLOW>(datetime, buf);
     }
     return readDateTimeTextFallback<ReturnType, dt64_mode>(datetime, buf, date_lut, allowed_date_delimiters, allowed_time_delimiters);
 }
@@ -1747,11 +1801,11 @@ void readAndThrowException(ReadBuffer & buf, const String & additional_message =
 
 /** Helper function for implementation.
   */
-template <ReadIntTextCheckOverflow check_overflow = ReadIntTextCheckOverflow::CHECK_OVERFLOW, typename T>
+template <int base = 10, ReadIntTextCheckOverflow check_overflow = ReadIntTextCheckOverflow::CHECK_OVERFLOW, typename T>
 static inline const char * tryReadIntText(T & x, const char * pos, const char * end)
 {
     ReadBufferFromMemory in(pos, end - pos);
-    tryReadIntText<check_overflow>(x, in);
+    tryReadIntText<base, check_overflow>(x, in);
     return pos + in.count();
 }
 

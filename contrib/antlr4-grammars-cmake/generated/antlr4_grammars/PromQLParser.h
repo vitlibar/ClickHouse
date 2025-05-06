@@ -13,14 +13,14 @@ namespace antlr4_grammars {
 class  PromQLParser : public antlr4::Parser {
 public:
   enum {
-    NUMBER = 1, STRING = 2, ADD = 3, SUB = 4, MULT = 5, DIV = 6, MOD = 7, 
-    POW = 8, AND = 9, OR = 10, UNLESS = 11, EQ = 12, DEQ = 13, NE = 14, 
-    GT = 15, LT = 16, GE = 17, LE = 18, RE = 19, NRE = 20, BY = 21, WITHOUT = 22, 
-    ON = 23, IGNORING = 24, GROUP_LEFT = 25, GROUP_RIGHT = 26, OFFSET = 27, 
-    BOOL = 28, AGGREGATION_OPERATOR = 29, FUNCTION = 30, LEFT_BRACE = 31, 
-    RIGHT_BRACE = 32, LEFT_PAREN = 33, RIGHT_PAREN = 34, LEFT_BRACKET = 35, 
-    RIGHT_BRACKET = 36, COMMA = 37, AT = 38, SUBQUERY_RANGE = 39, TIME_RANGE = 40, 
-    DURATION = 41, METRIC_NAME = 42, LABEL_NAME = 43, WS = 44, SL_COMMENT = 45
+    NUMBER = 1, SCALAR = 2, STRING = 3, ADD = 4, SUB = 5, MULT = 6, DIV = 7, 
+    MOD = 8, POW = 9, AND = 10, OR = 11, UNLESS = 12, EQ = 13, DEQ = 14, 
+    NE = 15, GT = 16, LT = 17, GE = 18, LE = 19, RE = 20, NRE = 21, BY = 22, 
+    WITHOUT = 23, ON = 24, IGNORING = 25, GROUP_LEFT = 26, GROUP_RIGHT = 27, 
+    OFFSET = 28, BOOL = 29, AGGREGATION_OPERATOR = 30, FUNCTION = 31, LEFT_BRACE = 32, 
+    RIGHT_BRACE = 33, LEFT_PAREN = 34, RIGHT_PAREN = 35, LEFT_BRACKET = 36, 
+    RIGHT_BRACKET = 37, COMMA = 38, AT = 39, SUBQUERY_RANGE = 40, TIME_RANGE = 41, 
+    DURATION = 42, METRIC_NAME = 43, LABEL_NAME = 44, WS = 45, SL_COMMENT = 46
   };
 
   enum {
@@ -703,7 +703,7 @@ public:
   public:
     LiteralContext(antlr4::ParserRuleContext *parent, size_t invokingState);
     virtual size_t getRuleIndex() const override;
-    antlr4::tree::TerminalNode *NUMBER();
+    antlr4::tree::TerminalNode *SCALAR();
     antlr4::tree::TerminalNode *STRING();
 
     virtual void enterRule(antlr4::tree::ParseTreeListener *listener) override;

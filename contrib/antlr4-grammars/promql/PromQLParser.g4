@@ -225,6 +225,6 @@ keyword
     ;
 
 literal
-    : NUMBER
+    : SCALAR
     | STRING
     ;

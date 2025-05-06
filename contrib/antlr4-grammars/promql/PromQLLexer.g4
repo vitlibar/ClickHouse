@@ -49,6 +49,8 @@ fragment SCIENTIFIC_NUMBER: NUMERAL ('e' [-+]? NUMERAL)?;
 
 NUMBER: NUMERAL | SCIENTIFIC_NUMBER;
 
+SCALAR: NUMBER | DURATION;
+
 STRING: '\'' (~('\'' | '\\') | '\\' .)* '\'' | '"' (~('"' | '\\') | '\\' .)* '"';
 
 // Binary operators
@@ -195,9 +197,9 @@ COMMA: ',';
 
 AT: '@';
 
-SUBQUERY_RANGE: LEFT_BRACKET DURATION ':' DURATION? RIGHT_BRACKET;
+SUBQUERY_RANGE: LEFT_BRACKET SCALAR ':' SCALAR? RIGHT_BRACKET;
 
-TIME_RANGE: LEFT_BRACKET DURATION RIGHT_BRACKET;
+TIME_RANGE: LEFT_BRACKET SCALAR RIGHT_BRACKET;
 
 // The proper order (longest to the shortest) must be validated after parsing
 DURATION: ([0-9]+ ('ms' | [smhdwy]))+;

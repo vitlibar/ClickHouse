@@ -1,7 +1,11 @@
 #include <Parsers/Prometheus/PrometheusQueryTree.h>
 
+#include <Common/UTF8Helpers.h>
+#include <Common/quoteString.h>
 #include <Common/typeid_cast.h>
 #include <Core/DecimalFunctions.h>
+#include <IO/readDecimalText.h>
+#include <IO/ReadHelpers.h>
 #include <Parsers/Prometheus/PrometheusQueryResultType.h>
 #include <boost/algorithm/string/join.hpp>
 
@@ -276,6 +280,530 @@ String PrometheusQueryTree::AggregationOperator::dumpTree(size_t indent) const
 }
 
 
+namespace
+{
+    /// Finds next underscore between two digits (or two hexadecimal digits if `is_hex` is true).
+    /// The function returns String::npos if not found,
+    size_t findUnderscoreBetweenDigits(std::string_view str, bool is_hex, size_t start_pos)
+    {
+        chassert(start_pos <= str.length());
+        size_t pos = str.find('_', start_pos);
+        while (pos != String::npos)
+        {
+            if ((1 <= pos) && (pos + 2 <= str.length()))
+            {
+                char before = str[pos - 1];
+                char after = str[pos + 1];
+                bool between_digits = is_hex ? (std::isxdigit(before) && std::isxdigit(after)) : (std::isdigit(before) && std::isdigit(after));
+                if (between_digits)
+                    break;
+            }
+            pos = str.find('_', pos + 1);
+        }
+        return pos;
+    }
+
+    /// Removes all underscores between digits (or two hexadecimal digits if `is_hex` is true).
+    /// For example, the function converts "1000_000_000" to "1000000000", "0x23_F_B" to "0x23FB" (with is_hex == true).
+    String removeUnderscoresBetweenDigits(std::string_view input, bool is_hex)
+    {
+        String result;
+        result.reserve(input.length());
+        size_t pos = 0;
+        while (pos != input.length())
+        {
+            size_t underscore_pos = findUnderscoreBetweenDigits(input, is_hex, pos);
+            if (underscore_pos == String::npos)
+            {
+                result.append(input.substr(pos));
+                break;
+            }
+            result.append(input.substr(pos, underscore_pos - pos));
+            pos = underscore_pos + 1;
+        }
+        return result;
+    }
+
+    /// Tries to parse an unsigned scalar in hex format, for example "0x23_F_B".
+    /// The function recognizes prefixes "0x" and "0X" and ignores underscores between digits.
+    /// If it succeeds the function returns true and sets `result`.
+    /// If it fails the function returns false and sets either `allow_other_formats` or `error_pos` & `error_message`.
+    template <typename ScalarType>
+    bool tryParseUnsignedScalarInHexFormat(std::string_view input, ScalarType & result,
+                                           bool & allow_other_formats, size_t & error_pos, String & error_message)
+    {
+        bool found_hex_prefix = (input.length() >= 2) && (input[0] == '0') && (std::tolower(input[1]) == 'x');
+        if (!found_hex_prefix)
+        {
+            /// No prefix "0x" is in the `input`, but we can still try other scalar formats.
+            allow_other_formats = true;
+            return false;
+        }
+        /// Remove prefix "0x" and underscores between digits.
+        std::string_view input_without_prefix = input.substr(2);
+        String str = removeUnderscoresBetweenDigits(input_without_prefix, /* is_hex = */ true);
+        /// Parse hexadecimal number.
+        Int64 value;
+        if (!tryReadIntText</* base = 16 */>(value, str))
+        {
+            error_message = fmt::format("Couldn't parse a hexadecimal number from {}", quoteString(input_without_prefix));
+            error_pos = 2;
+            allow_other_formats = false;
+            return false;
+        }
+        if constexpr(std::is_same_v<ScalarType, DecimalField<DateTime64>>)
+        {
+            DateTime64 duration_ms;
+            if (!DecimalUtils::tryRescale(DateTime64{value}, 0, 3, duration_ms))
+            {
+                error_message = fmt::format("Number {} is too big", input_without_prefix);
+                error_pos = 2;
+                allow_other_formats = false;
+                return false;
+            }
+            result = DecimalField<DateTime64>{duration_ms, 3};
+        }
+        else
+        {
+            result = static_cast<ScalarType>(value);
+        }
+        return true;
+    }
+
+    /// Tries to parse an unsigned scalar in duration format, for example "1y2w5d13h15m30s1ms".
+    /// If it succeeds the function returns true and sets `result`.
+    /// If it fails the function returns false and sets either `allow_other_formats` or `error_pos` & `error_message`.
+    template <typename ScalarType>
+    bool tryParseUnsignedScalarInDurationFormat(std::string_view input, ScalarType & result,
+                                                bool & allow_other_formats, size_t & error_pos, String & error_message)
+    {
+        bool found_time_unit = (input.find_first_of("ywdhms") != String::npos);
+        if (!found_time_unit)
+        {
+            /// No time units are in the `input`, but we can still try other scalar formats.
+            allow_other_formats = true;
+            return false;
+        }
+        Int64 result_ms = 0;
+        /// Iterate through all {number & time unit} pairs.
+        size_t pos = 0;
+        std::string_view previous_unit;
+        Int64 previous_unit_ms = 0;
+        while (pos != input.length())
+        {
+            size_t number_start_pos = pos;
+            while (pos != input.length() && std::isdigit(input[pos]))
+                ++pos;
+            if (pos == number_start_pos)
+            {
+                error_message = fmt::format("{} is not a digit. Expected a decimal integer number combined with a time unit in duration {}",
+                                            quoteString(input.substr(number_start_pos, 1)), quoteString(input));
+                error_pos = number_start_pos;
+                allow_other_formats = false;
+                return false;
+            }
+            Int64 number = 0;
+            std::string_view number_as_str = input.substr(number_start_pos, pos - number_start_pos);
+            if(!::DB::tryParse(number, number_as_str))
+            {
+                error_message = fmt::format("Too big number {} of time units in duration {}", number_as_str, quoteString(input));
+                error_pos = number_start_pos;
+                allow_other_formats = false;
+                return false;
+            }
+            size_t unit_start_pos = 0;
+            while (pos != input.length() && !std::isdigit(input[pos]))
+                ++pos;
+            std::string_view unit = input.substr(unit_start_pos, pos - unit_start_pos);
+            Int64 unit_ms = 0;
+            if (unit == "y")
+                unit_ms = 365ULL * 24 * 60 * 60 * 1000;  /// 1y equals 365d (ignoring leap days)
+            else if (unit == "w")
+                unit_ms = 7 * 24 * 60 * 60 * 1000;  /// 1w equals 7d
+            else if (unit == "d")
+                unit_ms = 24 * 60 * 60 * 1000;  /// 1d equals 24h
+            else if (unit == "h")
+                unit_ms = 60 * 60 * 1000;  /// 1h equals 60m
+            else if (unit == "m")
+                unit_ms = 60 * 1000;  /// 1m equals 60s
+            else if (unit == "s")
+                unit_ms = 1000;  /// 1s equals 1000ms
+            else if (unit == "ms")
+                unit_ms = 1;  /// milliseconds
+            if (!unit_ms)
+            {
+                error_message = fmt::format("Unknown unit {} in duration {}", quoteString(unit), quoteString(input));
+                error_pos = unit_start_pos;
+                allow_other_formats = false;
+                return false;
+            }
+            if (!previous_unit.empty() && (previous_unit_ms <= unit_ms))
+            {
+                error_message = fmt::format("Units must be ordered from the longest to the shortest: '{}' must appear before '{}'. "
+                                            "Wrong order of units in duration {}",
+                                            unit, previous_unit, quoteString(input));
+                error_pos = unit_start_pos;
+                allow_other_formats = false;
+                return false;
+            }
+            Int64 add_ms = 0;
+            bool overflow = common::mulOverflow(number, unit_ms, add_ms) || common::addOverflow(add_ms, result_ms, result_ms);
+            if (overflow)
+            {
+                error_message = fmt::format("Duration {} is too big", quoteString(input));
+                error_pos = number_start_pos;
+                allow_other_formats = false;
+                return false;
+            }
+            previous_unit = unit;
+        }
+        /// There should be at least one number with a time unit.
+        if (previous_unit.empty())
+        {
+            error_message = fmt::format("Expected a decimal integer number combined with a time unit in duration {}", quoteString(input));
+            error_pos = pos;
+            allow_other_formats = false;
+            return false;
+        }
+        if constexpr(std::is_same_v<ScalarType, DecimalField<DateTime64>>)
+            result = DecimalField<DateTime64>{result_ms, 3};
+        else
+            result = static_cast<ScalarType>(result_ms) / 1000;
+        return true;
+    }
+
+
+    /// Parses an unsigned scalar in number format, for example "1000" or "1_000" or "5.67" or "2e10" or "Inf" or "Nan".
+    /// Underscores between digits are ignored.
+    template <typename ScalarType>
+    bool tryParseUnsignedScalarInNumberFormat(std::string_view input, ScalarType & result,
+                                              size_t & error_pos, String & error_message)
+    {
+        /// Remove underscores between digits if necessary.
+        String str = removeUnderscoresBetweenDigits(input, /* is_hex = */ false);
+        if constexpr(std::is_same_v<ScalarType, DecimalField<DateTime64>>)
+        {
+            DateTime64 value;
+            UInt32 precision = 18;
+            UInt32 scale;
+            if (!tryReadDecimalText(str, value, precision, scale))
+            {
+                error_message = fmt::format("Couldn't parse a duration from {} ", quoteString(input));
+                error_pos = 0;
+                return false;
+            }
+            DateTime64 value_ms;
+            if (!DecimalUtils::tryRescale(value, scale, 3, value_ms))
+            {
+                error_message = fmt::format("Duration {} is too big", quoteString(input));
+                error_pos = 0;
+                return false;
+            }
+            result = DecimalField<DateTime64>{value_ms, 3};
+            return true;
+        }
+        else
+        {
+            if (!tryParse(result, str))
+            {
+                error_message = fmt::format("Couldn't parse a scalar from {}", quoteString(input));
+                error_pos = 0;
+                return false;
+            }
+            return true;
+        }
+    }
+
+    /// Parses a scalar which is either a floating-point number (e.g. 237e6), or Inf, or Nan,
+    /// or a hexadecimal number (e.g. 0xA7CD), or a time duration in the promql format (e.g. 1y2w5d13h15m30s1ms).
+    /// Underscores (_) can be used in between decimal or hexadecimal digits (they don't mean anything).
+    /// ScalarType here is either a floating-point type (Float64), or DecimalField<DateTime64>. 
+    template <typename ScalarType>
+    bool tryParseScalarLiteral(std::string_view input, ScalarType & result, bool allow_sign, size_t & error_pos, String & error_message)
+    {
+        /// Parse a sign.
+        size_t pos = 0;
+        bool negative = false;
+        if (!input.empty())
+        {
+            if (allow_sign)
+            {
+                if (input[0] == '+')
+                {
+                    ++pos;
+                }
+                else if (input[0] == '-')
+                {
+                    negative = true;
+                    ++pos;
+                }
+            }
+            while (pos != input.length() && std::isspace(input[pos]))
+                ++pos;
+        }
+        /// Parse an unsigned number in one of three formats.
+        bool allow_other_formats = false;
+        bool ok = tryParseUnsignedScalarInHexFormat(input.substr(pos), result, allow_other_formats, error_pos, error_message);
+
+        if (!ok && allow_other_formats)
+            ok = tryParseUnsignedScalarInDurationFormat(input.substr(pos), result, allow_other_formats, error_pos, error_message);
+
+        if (!ok)
+            ok = tryParseUnsignedScalarInNumberFormat(input.substr(pos), result, error_pos, error_message);
+
+        if (!ok)
+        {
+            chassert(!error_message.empty());
+            error_pos += pos;
+            return false;
+        }
+
+        if (negative)
+            result = -result;
+        return true;
+    }
+
+    /// Parses a time range as how it's used in a range selector: "[1h30m]".
+    bool tryParseTimeRange(std::string_view input, DecimalField<DateTime64> & range, size_t & error_pos, String & error_message)
+    {
+        if ((input.length() < 2) || (input[0] != '[') || (input[input.length() - 1] != ']')
+        {
+
+        }
+
+        std
+        if (tryParseScalarLiteral(in))
+    }
+
+    /// Parses a time range as how it's used in a subquery: "[1h:5m]".
+    bool tryParseSubqueryRange(std::string_view input,
+                               std::pair<DecimalField<DateTime64>, std::optional<DecimalField<DateTime64>>> & range_and_resolution,
+                               size_t & error_pos, String & error_message)
+    {
+
+    }
+
+    /// Parses escape sequences in a string literal and replaces them with the characters which they mean.
+    bool tryUnescapeStringLiteral(std::string_view input, String & result, size_t & error_pos, String & error_message)
+    {
+        result.clear();
+        result.reserve(input.length());
+
+        for (size_t pos = 0; pos < input.length();)
+        {
+            size_t next_pos = input.find('\\', pos);
+            result.append(input.substr(pos, next_pos - pos));
+            pos = next_pos;
+
+            if (pos >= input.length())
+                break;
+
+            /// An escape sequences contains at least 2 characters.
+            if (pos + 2 > input.length())
+            {
+                error_message = fmt::format("Invalid escape sequence {}", input.substr(pos));
+                error_pos = pos;
+                return false;
+            }
+
+            /// input[pos] is a backslash
+            char c = input[pos + 1];
+
+            switch (c)
+            {
+                case 'a':  result.push_back(0x07); pos += 2; break;  /// \a  U+0007 alert or bell
+                case 'b':  result.push_back(0x08); pos += 2; break;  /// \b  U+0008 backspace
+                case 'f':  result.push_back(0x0C); pos += 2; break;  /// \f  U+000C form feed
+                case 'n':  result.push_back(0x0A); pos += 2; break;  /// \n  U+000A line feed or newline
+                case 'r':  result.push_back(0x0D); pos += 2; break;  /// \r  U+000D carriage return
+                case 't':  result.push_back(0x09); pos += 2; break;  /// \t  U+0009 horizontal tab
+                case 'v':  result.push_back(0x0B); pos += 2; break;  /// \v  U+000B vertical tab
+                case '\\': result.push_back('\''); pos += 2; break;  /// \\  U+005C backslash
+                case '\'': result.push_back('\''); pos += 2; break;  /// \'  U+0027 single quote
+                case '"':  result.push_back('"');  pos += 2; break;  /// \"  U+0022 double quote
+                case 'x': 
+                {
+                    /// \x followed by exactly two hexadecimal digits represents a single byte.
+                    /// Example: \x51 is the 'Q' letter.
+                    if (pos + 4 > input.length())
+                    {
+                        error_message = fmt::format("Invalid escape sequence {}", input.substr(pos));
+                        error_pos = pos;
+                        return false;
+                    }
+                    char byte;
+                    if (!tryReadIntText</* base = */ 16>(byte, input.substr(pos + 2, 2)))
+                    {
+                        error_message = fmt::format("Invalid escape sequence {}", input.substr(pos, 4));
+                        error_pos = pos;
+                        return false;
+                    }
+                    result.push_back(byte);
+                    pos += 4;
+                    break;
+                }
+                case '0': [[fallthrough]];
+                case '1': [[fallthrough]];
+                case '2': [[fallthrough]];
+                case '3': [[fallthrough]];
+                case '4': [[fallthrough]];
+                case '5': [[fallthrough]];
+                case '6': [[fallthrough]];
+                case '7':
+                {
+                    /// \nnn - three digits octal represents a single byte.
+                    /// Example: \121 is the 'Q' letter.
+                    if (pos + 4 > input.length())
+                    {
+                        error_message = fmt::format("Invalid escape sequence {}", input.substr(pos));
+                        error_pos = pos;
+                        return false;
+                    }
+                    UInt16 byte;
+                    if (!tryReadIntText</* base = */ 8>(byte, input.substr(pos + 1, 3)))
+                    {
+                        error_message = fmt::format("Invalid escape sequence {}", input.substr(pos, 4));
+                        error_pos = pos;
+                        return false;
+                    }
+                    if (byte > 0xFF)
+                    {
+                        error_message = fmt::format("Invalid escape sequence {}: an octal representation \nnn must represent a single byte", input.substr(pos, 4));
+                        error_pos = pos;
+                        return false;
+                    }
+                    result.push_back(static_cast<char>(byte));
+                    pos += 4;
+                    break;
+                }
+                case 'u':
+                {
+                    /// \u followed by exactly four hexadecimal digits represents a single Unicode code point.
+                    /// Example: \u0051 is the 'Q' letter.
+                    if (pos + 6 > input.length())
+                    {
+                        error_message = fmt::format("Invalid escape sequence {}", input.substr(pos));
+                        error_pos = pos;
+                        return false;
+                    }
+                    UInt16 code_point;
+                    if (!tryReadIntText</* base = */ 16>(code_point, input.substr(pos + 2, 4)))
+                    {
+                        error_message = fmt::format("Invalid escape sequence {}", input.substr(pos, 6));
+                        error_pos = pos;
+                        return false;
+                    }
+                    char bytes[3];  /// 3 bytes is enough to represent a Unicode code point up to 0xFFFF.
+                    size_t num_bytes = UTF8::convertCodePointToUTF8(code_point, bytes, sizeof(bytes));
+                    result.append(bytes, num_bytes);
+                    pos += 6;
+                    break;
+                }
+                case 'U':
+                {
+                    /// \U followed by exactly eight hexadecimal digits represents a single Unicode code point.
+                    /// Example: \U00000051 is the 'Q' letter.
+                    if (pos + 10 > input.length())
+                    {
+                        error_message = fmt::format("Invalid escape sequence {}", input.substr(pos));
+                        error_pos = pos;
+                        return false;
+                    }
+                    UInt32 code_point;
+                    if (!tryReadIntText</* base = */ 16>(code_point, input.substr(pos + 2, 8)))
+                    {
+                        error_message = fmt::format("Invalid escape sequence {}", input.substr(pos, 10));
+                        error_pos = pos;
+                        return false;
+                    }
+                    if (code_point > 0x10FFFF)  /// There should be no Unicode code point beyond 0x10FFFF.
+                    {
+                        error_message = fmt::format("Invalid escape sequence {}: a Unicode code point can't be greater than 0x10FFFF",
+                                                    input.substr(pos, 10));
+                        error_pos = pos;
+                        return false;
+                    }
+                    char bytes[4];  /// 4 bytes is enough to represent a Unicode code point up to 0xFFFF.
+                    size_t num_bytes = UTF8::convertCodePointToUTF8(code_point, bytes, sizeof(bytes));
+                    result.append(bytes, num_bytes);
+                    pos += 10;
+                    break;
+                }
+                default:
+                {
+                    error_message = fmt::format("Invalid escape sequence {}", input.substr(pos, 2));
+                    error_pos = pos;
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /// Converts a quoted string literal to its unquoted version: "abc" -> abc
+    /// Accepts an input string in quotes or double quotes or backticks, and also handles escape sequences
+    /// according to the promql rules (see https://prometheus.io/docs/prometheus/latest/querying/basics/#string-literals).
+    bool tryParseStringLiteral(std::string_view input, String & result, size_t & error_pos, String & error_message)
+    {
+        if (input.empty())
+        {
+            error_message = "A string literal should open with a quote ', a double quote \" or a backtick `";
+            error_pos = 0;
+            return false;
+        }
+
+        char quote_char = input[0];
+
+        /// A string literal enclosed in backticks: escape sequences are not parsed.
+        if (quote_char == '`')
+        {
+            if ((input.length() < 2) || (input[input.length() - 1] != '`'))
+            {
+                error_message = "No closing backtick ` found for the string literal";
+                error_pos = input.length() - 1;
+                return false;
+            }
+            size_t closing_backtick = input.find('`', 1);
+            if (closing_backtick != input.length() - 1)
+            {
+                error_message = "A string literal in backticks can't contain other backticks";
+                error_pos = closing_backtick;
+                return false;
+            }
+            result = input.substr(1, input.length() - 2);
+            return true;
+        }
+
+        /// A string literal enclosed in quotes or double quotes: escape sequences are parsed.
+        if (!((quote_char == '\'') || (quote_char == '\"')))
+        {
+            error_message = "A string literal should open with a quote ', a double quote \" or a backtick `";
+            error_pos = 0;
+            return false;
+        }
+
+        if ((input.length() < 2) || (input[input.length() - 1] != quote_char))
+        {
+            error_message = fmt::format("No closing {} {} found for the string literal",
+                                        (quote_char == '\'' ? "quote" : "double quote"), quote_char);
+            error_pos = input.length() - 1;
+            return false;
+        }
+
+        std::string_view unquoted = input.substr(1, input.length() - 2);
+
+        /// Parse escape sequences.
+        if (!tryUnescapeStringLiteral(unquoted, result, error_pos, error_message))
+        {
+            ++error_pos; /// Skip a quote at the beginning of the `input`.
+            return false;
+        }
+
+        return true;
+    }
+}
+
+
 #if USE_ANTLR4_GRAMMARS
 
 /// Parses a promql query using ANTLR4.
@@ -341,399 +869,6 @@ private:
 };
 
 
-namespace
-{
-    /// Finds next underscore between two digits (or two hexadecimal digits if `is_hex` is true).
-    /// The function returns String::npos if not found,
-    size_t findUnderscoreBetweenDigits(std::string_view str, bool is_hex, size_t start_pos)
-    {
-        chassert(start_pos <= str.length());
-        size_t pos = str.find('_', start_pos);
-        while (pos != String::npos)
-        {
-            if ((1 <= pos) && (pos + 2 <= str.length()))
-            {
-                char before = str[pos - 1];
-                char after = str[pos + 1];
-                bool between_digits = is_hex ? (std::isxdigit(before) && std::isxdigit(after)) : (std::isdigit(before) && std::isdigit(after));
-                if (between_digits)
-                    break;
-            }
-            pos = str.find('_', pos + 1);
-        }
-        return pos;
-    }
-
-    /// Removes all underscores between digits (or two hexadecimal digits if `is_hex` is true).
-    /// For example, the function converts 1000_000_000 -> 1000000000; 0x23_F_B -> 0x23FB.
-    Strihg removeUnderscoresBetweenDigits(std::string_view input, bool is_hex)
-    {
-        String result;
-        result.reserve(input.length());
-        size_t pos = 0;
-        while (pos != input.length())
-        {
-            size_t underscore_pos = findUnderscoreBetweenDigits(input, is_hex, pos);
-            if (underscore_pos == String::npos)
-            {
-                result.append(input.substr(pos));
-                break;
-            }
-            result.append(input.substr(pos, underscore_pos - pos));
-            pos = underscore_pos + 1;
-        }
-        return result;
-    }
-
-    size_t countRemovedUnderscores(std::string_view original_input, std::string_view new_input, size_t new_pos)
-    {
-        size_t count = 0;
-        size_t old_pos = 0;
-        while ((old_pos != old_input.length()) && (old_pos - count < new_pos))
-        {
-            if (original_input[old_pos] == new_input[old_pos - count])
-            {
-                ++old_pos;
-            }
-            else
-            {
-                ++old_pos
-                ++count;
-            }
-        }
-        return count;
-    }
-
-    /// Tries to parse an unsigned scalar in hex format, for example "0x23_F_B".
-    /// Underscores between digits are ignored.
-    template <typename ScalarType>
-    bool tryParseUnsignedScalarInHexFormat(ScalarType & result, std::string_view input, size_t & error_pos, String & error_message)
-    {
-        bool starts_with_hex_prefix = (input.length() >= 2) && (input[0] == '0') && (input[1] == 'x' || input[1] == 'X');
-        if (!starts_with_hex_prefix)
-            return false;
-        /// Remove the prefix and underscores.
-        String str = removeUnderscoresBetweenDigits(input.substr(2), /* is_hex = */ true);
-        const char * begin = str.data();
-        const char * end = nullptr;
-        errno = 0;
-        auto value = std::strtoul(begin, const_cast<char **>(&end), 16);
-        if (errno == ERANGE)
-        {
-            error_message = fmt::format("Number {} is too big", str);
-            error_pos = pos + 2;
-            return false;
-        }
-        size_t end_pos = end - begin;
-        if (end_pos != str.length())
-        {
-            error_message = fmt::format("{} is not a hexadecimal digit", quoteString(str[end_pos]);
-            error_pos = 2 + end_pos - countRemovedUnderscores(input.substr(2), end_pos, /* is_hex = */ true);
-            return false;
-        }
-        if constexpr(std::is_same_v<ScalarType, DecimalField<DateTime64>)
-        {
-            result = DecimalField<DateTime64>{value * 1000, 3};
-        }
-        else
-        {
-            result = static_cast<ScalarType>(value);
-        }
-        return true;
-    }
-
-    /// Parses an unsigned scalar in number format, for example "1_000" or "5.67" or "2e10" or "Inf" or "Nan".
-    /// Underscores between digits are ignored.
-    template <typename ScalarType>
-    bool tryParseUnsignedScalarInNumberFormat(ScalarType & result, std::string_view input, size_t & error_pos, String & error_message)
-    {
-
-    }
-
-
-    bool isDurationFormat(std::string_view input)
-    {
-        size_t pos = 0;
-        while (pos < input.length() && std::isdigit(input[pos]))
-            ++pos;
-        if (pos == 0 || pos == input.length())
-            return false;
-        char c = input[pos];
-        return (c == 'y') || (c == 'w') || (c == 'd') || (c == 'h') || (c == 'm') || (c == 's');
-    }
-
-    /// Parses a scalar which is either a floating-point number (e.g. 237e6), or Inf, or Nan,
-    /// or a hexadecimal number (e.g. 0xA7CD), or a time duration in the promql format (e.g. 1y2w5d13h15m30s1ms).
-    /// Underscores (_) can be used in between decimal or hexadecimal digits (they don't mean anything).
-    /// ScalarType here is either a floating-point type (Float64), or DecimalField<DateTime64>. 
-    template <typename ScalarType>
-    bool tryParseScalarLiteral(ScalarType & result, std::string_view input, bool allow_sign, size_t & error_pos, String & error_message)
-    {
-        if (input.empty())
-        {
-            error_message = "A scalar literal is expected";
-            error_pos = 0;
-            return false;
-        }
-
-        size_t pos = 0;
-
-        bool negative = false;
-        if (allow_sign)
-        {
-            if (input[0] == '+')
-            {
-                ++pos;
-            }
-            else if (input[0] == '-')
-            {
-                negative = true;
-                ++pos;
-            }
-        }
-
-        while (pos < input.length() && std::isspace(input[pos]))
-            ++pos;
-
-        String temp;
-
-        /// Hexadecimal format (e.g. 0xA7CD).
-        if (pos + 2 <= input.length() && input[pos] == '0' && (input.pos[1] == 'x' || input.pos[1] == 'X'))
-        {
-            std::string_view input2 = removeUnderscoresBetweenDigits(input.substr(pos + 2), temp);
-            const char * begin = input2.data();
-            const char * end = begin;
-            errno = 0;
-            auto value = std::strtoul(begin, const_cast<char **>(&end), 16);
-            if (errno == ERANGE)
-            {
-                error_message = fmt::format("Value {} is too big", input2);
-                error_pos = pos + 2;
-                return false;
-            }
-            if (end != begin + input2.length())
-            {
-                error_message = fmt::format("A hexadecimal value is expected", input2);
-                error_pos = (end - begin) + pos + 2;
-                return false;
-            }
-            if constexpr(std::is_same_v<ScalarType, DecimalField<DateTime64>)
-            {
-                result = DecimalField<DateTime64>{value * 1000, 3};
-            }
-            else
-            {
-                result = static_cast<ScalarType>(value);
-            }
-            if (negative)
-                result = -result;
-            return true;
-        }
-
-
-        if (!::DB::tryParse(result, str))
-        {
-            error_message = fmt::format("Couldn't parse a scalar from {}", input);
-            error_pos = 0;
-            return false;
-        }
-        return true;
-    }
-
-    /// Converts a quoted string literal to its unquoted version: "abc" -> abc
-    /// Accepts an input string in quotes or double quotes or backticks, and also handles escape sequences
-    /// according to the promql rules (see https://prometheus.io/docs/prometheus/latest/querying/basics/#string-literals).
-    bool tryParseStringLiteral(String & result, std::string_view input, size_t & error_pos, String & error_message)
-    {
-        if (input.empty())
-        {
-            error_message = "A string literal should open with a quote ', a double quote \" or a backtick `";
-            error_pos = 0;
-            return false;
-        }
-
-        char quote_char = input[0];
-
-        /// A string literal enclosed in backticks: escape sequences are not parsed.
-        if (quote_char == '`')
-        {
-            size_t closing_backtick = input.find('`', 1);
-            if (closing_backtick == String::npos)
-            {
-                error_message = "No closing backtick ` found for the string literal";
-                error_pos = input.length();
-                return false;
-            }
-            if (closing_backtick < input.length() - 1)
-            {
-                error_message = "A string literal in backticks can't contain other backticks";
-                error_pos = closing_backtick;
-                return false;
-            }
-            result = input.substr(1, str.length() - 2);
-            return true;
-        }
-
-        /// A string literal enclosed in quotes or double quotes: escape sequences are parsed.
-        if (!((quote_char == '\'') || (quote_char == '\"')))
-        {
-            error_message = "A string literal should open with a quote ', a double quote \" or a backtick `";
-            error_pos = 0;
-            return false;
-        }
-
-        if ((input.length() < 2) || (input[input.length() - 1] != quote_char))
-        {
-            error_message = fmt::format("No closing {} {} found for the string literal",
-                                        (quote_char == '\'' ? "quote" : "double quote"), quote_char);
-            error_pos = input.length();
-            return false;
-        }
-
-        std::string_view unquoted = input.substr(1, input.length() - 2);
-        result.reserve(unquoted.length());
-
-        for (size_t pos = 0; pos < unquoted.length();)
-        {
-            size_t next_pos = unquoted.find('\\', pos);
-            result.append(unquoted.substr(pos, next_pos - pos));
-            pos = next_pos;
-
-            if (pos >= unquoted.length())
-                break;
-
-            /// Escape sequences contain at least 2 characters.
-            if (pos + 2 > unquoted.length())
-            {
-                error_message = fmt::format("Invalid escape sequence {}", unquoted.substr(pos));
-                error_pos = pos + 1;
-                return false;
-            }
-
-            /// input[pos] is a backslash
-            c = input[pos + 1];
-
-            switch (c)
-            {
-                case 'a':  result.push_back(0x07); pos += 2; break;  /// \a  U+0007 alert or bell
-                case 'b':  result.push_back(0x08); pos += 2; break;  /// \b  U+0008 backspace
-                case 'f':  result.push_back(0x0C); pos += 2; break;  /// \f  U+000C form feed
-                case 'n':  result.push_back(0x0A); pos += 2; break;  /// \n  U+000A line feed or newline
-                case 'r':  result.push_back(0x0D); pos += 2; break;  /// \r  U+000D carriage return
-                case 't':  result.push_back(0x09); pos += 2; break;  /// \t  U+0009 horizontal tab
-                case 'v':  result.push_back(0x0B); pos += 2; break;  /// \v  U+000B vertical tab
-                case '\\': result.push_back('\''); pos += 2; break;  /// \\  U+005C backslash
-                case '\'': result.push_back('\''); pos += 2; break;  /// \'  U+0027 single quote
-                case '"':  result.push_back('"');  pos += 2; break;  /// \"  U+0022 double quote
-                case 'x': 
-                {
-                    /// \x followed by exactly two hexadecimal digits represents a single byte.
-                    /// Example: \x51 is the 'Q' letter.
-                    if (pos + 4 > unquoted.length())
-                    {
-                        error_message = fmt::format("Invalid escape sequence {}", unquoted.substr(pos));
-                        error_pos = pos + 1;
-                        return false;
-                    }
-                    result.push_back(unhex2(&unquoted[pos + 2]));
-                    pos += 4;
-                    break;
-                }
-                case '0': [[fallthrough]];
-                case '1': [[fallthrough]];
-                case '2': [[fallthrough]];
-                case '3': [[fallthrough]];
-                case '4': [[fallthrough]];
-                case '5': [[fallthrough]];
-                case '6': [[fallthrough]];
-                case '7':
-                {
-                    /// \nnn - three digits octal represents a single byte.
-                    /// Example: \121 is the 'Q' letter.
-                    if (pos + 4 > unquoted.length())
-                    {
-                        error_message = fmt::format("Invalid escape sequence {}", unquoted.substr(pos));
-                        error_pos = pos + 1;
-                        return false;
-                    }
-                    const char * octal = &unquoted[pos + 1];
-                    UInt16 value = 0;
-                    for (size_t i = 0; i != 3; ++i)
-                    {
-                        char c = octal[i];
-                        if (c < '0' || c > '7')
-                        {
-                            error_message = fmt::format("Invalid escape sequence {}", unquoted.substr(pos));
-                            error_pos = pos + 1;
-                            return false;
-                        }
-                        value = value * 8 + static_cast<UInt16>(c - '0');
-                    }
-                    if (value >= 0xFF)  /// A three digits octal represents a single byte.
-                    {
-                        error_message = fmt::format("Invalid escape sequence {}: a three digit octal can't be greater than 0xFF",
-                                                    unquoted.substr(pos, 4));
-                        error_pos = pos + 1;
-                        return false;
-                    }
-                    result.append(value);
-                    pos += 4;
-                    break;
-                }
-                case 'u':
-                {
-                    /// \u followed by exactly four hexadecimal digits represents a single Unicode code point.
-                    /// Example: \u0051 is the 'Q' letter.
-                    if (pos + 6 > unquoted.length())
-                    {
-                        error_message = fmt::format("Invalid escape sequence {}", unquoted.substr(pos));
-                        error_pos = pos + 1;
-                        return false;
-                    }
-                    auto code_point = unhex4(&unquoted[pos + 2]);
-                    char buf[3];  /// 3 bytes is enough to represent a Unicode code point up to 0xFFFF.
-                    size_t num_bytes = UTF8::convertCodePointToUTF8(code_point, buf, sizeof(buf));
-                    result.append(buf, num_bytes)
-                    pos += 6;
-                    break;
-                }
-                case 'U':
-                {
-                    /// \U followed by exactly eight hexadecimal digits represents a single Unicode code point.
-                    /// Example: \U00000051 is the 'Q' letter.
-                    if (pos + 10 > unquoted.length())
-                    {
-                        error_message = fmt::format("Invalid escape sequence {}", unquoted.substr(pos));
-                        error_pos = pos + 1;
-                        return false;
-                    }
-                    auto code_point = unhexUInt<UInt32>(&unquoted[pos + 2]);
-                    if (code_point > 0x10FFFF)  /// There should be no Unicode code point beyond 0x10FFFF.
-                    {
-                        error_message = fmt::format("Invalid escape sequence {}: a Unicode code point can't be greater than 0x10FFFF",
-                                                    unquoted.substr(pos, 10));
-                        error_pos = pos + 1;
-                        return false;
-                    }
-                    char buf[4];  /// 4 bytes is enough to represent a Unicode code point up to 0xFFFF.
-                    size_t num_bytes = UTF8::convertCodePointToUTF8(code_point, buf, sizeof(buf));
-                    result.append(buf, num_bytes)
-                    pos += 10;
-                    break;
-                }
-                default:
-                {
-                    error_message = fmt::format("Invalid escape sequence {}", unquoted.substr(pos, 2));
-                    error_pos = pos + 1;
-                    return false;
-                }
-            }
-        }
-        return true;
-    }
-}
-
-
 class PrometheusQueryTree::Builder : public antlr4_grammars::PromQLParserBaseVisitor
 {
 public:
@@ -776,7 +911,7 @@ private:
         std::string_view scalar_literal = std::string_view{promql_query}.substr(new_node->start_pos, new_node->length);
         size_t error_pos = String::npos;
         String error_message;
-        if (!tryParseScalarLiteral(scalar_literal, new_node->scalar, error_pos, error_message))
+        if (!tryParseScalarLiteral(scalar_literal, new_node->scalar, /* allow_sign = */ true, error_pos, error_message))
         {
             error_listener.setError(new_node->start_pos + error_pos, error_message);
             return nullptr;
@@ -805,8 +940,8 @@ private:
 
     std::any visitLiteral(antlr4_grammars::PromQLParser::LiteralContext * ctx) override
     {
-        if (auto * number = ctx->NUMBER())
-            return makeScalarLiteral(number);
+        if (auto * scalar = ctx->SCALAR())
+            return makeScalarLiteral(scalar);
 
         if (auto * string = ctx->STRING())
             return makeStringLiteral(string);

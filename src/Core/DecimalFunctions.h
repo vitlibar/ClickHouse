@@ -377,6 +377,46 @@ bool tryConvertTo(const DecimalType & decimal, UInt32 scale, To & result)
     return convertToImpl<To, DecimalType, bool>(decimal, scale, result);
 }
 
+
+template <typename DecimalType, typename ReturnType>
+ReturnType rescaleImpl(const DecimalType & decimal, UInt32 scale, UInt32 new_scale, DecimalType & result)
+{
+    static constexpr bool throw_exception = std::is_void_v<ReturnType>;
+    if (new_scale == scale)
+    {
+        result = decimal;
+        return ReturnType(true);
+    }
+    if (new_scale > scale)
+    {
+        result = decimal / scaleMultiplier<DecimalType>(new_scale - scale);
+        return ReturnType(true);
+    }
+    if (mulOverflow(decimal, scaleMultiplier<DecimalType>(scale - new_scale), result))
+    {
+        if constexpr (throw_exception)
+            throw Exception(ErrorCodes::DECIMAL_OVERFLOW, "Convert overflow");
+        else
+            return ReturnType(false);
+    }
+    return ReturnType(true);
+}
+
+template <typename DecimalType>
+DecimalType rescale(const DecimalType & decimal, UInt32 scale, UInt32 new_scale)
+{
+    DecimalType result;
+    rescaleImpl<DecimalType, void>(decimal, scale, new_scale, result);
+    return result;
+}
+
+template <typename DecimalType>
+bool tryRescale(const DecimalType & decimal, UInt32 scale, UInt32 new_scale, DecimalType & result)
+{
+    return rescaleImpl<DecimalType, bool>(decimal, scale, new_scale, result);
+}
+
+
 template <bool is_multiply, bool is_division, typename T, typename U, template <typename> typename DecimalType>
 inline auto binaryOpResult(const DecimalType<T> & tx, const DecimalType<U> & ty)
 {
