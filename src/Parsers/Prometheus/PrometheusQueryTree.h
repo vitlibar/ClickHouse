@@ -23,7 +23,6 @@ public:
         Matcher,
         InstantSelector,
         RangeSelector,
-        At,
         Subquery,
         Function,
         UnaryOperator,
@@ -46,8 +45,8 @@ public:
         virtual String dumpTree(size_t indent) const = 0;
     };
 
-    /// A scalar literal, i.e. a floating-point number.
-    /// Example: -2.43
+    /// A scalar literal, i.e. a number or a duration.
+    /// Examples: -2.43, 2h30m
     class ScalarLiteral : public Node
     {
     public:
@@ -79,47 +78,41 @@ public:
         String dumpTree(size_t indent) const override;
     };
 
-    /// An instant selector.
-    /// Example: http_requests{job="prometheus"}
+    /// An instant selector with an optional offset.
+    /// Example: http_requests{job="prometheus"} offset 1d
     class InstantSelector : public Node
     {
     public:
+        std::optional<TimeType> at;  /// @ timestamp
+        DurationType offset;         /// offset <offset>
         const std::vector<const Node *> & getMatchers() const { return children; }
         String dumpTree(size_t indent) const override;
     };
     
-    /// A range selector.
-    /// Example: http_requests{job="prometheus"}[20m]
+    /// A range selector with an optional offset.
+    /// Example: http_requests{job="prometheus"}[20m] offset 1d
     class RangeSelector : public Node
     {
     public:
-        DurationType range;
+        DurationType range;          /// [20m]
+        std::optional<TimeType> at;  /// @ timestamp
+        DurationType offset;         /// offset <offset>
         const std::vector<const Node *> & getMatchers() const { return children; }
         String dumpTree(size_t indent) const override;
     };
 
-    /// Specifies a change of the evaluation time for the part of the query.
-    /// That includes either `@ <timestamp>` or `offset <duration>` or even both `@ <timestamp> offset <duration>`
-    /// Examples: <expression> offset 5m
-    ///           <expression> @ 1609746000
-    ///           <expression> @ 1609746000 offset 5m
-    class At : public Node
-    {
-    public:
-        std::optional<TimeType> timestamp;  /// @ timestamp
-        std::optional<DurationType> offset; /// offset <offset>
-        const Node * getExpression() const { return children[0]; }
-        String dumpTree(size_t indent) const override;
-    };
-
     /// Represents a subquery, i.e. <expression>[<range>:<resolution>]. Here resolution can be omitted, but the colon always presents.
+    /// Also an optional offset can be specified.
     /// Examples: <expression>[1h:5m]
-    ///           <expression>[1h:]
+    ///           <expression>[1h:] offset 1d
+    ///           <expression>[1h:] @ 1609746000
     class Subquery : public Node
     {
     public:
-        DurationType range;
-        std::optional<DurationType> resolution;
+        DurationType range;                      /// [1h: ...]
+        std::optional<DurationType> resolution;  /// [... :5m]
+        std::optional<TimeType> at;              /// @ timestamp
+        DurationType offset;                     /// offset <offset>
         const Node * getExpression() const { return children[0]; }
         String dumpTree(size_t indent) const override;
     };
@@ -152,12 +145,13 @@ public:
     {
     public:
         String operator_name;
-        bool bool_modifier = false;
-        Strings on_labels;
-        Strings ignore_labels;
+        bool on = false;
+        bool ignoring = false;
+        Strings labels;
         bool group_left = false;
         bool group_right = false;
         Strings extra_labels;
+        bool bool_modifier = false;
         const Node * getLeftArgument() const { return children[0]; }
         const Node * getRightArgument() const { return children[1]; }
         String dumpTree(size_t indent) const override;
@@ -171,8 +165,9 @@ public:
     {
     public:
         String operator_name;
-        Strings by_labels;
-        Strings without_labels;
+        bool by = false;
+        bool without = false;
+        Strings labels;
         const std::vector<const Node *> & getArguments() const { return children; }
         String dumpTree(size_t indent) const override;
     };

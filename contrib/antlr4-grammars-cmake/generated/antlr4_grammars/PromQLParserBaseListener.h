@@ -51,6 +51,12 @@ public:
   virtual void enterSubqueryOp(PromQLParser::SubqueryOpContext * /*ctx*/) override { }
   virtual void exitSubqueryOp(PromQLParser::SubqueryOpContext * /*ctx*/) override { }
 
+  virtual void enterOffsetAt(PromQLParser::OffsetAtContext * /*ctx*/) override { }
+  virtual void exitOffsetAt(PromQLParser::OffsetAtContext * /*ctx*/) override { }
+
+  virtual void enterAtOp(PromQLParser::AtOpContext * /*ctx*/) override { }
+  virtual void exitAtOp(PromQLParser::AtOpContext * /*ctx*/) override { }
+
   virtual void enterOffsetOp(PromQLParser::OffsetOpContext * /*ctx*/) override { }
   virtual void exitOffsetOp(PromQLParser::OffsetOpContext * /*ctx*/) override { }
 
@@ -72,11 +78,11 @@ public:
   virtual void enterLabelMatcherList(PromQLParser::LabelMatcherListContext * /*ctx*/) override { }
   virtual void exitLabelMatcherList(PromQLParser::LabelMatcherListContext * /*ctx*/) override { }
 
-  virtual void enterMatrixSelector(PromQLParser::MatrixSelectorContext * /*ctx*/) override { }
-  virtual void exitMatrixSelector(PromQLParser::MatrixSelectorContext * /*ctx*/) override { }
+  virtual void enterRangeSelector(PromQLParser::RangeSelectorContext * /*ctx*/) override { }
+  virtual void exitRangeSelector(PromQLParser::RangeSelectorContext * /*ctx*/) override { }
 
-  virtual void enterOffset(PromQLParser::OffsetContext * /*ctx*/) override { }
-  virtual void exitOffset(PromQLParser::OffsetContext * /*ctx*/) override { }
+  virtual void enterSelectorWithOffset(PromQLParser::SelectorWithOffsetContext * /*ctx*/) override { }
+  virtual void exitSelectorWithOffset(PromQLParser::SelectorWithOffsetContext * /*ctx*/) override { }
 
   virtual void enterFunction_(PromQLParser::Function_Context * /*ctx*/) override { }
   virtual void exitFunction_(PromQLParser::Function_Context * /*ctx*/) override { }
@@ -113,6 +119,9 @@ public:
 
   virtual void enterLabelName(PromQLParser::LabelNameContext * /*ctx*/) override { }
   virtual void exitLabelName(PromQLParser::LabelNameContext * /*ctx*/) override { }
+
+  virtual void enterMetricName(PromQLParser::MetricNameContext * /*ctx*/) override { }
+  virtual void exitMetricName(PromQLParser::MetricNameContext * /*ctx*/) override { }
 
   virtual void enterLabelNameList(PromQLParser::LabelNameListContext * /*ctx*/) override { }
   virtual void exitLabelNameList(PromQLParser::LabelNameListContext * /*ctx*/) override { }

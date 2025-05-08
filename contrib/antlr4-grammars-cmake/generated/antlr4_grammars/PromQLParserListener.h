@@ -49,6 +49,12 @@ public:
   virtual void enterSubqueryOp(PromQLParser::SubqueryOpContext *ctx) = 0;
   virtual void exitSubqueryOp(PromQLParser::SubqueryOpContext *ctx) = 0;
 
+  virtual void enterOffsetAt(PromQLParser::OffsetAtContext *ctx) = 0;
+  virtual void exitOffsetAt(PromQLParser::OffsetAtContext *ctx) = 0;
+
+  virtual void enterAtOp(PromQLParser::AtOpContext *ctx) = 0;
+  virtual void exitAtOp(PromQLParser::AtOpContext *ctx) = 0;
+
   virtual void enterOffsetOp(PromQLParser::OffsetOpContext *ctx) = 0;
   virtual void exitOffsetOp(PromQLParser::OffsetOpContext *ctx) = 0;
 
@@ -70,11 +76,11 @@ public:
   virtual void enterLabelMatcherList(PromQLParser::LabelMatcherListContext *ctx) = 0;
   virtual void exitLabelMatcherList(PromQLParser::LabelMatcherListContext *ctx) = 0;
 
-  virtual void enterMatrixSelector(PromQLParser::MatrixSelectorContext *ctx) = 0;
-  virtual void exitMatrixSelector(PromQLParser::MatrixSelectorContext *ctx) = 0;
+  virtual void enterRangeSelector(PromQLParser::RangeSelectorContext *ctx) = 0;
+  virtual void exitRangeSelector(PromQLParser::RangeSelectorContext *ctx) = 0;
 
-  virtual void enterOffset(PromQLParser::OffsetContext *ctx) = 0;
-  virtual void exitOffset(PromQLParser::OffsetContext *ctx) = 0;
+  virtual void enterSelectorWithOffset(PromQLParser::SelectorWithOffsetContext *ctx) = 0;
+  virtual void exitSelectorWithOffset(PromQLParser::SelectorWithOffsetContext *ctx) = 0;
 
   virtual void enterFunction_(PromQLParser::Function_Context *ctx) = 0;
   virtual void exitFunction_(PromQLParser::Function_Context *ctx) = 0;
@@ -111,6 +117,9 @@ public:
 
   virtual void enterLabelName(PromQLParser::LabelNameContext *ctx) = 0;
   virtual void exitLabelName(PromQLParser::LabelNameContext *ctx) = 0;
+
+  virtual void enterMetricName(PromQLParser::MetricNameContext *ctx) = 0;
+  virtual void exitMetricName(PromQLParser::MetricNameContext *ctx) = 0;
 
   virtual void enterLabelNameList(PromQLParser::LabelNameListContext *ctx) = 0;
   virtual void exitLabelNameList(PromQLParser::LabelNameListContext *ctx) = 0;

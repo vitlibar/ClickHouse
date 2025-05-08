@@ -42,6 +42,10 @@ public:
 
     virtual std::any visitSubqueryOp(PromQLParser::SubqueryOpContext *context) = 0;
 
+    virtual std::any visitOffsetAt(PromQLParser::OffsetAtContext *context) = 0;
+
+    virtual std::any visitAtOp(PromQLParser::AtOpContext *context) = 0;
+
     virtual std::any visitOffsetOp(PromQLParser::OffsetOpContext *context) = 0;
 
     virtual std::any visitVector(PromQLParser::VectorContext *context) = 0;
@@ -56,9 +60,9 @@ public:
 
     virtual std::any visitLabelMatcherList(PromQLParser::LabelMatcherListContext *context) = 0;
 
-    virtual std::any visitMatrixSelector(PromQLParser::MatrixSelectorContext *context) = 0;
+    virtual std::any visitRangeSelector(PromQLParser::RangeSelectorContext *context) = 0;
 
-    virtual std::any visitOffset(PromQLParser::OffsetContext *context) = 0;
+    virtual std::any visitSelectorWithOffset(PromQLParser::SelectorWithOffsetContext *context) = 0;
 
     virtual std::any visitFunction_(PromQLParser::Function_Context *context) = 0;
 
@@ -83,6 +87,8 @@ public:
     virtual std::any visitGroupRight(PromQLParser::GroupRightContext *context) = 0;
 
     virtual std::any visitLabelName(PromQLParser::LabelNameContext *context) = 0;
+
+    virtual std::any visitMetricName(PromQLParser::MetricNameContext *context) = 0;
 
     virtual std::any visitLabelNameList(PromQLParser::LabelNameListContext *context) = 0;
 
