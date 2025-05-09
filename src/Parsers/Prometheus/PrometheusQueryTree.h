@@ -186,7 +186,7 @@ public:
 
     /// Tries to parse a promql query. Returns true if successful.
     /// If it isn't successful the function sets `error_pos` and `error_message` and returns false.
-    bool tryParse(const String & promql_query_, size_t & error_pos, String & error_message);
+    bool tryParse(const String & promql_query_, String * error_message, size_t * error_pos);
 
     bool empty() const { return nodes.empty(); }
     size_t size() const { return nodes.size(); }
@@ -207,8 +207,9 @@ public:
     String dumpTree(size_t indent = 0) const;
 
 private:
-    class ErrorListener;
+    bool parseImpl(const String & promql_query_, bool throw_exception, String * error_message, size_t * error_pos);
     class Builder;
+
     std::vector<std::unique_ptr<Node>> nodes;
     const Node * root = nullptr;
     String promql_query;

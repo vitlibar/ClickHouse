@@ -288,6 +288,76 @@ String PrometheusQueryTree::AggregationOperator::dumpTree(size_t indent) const
 
 namespace
 {
+    /// Handles errors while a promql query is parsed.
+    class ErrorListener : public antlr4::BaseErrorListener
+    {
+    public:
+        explicit ErrorListener(std::string_view promql_query_, bool throw_exception_) : promql_query(promql_query_), throw_exception(throw_exception_) {}
+
+        void setError(const String & error_message_, size_t error_pos_)
+        {
+            /// Only the first error is interesting.
+            if (!hasError() && !error_message_.empty())
+            {
+                error_pos = error_pos_;
+                error_message = error_message_;
+                if (throw_exception)
+                {
+                    throw Exception(ErrorCodes::CANNOT_PARSE_PROMQL_QUERY,
+                        "{} at position {} while parsing promql query: {}",
+                        error_message, error_pos, promql_query);
+                }
+            }
+        }
+
+        bool hasError() const { return !error_message.empty(); }
+        size_t getErrorPos() const { return error_pos; }
+        const String & getErrorMessage() const { return error_message; }
+
+    protected:
+        void syntaxError(antlr4::Recognizer * /* recognizer */, antlr4::Token * offending_symbol,
+            size_t line, size_t position_in_line, const std::string & msg, std::exception_ptr /* exception */) override
+        {
+            chassert(!msg.empty());
+
+            size_t pos;
+            if (offending_symbol)
+                pos = offending_symbol->getStartIndex();
+            else  /// `offending_symbol` can be null if `recognizer` is a lexer.
+                pos = convertLineAndPositionInLine(line, position_in_line);
+
+            setError(msg, pos);
+        }
+
+        /// ANTLR4's lexer returns the position of an error as a line number and a position in that line;
+        /// we need to convert them to a char index.
+        size_t convertLineAndPositionInLine(size_t line, size_t position_in_line) const
+        {
+            size_t char_index = 0;
+            if (line != 1)
+            {
+                size_t cur_line = 1;
+                while (char_index != promql_query.length())
+                {
+                    char c = promql_query[char_index++];
+                    /// ANTLR4 considers only '\n' as end-of-line (see LexerATNSimulator::consume()).
+                    if (c == '\n')
+                    {
+                        if (++cur_line == line)
+                            break;
+                    }
+                }
+            }
+            return std::max(char_index + position_in_line, promql_query.length());
+        }
+
+    private:
+        std::string_view promql_query;
+        bool throw_exception = false;
+        size_t error_pos = String::npos;
+        String error_message;
+    };
+
     /// Finds next underscore between two digits (or two hexadecimal digits if `is_hex` is true).
     /// The function returns String::npos if not found,
     size_t findUnderscoreBetweenDigits(std::string_view str, bool is_hex, size_t start_pos)
@@ -335,8 +405,8 @@ namespace
     /// If it succeeds the function returns true and sets `result`.
     /// If it fails the function returns false and sets either `allow_other_formats` or `error_pos` & `error_message`.
     template <typename ScalarType>
-    bool parseUnsignedScalarInHexFormat(std::string_view input, ScalarType & result,
-                                        bool & try_other_formats, size_t & error_pos, String & error_message)
+    bool parseUnsignedScalarInHexFormat(std::string_view input, ScalarType & result, bool & try_other_formats,
+                                        ErrorListener & error_listener, size_t input_pos)
     {
         bool found_hex_prefix = (input.length() >= 2) && (input[0] == '0') && (std::tolower(input[1]) == 'x');
         if (!found_hex_prefix)
@@ -352,8 +422,7 @@ namespace
         Int64 value;
         if (!tryParseInt</* base = 16 */>(value, str))
         {
-            error_message = fmt::format("Couldn't parse a hexadecimal number from {}", quoteString(input_without_prefix));
-            error_pos = 2;
+            error_listener.setError(fmt::format("Couldn't parse a hexadecimal number from {}", quoteString(input_without_prefix)), 2 + input_pos);
             try_other_formats = false;
             return false;
         }
@@ -362,8 +431,7 @@ namespace
             DateTime64 duration_ms;
             if (!DecimalUtils::tryRescale(DateTime64{value}, 0, 3, duration_ms))
             {
-                error_message = fmt::format("Number {} is too big", input_without_prefix);
-                error_pos = 2;
+                error_listener.setError(fmt::format("Number {} is too big", input_without_prefix), 2 + input_pos);
                 try_other_formats = false;
                 return false;
             }
@@ -380,8 +448,8 @@ namespace
     /// If it succeeds the function returns true and sets `result`.
     /// If it fails the function returns false and sets either `allow_other_formats` or `error_pos` & `error_message`.
     template <typename ScalarType>
-    bool parseUnsignedScalarInDurationFormat(std::string_view input, ScalarType & result,
-                                             bool & try_other_formats, size_t & error_pos, String & error_message)
+    bool parseUnsignedScalarInDurationFormat(std::string_view input, ScalarType & result, bool & try_other_formats,
+                                             ErrorListener & error_listener, size_t input_pos)
     {
         bool found_time_unit = (input.find_first_of("ywdhms") != String::npos);
         if (!found_time_unit)
@@ -402,9 +470,9 @@ namespace
                 ++pos;
             if (pos == number_start_pos)
             {
-                error_message = fmt::format("{} is not a digit. Expected a decimal integer number combined with a time unit in duration {}",
-                                            quoteString(input.substr(number_start_pos, 1)), quoteString(input));
-                error_pos = number_start_pos;
+                error_listener.setError(fmt::format("{} is not a digit. Expected a decimal integer number combined with a time unit in duration {}",
+                                                    quoteString(input.substr(pos, 1)), quoteString(input)),
+                                        pos + input_pos);
                 try_other_formats = false;
                 return false;
             }
@@ -412,8 +480,9 @@ namespace
             std::string_view number_as_str = input.substr(number_start_pos, pos - number_start_pos);
             if(!::DB::tryParse(number, number_as_str))
             {
-                error_message = fmt::format("Too big number {} of time units in duration {}", number_as_str, quoteString(input));
-                error_pos = number_start_pos;
+                error_listener.setError(fmt::format("Too big number {} of time units in duration {}",
+                                                    number_as_str, quoteString(input)),
+                                        number_start_pos + input_pos);
                 try_other_formats = false;
                 return false;
             }
@@ -438,17 +507,17 @@ namespace
                 unit_ms = 1;  /// milliseconds
             if (!unit_ms)
             {
-                error_message = fmt::format("Unknown unit {} in duration {}", quoteString(unit), quoteString(input));
-                error_pos = unit_start_pos;
+                error_listener.setError(fmt::format("Unknown unit {} in duration {}", quoteString(unit), quoteString(input)),
+                                        unit_start_pos + input_pos);
                 try_other_formats = false;
                 return false;
             }
             if (!previous_unit.empty() && (previous_unit_ms <= unit_ms))
             {
-                error_message = fmt::format("Units must be ordered from the longest to the shortest: '{}' must appear before '{}'. "
-                                            "Wrong order of units in duration {}",
-                                            unit, previous_unit, quoteString(input));
-                error_pos = unit_start_pos;
+                error_listener.setError(fmt::format("Units must be ordered from the longest to the shortest: '{}' must appear before '{}'. "
+                                                    "Wrong order of units in duration {}",
+                                                    unit, previous_unit, quoteString(input)),
+                                        unit_start_pos + input_pos);
                 try_other_formats = false;
                 return false;
             }
@@ -456,8 +525,8 @@ namespace
             bool overflow = common::mulOverflow(number, unit_ms, add_ms) || common::addOverflow(add_ms, result_ms, result_ms);
             if (overflow)
             {
-                error_message = fmt::format("Duration {} is too big", quoteString(input));
-                error_pos = number_start_pos;
+                error_listener.setError(fmt::format("Duration {} is too big", quoteString(input)),
+                                        input_pos);
                 try_other_formats = false;
                 return false;
             }
@@ -467,8 +536,8 @@ namespace
         /// There should be at least one number with a time unit.
         if (previous_unit.empty())
         {
-            error_message = fmt::format("Expected a decimal integer number combined with a time unit in duration {}", quoteString(input));
-            error_pos = pos;
+            error_listener.setError(fmt::format("Expected a decimal integer number combined with a time unit in duration {}", quoteString(input)),
+                                    input_pos);
             try_other_formats = false;
             return false;
         }
@@ -484,7 +553,7 @@ namespace
     /// Underscores between digits are ignored.
     template <typename ScalarType>
     bool parseUnsignedScalarInNumberFormat(std::string_view input, ScalarType & result,
-                                              size_t & error_pos, String & error_message)
+                                           ErrorListener & error_listener, size_t input_pos)
     {
         /// Remove underscores between digits if necessary.
         String str = removeUnderscoresBetweenDigits(input, /* is_hex = */ false);
@@ -495,15 +564,13 @@ namespace
             UInt32 scale;
             if (!tryParseDecimal(str, value, default_precision, scale))
             {
-                error_message = fmt::format("Couldn't parse a duration from {} ", quoteString(input));
-                error_pos = 0;
+                error_listener.setError(fmt::format("Couldn't parse a duration from {} ", quoteString(input)), input_pos);
                 return false;
             }
             DateTime64 value_ms;
             if (!DecimalUtils::tryRescale(value, scale, 3, value_ms))
             {
-                error_message = fmt::format("Duration {} is too big", quoteString(input));
-                error_pos = 0;
+                error_listener.setError(fmt::format("Duration {} is too big", quoteString(input)), input_pos);
                 return false;
             }
             result = DecimalField<DateTime64>{value_ms, 3};
@@ -513,8 +580,7 @@ namespace
         {
             if (!tryParse(result, str))
             {
-                error_message = fmt::format("Couldn't parse a scalar from {}", quoteString(input));
-                error_pos = 0;
+                error_listener.setError(fmt::format("Couldn't parse a scalar from {}", quoteString(input)), input_pos);
                 return false;
             }
             return true;
@@ -526,7 +592,7 @@ namespace
     /// Underscores (_) can be used in between decimal or hexadecimal digits (they don't mean anything).
     /// ScalarType here is either a floating-point type (Float64), or DecimalField<DateTime64>. 
     template <typename ScalarType>
-    bool parseScalarLiteral(std::string_view input, ScalarType & result, bool allow_sign, size_t & error_pos, String & error_message)
+    bool parseScalarLiteral(std::string_view input, ScalarType & result, bool allow_sign, ErrorListener & error_listener, size_t input_pos)
     {
         /// Parse a sign.
         size_t pos = 0;
@@ -550,40 +616,35 @@ namespace
         }
         /// Parse an unsigned number in one of three formats.
         bool try_other_formats = false;
-        bool ok = parseUnsignedScalarInHexFormat(input.substr(pos), result, try_other_formats, error_pos, error_message);
+        bool ok = parseUnsignedScalarInHexFormat(input.substr(pos), result, try_other_formats, error_listener, pos + input_pos);
 
         if (!ok && try_other_formats)
-            ok = parseUnsignedScalarInDurationFormat(input.substr(pos), result, try_other_formats, error_pos, error_message);
+            ok = parseUnsignedScalarInDurationFormat(input.substr(pos), result, try_other_formats, error_listener, pos + input_pos);
 
         if (!ok && try_other_formats)
-            ok = parseUnsignedScalarInNumberFormat(input.substr(pos), result, error_pos, error_message);
+            ok = parseUnsignedScalarInNumberFormat(input.substr(pos), result, error_listener, pos + input_pos);
 
-        if (!ok)
+        if (ok)
         {
-            chassert(!error_message.empty());
-            error_pos += pos;
-            return false;
+            if (negative)
+                result = -result;
         }
 
-        if (negative)
-            result = -result;
-        return true;
+        return ok;
     }
 
     /// Parses a time range as how it's used in a range selector: "[1h30m]".
-    bool parseTimeRange(std::string_view input, DecimalField<DateTime64> & range, size_t & error_pos, String & error_message)
+    bool parseTimeRange(std::string_view input, DecimalField<DateTime64> & range, ErrorListener & error_listener, size_t input_pos)
     {
         /// Check opening and closing brackets.
         if (input.empty() || (input[0] != '['))
         {
-            error_message = "Time range should start with an opening bracket [";
-            error_pos = 0;
+            error_listener.setError("Time range should start with an opening bracket [", input_pos);
             return false;
         }
         if (input.length() < 2 || (input[input.length() - 1] != ']'))
         {
-            error_message = "Time range should end with a closing bracket ]";
-            error_pos = input.length() - 1;
+            error_listener.setError("Time range should end with a closing bracket ]", input.length() - 1 + input_pos);
             return false;
         }
         /// Skip spaces.
@@ -599,38 +660,30 @@ namespace
         }
         /// Parse a scalar between the brackets.
         std::string_view range_as_str = input.substr(start_pos, end_pos - start_pos);
-        if (!parseScalarLiteral(range_as_str, range, /* allow_sign = */ false, error_pos, error_message))
-        {
-            error_pos += start_pos;
-            return false;
-        }
-        return true;
+        return parseScalarLiteral(range_as_str, range, /* allow_sign = */ false, error_listener, start_pos + input_pos);
     }
 
     /// Parses a time range as how it's used in a subquery: "[1h:5m]" or "[1h:]".
     bool parseSubqueryRange(std::string_view input,
-                               std::pair<DecimalField<DateTime64>, std::optional<DecimalField<DateTime64>>> & range_and_resolution,
-                               size_t & error_pos, String & error_message)
+                            DecimalField<DateTime64> & range, std::optional<DecimalField<DateTime64>> & resolution,
+                            ErrorListener & error_listener, size_t input_pos)
     {
         /// Check opening and closing brackets.
         if (input.empty() || (input[0] != '['))
         {
-            error_message = "Subquery range should start with an opening bracket [";
-            error_pos = 0;
+            error_listener.setError("Subquery range should start with an opening bracket [", input_pos);
             return false;
         }
         if (input.length() < 2 || (input[input.length() - 1] != ']'))
         {
-            error_message = "Subquery range should end with a closing bracket ]";
-            error_pos = input.length() - 1;
+            error_listener.setError("Subquery range should end with a closing bracket ]", input.length() - 1 + input_pos);
             return false;
         }
         /// Find a colon between the brackets.
         size_t colon_pos = input.find(':', 1);
         if (colon_pos == String::npos)
         {
-            error_message = "Not found colon : in the subquery range";
-            error_pos = input.length() - 1;
+            error_listener.setError("Not found colon : in the subquery range", input_pos);
             return false;
         }
         /// Skip spaces.
@@ -657,24 +710,19 @@ namespace
         /// Parse a scalar between the brackets and the colon.
         std::string_view range_as_str = input.substr(range_start_pos, range_end_pos - range_start_pos);
         std::string_view resolution_as_str = input.substr(resolution_start_pos, resolution_end_pos - resolution_start_pos);
-        DecimalField<DateTime64> range;
-        std::optional<DecimalField<DateTime64>> resolution;
-        if (!parseScalarLiteral(range_as_str, range, /* allow_sign = */ false, error_pos, error_message))
+        if (!parseScalarLiteral(range_as_str, range, /* allow_sign = */ false, error_listener, range_start_pos + input_pos))
         {
-            error_pos += range_start_pos;
             return false;
         }
-        if (!resolution_as_str.empty() && !parseScalarLiteral(resolution_as_str, resolution.emplace(), /* allow_sign = */ false, error_pos, error_message))
+        if (!resolution_as_str.empty() && !parseScalarLiteral(resolution_as_str, resolution.emplace(), /* allow_sign = */ false, error_listener, resolution_start_pos + input_pos))
         {
-            error_pos += resolution_start_pos;
             return false;
         }
-        range_and_resolution = std::make_pair(range, resolution);
         return true;
     }
 
     /// Parses escape sequences in a string literal and replaces them with the characters which they mean.
-    bool unescapeStringLiteral(std::string_view input, String & result, size_t & error_pos, String & error_message)
+    bool unescapeStringLiteral(std::string_view input, String & result, ErrorListener & error_listener, size_t input_pos)
     {
         result.clear();
         result.reserve(input.length());
@@ -691,8 +739,7 @@ namespace
             /// An escape sequences contains at least 2 characters.
             if (pos + 2 > input.length())
             {
-                error_message = fmt::format("Invalid escape sequence {}", input.substr(pos));
-                error_pos = pos;
+                error_listener.setError(fmt::format("Invalid escape sequence {}", input.substr(pos)), pos + input_pos);
                 return false;
             }
 
@@ -717,15 +764,13 @@ namespace
                     /// Example: \x51 is the 'Q' letter.
                     if (pos + 4 > input.length())
                     {
-                        error_message = fmt::format("Invalid escape sequence {}", input.substr(pos));
-                        error_pos = pos;
+                        error_listener.setError(fmt::format("Invalid escape sequence {}", input.substr(pos)), pos + input_pos);
                         return false;
                     }
                     char byte;
                     if (!tryParseInt</* base = */ 16>(byte, input.substr(pos + 2, 2)))
                     {
-                        error_message = fmt::format("Invalid escape sequence {}", input.substr(pos, 4));
-                        error_pos = pos;
+                        error_listener.setError(fmt::format("Invalid escape sequence {}", input.substr(pos, 4)), pos + input_pos);
                         return false;
                     }
                     result.push_back(byte);
@@ -745,21 +790,20 @@ namespace
                     /// Example: \121 is the 'Q' letter.
                     if (pos + 4 > input.length())
                     {
-                        error_message = fmt::format("Invalid escape sequence {}", input.substr(pos));
-                        error_pos = pos;
+                        error_listener.setError(fmt::format("Invalid escape sequence {}", input.substr(pos)), pos + input_pos);
                         return false;
                     }
                     UInt16 byte;
                     if (!tryParseInt</* base = */ 8>(byte, input.substr(pos + 1, 3)))
                     {
-                        error_message = fmt::format("Invalid escape sequence {}", input.substr(pos, 4));
-                        error_pos = pos;
+                        error_listener.setError(fmt::format("Invalid escape sequence {}", input.substr(pos, 4)), pos + input_pos);
                         return false;
                     }
                     if (byte > 0xFF)
                     {
-                        error_message = fmt::format("Invalid escape sequence {}: an octal representation \nnn must represent a single byte", input.substr(pos, 4));
-                        error_pos = pos;
+                        error_listener.setError(fmt::format("Invalid escape sequence {}: an octal representation \nnn must represent a single byte",
+                                                            input.substr(pos, 4)),
+                                                pos + input_pos);
                         return false;
                     }
                     result.push_back(static_cast<char>(byte));
@@ -772,15 +816,13 @@ namespace
                     /// Example: \u0051 is the 'Q' letter.
                     if (pos + 6 > input.length())
                     {
-                        error_message = fmt::format("Invalid escape sequence {}", input.substr(pos));
-                        error_pos = pos;
+                        error_listener.setError(fmt::format("Invalid escape sequence {}", input.substr(pos)), pos + input_pos);
                         return false;
                     }
                     UInt16 code_point;
                     if (!tryParseInt</* base = */ 16>(code_point, input.substr(pos + 2, 4)))
                     {
-                        error_message = fmt::format("Invalid escape sequence {}", input.substr(pos, 6));
-                        error_pos = pos;
+                        error_listener.setError(fmt::format("Invalid escape sequence {}", input.substr(pos, 6)), pos + input_pos);
                         return false;
                     }
                     char bytes[3];  /// 3 bytes is enough to represent a Unicode code point up to 0xFFFF.
@@ -795,22 +837,20 @@ namespace
                     /// Example: \U00000051 is the 'Q' letter.
                     if (pos + 10 > input.length())
                     {
-                        error_message = fmt::format("Invalid escape sequence {}", input.substr(pos));
-                        error_pos = pos;
+                        error_listener.setError(fmt::format("Invalid escape sequence {}", input.substr(pos)), pos + input_pos);
                         return false;
                     }
                     UInt32 code_point;
                     if (!tryParseInt</* base = */ 16>(code_point, input.substr(pos + 2, 8)))
                     {
-                        error_message = fmt::format("Invalid escape sequence {}", input.substr(pos, 10));
-                        error_pos = pos;
+                        error_listener.setError(fmt::format("Invalid escape sequence {}", input.substr(pos, 10)), pos + input_pos);
                         return false;
                     }
                     if (code_point > 0x10FFFF)  /// There should be no Unicode code point beyond 0x10FFFF.
                     {
-                        error_message = fmt::format("Invalid escape sequence {}: a Unicode code point can't be greater than 0x10FFFF",
-                                                    input.substr(pos, 10));
-                        error_pos = pos;
+                        error_listener.setError(fmt::format("Invalid escape sequence {}: a Unicode code point can't be greater than 0x10FFFF",
+                                                            input.substr(pos, 10)),
+                                                pos + input_pos);
                         return false;
                     }
                     char bytes[4];  /// 4 bytes is enough to represent a Unicode code point up to 0xFFFF.
@@ -821,8 +861,7 @@ namespace
                 }
                 default:
                 {
-                    error_message = fmt::format("Invalid escape sequence {}", input.substr(pos, 2));
-                    error_pos = pos;
+                    error_listener.setError(fmt::format("Invalid escape sequence {}", input.substr(pos)), pos + input_pos);
                     return false;
                 }
             }
@@ -833,12 +872,11 @@ namespace
     /// Converts a quoted string literal to its unquoted version: "abc" -> abc
     /// Accepts an input string in quotes or double quotes or backticks, and also handles escape sequences
     /// according to the promql rules (see https://prometheus.io/docs/prometheus/latest/querying/basics/#string-literals).
-    bool parseStringLiteral(std::string_view input, String & result, size_t & error_pos, String & error_message)
+    bool parseStringLiteral(std::string_view input, String & result, ErrorListener & error_listener, size_t input_pos)
     {
         if (input.empty())
         {
-            error_message = "A string literal should open with a quote ', a double quote \" or a backtick `";
-            error_pos = 0;
+            error_listener.setError("A string literal should open with a quote ', a double quote \" or a backtick `", input_pos);
             return false;
         }
 
@@ -849,15 +887,13 @@ namespace
         {
             if ((input.length() < 2) || (input[input.length() - 1] != '`'))
             {
-                error_message = "No closing backtick ` found for the string literal";
-                error_pos = input.length() - 1;
+                error_listener.setError("No closing backtick ` found for the string literal", input.length() - 1 + input_pos);
                 return false;
             }
             size_t closing_backtick = input.find('`', 1);
             if (closing_backtick != input.length() - 1)
             {
-                error_message = "A string literal in backticks can't contain other backticks";
-                error_pos = closing_backtick;
+                error_listener.setError("A string literal in backticks can't contain other backticks", closing_backtick + input_pos);
                 return false;
             }
             result = input.substr(1, input.length() - 2);
@@ -867,29 +903,21 @@ namespace
         /// A string literal enclosed in quotes or double quotes: escape sequences are parsed.
         if (!((quote_char == '\'') || (quote_char == '\"')))
         {
-            error_message = "A string literal should open with a quote ', a double quote \" or a backtick `";
-            error_pos = 0;
+            error_listener.setError("A string literal should open with a quote ', a double quote \" or a backtick `", input_pos);
             return false;
         }
 
         if ((input.length() < 2) || (input[input.length() - 1] != quote_char))
         {
-            error_message = fmt::format("No closing {} {} found for the string literal",
-                                        (quote_char == '\'' ? "quote" : "double quote"), quote_char);
-            error_pos = input.length() - 1;
+            error_listener.setError(fmt::format("No closing {} {} found for the string literal",
+                                                (quote_char == '\'' ? "quote" : "double quote"), quote_char),
+                                    input.length() - 1 + input_pos);
             return false;
         }
-
-        std::string_view unquoted = input.substr(1, input.length() - 2);
 
         /// Parse escape sequences.
-        if (!unescapeStringLiteral(unquoted, result, error_pos, error_message))
-        {
-            ++error_pos; /// Skip a quote at the beginning of the `input`.
-            return false;
-        }
-
-        return true;
+        std::string_view unquoted = input.substr(1, input.length() - 2);
+        return unescapeStringLiteral(unquoted, result, error_listener, 1 + input_pos);
     }
 
     [[noreturn]] void throwInconsistentSchema(std::string_view context_name, std::string_view token)
@@ -897,69 +925,6 @@ namespace
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Schema {} is inconsistent with {}", context_name, token);
     }
 }
-
-
-/// Parses a promql query using ANTLR4.
-class PrometheusQueryTree::ErrorListener : public antlr4::BaseErrorListener
-{
-public:
-    explicit ErrorListener(std::string_view promql_query_) : promql_query(promql_query_) {}
-
-    void setError(size_t error_pos_, const String & error_message_)
-    {
-        /// Only the first error is interesting.
-        if (error_message.empty() && !error_message_.empty())
-        {
-            error_pos = error_pos_;
-            error_message = error_message_;
-        }
-    }
-
-    size_t getErrorPos() const { return error_pos; }
-    const String & getErrorMessage() const { return error_message; }
-
-protected:
-    void syntaxError(antlr4::Recognizer * /* recognizer */, antlr4::Token * offending_symbol,
-        size_t line, size_t position_in_line, const std::string & msg, std::exception_ptr /* exception */) override
-    {
-        chassert(!msg.empty());
-
-        size_t pos;
-        if (offending_symbol)
-            pos = offending_symbol->getStartIndex();
-        else  /// `offending_symbol` can be null if `recognizer` is a lexer.
-            pos = convertLineAndPositionInLine(line, position_in_line);
-
-        setError(pos, msg);
-    }
-
-    /// ANTLR4's lexer returns the position of an error as a line number and a position in that line;
-    /// we need to convert them to a char index.
-    size_t convertLineAndPositionInLine(size_t line, size_t position_in_line) const
-    {
-        size_t char_index = 0;
-        if (line != 1)
-        {
-            size_t cur_line = 1;
-            while (char_index != promql_query.length())
-            {
-                char c = promql_query[char_index++];
-                /// ANTLR4 considers only '\n' as end-of-line (see LexerATNSimulator::consume()).
-                if (c == '\n')
-                {
-                    if (++cur_line == line)
-                        break;
-                }
-            }
-        }
-        return std::max(char_index + position_in_line, promql_query.length());
-    }
-
-private:
-    std::string_view promql_query;
-    size_t error_pos = String::npos;
-    String error_message;
-};
 
 
 class PrometheusQueryTree::Builder : public antlr4_grammars::PromQLParserBaseVisitor
@@ -1010,11 +975,8 @@ private:
         new_node->result_type = ResultType::SCALAR;
         new_node->start_pos = getStartPos(ctx);
         new_node->length = getLength(ctx);
-        size_t error_pos = String::npos;
-        String error_message;
-        if (!parseScalarLiteral(getText(ctx), new_node->scalar, /* allow_sign = */ true, error_pos, error_message))
+        if (!parseScalarLiteral(getText(ctx), new_node->scalar, /* allow_sign = */ true, error_listener, new_node->start_pos))
         {
-            error_listener.setError(getStartPos(ctx) + error_pos, error_message);
             return nullptr;
         }
         return nodes.emplace_back(std::move(new_node)).get();
@@ -1028,11 +990,8 @@ private:
         new_node->result_type = ResultType::STRING;
         new_node->start_pos = getStartPos(ctx);
         new_node->length = getLength(ctx);
-        size_t error_pos = String::npos;
-        String error_message;
-        if (!parseStringLiteral(getText(ctx), new_node->string, error_pos, error_message))
+        if (!parseStringLiteral(getText(ctx), new_node->string, error_listener, new_node->start_pos))
         {
-            error_listener.setError(getStartPos(ctx) + error_pos, error_message);
             return nullptr;
         }
         return nodes.emplace_back(std::move(new_node)).get();
@@ -1092,11 +1051,8 @@ private:
         {
             throwInconsistentSchema("LabelMatcherContext", ctx->getText());
         }
-        size_t error_pos = String::npos;
-        String error_message;
-        if (!parseStringLiteral(getText(label_value_ctx), new_node->label_value, error_pos, error_message))
+        if (!parseStringLiteral(getText(label_value_ctx), new_node->label_value, error_listener, getStartPos(label_value_ctx)))
         {
-            error_listener.setError(getStartPos(label_value_ctx) + error_pos, error_message);
             return nullptr;
         }
         return nodes.emplace_back(std::move(new_node)).get();
@@ -1122,7 +1078,7 @@ private:
         {
             auto * matcher = makeMatcherForMetricName(metric_name_ctx);
             if (!matcher)
-                return false;  /// makeMatcherForMetricName() must already set an error.
+                return false;
             res_node.children.push_back(matcher);
             matcher->parent = &res_node;
         }
@@ -1133,14 +1089,14 @@ private:
             {
                 auto * matcher = makeMatcher(label_matcher_ctx);
                 if (!matcher)
-                    return false;  /// makeMatcher() must already set an error.
+                    return false;
                 res_node.children.push_back(matcher);
                 matcher->parent = &res_node;
             }
         }
         if (res_node.children.empty())
         {
-            error_listener.setError(getStartPos(ctx), "A selector must contain at least one matcher");
+            error_listener.setError("A selector must contain at least one matcher", getStartPos(ctx));
             return false;
         }
         return true;
@@ -1179,11 +1135,8 @@ private:
         {
             return nullptr;  /// makeMatcher() must already set an error.
         }
-        size_t error_pos = String::npos;
-        String error_message;
-        if (!parseTimeRange(getText(time_range_ctx), new_node->range, error_pos, error_message))
+        if (!parseTimeRange(getText(time_range_ctx), new_node->range, error_listener, getStartPos(time_range_ctx)))
         {
-            error_listener.setError(getStartPos(time_range_ctx) + error_pos, error_message);
             return nullptr;
         }
         return nodes.emplace_back(std::move(new_node)).get();
@@ -1197,13 +1150,13 @@ private:
         {
             new_node = makeInstantSelector(instant_selector_ctx);
             if (!new_node)
-                return nullptr;  /// makeInstantSelector() must already set an error.
+                return nullptr;
         }
         else if (auto * range_selector_ctx = ctx->rangeSelector())
         {
             new_node = makeRangeSelector(range_selector_ctx);
             if (!new_node)
-                return nullptr;  /// makeRangeSelector() must already set an error.
+                return nullptr;
         }
         else
         {
@@ -1212,7 +1165,7 @@ private:
         if (auto * offset_ctx = ctx->offsetAt())
         {
             if (!addOffsetToNode(offset_ctx, *new_node))
-                return nullptr;  /// addOffsetToNode() must already set an error.
+                return nullptr;
         }
         return new_node;
     }
@@ -1223,23 +1176,15 @@ private:
         DurationType offset;
         if (auto * at_ctx = ctx->atOp())
         {
-            size_t error_pos = String::npos;
-            String error_message;
-            if (!parseScalarLiteral(getText(at_ctx->SCALAR()), at.emplace(), /* allow_sign = */ false, error_pos, error_message))
-            {
-                error_listener.setError(getStartPos(at_ctx) + error_pos, error_message);
+            auto * scalar_ctx = at_ctx->SCALAR();
+            if (!parseScalarLiteral(getText(scalar_ctx), at.emplace(), /* allow_sign = */ false, error_listener, getStartPos(scalar_ctx)))
                 return false;
-            }
         }
         if (auto * offset_ctx = ctx->offsetOp())
         {
-            size_t error_pos = String::npos;
-            String error_message;
-            if (!parseScalarLiteral(getText(offset_ctx->SCALAR()), offset, /* allow_sign = */ true, error_pos, error_message))
-            {
-                error_listener.setError(getStartPos(offset_ctx) + error_pos, error_message);
+            auto * scalar_ctx = offset_ctx->SCALAR();
+            if (!parseScalarLiteral(getText(scalar_ctx), offset, /* allow_sign = */ true, error_listener, getStartPos(scalar_ctx)))
                 return false;
-            }
         }
         if (auto * instant_selector = typeid_cast<InstantSelector *>(&res_node))
         {
@@ -1276,16 +1221,10 @@ private:
         {
             throwInconsistentSchema("SubqueryOpContext", ctx->getText());
         }
-        size_t error_pos = String::npos;
-        String error_message;
-        std::pair<DecimalField<DateTime64>, std::optional<DecimalField<DateTime64>>> range_and_resolution;
-        if (!parseSubqueryRange(getText(subquery_range_ctx), range_and_resolution, error_pos, error_message))
+        if (!parseSubqueryRange(getText(subquery_range_ctx), new_node->range, new_node->resolution, error_listener, getStartPos(subquery_range_ctx)))
         {
-            error_listener.setError(getStartPos(subquery_range_ctx) + error_pos, error_message);
             return nullptr;
         }
-        new_node->range = range_and_resolution.first;
-        new_node->resolution = range_and_resolution.second;
         if (auto * offset_ctx = ctx->offsetAt())
         {
             if (!addOffsetToNode(offset_ctx, *new_node))
@@ -1388,6 +1327,7 @@ private:
         return nodes.emplace_back(std::move(new_node)).get();
     }
 
+    /// Makes a node for an aggregation operator.
     Node * makeAggregationOperator(std::string_view operator_name, const std::vector<Node *> & arguments,
                                    antlr4_grammars::PromQLParser::ByContext * by,
                                    antlr4_grammars::PromQLParser::WithoutContext * without,
@@ -1649,10 +1589,10 @@ private:
 
 #endif
 
-bool PrometheusQueryTree::tryParse(const String & promql_query_, size_t & error_pos, String & error_message)
+bool PrometheusQueryTree::parseImpl(const String & promql_query_, bool throw_exception, String * error_message, size_t * error_pos)
 {
 #if USE_ANTLR4_GRAMMARS
-    ErrorListener error_listener{promql_query_};
+    ErrorListener error_listener{promql_query_, throw_exception};
     antlr4::ANTLRInputStream input_stream{promql_query_};
 
     antlr4_grammars::PromQLLexer promql_lexer{&input_stream};
@@ -1665,43 +1605,52 @@ bool PrometheusQueryTree::tryParse(const String & promql_query_, size_t & error_
     promql_parser.removeErrorListeners();
     promql_parser.addErrorListener(&error_listener);
 
-    auto * expression = promql_parser.expression();
-    if (!expression)
-        throw Exception(ErrorCodes::CANNOT_PARSE_PROMQL_QUERY, "Couldn't get an expression while parsing promql query: {}", promql_query_);
+    antlr4_grammars::PromQLParser::ExpressionContext * expression = nullptr;
+    if (!error_listener.hasError())
+    {
+        expression = promql_parser.expression();
+        if (!expression)
+            error_listener.setError("Couldn't get an expression after parsing promql query", 0);
+    }
 
-    Builder builder{promql_query_, error_listener};
-    Node * new_root = builder.makeNode(expression);
+    std::vector<std::unique_ptr<Node>> parsed_nodes;
+    Node * parsed_root = nullptr;
+    if (!error_listener.hasError())
+    {
+        Builder builder{promql_query_, error_listener};
+        parsed_root = builder.makeNode(expression);
+        parsed_nodes = builder.extractNodes();
+    }
 
-    error_pos = error_listener.getErrorPos();
-    error_message = error_listener.getErrorMessage();
-
-    if (!error_message.empty())
+    if (error_listener.hasError())
+    {
+        if (error_message)
+            *error_message = error_listener.getErrorMessage();
+        if (error_pos)
+            *error_pos = error_listener.getErrorPos();
         return false;
+    }
 
-    if (!new_root)
+    if (!parsed_root)
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Parsing promql query '{}' failed without setting any error message", promql_query_);
 
-    PrometheusQueryTree res;
-    res.promql_query = promql_query_;
-    res.nodes = builder.extractNodes();
-    res.root = new_root;
-    *this = std::move(res);
+    nodes = std::move(parsed_nodes);
+    root = parsed_root;
+    promql_query = promql_query_;
     return true;
 #else
     throw Exception(ErrorCodes::SUPPORT_IS_DISABLED, "ANTLR4 support is disabled");
 #endif
 }
 
+bool PrometheusQueryTree::tryParse(const String & promql_query_, String * error_message, size_t * error_pos)
+{
+    return parseImpl(promql_query_, /* throw_exception = */ false, error_message, error_pos);
+}
+
 void PrometheusQueryTree::parse(const String & promql_query_)
 {
-    size_t error_pos;
-    String error_message;
-    if (!tryParse(promql_query_, error_pos, error_message))
-    {
-        throw Exception(ErrorCodes::CANNOT_PARSE_PROMQL_QUERY,
-                        "{} at position {} while parsing promql query: {}",
-                        error_message, error_pos, promql_query_);
-    }
+    parseImpl(promql_query_, /* throw_exception = */ true, /* error_message = */ nullptr, /* error_pos = */ nullptr);
 }
 
 }
