@@ -47,7 +47,7 @@ fragment NUMERAL: [0-9]+ ('.' [0-9]+)?;
 
 fragment SCIENTIFIC_NUMBER: NUMERAL ('e' [-+]? NUMERAL)?;
 
-NUMBER: NUMERAL | SCIENTIFIC_NUMBER;
+fragment NUMBER: NUMERAL | SCIENTIFIC_NUMBER;
 
 SCALAR: NUMBER | DURATION;
 
@@ -202,7 +202,7 @@ SUBQUERY_RANGE: LEFT_BRACKET SCALAR ':' SCALAR? RIGHT_BRACKET;
 TIME_RANGE: LEFT_BRACKET SCALAR RIGHT_BRACKET;
 
 // The proper order (longest to the shortest) must be validated after parsing
-DURATION: ([0-9]+ ('ms' | [smhdwy]))+;
+fragment DURATION: ([0-9]+ ('ms' | [smhdwy]))+;
 
 METRIC_NAME : [a-z_:] [a-z0-9_:]*;
 LABEL_NAME  : [a-z_] [a-z0-9_]*;

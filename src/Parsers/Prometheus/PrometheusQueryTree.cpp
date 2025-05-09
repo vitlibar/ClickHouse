@@ -1,11 +1,8 @@
 #include <Parsers/Prometheus/PrometheusQueryTree.h>
 
-#include <Common/UTF8Helpers.h>
 #include <Common/quoteString.h>
 #include <Common/typeid_cast.h>
 #include <Core/DecimalFunctions.h>
-#include <IO/readDecimalText.h>
-#include <IO/ReadHelpers.h>
 #include <Parsers/Prometheus/PrometheusQueryResultType.h>
 #include <boost/algorithm/string/join.hpp>
 
@@ -26,8 +23,9 @@
 #include <antlr4_grammars/PromQLParserBaseVisitor.h>
 #pragma clang diagnostic pop
 
+#include <Common/UTF8Helpers.h>
 #include <IO/ReadHelpers.h>
-#include <Common/logger_useful.h>
+#include <IO/readDecimalText.h>
 #endif
 
 
@@ -90,7 +88,7 @@ PrometheusQueryTree & PrometheusQueryTree::operator=(const PrometheusQueryTree &
         auto it = std::lower_bound(src_to_new.begin(), src_to_new.end(), src_node, less);
         if ((it != src_to_new.end()) && (it->first == src_node))
             return it->second;
-        throw Exception(ErrorCodes::LOGICAL_ERROR, "Inconsistency in prometheus query tree detected");
+        throw Exception(ErrorCodes::LOGICAL_ERROR, "Wrong node in a prometheus query tree");
     };
 
     for (const auto & new_node : new_nodes)
@@ -286,6 +284,8 @@ String PrometheusQueryTree::AggregationOperator::dumpTree(size_t indent) const
 }
 
 
+#if USE_ANTLR4_GRAMMARS
+
 namespace
 {
     /// Finds next underscore between two digits (or two hexadecimal digits if `is_hex` is true).
@@ -417,7 +417,7 @@ namespace
                 allow_other_formats = false;
                 return false;
             }
-            size_t unit_start_pos = 0;
+            size_t unit_start_pos = pos;
             while (pos != input.length() && !std::isdigit(input[pos]))
                 ++pos;
             std::string_view unit = input.substr(unit_start_pos, pos - unit_start_pos);
@@ -462,6 +462,7 @@ namespace
                 return false;
             }
             previous_unit = unit;
+            previous_unit_ms = unit_ms;
         }
         /// There should be at least one number with a time unit.
         if (previous_unit.empty())
@@ -554,7 +555,7 @@ namespace
         if (!ok && allow_other_formats)
             ok = tryParseUnsignedScalarInDurationFormat(input.substr(pos), result, allow_other_formats, error_pos, error_message);
 
-        if (!ok)
+        if (!ok && allow_other_formats)
             ok = tryParseUnsignedScalarInNumberFormat(input.substr(pos), result, error_pos, error_message);
 
         if (!ok)
@@ -890,10 +891,13 @@ namespace
 
         return true;
     }
+
+    [[noreturn]] void throwInconsistentSchema(std::string_view context_name, std::string_view token)
+    {
+        throw Exception(ErrorCodes::LOGICAL_ERROR, "Schema {} is inconsistent with {}", context_name, token);
+    }
 }
 
-
-#if USE_ANTLR4_GRAMMARS
 
 /// Parses a promql query using ANTLR4.
 class PrometheusQueryTree::ErrorListener : public antlr4::BaseErrorListener
@@ -964,10 +968,14 @@ public:
     explicit Builder(std::string_view promql_query_, ErrorListener & error_listener_)
         : promql_query(promql_query_), error_listener(error_listener_) {}
 
-    Node * makeNode(antlr4_grammars::PromQLParser::ExpressionContext * expression)
+    Node * makeNode(antlr4::ParserRuleContext * expression)
     {
         std::any any = visit(expression);
-        return any.has_value() ? std::any_cast<Node *>(any) : nullptr;
+        if (!any.has_value())
+            return nullptr;
+        if (Node ** node = std::any_cast<Node *>(&any))
+            return *node;
+        throw Exception(ErrorCodes::LOGICAL_ERROR, "makeNode() returned {}", any.type().name());
     }
 
     std::vector<std::unique_ptr<Node>> extractNodes() { return std::exchange(nodes, {}); }
@@ -988,14 +996,14 @@ private:
                         std::any_cast<Node *>(next_result)->dumpTree(1));
     }
 
-    static size_t getStartPos(antlr4::tree::TerminalNode * ctx) { return ctx->getSymbol()->getStartIndex(); }
-    static size_t getStartPos(antlr4::ParserRuleContext * ctx) { return ctx->start->getStartIndex(); }
-    static size_t getLength(antlr4::tree::TerminalNode * ctx) { return ctx->getSymbol()->getStopIndex() - ctx->getSymbol()->getStartIndex() + 1; }
-    static size_t getLength(antlr4::ParserRuleContext * ctx) { return ctx->stop->getStopIndex() - ctx->start->getStartIndex() + 1; }
-    std::string_view getText(antlr4::tree::TerminalNode * ctx) const { return std::string_view{promql_query}.substr(getStartPos(ctx), getLength(ctx)); }
+    static size_t getStartPos(const antlr4::tree::TerminalNode * ctx) { return ctx->getSymbol()->getStartIndex(); }
+    static size_t getStartPos(const antlr4::ParserRuleContext * ctx) { return ctx->start->getStartIndex(); }
+    static size_t getLength(const antlr4::tree::TerminalNode * ctx) { return ctx->getSymbol()->getStopIndex() - ctx->getSymbol()->getStartIndex() + 1; }
+    static size_t getLength(const antlr4::ParserRuleContext * ctx) { return ctx->stop->getStopIndex() - ctx->start->getStartIndex() + 1; }
+    std::string_view getText(const antlr4::tree::TerminalNode * ctx) const { return std::string_view{promql_query}.substr(getStartPos(ctx), getLength(ctx)); }
 
     /// Makes a node for a scalar literal after parsing it.
-    Node * makeScalarLiteral(const antlr4::tree::TerminalNode * ctx)
+    Node * makeScalarLiteral(antlr4::tree::TerminalNode * ctx)
     {
         auto new_node = std::make_unique<ScalarLiteral>();
         new_node->node_type = NodeType::ScalarLiteral;
@@ -1013,7 +1021,7 @@ private:
     }
 
     /// Makes a node for a string literal after unquoting and unescaping it.
-    Node * makeStringLiteral(const antlr4::tree::TerminalNode * ctx)
+    Node * makeStringLiteral(antlr4::tree::TerminalNode * ctx)
     {
         auto new_node = std::make_unique<StringLiteral>();
         new_node->node_type = NodeType::StringLiteral;
@@ -1031,29 +1039,29 @@ private:
     }
 
     /// Extracts a metric name.
-    String getMetricName(const antlr4_grammars::PromQLParser::MetricNameContext * ctx) const
+    String getMetricName(antlr4_grammars::PromQLParser::MetricNameContext * ctx) const
     {
         auto * metric_name_ctx = ctx->METRIC_NAME();
         if (!metric_name_ctx)
         {
-            throw Exception(ErrorCodes::LOGICAL_ERROR, "MetricNameContext doesn't correspond to the schema: {}", ctx->getText());
+            throwInconsistentSchema("MetricNameContext", ctx->getText());
         }
-        return getText(metric_name_ctx);
+        return String{getText(metric_name_ctx)};
     }
 
     /// Extracts a label name.
-    String getLabelName(const antlr4_grammars::PromQLParser::LabelNameContext * ctx) const
+    String getLabelName(antlr4_grammars::PromQLParser::LabelNameContext * ctx) const
     {
         auto * label_name_ctx = ctx->LABEL_NAME();
         if (!label_name_ctx)
         {
-            throw Exception(ErrorCodes::LOGICAL_ERROR, "LabelNameContext doesn't correspond to the schema: {}", ctx->getText());
+            throwInconsistentSchema("LabelNameContext", ctx->getText());
         }
-        return getText(label_name_ctx);
+        return String{getText(label_name_ctx)};
     }
 
     /// Extracts multiple label names separated by comma.
-    Strings getLabelNameList(const antlr4_grammars::PromQLParser::LabelNameListContext * ctx) const
+    Strings getLabelNameList(antlr4_grammars::PromQLParser::LabelNameListContext * ctx) const
     {
         Strings label_name_list;
         antlr4_grammars::PromQLParser::LabelNameContext * label_name_ctx = nullptr;
@@ -1065,7 +1073,7 @@ private:
     }
 
     /// Makes a node for a matcher.
-    Node * makeMatcher(const antlr4_grammars::PromQLParser::LabelMatcherContext * ctx)
+    Node * makeMatcher(antlr4_grammars::PromQLParser::LabelMatcherContext * ctx)
     {
         auto new_node = std::make_unique<Matcher>();
         new_node->node_type = NodeType::Matcher;
@@ -1077,7 +1085,7 @@ private:
         auto * op_ctx = ctx->labelMatcherOperator();
         if (!label_name_ctx || !label_value_ctx || !op_ctx)
         {
-            throw Exception(ErrorCodes::LOGICAL_ERROR, "LabelMatcherContext doesn't correspond to the schema: {}", ctx->getText());
+            throwInconsistentSchema("LabelMatcherContext", ctx->getText());
         }
         new_node->label_name = getLabelName(label_name_ctx);
         if (op_ctx->EQ())
@@ -1098,7 +1106,7 @@ private:
         }
         else
         {
-            throw Exception(ErrorCodes::LOGICAL_ERROR, "LabelMatcherContext doesn't correspond to the schema: {}", ctx->getText());
+            throwInconsistentSchema("LabelMatcherContext", ctx->getText());
         }
         size_t error_pos = String::npos;
         String error_message;
@@ -1110,7 +1118,7 @@ private:
         return nodes.emplace_back(std::move(new_node)).get();
     }
 
-    Node * makeMatcherForMetricName(const antlr4_grammars::PromQLParser::MetricNameContext * ctx)
+    Node * makeMatcherForMetricName(antlr4_grammars::PromQLParser::MetricNameContext * ctx)
     {
         auto new_node = std::make_unique<Matcher>();
         new_node->node_type = NodeType::Matcher;
@@ -1124,9 +1132,9 @@ private:
     }
 
     /// Makes nodes for a set of matchers.
-    bool makeMatchers(const antlr4_grammars::PromQLParser::InstantSelectorContext * ctx, Node & res_node)
+    bool makeMatchers(antlr4_grammars::PromQLParser::InstantSelectorContext * ctx, Node & res_node)
     {
-        if (auto * metric_name_ctx = ctx->METRIC_NAME())
+        if (auto * metric_name_ctx = ctx->metricName())
         {
             auto * matcher = makeMatcherForMetricName(metric_name_ctx);
             if (!matcher)
@@ -1155,7 +1163,7 @@ private:
     }
 
     /// Makes a node for an instant selector.
-    Node * makeInstantSelector(const antlr4_grammars::PromQLParser::InstantSelectorContext * ctx)
+    Node * makeInstantSelector(antlr4_grammars::PromQLParser::InstantSelectorContext * ctx)
     {
         auto new_node = std::make_unique<InstantSelector>();
         new_node->node_type = NodeType::InstantSelector;
@@ -1170,7 +1178,7 @@ private:
     }
 
     /// Makes a node for a range selector.
-    Node * makeRangeSelector(const antlr4_grammars::PromQLParser::RangeSelectorContext * ctx)
+    Node * makeRangeSelector(antlr4_grammars::PromQLParser::RangeSelectorContext * ctx)
     {
         auto new_node = std::make_unique<RangeSelector>();
         new_node->node_type = NodeType::RangeSelector;
@@ -1181,7 +1189,7 @@ private:
         auto * time_range_ctx = ctx->TIME_RANGE();
         if (!instant_selector_ctx || !time_range_ctx)
         {
-            throw Exception(ErrorCodes::LOGICAL_ERROR, "RangeSelectorContext doesn't correspond to the schema: {}", ctx->getText());
+            throwInconsistentSchema("RangeSelectorContext", ctx->getText());
         }
         if (!makeMatchers(instant_selector_ctx, *new_node))
         {
@@ -1198,7 +1206,7 @@ private:
     }
 
     /// Makes a node for an instant selector with an offset or for a range selector with an offset.
-    Node * makeSelectorWithOffset(const antlr4_grammars::PromQLParser::SelectorWithOffsetContext * ctx) override
+    Node * makeSelectorWithOffset(antlr4_grammars::PromQLParser::SelectorWithOffsetContext * ctx)
     {
         Node * new_node = nullptr;
         if (auto * instant_selector_ctx = ctx->instantSelector())
@@ -1215,7 +1223,7 @@ private:
         }
         else
         {
-            throw Exception(ErrorCodes::LOGICAL_ERROR, "SelectorWithOffsetContext doesn't correspond to the schema: {}", ctx->getText());
+            throwInconsistentSchema("SelectorWithOffsetContext", ctx->getText());
         }
         if (auto * offset_ctx = ctx->offsetAt())
         {
@@ -1225,7 +1233,7 @@ private:
         return new_node;
     }
 
-    bool addOffsetToNode(const antlr4_grammars::PromQLParser::OffsetAtContext * ctx, Node & res_node)
+    bool addOffsetToNode(antlr4_grammars::PromQLParser::OffsetAtContext * ctx, Node & res_node)
     {
         std::optional<DurationType> at;
         DurationType offset;
@@ -1272,7 +1280,7 @@ private:
     }
 
     /// Makes a node for a subquery operator.
-    Node * makeSubquery(const antlr4_grammars::PromQLParser::SubqueryOpContext * ctx, Node * expression, size_t start_pos, size_t length)
+    Node * makeSubquery(antlr4_grammars::PromQLParser::SubqueryOpContext * ctx, Node * expression, size_t start_pos, size_t length)
     {
         auto new_node = std::make_unique<Subquery>();
         new_node->node_type = NodeType::Subquery;
@@ -1282,7 +1290,7 @@ private:
         auto * subquery_range_ctx = ctx->SUBQUERY_RANGE();
         if (!subquery_range_ctx)
         {
-            throw Exception(ErrorCodes::LOGICAL_ERROR, "SubqueryOpContext doesn't correspond to the schema: {}", ctx->getText());
+            throwInconsistentSchema("SubqueryOpContext", ctx->getText());
         }
         size_t error_pos = String::npos;
         String error_message;
@@ -1299,7 +1307,7 @@ private:
             if (!addOffsetToNode(offset_ctx, *new_node))
                 return nullptr;  /// addOffsetToNode() must already set an error.
         }
-        new_node.children.push_back(expression);
+        new_node->children.push_back(expression);
         expression->parent = new_node.get();
         return nodes.emplace_back(std::move(new_node)).get();
     }
@@ -1307,11 +1315,11 @@ private:
     /// Makes a node for an unary operation.
     Node * makeUnaryOperator(std::string_view operator_name, Node * argument, size_t start_pos, size_t length)
     {
-        auto new_node = std::make_unique<UnaryOperation>();
+        auto new_node = std::make_unique<UnaryOperator>();
         new_node->start_pos = start_pos;
         new_node->length = length;
         new_node->children.reserve(1);
-        new_node->node_type = NodeType::UnaryOperation;
+        new_node->node_type = NodeType::UnaryOperator;
         new_node->operator_name = operator_name;
         new_node->result_type = argument->result_type;
         new_node->children.push_back(argument);
@@ -1321,14 +1329,14 @@ private:
 
     /// Makes a node for a binary operation.
     Node * makeBinaryOperator(std::string_view operator_name, Node * left_argument, Node * right_argument,
-                              const antlr4_grammars::PromQLParser::GroupingContext * grouping, bool bool_modifier,
+                              antlr4_grammars::PromQLParser::GroupingContext * grouping, bool bool_modifier,
                               size_t start_pos, size_t length)
     {
-        auto new_node = std::make_unique<BinaryOperation>();
+        auto new_node = std::make_unique<BinaryOperator>();
         new_node->start_pos = start_pos;
         new_node->length = length;
         new_node->children.reserve(2);
-        new_node->node_type = NodeType::BinaryOperation;
+        new_node->node_type = NodeType::BinaryOperator;
         new_node->operator_name = operator_name;
         if ((left_argument->result_type == ResultType::SCALAR) && (right_argument->result_type == ResultType::SCALAR))
             new_node->result_type = ResultType::SCALAR;
@@ -1345,7 +1353,7 @@ private:
                 auto * labels_ctx = on_ctx->labelNameList();
                 if (!labels_ctx)
                 {
-                    throw Exception(ErrorCodes::LOGICAL_ERROR, "GroupingContext doesn't correspond to the schema: {}", grouping->getText());
+                    throwInconsistentSchema("GroupingContext", grouping->getText());
                 }
                 new_node->on = true;
                 new_node->labels = getLabelNameList(labels_ctx);
@@ -1355,7 +1363,7 @@ private:
                 auto * labels_ctx = ignoring_ctx->labelNameList();
                 if (!labels_ctx)
                 {
-                    throw Exception(ErrorCodes::LOGICAL_ERROR, "GroupingContext doesn't correspond to the schema: {}", grouping->getText());
+                    throwInconsistentSchema("GroupingContext", grouping->getText());
                 }
                 new_node->ignoring = true;
                 new_node->labels = getLabelNameList(labels_ctx);
@@ -1366,7 +1374,7 @@ private:
                 if (auto * extra_labels_ctx = group_left_ctx->labelNameList())
                     new_node->extra_labels = getLabelNameList(extra_labels_ctx);
             }
-            else if (auto * group_right_ctx = grouping->groupRight))
+            else if (auto * group_right_ctx = grouping->groupRight())
             {
                 new_node->group_right = true;
                 if (auto * extra_labels_ctx = group_right_ctx->labelNameList())
@@ -1378,7 +1386,7 @@ private:
     }
 
     /// Makes a node to call a function.
-    Node * makeFunction(std::string_view function_name, std::vector<Node *> && arguments,
+    Node * makeFunction(std::string_view function_name, const std::vector<Node *> & arguments,
                         size_t start_pos, size_t length)
     {
         auto new_node = std::make_unique<Function>();
@@ -1386,29 +1394,34 @@ private:
         new_node->length = length;
         new_node->node_type = NodeType::Function;
         new_node->function_name = function_name;
-        new_node->children = std::move(arguments);
-        for (auto * argument : new_node->children)
+        new_node->result_type = (function_name == "scalar") ? ResultType::SCALAR : ResultType::INSTANT_VECTOR;
+        new_node->children.reserve(arguments.size());
+        for (auto * argument : arguments)
+        {
+            new_node->children.push_back(argument);
             argument->parent = new_node.get();
+        }
         return nodes.emplace_back(std::move(new_node)).get();
     }
 
-    Node * makeAggregationOperator(std::string_view operator_name, std::vector<Node *> && arguments,
-                                   const antlr4_grammars::PromQLParser::ByContext * by,
-                                   const antlr4_grammars::PromQLParser::WithoutContext * without,
+    Node * makeAggregationOperator(std::string_view operator_name, const std::vector<Node *> & arguments,
+                                   antlr4_grammars::PromQLParser::ByContext * by,
+                                   antlr4_grammars::PromQLParser::WithoutContext * without,
                                    size_t start_pos, size_t length)
     {
         auto new_node = std::make_unique<AggregationOperator>();
         new_node->start_pos = start_pos;
         new_node->length = length;
         new_node->node_type = NodeType::AggregationOperator;
-        new_node->function_name = function_name;
+        new_node->operator_name = operator_name;
+        new_node->result_type = ResultType::INSTANT_VECTOR;
         if (by)
         {
             new_node->by = true;
             auto * labels_ctx = by->labelNameList();
             if (!labels_ctx)
             {
-                throw Exception(ErrorCodes::LOGICAL_ERROR, "ByContext doesn't correspond to the schema: {}", by->getText());
+                throwInconsistentSchema("ByContext", by->getText());
             }
             new_node->labels = getLabelNameList(labels_ctx);
         }
@@ -1418,13 +1431,16 @@ private:
             auto * labels_ctx = without->labelNameList();
             if (!labels_ctx)
             {
-                throw Exception(ErrorCodes::LOGICAL_ERROR, "WithoutContext doesn't correspond to the schema: {}", without->getText());
+                throwInconsistentSchema("WithoutContext", without->getText());
             }
             new_node->labels = getLabelNameList(labels_ctx);
         }
-        new_node->children = std::move(arguments);
-        for (auto * argument : new_node->children)
+        new_node->children.reserve(arguments.size());
+        for (auto * argument : arguments)
+        {
+            new_node->children.push_back(argument);
             argument->parent = new_node.get();
+        }
         return nodes.emplace_back(std::move(new_node)).get();
     }
 
@@ -1436,7 +1452,7 @@ private:
         if (auto * string = ctx->STRING())
             return makeStringLiteral(string);
 
-        return nullptr;
+        return {};
     }
 
     std::any visitLabelMatcher(antlr4_grammars::PromQLParser::LabelMatcherContext * ctx) override
@@ -1474,21 +1490,21 @@ private:
             }
             else
             {
-                throw Exception(ErrorCodes::LOGICAL_ERROR, "VectorOperationContext doesn't correspond to the schema: {}", ctx->getText());
+                throwInconsistentSchema("VectorOperationContext", ctx->getText());
             }
             auto * argument = makeNode(ctx->vectorOperation(0));
             if (!argument)
-                return nullptr;  /// makeNode() must already set an error.
-            return makeUnaryOperator(operator_name, argument, getStartPos(ctx), getLength(ctx)));
+                return {};  /// makeNode() must already set an error.
+            return makeUnaryOperator(operator_name, argument, getStartPos(ctx), getLength(ctx));
         }
         else if (auto * pow_ctx = ctx->powOp())
         {
             auto * left_argument = makeNode(ctx->vectorOperation(0));
             auto * right_argument = makeNode(ctx->vectorOperation(1));
             if (!left_argument || !right_argument)
-                return nullptr;  /// makeNode() must already set an error.
-            return makeBinaryOperation("^", left_argument, right_argument, pow_ctx->grouping(), /* bool_modifier = */ false,
-                                       getStartPos(ctx), getLength(ctx));
+                return {};  /// makeNode() must already set an error.
+            return makeBinaryOperator("^", left_argument, right_argument, pow_ctx->grouping(), /* bool_modifier = */ false,
+                                      getStartPos(ctx), getLength(ctx));
         }
         else if (auto * mult_ctx = ctx->multOp())
         {
@@ -1496,9 +1512,9 @@ private:
             auto * left_argument = makeNode(ctx->vectorOperation(0));
             auto * right_argument = makeNode(ctx->vectorOperation(1));
             if (!left_argument || !right_argument)
-                return nullptr;  /// makeNode() must already set an error.
-            return makeBinaryOperation(operator_name, left_argument, right_argument, mult_ctx->grouping(), /* bool_modifier = */ false,
-                                       getStartPos(ctx), getLength(ctx));
+                return {};  /// makeNode() must already set an error.
+            return makeBinaryOperator(operator_name, left_argument, right_argument, mult_ctx->grouping(), /* bool_modifier = */ false,
+                                      getStartPos(ctx), getLength(ctx));
         }
         else if (auto * add_ctx = ctx->addOp())
         {
@@ -1513,14 +1529,14 @@ private:
             }
             else
             {
-                throw Exception(ErrorCodes::LOGICAL_ERROR, "VectorOperationContext doesn't correspond to the schema: {}", ctx->getText());
+                throwInconsistentSchema("VectorOperationContext", ctx->getText());
             }
             auto * left_argument = makeNode(ctx->vectorOperation(0));
             auto * right_argument = makeNode(ctx->vectorOperation(1));
             if (!left_argument || !right_argument)
-                return nullptr;  /// makeNode() must already set an error.
-            return makeBinaryOperation(operator_name, left_argument, right_argument, add_ctx->grouping(), /* bool_modifier = */ false,
-                                       getStartPos(ctx), getLength(ctx));
+                return {};  /// makeNode() must already set an error.
+            return makeBinaryOperator(operator_name, left_argument, right_argument, add_ctx->grouping(), /* bool_modifier = */ false,
+                                      getStartPos(ctx), getLength(ctx));
         }
         else if (auto * compare_ctx = ctx->compareOp())
         {
@@ -1551,15 +1567,15 @@ private:
             }
             else
             {
-                throw Exception(ErrorCodes::LOGICAL_ERROR, "VectorOperationContext doesn't correspond to the schema: {}", ctx->getText());
+                throwInconsistentSchema("VectorOperationContext", ctx->getText());
             }
             bool bool_modifier = (compare_ctx->BOOL() != nullptr);
             auto * left_argument = makeNode(ctx->vectorOperation(0));
             auto * right_argument = makeNode(ctx->vectorOperation(1));
             if (!left_argument || !right_argument)
-                return nullptr;  /// makeNode() must already set an error.
-            return makeBinaryOperation(operator_name, left_argument, right_argument, compare_ctx->grouping(), bool_modifier,
-                                       getStartPos(ctx), getLength(ctx));
+                return {};  /// makeNode() must already set an error.
+            return makeBinaryOperator(operator_name, left_argument, right_argument, compare_ctx->grouping(), bool_modifier,
+                                      getStartPos(ctx), getLength(ctx));
         }
         else if (auto * and_unless_ctx = ctx->andUnlessOp())
         {
@@ -1574,30 +1590,30 @@ private:
             }
             else
             {
-                throw Exception(ErrorCodes::LOGICAL_ERROR, "VectorOperationContext doesn't correspond to the schema: {}", ctx->getText());
+                throwInconsistentSchema("VectorOperationContext", ctx->getText());
             }
             auto * left_argument = makeNode(ctx->vectorOperation(0));
             auto * right_argument = makeNode(ctx->vectorOperation(1));
             if (!left_argument || !right_argument)
-                return nullptr;  /// makeNode() must already set an error.
-            return makeBinaryOperation(operator_name, left_argument, right_argument, and_unless_ctx->grouping(), /* bool_modifier = */ false,
-                                       getStartPos(ctx), getLength(ctx));
+                return {};  /// makeNode() must already set an error.
+            return makeBinaryOperator(operator_name, left_argument, right_argument, and_unless_ctx->grouping(), /* bool_modifier = */ false,
+                                      getStartPos(ctx), getLength(ctx));
         }
         else if (auto * or_ctx = ctx->orOp())
         {
             auto * left_argument = makeNode(ctx->vectorOperation(0));
             auto * right_argument = makeNode(ctx->vectorOperation(1));
             if (!left_argument || !right_argument)
-                return nullptr;  /// makeNode() must already set an error.
-            return makeBinaryOperation("or", left_argument, right_argument, or_ctx->grouping(), /* bool_modifier = */ false,
-                                       getStartPos(ctx), getLength(ctx));
+                return {};  /// makeNode() must already set an error.
+            return makeBinaryOperator("or", left_argument, right_argument, or_ctx->grouping(), /* bool_modifier = */ false,
+                                      getStartPos(ctx), getLength(ctx));
         }
         else if (auto * subquery_ctx = ctx->subqueryOp())
         {
             auto * expression = makeNode(ctx->vectorOperation(0));
             if (!expression)
-                return nullptr;  /// makeNode() must already set an error.
-            return makeSubquery(subquery_ctx, expression, getStartPos(ctx), getEndPos(ctx));
+                return {};  /// makeNode() must already set an error.
+            return makeSubquery(subquery_ctx, expression, getStartPos(ctx), getLength(ctx));
         }
         else
         {
@@ -1605,12 +1621,12 @@ private:
         }
     }
 
-    std::any visitFunction(antlr4_grammars::PromQLParser::Function_Context * ctx) override
+    std::any visitFunction_(antlr4_grammars::PromQLParser::Function_Context * ctx) override
     {
         auto * function_name_ctx = ctx->FUNCTION();
         if (!function_name_ctx)
         {
-            throw Exception(ErrorCodes::LOGICAL_ERROR, "FunctionContext doesn't correspond to the schema: {}", ctx->getText());
+            throwInconsistentSchema("FunctionContext", ctx->getText());
         }
         auto function_name = getText(function_name_ctx);
         std::vector<Node *> arguments;
@@ -1619,30 +1635,31 @@ private:
         {
             Node * argument = makeNode(parameter_ctx);
             if (!argument)
-                return nullptr;  /// makeNode() must already set an error.
+                return {};  /// makeNode() must already set an error.
             arguments.push_back(argument);
         }
-        return makeFunction(function_name, std::move(arguments), getStartPos(ctx), getLength(ctx));
+        return makeFunction(function_name, arguments, getStartPos(ctx), getLength(ctx));
     }
 
     std::any visitAggregation(antlr4_grammars::PromQLParser::AggregationContext * ctx) override
     {
         auto * operator_name_ctx = ctx->AGGREGATION_OPERATOR();
-        if (!operator_name_ctx)
+        auto * parameter_list_ctx = ctx->parameterList();
+        if (!operator_name_ctx || !parameter_list_ctx)
         {
-            throw Exception(ErrorCodes::LOGICAL_ERROR, "FunctionContext doesn't correspond to the schema: {}", ctx->getText());
+            throwInconsistentSchema("AggregationContext", ctx->getText());
         }
         auto operator_name = getText(operator_name_ctx);
         std::vector<Node *> arguments;
         antlr4_grammars::PromQLParser::ParameterContext * parameter_ctx = nullptr;
-        for (size_t i = 0; (parameter_ctx = ctx->parameter(i)) != nullptr; ++i)
+        for (size_t i = 0; (parameter_ctx = parameter_list_ctx->parameter(i)) != nullptr; ++i)
         {
             Node * argument = makeNode(parameter_ctx);
             if (!argument)
-                return nullptr;  /// makeNode() must already set an error.
+                return {};  /// makeNode() must already set an error.
             arguments.push_back(argument);
         }
-        return makeFunction(operator_name, std::move(arguments), ctx->by(), ctx->without(), getStartPos(ctx), getLength(ctx));
+        return makeAggregationOperator(operator_name, arguments, ctx->by(), ctx->without(), getStartPos(ctx), getLength(ctx));
     }
 };
 
