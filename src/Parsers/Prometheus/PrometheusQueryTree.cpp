@@ -28,6 +28,8 @@
 #include <IO/readDecimalText.h>
 #endif
 
+#include <Common/logger_useful.h>
+
 
 namespace DB
 {
@@ -1684,6 +1686,8 @@ bool PrometheusQueryTree::tryParse(const String & promql_query_, size_t & error_
     auto * expression = promql_parser.expression();
     if (!expression)
         throw Exception(ErrorCodes::CANNOT_PARSE_PROMQL_QUERY, "Couldn't get an expression while parsing promql query: {}", promql_query_);
+
+    LOG_INFO(getLogger("!!!"), "Using builder");
 
     Builder builder{promql_query_, error_listener};
     Node * new_root = builder.makeNode(expression);

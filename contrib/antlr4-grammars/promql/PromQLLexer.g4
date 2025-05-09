@@ -51,7 +51,7 @@ fragment NUMBER: NUMERAL | SCIENTIFIC_NUMBER;
 
 SCALAR: NUMBER | DURATION;
 
-STRING: '\'' (~('\'' | '\\') | '\\' .)* '\'' | '"' (~('"' | '\\') | '\\' .)* '"';
+STRING: '\'' (~('\'' | '\\') | '\\' .)* '\'' | '"' (~('"' | '\\') | '\\' .)* '"' | '`' (~'`')* '`';
 
 // Binary operators
 
