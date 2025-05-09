@@ -28,8 +28,6 @@
 #include <IO/readDecimalText.h>
 #endif
 
-#include <Common/logger_useful.h>
-
 
 namespace DB
 {
@@ -337,14 +335,14 @@ namespace
     /// If it succeeds the function returns true and sets `result`.
     /// If it fails the function returns false and sets either `allow_other_formats` or `error_pos` & `error_message`.
     template <typename ScalarType>
-    bool tryParseUnsignedScalarInHexFormat(std::string_view input, ScalarType & result,
-                                           bool & allow_other_formats, size_t & error_pos, String & error_message)
+    bool parseUnsignedScalarInHexFormat(std::string_view input, ScalarType & result,
+                                        bool & try_other_formats, size_t & error_pos, String & error_message)
     {
         bool found_hex_prefix = (input.length() >= 2) && (input[0] == '0') && (std::tolower(input[1]) == 'x');
         if (!found_hex_prefix)
         {
             /// No prefix "0x" is in the `input`, but we can still try other scalar formats.
-            allow_other_formats = true;
+            try_other_formats = true;
             return false;
         }
         /// Remove prefix "0x" and underscores between digits.
@@ -356,7 +354,7 @@ namespace
         {
             error_message = fmt::format("Couldn't parse a hexadecimal number from {}", quoteString(input_without_prefix));
             error_pos = 2;
-            allow_other_formats = false;
+            try_other_formats = false;
             return false;
         }
         if constexpr(std::is_same_v<ScalarType, DecimalField<DateTime64>>)
@@ -366,7 +364,7 @@ namespace
             {
                 error_message = fmt::format("Number {} is too big", input_without_prefix);
                 error_pos = 2;
-                allow_other_formats = false;
+                try_other_formats = false;
                 return false;
             }
             result = DecimalField<DateTime64>{duration_ms, 3};
@@ -382,14 +380,14 @@ namespace
     /// If it succeeds the function returns true and sets `result`.
     /// If it fails the function returns false and sets either `allow_other_formats` or `error_pos` & `error_message`.
     template <typename ScalarType>
-    bool tryParseUnsignedScalarInDurationFormat(std::string_view input, ScalarType & result,
-                                                bool & allow_other_formats, size_t & error_pos, String & error_message)
+    bool parseUnsignedScalarInDurationFormat(std::string_view input, ScalarType & result,
+                                             bool & try_other_formats, size_t & error_pos, String & error_message)
     {
         bool found_time_unit = (input.find_first_of("ywdhms") != String::npos);
         if (!found_time_unit)
         {
             /// No time units are in the `input`, but we can still try other scalar formats.
-            allow_other_formats = true;
+            try_other_formats = true;
             return false;
         }
         Int64 result_ms = 0;
@@ -407,7 +405,7 @@ namespace
                 error_message = fmt::format("{} is not a digit. Expected a decimal integer number combined with a time unit in duration {}",
                                             quoteString(input.substr(number_start_pos, 1)), quoteString(input));
                 error_pos = number_start_pos;
-                allow_other_formats = false;
+                try_other_formats = false;
                 return false;
             }
             Int64 number = 0;
@@ -416,7 +414,7 @@ namespace
             {
                 error_message = fmt::format("Too big number {} of time units in duration {}", number_as_str, quoteString(input));
                 error_pos = number_start_pos;
-                allow_other_formats = false;
+                try_other_formats = false;
                 return false;
             }
             size_t unit_start_pos = pos;
@@ -442,7 +440,7 @@ namespace
             {
                 error_message = fmt::format("Unknown unit {} in duration {}", quoteString(unit), quoteString(input));
                 error_pos = unit_start_pos;
-                allow_other_formats = false;
+                try_other_formats = false;
                 return false;
             }
             if (!previous_unit.empty() && (previous_unit_ms <= unit_ms))
@@ -451,7 +449,7 @@ namespace
                                             "Wrong order of units in duration {}",
                                             unit, previous_unit, quoteString(input));
                 error_pos = unit_start_pos;
-                allow_other_formats = false;
+                try_other_formats = false;
                 return false;
             }
             Int64 add_ms = 0;
@@ -460,7 +458,7 @@ namespace
             {
                 error_message = fmt::format("Duration {} is too big", quoteString(input));
                 error_pos = number_start_pos;
-                allow_other_formats = false;
+                try_other_formats = false;
                 return false;
             }
             previous_unit = unit;
@@ -471,7 +469,7 @@ namespace
         {
             error_message = fmt::format("Expected a decimal integer number combined with a time unit in duration {}", quoteString(input));
             error_pos = pos;
-            allow_other_formats = false;
+            try_other_formats = false;
             return false;
         }
         if constexpr(std::is_same_v<ScalarType, DecimalField<DateTime64>>)
@@ -485,7 +483,7 @@ namespace
     /// Parses an unsigned scalar in number format, for example "1000" or "1_000" or "5.67" or "2e10" or "Inf" or "Nan".
     /// Underscores between digits are ignored.
     template <typename ScalarType>
-    bool tryParseUnsignedScalarInNumberFormat(std::string_view input, ScalarType & result,
+    bool parseUnsignedScalarInNumberFormat(std::string_view input, ScalarType & result,
                                               size_t & error_pos, String & error_message)
     {
         /// Remove underscores between digits if necessary.
@@ -528,7 +526,7 @@ namespace
     /// Underscores (_) can be used in between decimal or hexadecimal digits (they don't mean anything).
     /// ScalarType here is either a floating-point type (Float64), or DecimalField<DateTime64>. 
     template <typename ScalarType>
-    bool tryParseScalarLiteral(std::string_view input, ScalarType & result, bool allow_sign, size_t & error_pos, String & error_message)
+    bool parseScalarLiteral(std::string_view input, ScalarType & result, bool allow_sign, size_t & error_pos, String & error_message)
     {
         /// Parse a sign.
         size_t pos = 0;
@@ -551,14 +549,14 @@ namespace
                 ++pos;
         }
         /// Parse an unsigned number in one of three formats.
-        bool allow_other_formats = false;
-        bool ok = tryParseUnsignedScalarInHexFormat(input.substr(pos), result, allow_other_formats, error_pos, error_message);
+        bool try_other_formats = false;
+        bool ok = parseUnsignedScalarInHexFormat(input.substr(pos), result, try_other_formats, error_pos, error_message);
 
-        if (!ok && allow_other_formats)
-            ok = tryParseUnsignedScalarInDurationFormat(input.substr(pos), result, allow_other_formats, error_pos, error_message);
+        if (!ok && try_other_formats)
+            ok = parseUnsignedScalarInDurationFormat(input.substr(pos), result, try_other_formats, error_pos, error_message);
 
-        if (!ok && allow_other_formats)
-            ok = tryParseUnsignedScalarInNumberFormat(input.substr(pos), result, error_pos, error_message);
+        if (!ok && try_other_formats)
+            ok = parseUnsignedScalarInNumberFormat(input.substr(pos), result, error_pos, error_message);
 
         if (!ok)
         {
@@ -573,7 +571,7 @@ namespace
     }
 
     /// Parses a time range as how it's used in a range selector: "[1h30m]".
-    bool tryParseTimeRange(std::string_view input, DecimalField<DateTime64> & range, size_t & error_pos, String & error_message)
+    bool parseTimeRange(std::string_view input, DecimalField<DateTime64> & range, size_t & error_pos, String & error_message)
     {
         /// Check opening and closing brackets.
         if (input.empty() || (input[0] != '['))
@@ -601,7 +599,7 @@ namespace
         }
         /// Parse a scalar between the brackets.
         std::string_view range_as_str = input.substr(start_pos, end_pos - start_pos);
-        if (!tryParseScalarLiteral(range_as_str, range, /* allow_sign = */ false, error_pos, error_message))
+        if (!parseScalarLiteral(range_as_str, range, /* allow_sign = */ false, error_pos, error_message))
         {
             error_pos += start_pos;
             return false;
@@ -610,7 +608,7 @@ namespace
     }
 
     /// Parses a time range as how it's used in a subquery: "[1h:5m]" or "[1h:]".
-    bool tryParseSubqueryRange(std::string_view input,
+    bool parseSubqueryRange(std::string_view input,
                                std::pair<DecimalField<DateTime64>, std::optional<DecimalField<DateTime64>>> & range_and_resolution,
                                size_t & error_pos, String & error_message)
     {
@@ -661,12 +659,12 @@ namespace
         std::string_view resolution_as_str = input.substr(resolution_start_pos, resolution_end_pos - resolution_start_pos);
         DecimalField<DateTime64> range;
         std::optional<DecimalField<DateTime64>> resolution;
-        if (!tryParseScalarLiteral(range_as_str, range, /* allow_sign = */ false, error_pos, error_message))
+        if (!parseScalarLiteral(range_as_str, range, /* allow_sign = */ false, error_pos, error_message))
         {
             error_pos += range_start_pos;
             return false;
         }
-        if (!resolution_as_str.empty() && !tryParseScalarLiteral(resolution_as_str, resolution.emplace(), /* allow_sign = */ false, error_pos, error_message))
+        if (!resolution_as_str.empty() && !parseScalarLiteral(resolution_as_str, resolution.emplace(), /* allow_sign = */ false, error_pos, error_message))
         {
             error_pos += resolution_start_pos;
             return false;
@@ -676,7 +674,7 @@ namespace
     }
 
     /// Parses escape sequences in a string literal and replaces them with the characters which they mean.
-    bool tryUnescapeStringLiteral(std::string_view input, String & result, size_t & error_pos, String & error_message)
+    bool unescapeStringLiteral(std::string_view input, String & result, size_t & error_pos, String & error_message)
     {
         result.clear();
         result.reserve(input.length());
@@ -835,7 +833,7 @@ namespace
     /// Converts a quoted string literal to its unquoted version: "abc" -> abc
     /// Accepts an input string in quotes or double quotes or backticks, and also handles escape sequences
     /// according to the promql rules (see https://prometheus.io/docs/prometheus/latest/querying/basics/#string-literals).
-    bool tryParseStringLiteral(std::string_view input, String & result, size_t & error_pos, String & error_message)
+    bool parseStringLiteral(std::string_view input, String & result, size_t & error_pos, String & error_message)
     {
         if (input.empty())
         {
@@ -885,7 +883,7 @@ namespace
         std::string_view unquoted = input.substr(1, input.length() - 2);
 
         /// Parse escape sequences.
-        if (!tryUnescapeStringLiteral(unquoted, result, error_pos, error_message))
+        if (!unescapeStringLiteral(unquoted, result, error_pos, error_message))
         {
             ++error_pos; /// Skip a quote at the beginning of the `input`.
             return false;
@@ -1014,7 +1012,7 @@ private:
         new_node->length = getLength(ctx);
         size_t error_pos = String::npos;
         String error_message;
-        if (!tryParseScalarLiteral(getText(ctx), new_node->scalar, /* allow_sign = */ true, error_pos, error_message))
+        if (!parseScalarLiteral(getText(ctx), new_node->scalar, /* allow_sign = */ true, error_pos, error_message))
         {
             error_listener.setError(getStartPos(ctx) + error_pos, error_message);
             return nullptr;
@@ -1032,7 +1030,7 @@ private:
         new_node->length = getLength(ctx);
         size_t error_pos = String::npos;
         String error_message;
-        if (!tryParseStringLiteral(getText(ctx), new_node->string, error_pos, error_message))
+        if (!parseStringLiteral(getText(ctx), new_node->string, error_pos, error_message))
         {
             error_listener.setError(getStartPos(ctx) + error_pos, error_message);
             return nullptr;
@@ -1041,26 +1039,10 @@ private:
     }
 
     /// Extracts a metric name.
-    String getMetricName(antlr4_grammars::PromQLParser::MetricNameContext * ctx) const
-    {
-        auto * metric_name_ctx = ctx->METRIC_NAME();
-        if (!metric_name_ctx)
-        {
-            throwInconsistentSchema("MetricNameContext", ctx->getText());
-        }
-        return String{getText(metric_name_ctx)};
-    }
+    String getMetricName(antlr4_grammars::PromQLParser::MetricNameContext * ctx) const { return ctx->getText(); }
 
     /// Extracts a label name.
-    String getLabelName(antlr4_grammars::PromQLParser::LabelNameContext * ctx) const
-    {
-        auto * label_name_ctx = ctx->LABEL_NAME();
-        if (!label_name_ctx)
-        {
-            throwInconsistentSchema("LabelNameContext", ctx->getText());
-        }
-        return String{getText(label_name_ctx)};
-    }
+    String getLabelName(antlr4_grammars::PromQLParser::LabelNameContext * ctx) const { return ctx->getText(); }
 
     /// Extracts multiple label names separated by comma.
     Strings getLabelNameList(antlr4_grammars::PromQLParser::LabelNameListContext * ctx) const
@@ -1112,7 +1094,7 @@ private:
         }
         size_t error_pos = String::npos;
         String error_message;
-        if (!tryParseStringLiteral(getText(label_value_ctx), new_node->label_value, error_pos, error_message))
+        if (!parseStringLiteral(getText(label_value_ctx), new_node->label_value, error_pos, error_message))
         {
             error_listener.setError(getStartPos(label_value_ctx) + error_pos, error_message);
             return nullptr;
@@ -1199,7 +1181,7 @@ private:
         }
         size_t error_pos = String::npos;
         String error_message;
-        if (!tryParseTimeRange(getText(time_range_ctx), new_node->range, error_pos, error_message))
+        if (!parseTimeRange(getText(time_range_ctx), new_node->range, error_pos, error_message))
         {
             error_listener.setError(getStartPos(time_range_ctx) + error_pos, error_message);
             return nullptr;
@@ -1243,7 +1225,7 @@ private:
         {
             size_t error_pos = String::npos;
             String error_message;
-            if (!tryParseScalarLiteral(getText(at_ctx->SCALAR()), at.emplace(), /* allow_sign = */ false, error_pos, error_message))
+            if (!parseScalarLiteral(getText(at_ctx->SCALAR()), at.emplace(), /* allow_sign = */ false, error_pos, error_message))
             {
                 error_listener.setError(getStartPos(at_ctx) + error_pos, error_message);
                 return false;
@@ -1253,7 +1235,7 @@ private:
         {
             size_t error_pos = String::npos;
             String error_message;
-            if (!tryParseScalarLiteral(getText(offset_ctx->SCALAR()), offset, /* allow_sign = */ true, error_pos, error_message))
+            if (!parseScalarLiteral(getText(offset_ctx->SCALAR()), offset, /* allow_sign = */ true, error_pos, error_message))
             {
                 error_listener.setError(getStartPos(offset_ctx) + error_pos, error_message);
                 return false;
@@ -1297,7 +1279,7 @@ private:
         size_t error_pos = String::npos;
         String error_message;
         std::pair<DecimalField<DateTime64>, std::optional<DecimalField<DateTime64>>> range_and_resolution;
-        if (!tryParseSubqueryRange(getText(subquery_range_ctx), range_and_resolution, error_pos, error_message))
+        if (!parseSubqueryRange(getText(subquery_range_ctx), range_and_resolution, error_pos, error_message))
         {
             error_listener.setError(getStartPos(subquery_range_ctx) + error_pos, error_message);
             return nullptr;
@@ -1686,8 +1668,6 @@ bool PrometheusQueryTree::tryParse(const String & promql_query_, size_t & error_
     auto * expression = promql_parser.expression();
     if (!expression)
         throw Exception(ErrorCodes::CANNOT_PARSE_PROMQL_QUERY, "Couldn't get an expression while parsing promql query: {}", promql_query_);
-
-    LOG_INFO(getLogger("!!!"), "Using builder");
 
     Builder builder{promql_query_, error_listener};
     Node * new_root = builder.makeNode(expression);

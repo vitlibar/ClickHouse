@@ -52,7 +52,6 @@ vectorOperation
     | vectorOperation compareOp vectorOperation
     | vectorOperation andUnlessOp vectorOperation
     | vectorOperation orOp vectorOperation
-//  | vectorOperation vectorMatchOp vectorOperation
     | vector
     ;
 
@@ -204,13 +203,13 @@ groupRight
 
 labelName
     : LABEL_NAME
-//  | METRIC_NAME
-//  | keyword
+    | METRIC_NAME
+    | keyword
     ;
 
 metricName
     : METRIC_NAME
-//  | keyword
+    | keyword
     ;
 
 labelNameList
