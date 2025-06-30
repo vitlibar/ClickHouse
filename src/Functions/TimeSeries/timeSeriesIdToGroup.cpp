@@ -17,8 +17,8 @@ namespace ErrorCodes
     extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
 }
 
-/// Function timeSeriesIdToGroup(<id>) returns a group associated with a specified identifier.
-/// Groups are numbers 0, 1, 2, 3 associated with each unique set of tags in the context of the currently executed query.
+/// Function timeSeriesIdToGroup(<id>) converts the specified identifier of a time series to its group index.
+/// Group indices are numbers 0, 1, 2, 3 associated with each unique set of tags in the context of the currently executed query.
 class FunctionTimeSeriesIdToGroup : public IFunction, private WithContext 
 {
 public:
@@ -139,12 +139,12 @@ public:
 
 REGISTER_FUNCTION(TimeSeriesIdToGroup)
 {
-    FunctionDocumentation::Description description = R"(Returns a group associated with a specified identifier. Groups are numbers 0, 1, 2, 3 associated with each unique set of tags in the context of the currently executed query.)";
+    FunctionDocumentation::Description description = R"(Converts the specified identifier of a time series to its group index. Group indices are numbers 0, 1, 2, 3 associated with each unique set of tags in the context of the currently executed query.)";
     FunctionDocumentation::Syntax syntax = "timeSeriesIdToGroup(id)";
-    FunctionDocumentation::Arguments arguments = {{"id", "Identifier of a time series. Can be either UInt64 or UInt128 or UUID or FixedString(16)."}};
-    FunctionDocumentation::ReturnedValue returned_value = "Group (UInt64) associated with the set of tags represented by id.";
+    FunctionDocumentation::Arguments arguments = {{"id", "Identifier of a time series.", {"UInt64", "UInt128", "UUID", "FixedString(16)"}};
+    FunctionDocumentation::ReturnedValue returned_value = {"Returns a group index associated with this set of tags.", {"UInt64"}};
     FunctionDocumentation::Examples examples = {{"Example", "SELECT timeSeriesStoreTags(8374283493092, [('region', 'eu'), ('env', 'dev')], '__name__', 'http_requests_count') AS id, timeSeriesIdToGroup(id)", "8374283493092    0"}};
-    FunctionDocumentation::Category category = {"TimeSeries"};
+    FunctionDocumentation::Category category = FunctionDocumentation::Category::TimeSeries;
 
     factory.registerFunction<FunctionTimeSeriesIdToGroup>({description, syntax, arguments, returned_value, examples, category});
 }

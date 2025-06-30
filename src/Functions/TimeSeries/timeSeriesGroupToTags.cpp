@@ -140,12 +140,12 @@ public:
 
 REGISTER_FUNCTION(TimeSeriesGroupToTags)
 {
-    FunctionDocumentation::Description description = R"(Returns the names and values of tags associated with a specified group.)";
+    FunctionDocumentation::Description description = R"(Finds tags associated with the specified group index.)";
     FunctionDocumentation::Syntax syntax = "timeSeriesGroupToTags(group)";
-    FunctionDocumentation::Arguments arguments = {{"group", "Group associated with a time series. Group (UInt64) is a number 0, 1, 2, ... associated with each unique set of tags used in the context of the currenly executed query."}};
-    FunctionDocumentation::ReturnedValue returned_value = "Array of pairs (tag_name, tag_value).";
+    FunctionDocumentation::Arguments arguments = {{"group", "Group index associated with a time series. Group indices are numbers 0, 1, 2, ... associated with each unique set of tags used in the context of the currenly executed query.", {"UInt64"}}};
+    FunctionDocumentation::ReturnedValue returned_value = {"Array of pairs (tag_name, tag_value).", "Array(Tuple(String, String))"};
     FunctionDocumentation::Examples examples = {{"Example", "SELECT timeSeriesStoreTags(8374283493092, [('region', 'eu'), ('env', 'dev')], '__name__', 'http_requests_count') AS id, timeSeriesIdToGroup(id) AS group, timeSeriesGroupToTags(group)", "8374283493092    0    [('__name__', ''http_requests_count''), ('env', 'dev'), ('region', 'eu')]"}};
-    FunctionDocumentation::Category category = {"TimeSeries"};
+    FunctionDocumentation::Category category = FunctionDocumentation::Category::TimeSeries;
 
     factory.registerFunction<FunctionTimeSeriesGroupToTags>({description, syntax, arguments, returned_value, examples, category});
 }

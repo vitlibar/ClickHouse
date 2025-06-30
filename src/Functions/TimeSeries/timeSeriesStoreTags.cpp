@@ -31,7 +31,8 @@ namespace ErrorCodes
 }
 
 /// Function timeSeriesStoreTags(<id>, [('tag1_name', 'tag1_value'), ...], 'tag2_name', 'tag2_value', ...) returns <id>
-/// and stores the match between <id> and those tags in the query context so that they can later be extracted by function timeSeriesIdToTags().
+/// and stores the mapping between the identifier of a time series and its tags in the query context so that
+/// they can later be extracted by function timeSeriesIdToTags().
 class FunctionTimeSeriesStoreTags : public IFunction, private WithContext 
 {
 public:
@@ -424,15 +425,15 @@ public:
 
 REGISTER_FUNCTION(TimeSeriesStoreTags)
 {
-    FunctionDocumentation::Description description = R"(Stores the match between a specified identifier and specified tags in the query context, so that function timeSeriesTags() can extract those tags later.)";
+    FunctionDocumentation::Description description = R"(Stores the mapping between the identifier of a time series and its tags in the query context, so that function timeSeriesIdToTags() can extract these tags later.)";
     FunctionDocumentation::Syntax syntax = "timeSeriesStoreTags(id, tags_array, separate_tag_name_1, separate_tag_value_1, ...)";
-    FunctionDocumentation::Arguments arguments = {{"id", "Identifier of a time series. Can be either UInt64 or UInt128 or UUID or FixedString(16)."},
-                                                  {"tags_array", "Array of pairs (tag_name, tag_value). Can be either Array(Tuple(String, String)) or NULL."},
-                                                  {"separate_tag_name_i", "The name of a tag. Can be either String or FixedString."},
-                                                  {"separate_tag_value_i", "The value of the tag with name separate_tag_name_i. Can be either String or FixedString or NULL."}};
-    FunctionDocumentation::ReturnedValue returned_value = "The identifier of a time series (the function returns its first argument).";
+    FunctionDocumentation::Arguments arguments = {{"id", "Identifier of a time series.", {"UInt64", "UInt128", "UUID", "FixedString(16)"}},
+                                                  {"tags_array", "Array of pairs (tag_name, tag_value).", {"Array(Tuple(String, String))", "NULL"}},
+                                                  {"separate_tag_name_i", "The name of a tag.", {"String", "FixedString"}},
+                                                  {"separate_tag_value_i", "The value of a tag.", {"String", "FixedString", "Nullable(String)"}};
+    FunctionDocumentation::ReturnedValue returned_value = {"Returns the first argument, i.e. the identifier of a time series."};
     FunctionDocumentation::Examples examples = {{"Example", "SELECT timeSeriesStoreTags(8374283493092, [('region', 'eu'), ('env', 'dev')], '__name__', 'http_requests_count')", "8374283493092"}};
-    FunctionDocumentation::Category category = {"TimeSeries"};
+    FunctionDocumentation::Category category = FunctionDocumentation::Category::TimeSeries;
 
     factory.registerFunction<FunctionTimeSeriesStoreTags>({description, syntax, arguments, returned_value, examples, category});
 }

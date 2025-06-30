@@ -166,12 +166,12 @@ public:
 
 REGISTER_FUNCTION(TimeSeriesIdToTags)
 {
-    FunctionDocumentation::Description description = R"(Returns the names and values of tags associated with a specified identifier.)";
+    FunctionDocumentation::Description description = R"(Finds tags associated with the specified identifier of a time series.)";
     FunctionDocumentation::Syntax syntax = "timeSeriesIdToTags(id)";
-    FunctionDocumentation::Arguments arguments = {{"id", "Identifier of a time series. Can be either UInt64 or UInt128 or UUID or FixedString(16)."}};
-    FunctionDocumentation::ReturnedValue returned_value = "Array of pairs (tag_name, tag_value).";
+    FunctionDocumentation::Arguments arguments = {{"id", "Identifier of a time series.", {"UInt64", "UInt128", "UUID", "FixedString(16)"}}};
+    FunctionDocumentation::ReturnedValue returned_value = {"Returns an array of pairs (tag_name, tag_value).", "Array(Tuple(String, String))"};
     FunctionDocumentation::Examples examples = {{"Example", "SELECT timeSeriesStoreTags(8374283493092, [('region', 'eu'), ('env', 'dev')], '__name__', 'http_requests_count') AS id, timeSeriesIdToTags(id)", "8374283493092    [('__name__', ''http_requests_count''), ('env', 'dev'), ('region', 'eu')]"}};
-    FunctionDocumentation::Category category = {"TimeSeries"};
+    FunctionDocumentation::Category category = FunctionDocumentation::Category::TimeSeries;
 
     factory.registerFunction<FunctionTimeSeriesIdToTags>({description, syntax, arguments, returned_value, examples, category});
 }
