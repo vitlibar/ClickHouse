@@ -188,6 +188,8 @@ namespace
 bool PrometheusQueryParsingUtil::parseStringLiteral(std::string_view input, String & result,
                                                     String & error_message, size_t & error_pos)
 {
+    result.clear();
+
     if (!input.starts_with('\'') && !input.starts_with('\"') && !input.starts_with('`'))
     {
         error_message = fmt::format("Cannot parse string literal {}: A string literal must open with a quote ', a double quote \" or a backtick `", input);
@@ -277,39 +279,18 @@ namespace
     /// Parses an unsigned scalar in number format, for example "1000" or "1_000" or "5.67" or "2e10" or "Inf" or "Nan".
     /// Underscores between digits are ignored.
     template <typename T>
-    bool parseNumber(std::string_view input, UInt32 scale, T & result, String & error_message, size_t & error_pos)
+    bool parseNumber(std::string_view input, T & result, String & error_message, size_t & error_pos)
     {
         /// Remove underscores between digits if necessary.
         String str = removeUnderscoresBetweenDigits(input, /* is_hex = */ false);
 
-        if constexpr (is_decimal_field<T>)
+        if (!tryParse(result, str))
         {
-            ReadBufferFromMemory buf{input};
-            UInt32 unread_scale = scale;
-            typename T::ValueType x;
-            if (!tryReadDecimalText(buf, x, DecimalUtils::max_precision<typename T::ValueType>, unread_scale) || !buf.eof())
-            {
-                error_message = fmt::format("Cannot parse number {}", quoteString(input));
-                error_pos = 0;
-                return false;
-            }
-            if (common::mulOverflow(x.value, DecimalUtils::scaleMultiplier<typename T::ValueType>(unread_scale), x.value))
-            {
-                error_message = fmt::format("Cannot parse number {}: It's too big", quoteString(input));
-                error_pos = 0;
-                return false;
-            }
-            result = T{x, scale};
+            error_message = fmt::format("Cannot parse number {}", quoteString(input));
+            error_pos = 0;
+            return false;
         }
-        else
-        {
-            if (!tryParse(result, str))
-            {
-                error_message = fmt::format("Cannot parse number {}", quoteString(input));
-                error_pos = 0;
-                return false;
-            }
-        }
+
         return true;
     }
 
@@ -325,7 +306,7 @@ namespace
     /// If it succeeds the function returns true and sets `result`.
     /// If it fails the function returns false and sets either `allow_other_formats` or `error_pos` & `error_message`.
     template <typename T>
-    bool parseNumberInHex(std::string_view input, UInt32 scale, T & result, String & error_message, size_t & error_pos)
+    bool parseNumberInHex(std::string_view input, T & result, String & error_message, size_t & error_pos)
     {
         bool found_hex_prefix = (input.length() >= 2) && (input[0] == '0') && (std::tolower(input[1]) == 'x');
         if (!found_hex_prefix)
@@ -349,27 +330,12 @@ namespace
             return false;
         }
 
-        if constexpr (is_decimal<T>)
-        {
-            if (common::mulOverflow(value, DecimalUtils::scaleMultiplier<T>(scale), value))
-            {
-                error_message = fmt::format("Cannot parse number {}: It's too big", quoteString(input));
-                error_pos = 0;
-                return false;
-            }
-
-            result = T{value, scale};
-        }
-        else
-        {
-            result = static_cast<T>(value);
-        }
-
+        result = static_cast<T>(value);
         return true;
     }
 
-    /// Whether this input represents a duration, i.e. it contains time units.
-    bool isDurationFormat(std::string_view input)
+    /// Whether this input represents an interval, i.e. it contains time units.
+    bool isIntervalFormat(std::string_view input)
     {
         bool found_time_unit = (input.find_first_of("ywdhms") != String::npos);
         return found_time_unit;
@@ -379,10 +345,10 @@ namespace
     /// If it succeeds the function returns true and sets `result`.
     /// If it fails the function returns false and sets either `allow_other_formats` or `error_pos` & `error_message`.
     template <typename T>
-    bool parseDuration(std::string_view input, UInt32 scale, T & result, String & error_message, size_t & error_pos)
+    bool parseInterval(std::string_view input, T & result, String & error_message, size_t & error_pos)
     {
         Decimal64 current = 0;
-        UInt32 current_scale = scale;
+        UInt32 current_scale = 0;
 
         Decimal64 previous_unit = 0;
         std::string_view previous_unit_name;
@@ -452,22 +418,15 @@ namespace
             }
             else if (unit_scale > current_scale)
             {
-                if constexpr (is_decimal<T>)
+                auto scale_multiplier = DecimalUtils::scaleMultiplier<Int64>(unit_scale - current_scale);
+                if (common::mulOverflow(current.value, scale_multiplier, current.value))
                 {
-                    unit.value /= DecimalUtils::scaleMultiplier<Int64>(unit_scale - current_scale);
+                    error_message = fmt::format("Cannot parse time duration {}: It's too big", quoteString(input));
+                    error_pos = 0;
+                    return false;
                 }
-                else
-                {
-                    auto scale_multiplier = DecimalUtils::scaleMultiplier<Int64>(unit_scale - current_scale);
-                    if (common::mulOverflow(current.value, scale_multiplier, current.value))
-                    {
-                        error_message = fmt::format("Cannot parse time duration {}: It's too big", quoteString(input));
-                        error_pos = 0;
-                        return false;
-                    }
-                    previous_unit.value *= scale_multiplier;
-                    current_scale = unit_scale;
-                }
+                previous_unit.value *= scale_multiplier;
+                current_scale = unit_scale;
             }
 
             if (previous_unit && (unit >= previous_unit))
@@ -500,89 +459,91 @@ namespace
         }
 
         if constexpr(is_decimal_field<T>)
-            result = T{current, scale};
+            result = T{current, current_scale};
         else
-            result = static_cast<T>(DecimalField<Decimal64>{current, scale});
+            result = static_cast<T>(DecimalField<Decimal64>{current, current_scale});
 
         return true;
     }
 
-    /// Parses a scalar which is either a floating-point number (e.g. 237e6), or Inf, or Nan,
-    /// or a hexadecimal number (e.g. 0xA7CD), or a time duration in the promql format (e.g. 1y2w5d13h15m30s1ms).
-    /// Underscores (_) can be used in between decimal or hexadecimal digits (they don't mean anything).
-    template <typename T>
-    bool parseScalarImpl(std::string_view input, bool allow_sign, UInt32 scale, T & result, String & error_message, size_t & error_pos)
+    /// Changes the sign of a scalar or an interval stored in `ScalarOrInterval`.
+    void negate(PrometheusQueryParsingUtil::ScalarOrInterval & res)
     {
-        size_t pos = 0;
-
-        /// Parse a sign.
-        bool negative = false;
-        if (allow_sign)
+        if (res.scalar)
         {
-            if (input.starts_with('+'))
-            {
-                ++pos;
-            }
-            else if (input.starts_with('-'))
-            {
-                negative = true;
-                ++pos;
-            }
+            auto & scalar = *res.scalar;
+            scalar = -scalar;
         }
-
-        /// Spaces between a sign and number are allowed.
-        while (pos != input.length() && std::isspace(input[pos]))
-            ++pos;
-
-        std::string_view unsigned_input = input.substr(pos);
-
-        /// Parse an unsigned number in one of three formats.
-        bool ok = false;
-        if (isHexFormat(unsigned_input))
-            ok = parseNumberInHex(unsigned_input, scale, result, error_message, error_pos);
-        else if (isDurationFormat(unsigned_input))
-            ok = parseDuration(unsigned_input, scale, result, error_message, error_pos);
-        else
-            ok = parseNumber(unsigned_input, scale, result, error_message, error_pos);
-
-        if (!ok)
+        else if (res.interval)
         {
-            error_pos += pos;
-            return false;
+            auto & interval = *res.interval;
+            using IntervalType = std::remove_cvref_t<decltype(interval)>;
+            interval = IntervalType{-interval.getValue(), interval.getScale()};
         }
-
-        if (negative)
-        {
-            if constexpr (is_decimal_field<T>)
-                result = T{-result.getValue(), result.getScale()};
-            else
-                result = -result;
-        }
-
-        return true;
     }
 }
 
-/// Parses a scalar literal.
-bool PrometheusQueryParsingUtil::parseScalar(std::string_view input, ScalarType & res_scalar, String & error_message, size_t & error_pos)
+/// Parses a scalar or an interval literal.
+bool PrometheusQueryParsingUtil::parseScalarOrInterval(std::string_view input, ScalarOrInterval & res, String & error_message, size_t & error_pos)
 {
-    return parseScalarImpl(input, /* allow_sign = */ true, /* scale */ 0, res_scalar, error_message, error_pos);
-}
+    size_t pos = 0;
 
-/// Parses an offset which can be written after the "offset" keyword.
-bool PrometheusQueryParsingUtil::parseOffset(std::string_view input, UInt32 scale, OffsetType & res_offset, String & error_message, size_t & error_pos)
-{
-    return parseScalarImpl(input, /* allow_sign = */ true, scale, res_offset, error_message, error_pos);
-}
+    /// Parse a sign.
+    bool negative = false;
+    if (input.starts_with('+'))
+    {
+        ++pos;
+    }
+    else if (input.starts_with('-'))
+    {
+        negative = true;
+        ++pos;
+    }
 
-/// Parses a timestamp which can be written after '@' character (e.g. "@ 1609746000").
-bool PrometheusQueryParsingUtil::parseTimestamp(std::string_view input, UInt32 scale, TimestampType & res_timestamp, String & error_message, size_t & error_pos)
-{
-    return parseScalarImpl(input, /* allow_sign = */ false, scale, res_timestamp, error_message, error_pos);
+    /// Spaces between a sign and number are allowed.
+    while (pos != input.length() && std::isspace(input[pos]))
+        ++pos;
+
+    std::string_view unsigned_input = input.substr(pos);
+
+    ScalarType scalar;
+    IntervalType interval;
+    bool ok = false;
+
+    /// Parse an unsigned number in one of three formats.
+    if (isHexFormat(unsigned_input))
+    {
+        ok = parseNumberInHex(unsigned_input, scalar, error_message, error_pos);
+        if (ok)
+            res.scalar = scalar;
+    }
+    else if (isIntervalFormat(unsigned_input))
+    {
+        ok = parseInterval(unsigned_input, interval, error_message, error_pos);
+        if (ok)
+            res.interval = interval;
+    }
+    else
+    {
+        ok = parseNumber(unsigned_input, scalar, error_message, error_pos);
+        if (ok)
+            res.scalar = scalar;
+    }
+
+    if (!ok)
+    {
+        error_pos += pos;
+        return false;
+    }
+
+    if (negative)
+        negate(res);
+
+    return true;
 }
 
 /// Parses a time range which is used in range selectors.
-bool PrometheusQueryParsingUtil::parseTimeRange(std::string_view input, UInt32 scale, OffsetType & res_range, String & error_message, size_t & error_pos)
+bool PrometheusQueryParsingUtil::extractTimeRange(std::string_view input, std::string_view & res_range, String & error_message, size_t & error_pos)
 {
     /// Check opening and closing brackets.
     if (!input.starts_with('['))
@@ -611,21 +572,21 @@ bool PrometheusQueryParsingUtil::parseTimeRange(std::string_view input, UInt32 s
         --end_pos;
     }
 
-    /// Parse a scalar literal between the brackets.
-    std::string_view range_as_str = input.substr(start_pos, end_pos - start_pos);
-    if (!parseScalarImpl(range_as_str, /* allow_sign = */ false, scale, res_range, error_message, error_pos))
+    if (start_pos == end_pos)
     {
-        error_pos += start_pos;
+        error_message = fmt::format("Cannot parse time range {}: Expected an interval between brackets [ ]", quoteString(input));
+        error_pos = start_pos;
         return false;
     }
 
+    res_range = input.substr(start_pos, end_pos - start_pos);
     return true;
 }
 
 /// Parses a time range with an optional resolution which are used in subqueries.
-bool PrometheusQueryParsingUtil::parseSubqueryRange(std::string_view input, UInt32 scale,
-                                                    OffsetType & range, std::optional<OffsetType> & resolution,
-                                                    String & error_message, size_t & error_pos)
+bool PrometheusQueryParsingUtil::extractSubqueryRangeAndResolution(std::string_view input,
+                                                                   std::string_view & res_range, std::string_view & res_resolution,
+                                                                   String & error_message, size_t & error_pos)
 {
     /// Check opening and closing brackets.
     if (!input.starts_with('['))
@@ -673,25 +634,16 @@ bool PrometheusQueryParsingUtil::parseSubqueryRange(std::string_view input, UInt
         --resolution_end_pos;
     }
 
-    /// Parse two scalar literals before and after the colon. The second scalar literal is optional.
-    std::string_view range_as_str = input.substr(range_start_pos, range_end_pos - range_start_pos);
-    std::string_view resolution_as_str = input.substr(resolution_start_pos, resolution_end_pos - resolution_start_pos);
-    if (!parseScalarImpl(range_as_str, /* allow_sign = */ false, scale, range, error_message, error_pos))
+    if (range_start_pos == range_end_pos)
     {
-        error_pos += range_start_pos;
+        error_message = fmt::format("Cannot parse time range {}: Expected an interval between opening bracket [ and colon :", quoteString(input));
+        error_pos = range_start_pos;
         return false;
     }
-    if (!resolution_as_str.empty() && !parseScalarImpl(resolution_as_str, /* allow_sign = */ false, scale, resolution.emplace(), error_message, error_pos))
-    {
-        error_pos += resolution_start_pos;
-        return false;
-    }
-    return true;
-}
 
-bool PrometheusQueryParsingUtil::containsTimeUnits(std::string_view input)
-{
-    return isDurationFormat(input);
+    res_range = input.substr(range_start_pos, range_end_pos - range_start_pos);
+    res_resolution = input.substr(resolution_start_pos, resolution_end_pos - resolution_start_pos);
+    return true;
 }
 
 }

@@ -1,9 +1,10 @@
 #pragma once
 
+#include <Common/typeid_cast.h>
 #include <Core/Field.h>
 #include <Parsers/Prometheus/PrometheusQueryResultType.h>
 #include <fmt/format.h>
-#include <optional>
+
 
 namespace DB
 {
@@ -12,9 +13,11 @@ namespace DB
 class PrometheusQueryTree
 {
 public:
-    using TimestampType = DecimalField<DateTime64>;
-    using OffsetType = DecimalField<Decimal64>;
+    /// The scalar type is used to represent floating-point values, for example -539.8 or 1736046605.
     using ScalarType = Float64;
+
+    /// The interval type is used to represent time intervals, for example 1d30m.
+    using IntervalType = DecimalField<Decimal64>;
 
     enum class MatcherType { EQ /* = */, NE /* != */, RE /* =~ */, NRE /* !~ */};
 
@@ -36,7 +39,7 @@ public:
     {
         StringLiteral,
         ScalarLiteral,
-        OffsetLiteral,
+        IntervalLiteral,
         InstantSelector,
         RangeSelector,
         Subquery,
@@ -65,17 +68,6 @@ public:
         virtual String dumpTree(size_t indent) const = 0;
     };
 
-    /// A string literal.
-    /// Example: "abc"
-    class StringLiteral : public Node
-    {
-    public:
-        String string;
-        StringLiteral() { node_type = NodeType::StringLiteral; result_type = ResultType::STRING; }
-        Node * clone(std::vector<std::unique_ptr<Node>> & node_list_) const override;
-        String dumpTree(size_t indent) const override;
-    };
-
     /// A scalar literal, i.e. a floating-point or an integer number.
     /// Examples: -2.43, 2h30m
     class ScalarLiteral : public Node
@@ -88,11 +80,22 @@ public:
     };
 
     /// An offset written in the format 2h30m or -1d.
-    class OffsetLiteral : public Node
+    class IntervalLiteral : public Node
     {
     public:
-        OffsetType offset;
-        OffsetLiteral() { node_type = NodeType::OffsetLiteral; result_type = ResultType::SCALAR; }
+        IntervalType interval;
+        IntervalLiteral() { node_type = NodeType::IntervalLiteral; result_type = ResultType::INTERVAL; }
+        Node * clone(std::vector<std::unique_ptr<Node>> & node_list_) const override;
+        String dumpTree(size_t indent) const override;
+    };
+
+    /// A string literal.
+    /// Example: "abc"
+    class StringLiteral : public Node
+    {
+    public:
+        String string;
+        StringLiteral() { node_type = NodeType::StringLiteral; result_type = ResultType::STRING; }
         Node * clone(std::vector<std::unique_ptr<Node>> & node_list_) const override;
         String dumpTree(size_t indent) const override;
     };
@@ -113,8 +116,8 @@ public:
     class RangeSelector : public Node
     {
     public:
-        OffsetType range; /// e.g. [20m]
-        const Node * getInstantSelector() const { return children.at(0); }
+        const InstantSelector * getInstantSelector() const { return &typeid_cast<const InstantSelector &>(*children.at(0)); }
+        const Node * getRange() const { return children.at(1); } /// [20m]
         RangeSelector() { node_type = NodeType::RangeSelector; result_type = ResultType::RANGE_VECTOR; }
         Node * clone(std::vector<std::unique_ptr<Node>> & node_list_) const override;
         String dumpTree(size_t indent) const override;
@@ -126,9 +129,9 @@ public:
     class Subquery : public Node
     {
     public:
-        OffsetType range;                     /// [1h: ...]
-        std::optional<OffsetType> resolution; /// [... :5m]
         const Node * getExpression() const { return children.at(0); }
+        const Node * getRange() const { return children.at(1); } /// [1h: ...]
+        const Node * getResolution() const { return (children.size() >= 3) ? children[2] : nullptr; } /// [... :5m]
         Subquery() { node_type = NodeType::Subquery; result_type = ResultType::RANGE_VECTOR; }
         Node * clone(std::vector<std::unique_ptr<Node>> & node_list_) const override;
         String dumpTree(size_t indent) const override;
@@ -140,9 +143,11 @@ public:
     class At : public Node
     {
     public:
-        std::optional<TimestampType> at; /// @ timestamp
-        OffsetType offset;               /// offset <offset>
+        size_t at_index = static_cast<size_t>(-1);
+        size_t offset_index = static_cast<size_t>(-1);
         const Node * getExpression() const { return children.at(0); }
+        const Node * getAt() const { return (at_index < children.size()) ? children.at(at_index) : nullptr; } /// @ timestamp
+        const Node * getOffset() const { return (offset_index < children.size()) ? children.at(offset_index) : nullptr; } /// offset <offset>
         At() { node_type = NodeType::At; }
         Node * clone(std::vector<std::unique_ptr<Node>> & node_list_) const override;
         String dumpTree(size_t indent) const override;
@@ -225,12 +230,11 @@ public:
 
     /// Parses a promql query.
     /// This function throws an exception if something is wrong with the syntax.
-    /// `timestamp_scale` is a decimal scale used to parse decimals representing timestamps (DateTime64) and offsets (Decimal64).
-    void parse(std::string_view promql_query_, UInt32 timestamp_scale_ = 3);
+    void parse(std::string_view promql_query_);
 
     /// Tries to parse a promql query. Returns true if successful.
     /// If it isn't successful the function sets `error_pos` and `error_message` and returns false.
-    bool tryParse(std::string_view promql_query_, UInt32 timestamp_scale_ = 3, String * error_message_ = nullptr, size_t * error_pos_ = nullptr);
+    bool tryParse(std::string_view promql_query_, String * error_message_ = nullptr, size_t * error_pos_ = nullptr);
 
     bool empty() const { return node_list.empty(); }
     size_t size() const { return node_list.size(); }
