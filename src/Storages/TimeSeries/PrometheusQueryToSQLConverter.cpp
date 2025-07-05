@@ -1,4 +1,4 @@
-#include <Storages/TimeSeries/PrometheusQueryTreeToSQL.h>
+#include <Storages/TimeSeries/PrometheusQueryToSQLConverter.h>
 #include <Parsers/Prometheus/PrometheusQueryTree.h>
 
 
@@ -10,8 +10,54 @@ namespace ErrorCodes
     extern const int NOT_IMPLEMENTED;
 }
 
+class PrometheusQueryToSQLConverter::ASTBuilder
+{
+public:
+    ASTBuilder(const PrometheusQueryToSQLConverter & )
+
+    
+
+private:
+    ASTPtr convertSelector(const PrometheusQueryTree::InstantSelector * instant_selector)
+    {
+
+    }
+};
+
+
+PrometheusQueryToSQLConverter::PrometheusQueryToSQLConverter(
+    const PrometheusQueryTree & promql_,
+    const EvaluationTimeType & evaluation_time_,
+    const TimeSeriesTableInfo & time_series_table_info_,
+    const IntervalType & lookback_delta_,
+    const IntervalType & default_resolution_)
+    : promql(promql_)
+    , evaluation_time(evaluation_time_)
+    , time_series_table_info(time_series_table_info_)
+    , lookback_delta(lookback_delta_)
+    , default_resolution(default_resolution_)
+{
+}
+
+ASTPtr PrometheusQueryToSQLConverter::getSQL() const
+{
+
+}
+
+ColumnsWithTypesAndNames PrometheusQueryToSQLConverter::getResultColumns() const
+{
+
+}
+
+
+
+
 namespace
 {
+
+
+
+    template <typename TimestampType, typename IntervalType>
     class PromQLToSQLConverter
     {
     public:
@@ -26,6 +72,7 @@ namespace
         }
 
     private:
+        /// Converts a selector 
         ASTPtr instantSelectorToSQL(const PrometheusQueryTree::InstantSelector * instant_selector)
         {
             std::optional<TimestampType> evaluation_time;
@@ -62,6 +109,13 @@ namespace
         ASTPtr makeSelector
     };
 }
+
+template <typename TimestampType, typename IntervalType>
+ASTPtr prometheusQueryToSQL(const PrometheusQueryTree & promql,
+                            const StorageID & time_series_table_id,
+                            const TimestampType & evaluation_time,
+                            const IntervalType & lookback_delta,
+                            const IntervalType & default_resolution);
 
 ASTPtr prometheusQueryToSQL(const PrometheusQueryTree & promql,
                             const StorageID & time_series_table_id,
