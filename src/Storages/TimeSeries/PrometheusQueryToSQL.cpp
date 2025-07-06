@@ -37,7 +37,7 @@ private:
 
     /// Represents a SELECT query built for a node in a prometheus query tree.
     /// SELECT <tags>, <timestamp>, <value> FROM <from> [GROUP BY <group_by>]
-    struct QueryPiece
+    struct Piece
     {
         /// Result of the query.
         ResultType result_type;
@@ -76,17 +76,17 @@ private:
     };
 
     /// Collected subqueries.
-    std::vector<std::pair<String, QueryPiece>> subqueries;
+    std::vector<std::pair<String, Piece>> subqueries;
 
-    String addSubquery(QueryPiece && piece)
+    String addSubquery(Piece && piece)
     {
         String name = fmt::format("prom{}", subqueries.size() + 1);
         subqueries.emplace_back(name, std::move(piece));
         return name;
     }
 
-    /// Converts a QueryPiece to AST.
-    static ASTPtr toAST(const QueryPiece & piece)
+    /// Converts a Piece to AST.
+    static ASTPtr toAST(const Piece & piece)
     {
         chassert(!piece.empty);
         auto select_query = std::make_shared<ASTSelectQuery>();
@@ -158,7 +158,7 @@ private:
         return select_query;
     }
 
-    /// Finalizes a QueryPiece built to execute a prometheus query.
+    /// Finalizes a Piece built to execute a prometheus query.
     Piece finalize(Piece && piece)
     {
         Piece res;
@@ -184,7 +184,7 @@ private:
         return res;
     }
 
-    /// Finalizes a QueryPiece returning a string.
+    /// Finalizes a Piece returning a string.
     Piece finalizeWithStringResult(Piece && piece)
     {
         if (piece.string_column && piece.num_columns() == 1)
@@ -202,7 +202,7 @@ private:
         return res;
     }
 
-    /// Finalizes a QueryPiece returning a scalar.
+    /// Finalizes a Piece returning a scalar.
     Piece finalizeWithScalarResult(Piece && piece)
     {
         if (piece.scalar_column && (piece.num_columns() == 1))
@@ -220,7 +220,7 @@ private:
         return res;
     }
 
-    /// Finalizes a QueryPiece returning an instant vector.
+    /// Finalizes a Piece returning an instant vector.
     Piece finalizeWithInstantVectorResult(Piece && piece)
     {
         if (piece.tags_column && piece.timestamp_column && piece.value_column && (piece.num_columns() == 3))
@@ -283,7 +283,7 @@ private:
         return res;
     }
 
-    /// Finalizes a QueryPiece returning a range vector.
+    /// Finalizes a Piece returning a range vector.
     Piece finalizeWithRangeVectorResult(Piece && piece)
     {
         if (piece.tags_column && piece.time_series_column && (piece.num_columns() == 2))
@@ -345,160 +345,6 @@ private:
         return res;
     }
 
-    Piece finalize(Piece && piece)
-    {
-        switch (piece.type)
-        {
-            case ResultType::STRING:
-            {
-                if (piece.empty)
-                {
-                    Piece res;
-                    res.type = piece.type;
-                    res.empty = false;
-                    res.string_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::String);
-                    res.from_table_function = makeASTFunction("null", fmt::format("{} String", TimeSeriesColumnNames::String));
-                    return res;
-                }
-                else if (piece.string_column && piece.num_columns() == 1)
-                {
-                    return piece;
-                }
-                else
-                {
-                    Piece res;
-                    res.type = piece.type;
-                    res.empty = false;
-                    res.string_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::String);
-                    res.from_subquery = toAST(piece);
-                    return res;
-                }
-            }
-            case ResultType::SCALAR:
-            case ResultType::INTERVAL:
-            {
-
-            }
-            case ResultType::INSTANT_VECTOR:
-            {
-                if (piece.empty)
-                {
-                    Piece res;
-                    res.type = piece.type;
-                    res.empty = false;
-                    res.tags_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Tags);
-                    res.timestamp_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Timestamp);
-                    res.value_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Value);
-                    res.from_table_function = makeASTFunction("null",
-                        fmt::format("{} Array(Tuple(String, String)), {} {}, {} {}",
-                                    TimeSeriesColumnNames::Tags, TimeSeriesColumnNames::Timestamp, getTimeSeriesTableInfo().timestamp_data_type,
-                                    TimeSeriesColumnNames::Value, getTimeSeriesTableInfo().value_data_type));
-                    return res;
-                }
-                else if (piece.tags_column && piece.timestamp_column && piece.value_column && piece.num_columns() == 3)
-                {
-                    return piece;
-                }
-                else
-                {
-                    Piece res;
-                    res.type = piece.type;
-                    res.empty = false;
-                    if (piece.tags_column)
-                    {
-                        res.tags_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Tags);
-                    }
-                    else if (piece.group_column)
-                    {
-                        res.tags_column = makeASTFunction("timeSeriesGroupToTags", TimeSeriesColumnNames::Group);
-                        res.tags_column->setAlias(TimeSeriesColumnNames::Tags);
-                        res.group_by.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Group));
-                    }
-                    else if (piece.id_column)
-                    {
-                        res.tags_column = makeASTFunction("timeSeriesIdToTags", TimeSeriesColumnNames::ID);
-                        res.tags_column->setAlias(TimeSeriesColumnNames::Tags);
-                        res.group_by.push_back(makeASTFunction("timeSeriesIdToGroup", TimeSeriesColumnNames::ID));
-                    }
-                    if (piece.timestamp_column && piece.value_column)
-                    {
-                        res.timestamp_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Timestamp);
-                        res.value_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Value);
-                    }
-                    else if (piece.time_series_column)
-                    {
-                        res.where = makeASTFunction("notEmpty", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::TimeSeries));
-                        auto array_element = makeASTFunction("arrayElement", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::TimeSeries), std::make_shared<ASTLiteral>(Field{1}));
-                        res.timestamp_column = makeASTFunction("tupleElement", array_element, std::make_shared<ASTLiteral>(Field{1}));
-                        res.value_column = makeASTFunction("tupleElement", array_element, std::make_shared<ASTLiteral>(Field{2}));
-                    }
-                    res.from_subquery = toAST(piece);
-                    return res;
-                }
-            }
-
-
-        }
-            switch (piece.type)
-            {
-                case ResultType::STRING:
-                {
-                    res.string_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::String);
-                    structure = fmt::format("{} String", res.string_column);
-                    break;
-                }
-                case ResultType::SCALAR:
-                case ResultType::INTERVAL:
-                {
-                    res.scalar_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::String);
-                    structure = fmt::format("{} {}", TimeSeriesColumnNames::String, getTimeSeriesTableInfo().value_data_type);
-                    break;
-                }
-                case ResultType::INSTANT_VECTOR:
-                {
-                    res.tags_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Tags);
-                    res.timestamp_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Timestamp);
-                    res.value_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Value);
-                    structure = fmt::format("{} Array(Tuple(String, String)), {} {}, {} {}",
-                                            TimeSeriesColumnNames::Tags, TimeSeriesColumnNames::Timestamp, getTimeSeriesTableInfo().timestamp_data_type,
-                                            TimeSeriesColumnNames::Value, getTimeSeriesTableInfo().value_data_type);
-                    break;
-                }
-                case ResultType::RANGE_VECTOR:
-                {
-                    res.tags_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Tags);
-                    res.time_series_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::TimeSeries);
-                    structure = fmt::format("{} Array(Tuple(String, String)), {} Array(Tuple({}, {}))",
-                                            TimeSeriesColumnNames::Tags, TimeSeriesColumnNames::TimeSeries,
-                                            getTimeSeriesTableInfo().timestamp_data_type, getTimeSeriesTableInfo().value_data_type);
-                    break;
-                }
-            }
-            res.from_table_function = makeASTFunction("null", structure);
-            return res;
-        }
-
-        if (piece.type == ResultType::STRING)
-        {
-            if (piece.scalar_column && piece.num_columns() == 1)
-                return piece;
-            
-            add
-        }
-
-
-
-
-
-        )
-        else if (piece.sorted_array && res.id && )
-        {
-            if (res.sorted_array)
-            if (res.)
-        }
-        return res;
-    }
-
     /// Builds a query piece to execute a node in a prometheus query tree.
     Piece buildPiece(const PrometheusQueryTree::Node * node)
     {
@@ -508,19 +354,25 @@ private:
             case NodeType::InstantSelector:
                 return buildPieceForSelector(typeid_cast<const PrometheusQueryTree::InstantSelector *>(node));
 
+            case NodeType::RangeSelector:
+                return buildPieceForSelector(typeid_cast<const PrometheusQueryTree::RangeSelector *>(node));
+
+            case NodeType::Function:
+                return buildPieceForFunction(typeid_cast<const PrometheusQueryTree::Function *>(node));
+
+            case NodeType::BinaryOperator:
+                return buildPieceForBinaryOperator(typeid_cast<const PrometheusQueryTree::BinaryOperator *>(node));
+
             default:
-                throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Prometheus query tree node {} is not implemented", node_type);
+                throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Prometheus query tree node type {} is not implemented", node_type);
         }
     }
 
-    /// Builds a query piece to execute an instant or range selector in a prometheus query tree.
+    /// Builds a query piece to execute an instant selector.
     Piece buildPieceForSelector(const PrometheusQueryTree::InstantSelector * instant_selector)
     {
-        Field max_time;
-        Field max_time_offset;
-        Field window = castToIntervalDataType(getLookbackDelta());
+        Field max_time, max_time_offset, window;
         Field range, step;
-        bool apply_function_last = true;
 
         for (const auto * parent = instant_selector->parent; parent; parent = parent->parent)
         {
@@ -528,7 +380,6 @@ private:
             {
                 const auto * range_selector = typeid_cast<const PrometheusQueryTree::RangeSelector *>(parent);
                 window = castToIntervalDataType(scalarOrIntervalNodeToField(range_selector->range));
-                apply_function_last = false;
             }
             else if (parent->node_type == NodeType::At)
             {
@@ -569,6 +420,8 @@ private:
             max_time = castToTimestampDataType(getEvaluationTime());
         if (!max_time_offset.isNull())
             max_time = sub(max_time, max_time_offset);
+        if (window.isNull())
+            window = castToIntervalDataType(getLookbackDelta());
         Field min_time = sub(max_time, window);
         if (!range.isNull())
             min_time = sub(min_time, range);
@@ -579,7 +432,7 @@ private:
         res.id = std::make_shared<ASTIdentifier>("id");
         res.timestamp = std::make_shared<ASTIdentifier>("timestamp");
         res.value = std::make_shared<ASTIdentifier>("value");
-        res.empty = false;
+        res.window = window;
 
         if (apply_function_last)
         {
@@ -601,10 +454,34 @@ private:
             res.timestamp = std::make_shared<ASTIdentifier>(Strings{alias, "1"});
             res.value = std::make_shared<ASTIdentifier>(Strings{alias, "2"});
             res.group_by = makeGroupByID(res.id);
-            res.sorted_arrays = true;
+            res.result_type = ResultType::INSTANT_VECTOR;
         }
 
         return res;
+    }
+
+    /// Builds a query piece to execute a range selector.
+    Piece buildPieceForSelector(const PrometheusQueryTree::RangeSelector * range_selector)
+    {
+        /// buildPieceForSelector() for an instant selector can understand when its' a part of a range selector.
+        return buildPieceForSelector(range_selector->getInstantSelector());
+    }
+
+    Piece buildPieceForFunction(const PrometheusQueryTree::Function * func)
+    {
+        if (func->function_name == "rate")
+        {
+            std::vector<Piece> args = buildPiecesForArguments(func);
+            checkNumberArguments(func->function_name, args, 1);
+            checkArgumentType(func->function_name, args[0], ResultType::RANGE_VECTOR);
+            Piece
+        }
+        throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Function {} is not implemented", func->function_name);
+    }
+
+    Piece buildPieceForBinaryOperator(const PrometheusQueryTree::BinaryOperator * binary_operator)
+    {
+        throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Binary operator {} is not implemented", binary_operator->operator_name);
     }
 
     std::string_view getPromQLText(const PrometheusQueryTree::Node * node)
@@ -632,11 +509,6 @@ private:
     ASTs makeGroupByID(ASTPtr id)
     {
         return {makeASTFunction("timeSeriesIdToGroup", id)};
-    }
-
-    String getAliasName()
-    {
-        return fmt::format("prom{}", ++num_aliases);
     }
 
     /// Extracts a scalar value or an interval value.
@@ -825,92 +697,6 @@ ColumnsDescription PrometheusQueryToSQLConverter::getResultColumns() const
             break;
         }
     }
-}
-
-}
-
-
-
-
-
-
-
-namespace
-{
-
-
-
-    template <typename TimestampType, typename IntervalType>
-    class PromQLToSQLConverter
-    {
-    public:
-        ASTPtr nodeToSQL(const PrometheusQueryTree::Node * node)
-        {
-            auto node_type = node->node_type;
-            switch (node_type)
-            {
-                case NodeType::InstantSelector:
-                    return instantSelectorToSQL(typeid_cast<const PrometheusQueryTree::InstantSelector *>(node));
-            }
-        }
-
-    private:
-        /// Converts a selector 
-        ASTPtr instantSelectorToSQL(const PrometheusQueryTree::InstantSelector * instant_selector)
-        {
-            std::optional<TimestampType> evaluation_time;
-            IntervalType evaluation_time_offset = 0;
-            TimestampType range = lookback_delta;
-
-            for (const auto * parent = instant_selector->parent; parent; parent = parent->parent)
-            {
-                if (parent->node_type == NodeType::RangeSelector)
-                {
-                    const auto * range_selector = typeid_cast<const PrometheusQueryTree::RangeSelector *>(parent);
-                    range = range_selector->range;
-                }
-                else if (parent->node_type == NodeType::At)
-                {
-                    const auto * at_parent = typeid_cast<const PrometheusQueryTree::At *>(parent);
-                    if (at_parent->at && !evaluation_time)
-                        evaluation_time = *at_parent->at;
-                    if ()
-                }
-                else if (parent->node_type == NodeType::Subquery)
-                {
-                    const auto * subquery_parent = typeid_cast<const PrometheusQueryTree::Subquery *>(parent);
-                    range = subquery_parent->
-                }
-            }
-        }
-
-        PrometheusQueryTree promql;
-        StorageID time_series_table_id;
-        TimestampType evaluation_time;
-        OffsetType lookback_delta;
-
-        ASTPtr makeSelector
-    };
-}
-
-template <typename TimestampType, typename IntervalType>
-ASTPtr prometheusQueryToSQL(const PrometheusQueryTree & promql,
-                            const StorageID & time_series_table_id,
-                            const TimestampType & evaluation_time,
-                            const IntervalType & lookback_delta,
-                            const IntervalType & default_resolution);
-
-ASTPtr prometheusQueryToSQL(const PrometheusQueryTree & promql,
-                            const StorageID & time_series_table_id,
-                            const PrometheusQueryTree::Timestamp & evaluation_time,
-                            const PrometheusQueryTree::OffsetType & lookback_delta)
-{
-    if (promql.empty())
-        throw Exception();
-
-    const auto * node = promql.getRoot();
-    return PromQLToSQLConverter{promql, time_series_table_id, lookback_delta}.nodeToSQL(promql.getRoot(), evaluation_time);
-
 }
 
 }
