@@ -33,6 +33,10 @@ struct TimeSeriesColumnNames
     static constexpr const char * Type = "type";
     static constexpr const char * Unit = "unit";
     static constexpr const char * Help = "help";
+
+    static constexpr const char * TimeSeries = "time_series";
+    static constexpr const char * Scalar = "scalar";
+    static constexpr const char * String = "string";
 };
 
 }
