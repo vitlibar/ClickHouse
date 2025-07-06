@@ -371,31 +371,32 @@ private:
     /// Builds a query piece to execute an instant selector.
     Piece buildPieceForSelector(const PrometheusQueryTree::InstantSelector * instant_selector)
     {
-        Field max_time, max_time_offset, window;
-        Field range, step;
+        Field max_time, max_time_offset, window, range, step;
+        bool is_range_selector = false;
 
         for (const auto * parent = instant_selector->parent; parent; parent = parent->parent)
         {
             if (parent->node_type == NodeType::RangeSelector)
             {
                 const auto * range_selector = typeid_cast<const PrometheusQueryTree::RangeSelector *>(parent);
-                window = castToIntervalDataType(scalarOrIntervalNodeToField(range_selector->range));
+                is_range_selector = true;
+                window = castToIntervalDataType(nodeToField(range_selector->range));
             }
             else if (parent->node_type == NodeType::At)
             {
                 const auto * at_node = typeid_cast<const PrometheusQueryTree::At *>(parent);
                 if (max_time.isNull())
                 {
-                    if (const auto * at = at_node->getAt())
-                        max_time = castToTimestampDataType(scalarOrIntervalNodeToField(at));
                     if (const auto * offset = at_node->getOffset())
                     {
-                        auto casted_offset = castToIntervalDataType(scalarOrIntervalNodeToField(offset));
+                        auto casted_offset = castToIntervalDataType(nodeToField(offset));
                         if (max_time_offset.isNull())
                             max_time_offset = casted_offset;
                         else
                             max_time_offset = add(max_time_offset, casted_offset);
                     }
+                    if (const auto * at = at_node->getAt())
+                        max_time = castToTimestampDataType(nodeToField(at));
                 }
             }
             else if (parent->node_type == NodeType::Subquery)
@@ -404,11 +405,11 @@ private:
                 if (step.isNull())
                 {
                     if (const auto * resolution = subquery_node->getResolution())
-                        step = castToIntervalDataType(scalarOrIntervalNodeToField(resolution));
+                        step = castToIntervalDataType(nodeToField(resolution));
                     else
                         step = castToIntervalDataType(getDefaultResolution());
                 }
-                auto subquery_range = castToIntervalDataType(scalarOrIntervalNodeToField(subquery_node->getRange()));
+                auto subquery_range = castToIntervalDataType(nodeToField(subquery_node->getRange()));
                 if (range.isNull())
                     range = subquery_range;
                 else
@@ -420,23 +421,27 @@ private:
             max_time = castToTimestampDataType(getEvaluationTime());
         if (!max_time_offset.isNull())
             max_time = sub(max_time, max_time_offset);
-        if (window.isNull())
+
+        if (!is_range_selector)
             window = castToIntervalDataType(getLookbackDelta());
+
         Field min_time = sub(max_time, window);
         if (!range.isNull())
             min_time = sub(min_time, range);
 
         Piece res;
-
         res.from_table_function = makeASTFunction("timeSeriesSelector", getPromQLText(instant_selector), std::make_shared<ASTLiteral>(min_time), std::make_shared<ASTLiteral>(max_time));
-        res.id = std::make_shared<ASTIdentifier>("id");
-        res.timestamp = std::make_shared<ASTIdentifier>("timestamp");
-        res.value = std::make_shared<ASTIdentifier>("value");
-        res.window = window;
 
-        if (apply_function_last)
+        if (res.is_range_selector)
         {
-            String alias = getAliasName();
+            res.id = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::ID);
+            res.timestamp = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Timestamp);
+            res.value = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Value);
+            res.result_type = ResultType::RANGE_VECTOR;
+            res.window = window;
+        }
+        else
+        {
             Field start_time = max_time;
             if (step.isNull())
             {
@@ -446,14 +451,19 @@ private:
             {
                 start_time = alignStartTime(sub(max_time, range), max_time, step);
                 if (!start_time)
-                    return {}; /// Couldn't align by `step` within a specified range.
+                {
+                    /// Couldn't align by `step` within a specified range.
+                    Piece empty;
+                    empty.result_type = ResultType::INSTANT_VECTOR;
+                    return empty;
+                }
             }
 
-            auto grid_function = makeGridFunction("timeSeriesLastToGrid", start_time, max_time, step, res.timestamp, res.value, alias);
-            res.extra_columns.push_back(grid_function);
-            res.timestamp = std::make_shared<ASTIdentifier>(Strings{alias, "1"});
-            res.value = std::make_shared<ASTIdentifier>(Strings{alias, "2"});
-            res.group_by = makeGroupByID(res.id);
+            res.group_column = makeASTFunction("timeSeriesIdToGroup", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::ID));
+            res.group_column->setAlias(TimeSeriesColumnNames::Group);
+            res.time_series_column = makeGridFunction("timeSeriesLastToGrid", start_time, max_time, step, res.timestamp, res.value);
+            res.time_series_column->setAlias(TimeSeriesColumnNames::TimeSeries);
+            res.group_by.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Group));
             res.result_type = ResultType::INSTANT_VECTOR;
         }
 
@@ -469,14 +479,94 @@ private:
 
     Piece buildPieceForFunction(const PrometheusQueryTree::Function * func)
     {
-        if (func->function_name == "rate")
+        std::vector<Piece> args = buildPiecesForArguments(func);
+        /*if (func->function_name == "rate")
+            return buildPieceForRangeFunction(func, std::move(args));
+        else
+        */
+            throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Function {} is not implemented", func->function_name);
+    }
+
+    Piece buildPieceForRangeFunction(const PrometheusQueryTree::Function * func, std::vector<Piece> && arguments)
+    {
+        checkNumberArguments(func->function_name, args, 1);
+        checkArgumentType(func->function_name, args[0], ResultType::RANGE_VECTOR);
+
+        Field window = args[0].window;
+        Field max_time, max_time_offset, range, step;
+
+        for (const auto * parent = func->parent; parent; parent = parent->parent)
         {
-            std::vector<Piece> args = buildPiecesForArguments(func);
-            checkNumberArguments(func->function_name, args, 1);
-            checkArgumentType(func->function_name, args[0], ResultType::RANGE_VECTOR);
-            Piece
+            if (parent->node_type == NodeType::At)
+            {
+                const auto * at_node = typeid_cast<const PrometheusQueryTree::At *>(parent);
+                if (max_time.isNull())
+                {
+                    if (const auto * offset = at_node->getOffset())
+                    {
+                        auto casted_offset = castToIntervalDataType(nodeToField(offset));
+                        if (max_time_offset.isNull())
+                            max_time_offset = casted_offset;
+                        else
+                            max_time_offset = add(max_time_offset, casted_offset);
+                    }
+                    if (const auto * at = at_node->getAt())
+                        max_time = castToTimestampDataType(nodeToField(at));
+                }
+            }
+            else if (parent->node_type == NodeType::Subquery)
+            {
+                const auto * subquery_node = typeid_cast<const PrometheusQueryTree::Subquery *>(parent);
+                if (step.isNull())
+                {
+                    if (const auto * resolution = subquery_node->getResolution())
+                        step = castToIntervalDataType(nodeToField(resolution));
+                    else
+                        step = castToIntervalDataType(getDefaultResolution());
+                }
+                auto subquery_range = castToIntervalDataType(nodeToField(subquery_node->getRange()));
+                if (range.isNull())
+                    range = subquery_range;
+                else
+                    range = add(range, subquery_range);
+            }
         }
-        throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Function {} is not implemented", func->function_name);
+
+        if (max_time.isNull())
+            max_time = castToTimestampDataType(getEvaluationTime());
+        if (!max_time_offset.isNull())
+            max_time = sub(max_time, max_time_offset);
+
+        Field min_time = sub(max_time, window);
+        if (!range.isNull())
+            min_time = sub(min_time, range);
+
+        Field start_time = max_time;
+        if (step.isNull())
+        {
+            step = getDummyStep();
+        }
+        else
+        {
+            start_time = alignStartTime(sub(max_time, range), max_time, step);
+            if (!start_time)
+            {
+                /// Couldn't align by `step` within a specified range.
+                Piece empty;
+                empty.result_type = ResultType::INSTANT_VECTOR;
+                return empty;
+            }
+        }
+
+        Piece res;
+        res.result_type = ResultType::INSTANT_VECTOR;
+
+        res.group_column = makeASTFunction("timeSeriesIdToGroup", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::ID));
+        res.group_column->setAlias(TimeSeriesColumnNames::Group);
+        res.time_series_column = makeGridFunction("timeSeriesLastToGrid", start_time, max_time, step, res.timestamp, res.value);
+        res.time_series_column->setAlias(TimeSeriesColumnNames::TimeSeries);
+        res.group_by.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Group));
+        res.result_type = ResultType::INSTANT_VECTOR;
     }
 
     Piece buildPieceForBinaryOperator(const PrometheusQueryTree::BinaryOperator * binary_operator)
@@ -490,29 +580,18 @@ private:
     }
 
     ASTPtr makeGridFunction(const String & function_name, const Field & start_time, const Field & end_time, const Field & step,
-                            ASTPtr timestamp, ASTPtr value, const String & alias)
+                            ASTPtr timestamp_column, ASTPtr value_column)
     {
-        auto aggregate_function = std::make_shared<ASTFunction>();
-        aggregate_function->name = function_name;
+        auto aggregate_function = makeASTFunction(function_name, timestamp_column, value_column);
         aggregate_function->parameters = std::make_shared<ASTExpressionList>();
         aggregate_function->parameters->children.push_back(std::make_shared<ASTLiteral>(start_time));
         aggregate_function->parameters->children.push_back(std::make_shared<ASTLiteral>(end_time));
         aggregate_function->parameters->children.push_back(std::make_shared<ASTLiteral>(step));
-        aggregate_function->arguments = std::make_shared<ASTExpressionList>();
-        aggregate_function->arguments->children.push_back(timestamp);
-        aggregate_function->arguments->children.push_back(value);
-        auto grid_function = makeASTFunction("timeSeriesGrid", std::make_shared<ASTLiteral>(start_time), std::make_shared<ASTLiteral>(step), aggregate_function);
-        grid_function->setAlias(alias);
-        return grid_function;
-    }
-
-    ASTs makeGroupByID(ASTPtr id)
-    {
-        return {makeASTFunction("timeSeriesIdToGroup", id)};
+        return makeASTFunction("timeSeriesGrid", std::make_shared<ASTLiteral>(start_time), std::make_shared<ASTLiteral>(step), aggregate_function);
     }
 
     /// Extracts a scalar value or an interval value.
-    static Field scalarOrIntervalNodeToField(const PrometheusQueryTree::Node * scalar_or_interval_node)
+    static Field nodeToField(const PrometheusQueryTree::Node * scalar_or_interval_node)
     {
         auto node_type = scalar_or_interval_node->node_type;
         if (node_type == NodeType::ScalarLiteral)
