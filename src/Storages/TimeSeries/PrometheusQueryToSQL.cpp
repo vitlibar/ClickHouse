@@ -28,7 +28,6 @@ public:
 
 private:
     const PrometheusQueryToSQLConverter & converter;
-    size_t num_aliases = 0;
 
     const PrometheusQueryTree & getPromQLTree() const { return converter.promql; }
     const TimeSeriesTableInfo & getTimeSeriesTableInfo() const { return converter.time_series_table_info; }
@@ -36,23 +35,17 @@ private:
     using NodeType = PrometheusQueryTree::NodeType;
     using ResultType = PrometheusQueryResultType;
 
-    struct ExpressionAndAlias
-    {
-        ASTPtr expression;
-        String alias;
-    };
-
     /// Represents a SELECT query built for a node in a prometheus query tree.
     /// SELECT <tags>, <timestamp>, <value> FROM <from> [GROUP BY <group_by>]
     struct QueryPiece
     {
-        ResultType type;
-        bool empty = true;
+        /// Result of the query.
+        ResultType result_type;
 
-        /// Expressions to select.
-        ASTs select;
+        /// A window is extracted from a range selector. The window is used only by functions accepting range vectors, e.g. rate().
+        Field window;
 
-        /// Columns (nullptr if there is no such column).
+        /// Columns to select (nullptr if there is no such column).
         /// The names of these columns are always TimeSeriesColumnNames::ID and so on.
         ASTPtr id_column;
         ASTPtr group_column;
@@ -69,15 +62,28 @@ private:
                 + (value_column != nullptr) + (time_series_column != nullptr) + (scalar_column != nullptr) + (string_column != nullptr);
         }
 
-        /// The table expression to read from.
+        bool empty () const { return num_columns() == 0; }
+
+        /// The FROM expression - either a table function or the CTE name of a subquery.
         ASTPtr from_table_function;
-        ASTPtr from_subquery;
+        String from_subquery;
 
         /// The GROUP BY expression.
         ASTs group_by;
 
         ASTPtr where;
+        std::vector<std::pair<String, ASTPtr>> with;
     };
+
+    /// Collected subqueries.
+    std::vector<std::pair<String, QueryPiece>> subqueries;
+
+    String addSubquery(QueryPiece && piece)
+    {
+        String name = fmt::format("prom{}", subqueries.size() + 1);
+        subqueries.emplace_back(name, std::move(piece));
+        return name;
+    }
 
     /// Converts a QueryPiece to AST.
     static ASTPtr toAST(const QueryPiece & piece)
@@ -105,16 +111,21 @@ private:
             select_list.push_back(piece.string_column);
         select_query->setExpression(ASTSelectQuery::Expression::SELECT, select_list_exp);
 
-        if (piece.from_table_function || piece.from_subquery)
+        if (piece.from_table || piece.from_table_function)
         {
             auto tables = std::make_shared<ASTTablesInSelectQuery>();
             auto table = std::make_shared<ASTTablesInSelectQueryElement>();
             auto table_exp = std::make_shared<ASTTableExpression>();
-            if (piece.from_table_function)
+            if (piece.from_subquery)
+            {
+                table_exp->database_and_table_name = std::make_shared<ASTTableIdentifier>(piece.from_subquery);
+                table_exp->children.emplace_back(table_exp->database_and_table_name);
+            }
+            else if (piece.from_table_function)
+            {
                 table_exp->table_function = piece.from_table_function;
-            else
-                table_exp->subquery = piece.from_subquery;
-            table_exp->children.emplace_back(table_exp->database_and_table_name);
+                table_exp->children.emplace_back(table_exp->table_function);
+            }
             table->table_expression = table_exp;
             tables->children.push_back(table);
             select_query->setExpression(ASTSelectQuery::Expression::TABLES, tables);
@@ -130,22 +141,50 @@ private:
         if (piece.where)
             select_query->setExpression(ASTSelectQuery::Expression::WHERE, where);
 
+        if (!piece.with.empty())
+        {
+            auto with_expression_list_ast = std::make_shared<ASTExpressionList>();
+            with_expression_list_ast->children.push_back(std::move(with_element_ast));
+            for (const auto & [name, ast] : piece.with)
+            {
+                auto with_element_ast = std::make_shared<ASTWithElement>();
+                with_element_ast->name = name;
+                with_element_ast->subquery = std::make_shared<ASTSubquery>(ast);
+                with_element_ast->children.push_back(with_element_ast->subquery);
+            }
+            select_query->setExpression(ASTSelectQuery::Expression::WITH, std::move(with_expression_list_ast));
+        }
+            
         return select_query;
     }
 
     /// Finalizes a QueryPiece built to execute a prometheus query.
     Piece finalize(Piece && piece)
     {
-        switch (piece.type)
+        Piece res;
+
+        /// Finalize depending on the result type.
+        switch (piece.result_type)
         {
-            case ResultType::STRING: return finalizeWithStringResult(std::move(piece));
-            case ResultType::SCALAR:
-            case ResultType::INTERVAL: return finalizeWithScalarResult(std::move(piece));
-            case ResultType::INSTANT_VECTOR: return finalizeWithInstantVectorResult(std::move(piece));
-            case ResultType::RANGE_VECTOR: return finalizeWithRangeVectorResult(std::move(piece));
+            case ResultType::STRING: res = finalizeWithStringResult(std::move(piece)); break;
+            case ResultType::SCALAR: /// nobreak
+            case ResultType::INTERVAL: res = finalizeWithScalarResult(std::move(piece)); break;
+            case ResultType::INSTANT_VECTOR: res = finalizeWithInstantVectorResult(std::move(piece)); break;
+            case ResultType::RANGE_VECTOR: res = finalizeWithRangeVectorResult(std::move(piece)); break;
         }
+
+        /// Add subqueries as CTEs to the final query.
+        if (!subqueries.empty())
+        {
+            res.with.reserve(subqueries.size());
+            for (const auto & [name, piece_for_subquery] : subqueries)
+                res.with.push_back(name, toAST(piece_for_subquery));
+        }
+
+        return res;
     }
 
+    /// Finalizes a QueryPiece returning a string.
     Piece finalizeWithStringResult(Piece && piece)
     {
         if (piece.string_column && piece.num_columns() == 1)
@@ -153,52 +192,157 @@ private:
 
         Piece res;
         res.type = piece.type;
-        res.empty = false;
         res.string_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::String);
 
-        if (piece.empty)
+        if (piece.empty())
             res.from_table_function = makeASTFunction("null", fmt::format("{} String", TimeSeriesColumnNames::String));
         else
-            res.from_subquery = toAST(piece);
+            res.from_subquery = addSubquery(std::move(piece));
 
         return res;
     }
 
+    /// Finalizes a QueryPiece returning a scalar.
     Piece finalizeWithScalarResult(Piece && piece)
     {
-        if (piece.empty)
+        if (piece.scalar_column && (piece.num_columns() == 1))
+            return piece;
+
+        Piece res;
+        res.type = piece.type;
+        res.scalar_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Scalar);
+
+        if (piece.empty())
+            res.from_table_function = makeASTFunction("null", fmt::format("{} {}", TimeSeriesColumnNames::Scalar, getTimeSeriesTableInfo().value_data_type));
+        else
+            res.from_subquery = addSubquery(std::move(piece));
+
+        return res;
+    }
+
+    /// Finalizes a QueryPiece returning an instant vector.
+    Piece finalizeWithInstantVectorResult(Piece && piece)
+    {
+        if (piece.tags_column && piece.timestamp_column && piece.value_column && (piece.num_columns() == 3))
+            return piece;
+
+        Piece res;
+        res.type = piece.type;
+
+        if (piece.empty())
         {
-            Piece res;
-            res.type = piece.type;
-            res.empty = false;
-            res.scalar_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Scalar);
+            res.tags_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Tags);
+            res.timestamp_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Timestamp);
+            res.value_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Value);
             res.from_table_function = makeASTFunction("null",
-                fmt::format("{} {}", TimeSeriesColumnNames::Scalar, getTimeSeriesTableInfo().value_data_type));
+                fmt::format("{} Array(Tuple(String, String)), {} {}, {} {}",
+                            TimeSeriesColumnNames::Tags, TimeSeriesColumnNames::Timestamp, getTimeSeriesTableInfo().timestamp_data_type,
+                            TimeSeriesColumnNames::Value, getTimeSeriesTableInfo().value_data_type));
             return res;
         }
-        else if (piece.string_column && piece.num_columns() == 1)
+
+        if (piece.tags_column)
         {
-            return piece;
+            res.tags_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Tags);
+        }
+        else if (piece.group_column)
+        {
+            res.tags_column = makeASTFunction("timeSeriesGroupToTags", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Group));
+            res.tags_column->setAlias(TimeSeriesColumnNames::Tags);
+            res.group_by.push_back(std::make_shared<ASTIdentifier>(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Group)));
+        }
+        else if (piece.id_column)
+        {
+            res.tags_column = makeASTFunction("timeSeriesIdToTags", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::ID));
+            res.tags_column->setAlias(TimeSeriesColumnNames::Tags);
+            res.group_by.push_back(makeASTFunction("timeSeriesIdToGroup", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::ID)));
         }
         else
         {
-            Piece res;
-            res.type = piece.type;
-            res.empty = false;
-            res.scalar_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Scalar);
-            res.from_subquery = toAST(piece);
-            return res;
+            throw Exception(ErrorCodes::LOGICAL_ERROR, "Expected columns {} or {} or {} while building an SQL query", TimeSeriesColumnNames::Tags, TimeSeriesColumnNames::Group, TimeSeriesColumnNames::ID);
         }
+
+        if (piece.timestamp_column && piece.value_column)
+        {
+            res.timestamp_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Timestamp);
+            res.value_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Value);
+        }
+        else if (piece.time_series_column)
+        {
+            res.where = makeASTFunction("notEmpty", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::TimeSeries));
+            auto array_element = makeASTFunction("arrayLast", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::TimeSeries));
+            res.timestamp_column = makeASTFunction("tupleElement", array_element, std::make_shared<ASTLiteral>(Field{1}));
+            res.value_column = makeASTFunction("tupleElement", array_element, std::make_shared<ASTLiteral>(Field{2}));
+        }
+        else
+        {
+            throw Exception(ErrorCodes::LOGICAL_ERROR, "Expected columns ({} and {}) or {} while building an SQL query", TimeSeriesColumnNames::Timestamp, TimeSeriesColumnNames::Value, TimeSeriesColumnNames::TimeSeries);
+        }
+
+        res.from_subquery = addSubquery(std::move(piece));
+        return res;
     }
 
-    Piece finalizeWithInstantVectorResult(Piece && piece)
-    {
-        
-    }
-
+    /// Finalizes a QueryPiece returning a range vector.
     Piece finalizeWithRangeVectorResult(Piece && piece)
     {
-        
+        if (piece.tags_column && piece.time_series_column && (piece.num_columns() == 2))
+            return piece;
+
+        Piece res;
+        res.type = piece.type;
+
+        if (piece.empty())
+        {
+            res.tags_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Tags);
+            res.time_series_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::TimeSeries);
+            res.from_table_function = makeASTFunction("null",
+                fmt::format("{} Array(Tuple(String, String)), {} Array(Tuple({}, {}))",
+                            TimeSeriesColumnNames::Tags, TimeSeriesColumnNames::TimeSeries,
+                            getTimeSeriesTableInfo().timestamp_data_type, getTimeSeriesTableInfo().value_data_type));
+            return res;
+        }
+
+        if (piece.tags_column)
+        {
+            res.tags_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Tags);
+        }
+        else if (piece.group_column)
+        {
+            res.tags_column = makeASTFunction("timeSeriesGroupToTags", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Group));
+            res.tags_column->setAlias(TimeSeriesColumnNames::Tags);
+            res.group_by.push_back(std::make_shared<ASTIdentifier>(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Group)));
+        }
+        else if (piece.id_column)
+        {
+            res.tags_column = makeASTFunction("timeSeriesIdToTags", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::ID));
+            res.tags_column->setAlias(TimeSeriesColumnNames::Tags);
+            res.group_by.push_back(makeASTFunction("timeSeriesIdToGroup", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::ID)));
+        }
+        else
+        {
+            throw Exception(ErrorCodes::LOGICAL_ERROR, "Expected columns {} or {} or {} while building an SQL query", TimeSeriesColumnNames::Tags, TimeSeriesColumnNames::Group, TimeSeriesColumnNames::ID);
+        }
+
+        if (piece.time_series_column)
+        {
+            res.time_series_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::TimeSeries);
+        }
+        else if (piece.timestamp_column && piece.value_column)
+        {
+            auto group_array_function = makeASTFunction("timeSeriesGroupArraySorted",
+                                                        std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Timestamp),
+                                                        std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Value));
+            group_array_function->setAlias(TimeSeriesColumnNames::TimeSeries);
+            res.time_series_column = group_array_function;
+        }
+        else
+        {
+            throw Exception(ErrorCodes::LOGICAL_ERROR, "Expected columns ({} and {}) or {} while building an SQL query", TimeSeriesColumnNames::Timestamp, TimeSeriesColumnNames::Value, TimeSeriesColumnNames::TimeSeries);
+        }
+
+        res.from_subquery = addSubquery(std::move(piece));
+        return res;
     }
 
     Piece finalize(Piece && piece)
