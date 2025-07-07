@@ -879,6 +879,7 @@ template DecimalField<Decimal256>::operator Float64() const;
 template DecimalField<DateTime64>::operator Float32() const;
 template DecimalField<DateTime64>::operator Float64() const;
 
+
 template <typename T>
 NearestFieldType<std::decay_t<T>> & Field::safeGet() &
 {

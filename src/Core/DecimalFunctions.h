@@ -378,6 +378,18 @@ bool tryConvertTo(const DecimalType & decimal, UInt32 scale, To & result)
     return convertToImpl<To, DecimalType, bool>(decimal, scale, result);
 }
 
+/// Converts a decimal to another decimal.
+template <is_decimal To, typename DecimalType>
+To convertTo(UInt32 to_scale, const DecimalType & decimal, UInt32 scale)
+{
+    if (to_scale_ > scale)
+        return decimal.convertTo<To>().value * scaleMultiplier<T>(to_scale - scale);
+    else if (to_scale < scale)
+        return decimal.convertTo<To>().value / DecimalUtils::scaleMultiplier<T>(scale - to_scale);
+    else
+        return decimal.convertTo<To>();
+}
+
 template <bool is_multiply, bool is_division, typename T, typename U, template <typename> typename DecimalType>
 inline auto binaryOpResult(const DecimalType<T> & tx, const DecimalType<U> & ty)
 {
