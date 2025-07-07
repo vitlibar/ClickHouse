@@ -382,12 +382,12 @@ bool tryConvertTo(const DecimalType & decimal, UInt32 scale, To & result)
 template <is_decimal To, typename DecimalType>
 To convertTo(UInt32 to_scale, const DecimalType & decimal, UInt32 scale)
 {
-    if (to_scale_ > scale)
-        return decimal.convertTo<To>().value * scaleMultiplier<T>(to_scale - scale);
+    if (to_scale > scale)
+        return decimal.template convertTo<To>().value * scaleMultiplier<To>(to_scale - scale);
     else if (to_scale < scale)
-        return decimal.convertTo<To>().value / DecimalUtils::scaleMultiplier<T>(scale - to_scale);
+        return decimal.template convertTo<To>().value / DecimalUtils::scaleMultiplier<To>(scale - to_scale);
     else
-        return decimal.convertTo<To>();
+        return decimal.template convertTo<To>();
 }
 
 template <bool is_multiply, bool is_division, typename T, typename U, template <typename> typename DecimalType>

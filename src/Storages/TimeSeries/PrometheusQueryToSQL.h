@@ -1,8 +1,13 @@
 #pragma once
 
+#include <DataTypes/IDataType.h>
+#include <Interpreters/StorageID.h>
+#include <Parsers/Prometheus/PrometheusQueryTree.h>
+
 
 namespace DB
 {
+class ColumnsDescription;
 
 /// Converts a parsed prometheus query to SQL.
 class PrometheusQueryToSQLConverter
