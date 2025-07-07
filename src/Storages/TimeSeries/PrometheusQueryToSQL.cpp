@@ -13,9 +13,21 @@ namespace ErrorCodes
 namespace
 {
     template <typename TimestampType, typename IntervalType>
-    bool alignStartTimeAndEndTimeImpl(Field & start_time, Field & end_time, const Field & step)
+    bool alignStartTimeAndEndTimeTemplate(Field & start_time, Field & end_time, const Field & step)
     {
-        
+        TimestampType start_time_value = start_time.safeGet<TimestampType>();
+        TimestampType end_time_value = end_time.safeGet<TimestampType>();
+        IntervalType step_value = step.safeGet<IntervalType>();
+
+        start_time_value = (start_time_value + step_value - 1) / step_value * step_value;
+        end_time_value = end_time_value / step_value * step_value;
+
+        if (start_time_value > end_time_value)
+            return false;
+
+        start_time = start_time_value;
+        end_time = end_time_value;
+        return true;
     }
 
     /// Increases the start time by some value to make it divisible by `step`.
@@ -23,35 +35,70 @@ namespace
     /// If after that still `start_time <= end_time` then the function returns true.
     bool alignStartTimeAndEndTime(Field & start_time, Field & end_time, const Field & step)
     {
-        auto align_int = [](auto start_time_, auto end_time_, auto step_)
-        {
-            if (step_ <= 0)
-                throw Exception();
-            auto aligned = (start_time_ + step_ - 1) / step_;
-            if (aligned > end_time_)
-                return Field{};
-            return Field{aligned};
-        };
-
         if ((start_time.getType() == end_time.getType()) && (start_time.getType() == step.getType()))
         {
             switch (left.getType())
             {
-                case Field::Types::Int64: return align_int(start_time.safeGet<Int64>(), end_time.safeGet<Int64>(), step.safeGet<Int64>());
-                case Field::Types::UInt64: return align_int(start_time.safeGet<UInt64>(), end_time.safeGet<UInt64>(), step.safeGet<UInt64>());
-                case Field::Types::Decimal32: return align_decimal(start_time.safeGet<Decimal32>(), end_time.safeGet<Decimal32>(), step.safeGet<Decimal32>());
-                case Field::Types::Decimal64: return align_decimal(start_time.safeGet<Decimal64>(), end_time.safeGet<Decimal64>(), step.safeGet<Decimal64>());
+                case Field::Types::Int64: return alignStartTimeAndEndTimeTemplate<Int64, Int64>(start_time, end_time, step);
+                case Field::Types::UInt64: return alignStartTimeAndEndTimeTemplate<UInt64, UInt64>(start_time, end_time, step);
+                case Field::Types::Decimal32: return alignStartTimeAndEndTimeTemplate<Decimal32, Decimal32>(start_time, end_time, step);
+                case Field::Types::Decimal64: return alignStartTimeAndEndTimeTemplate<Decimal64, Decimal64>(start_time, end_time, step);
                 default: break;
             }
         }
         else if ((start_time.getType() == end_time.getType()) && (start_time.getType() == Field::Types::UInt64) && (step.getType() == Field::Types::Int64))
         {
-            return align_int(start_time.safeGet<UInt64>(), end_time.safeGet<UInt64>(), step.safeGet<Int64>());
+            return alignStartTimeAndEndTimeTemplate<UInt64, Int64>(start_time, end_time, step);
         }
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Cannot align start time of type {} by step of type {} with end time of type {}",
                         start_time.getType(), step.getType(), end_time.getType());
     }
+
+    /// Adds a time interval to another time interval or to a timestamp.
+    static Field add(const Field & left, const Field & right)
+    {
+        if (left.getType() == right.getType())
+        {
+            switch (left.getType())
+            {
+                case Field::Types::Int64: return left.safeGet<Int64>() + right.safeGet<Int64>();
+                case Field::Types::UInt64: return left.safeGet<UInt64>() + right.safeGet<UInt64>();
+                case Field::Types::Float64: return left.safeGet<Float64>() + right.safeGet<Float64>();
+                case Field::Types::Decimal32: return left.safeGet<Decimal32>() + right.safeGet<Decimal32>();
+                case Field::Types::Decimal64: return left.safeGet<Decimal64>() + right.safeGet<Decimal64>();
+                default: break;
+            }
+        }
+        else if ((left.getType() == Field::Types::UInt64) && (right.getType() == Field::Types::Int64))
+        {
+            return static_cast<UInt64>(left.safeGet<UInt64>() + right.safeGet<Int64>());
+        }
+        throw Exception(ErrorCodes::LOGICAL_ERROR, "Cannot add {} and {}", left.getType(), right.getType());
+    }
+
+    /// Subtract a time interval from another time interval or from a timestamp.
+    static Field subtract(const Field & left, const Field & right)
+    {
+        if (left.getType() == right.getType())
+        {
+            switch (left.getType())
+            {
+                case Field::Types::Int64: return left.safeGet<Int64>() - right.safeGet<Int64>();
+                case Field::Types::UInt64: return left.safeGet<UInt64>() - right.safeGet<UInt64>();
+                case Field::Types::Float64: return left.safeGet<Float64>() - right.safeGet<Float64>();
+                case Field::Types::Decimal32: return left.safeGet<Decimal32>() - right.safeGet<Decimal32>();
+                case Field::Types::Decimal64: return left.safeGet<Decimal64>() - right.safeGet<Decimal64>();
+                default: break;
+            }
+        }
+        else if ((left.getType() == Field::Types::UInt64) && (right.getType() == Field::Types::Int64))
+        {
+            return static_cast<UInt64>(left.safeGet<UInt64>() - right.safeGet<Int64>());
+        }
+        throw Exception(ErrorCodes::LOGICAL_ERROR, "Cannot subtract {} from {}", right.getType(), left.getType());
+    }
 }
+
 
 class PrometheusQueryToSQLConverter::ASTBuilder
 {
@@ -380,10 +427,10 @@ private:
         switch (node_type)
         {
             case NodeType::InstantSelector:
-                return buildPieceForSelector(typeid_cast<const PrometheusQueryTree::InstantSelector *>(node));
+                return buildPieceForInstantSelector(typeid_cast<const PrometheusQueryTree::InstantSelector *>(node));
 
             case NodeType::RangeSelector:
-                return buildPieceForSelector(typeid_cast<const PrometheusQueryTree::RangeSelector *>(node));
+                return buildPieceForRangeSelector(typeid_cast<const PrometheusQueryTree::RangeSelector *>(node));
 
             case NodeType::Function:
                 return buildPieceForFunction(typeid_cast<const PrometheusQueryTree::Function *>(node));
@@ -397,7 +444,7 @@ private:
     }
 
     /// Builds a query piece to execute an instant selector.
-    Piece buildPieceForSelector(const PrometheusQueryTree::InstantSelector * instant_selector)
+    Piece buildPieceForInstantSelector(const PrometheusQueryTree::InstantSelector * instant_selector)
     {
         Field window = castToIntervalDataType(getLookbackDelta());
 
@@ -430,7 +477,7 @@ private:
     }
 
     /// Builds a query piece to execute a range selector.
-    Piece buildPieceForSelector(const PrometheusQueryTree::RangeSelector * range_selector)
+    Piece buildPieceForRangeSelector(const PrometheusQueryTree::RangeSelector * range_selector)
     {
         const auto * instant_selector = range_selector->getInstantSelector();
         Field window = range_selector->range;
@@ -454,10 +501,9 @@ private:
     Piece buildPieceForFunction(const PrometheusQueryTree::Function * func)
     {
         std::vector<Piece> args = buildPiecesForArguments(func);
-        /*if (func->function_name == "rate")
+        if (func->function_name == "rate")
             return buildPieceForRangeFunction(func, std::move(args));
         else
-        */
             throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Function {} is not implemented", func->function_name);
     }
 
@@ -466,36 +512,54 @@ private:
         checkNumberArguments(func->function_name, args, 1);
         checkArgumentType(func->function_name, args[0], ResultType::RANGE_VECTOR);
 
-        Field window = args[0].window;
+        const auto & arg = args[0];
+
+        std::string_view to_grid_function_name;
+        if (func)
+
+        Field window = arg.window;
 
         Field min_time, max_time, step;
         extractRangeAndStep(func, min_time, max_time, step);
 
-        Field start_time = max_time;
-        if (step.isNull())
+        if (min_time == max_time)
         {
             step = getDummyStep();
         }
+        else if (!alignStartTimeAndEndTime(min_time, max_time, step))
+        {
+            /// Couldn't align by `step`.
+            Piece empty;
+            empty.result_type = ResultType::INSTANT_VECTOR;
+            return empty;
+        }
+
+        Piece intermedite;
+        if (arg.timestamp_column && arg.value_column)
+        {
+            intermediate = arg;
+        }
         else
         {
-            start_time = alignStartAndEndTime(sub(max_time, range), max_time, step);
-            if (!start_time)
-            {
-                /// Couldn't align by `step` within a specified range.
-                Piece empty;
-                empty.result_type = ResultType::INSTANT_VECTOR;
-                return empty;
-            }
+            intermedite.result_type = ResultType::RANGE_VECTOR;
+            intermedite.group_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Group);
+            intermedite.timestamp_column = makeASTFunction("tupleElement", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::TimeSeriees),
+                                                std::make_shared<ASTLiteral>(Field{1}));
+            intermedite.timestamp_column->setAlias(TimeSeriesColumnNames::Timestamp);
+            intermedite.value_column = makeASTFunction("tupleElement", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::TimeSeries),
+                                                std::make_shared<ASTLiteral>(Field{2}));
+            intermedite.value_column->setAlias(TimeSeriesColumnNames::Value);
+            intermediate.from_subquery = addSubquery(arg);
         }
 
         Piece res;
         res.result_type = ResultType::INSTANT_VECTOR;
-
         res.group_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Group);
-        res.time_series_column = makeGridFunction(function_name, start_time, max_time, step, res.timestamp, res.value);
+        res.time_series_column = makeGridFunction(to_grid_function_name, start_time, max_time, step, std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Timestamp), std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Value));
         res.time_series_column->setAlias(TimeSeriesColumnNames::TimeSeries);
         res.group_by.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Group));
-        res.result_type = ResultType::INSTANT_VECTOR;
+        res.from_subquery = addSubquery(intermediate)
+        return res;
     }
 
     Piece buildPieceForBinaryOperator(const PrometheusQueryTree::BinaryOperator * binary_operator)
@@ -614,48 +678,9 @@ private:
     {
     }
 
-    /// Adds a time interval to another time interval or to a timestamp.
-    static Field add(const Field & left, const Field & right)
+    Field getDummyStep() const
     {
-        if (left.getType() == right.getType())
-        {
-            switch (left.getType())
-            {
-                case Field::Types::Int64: return left.safeGet<Int64>() + right.safeGet<Int64>();
-                case Field::Types::UInt64: return left.safeGet<UInt64>() + right.safeGet<UInt64>();
-                case Field::Types::Float64: return left.safeGet<Float64>() + right.safeGet<Float64>();
-                case Field::Types::Decimal32: return left.safeGet<Decimal32>() + right.safeGet<Decimal32>();
-                case Field::Types::Decimal64: return left.safeGet<Decimal64>() + right.safeGet<Decimal64>();
-                default: break;
-            }
-        }
-        else if ((left.getType() == Field::Types::UInt64) && (right.getType() == Field::Types::Int64))
-        {
-            return static_cast<UInt64>(left.safeGet<UInt64>() + right.safeGet<Int64>());
-        }
-        throw Exception(ErrorCodes::LOGICAL_ERROR, "Cannot add {} and {}", left.getType(), right.getType());
-    }
 
-    /// Subtract a time interval from another time interval or from a timestamp.
-    static Field subtract(const Field & left, const Field & right)
-    {
-        if (left.getType() == right.getType())
-        {
-            switch (left.getType())
-            {
-                case Field::Types::Int64: return left.safeGet<Int64>() - right.safeGet<Int64>();
-                case Field::Types::UInt64: return left.safeGet<UInt64>() - right.safeGet<UInt64>();
-                case Field::Types::Float64: return left.safeGet<Float64>() - right.safeGet<Float64>();
-                case Field::Types::Decimal32: return left.safeGet<Decimal32>() - right.safeGet<Decimal32>();
-                case Field::Types::Decimal64: return left.safeGet<Decimal64>() - right.safeGet<Decimal64>();
-                default: break;
-            }
-        }
-        else if ((left.getType() == Field::Types::UInt64) && (right.getType() == Field::Types::Int64))
-        {
-            return static_cast<UInt64>(left.safeGet<UInt64>() - right.safeGet<Int64>());
-        }
-        throw Exception(ErrorCodes::LOGICAL_ERROR, "Cannot subtract {} from {}", right.getType(), left.getType());
     }
 };
 
