@@ -616,6 +616,9 @@ private:
         const auto & function_name = func->function_name;
         std::vector<Piece> args = buildPiecesForArguments(func);
 
+        if (function_name == "sin")
+            return buildPieceForOrdinaryFunction(func, std::move(args));
+
         if (function_name == "rate" || function_name == "irate" || function_name == "delta" || function_name == "idelta" || function_name == "last_over_time")
             return buildPieceForRangeFunction(func, std::move(args));
 
@@ -645,6 +648,33 @@ private:
         res.reserve(func->getArguments().size());
         for (const auto * argument : func->getArguments())
             res.push_back(buildPiece(argument));
+        return res;
+    }
+
+    /// Builds a piece to evaluate an ordinary function, i.e. a function accepting an instant vector and returning an instant vector.
+    Piece buildPieceForOrdinaryFunction(const PrometheusQueryTree::Function * func, std::vector<Piece> && arguments)
+    {
+        checkNumberArguments(func, arguments, 1);
+        checkArgumentType(func, arguments, 0, ResultType::INSTANT_VECTOR);
+
+        auto & argument = arguments[0];
+
+        if (argument.empty())
+            return getEmptyPiece(ResultType::INSTANT_VECTOR);
+
+        std::string_view ch_function_name;
+        if (func->function_name == "sin")
+            ch_function_name = "sin";
+        else
+            throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Function {} is not implemented", func->function_name);
+
+        Piece res;
+        res.result_type = ResultType::INSTANT_VECTOR;
+        res.group_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Group);
+        res.timestamp_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Timestamp);
+        res.value_column = makeASTFunction(ch_function_name, std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Value));
+        res.value_column->setAlias(TimeSeriesColumnNames::Value);
+        res.from_subquery = addSubquery(splitTimeSeriesColumnToTwoNonArrays(std::move(argument)));
         return res;
     }
 
@@ -709,14 +739,14 @@ private:
         throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Binary operator {} is not implemented", binary_operator->operator_name);
     }
 
-    /// Builds a piece splitting the "time_series" column into two columns "timestamp" and "values", both of them are arrays.
+    /// Builds a piece splitting the "time_series" column into two columns "timestamp" and "value", both of them are arrays.
     Piece splitTimeSeriesColumnToTwoArrays(Piece && piece)
     {
         if (!piece.time_series_column)
             return piece;
 
         Piece res;
-        res.result_type = ResultType::RANGE_VECTOR;
+        res.result_type = piece.result_type;
         res.group_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Group);
         res.timestamp_column = makeASTFunction("tupleElement", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::TimeSeries),
                                                std::make_shared<ASTLiteral>(Field{1u}));
@@ -727,6 +757,27 @@ private:
         res.from_subquery = addSubquery(std::move(piece));
         res.timestamp_column_is_array = true;
         res.value_column_is_array = true;
+        return res;
+    }
+
+    /// Builds a piece splitting the "time_series" column into two columns "timestamp" and "value", which are not arrays.
+    Piece splitTimeSeriesColumnToTwoNonArrays(Piece && piece)
+    {
+        if (!piece.time_series_column)
+            return piece;
+
+        Piece res;
+        res.result_type = piece.result_type;
+        res.group_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Group);
+        res.timestamp_column = makeASTFunction("tupleElement", makeASTFunction("arrayJoin",
+                                               std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::TimeSeries)),
+                                               std::make_shared<ASTLiteral>(Field{1u}));
+        res.timestamp_column->setAlias(TimeSeriesColumnNames::Timestamp);
+        res.value_column = makeASTFunction("tupleElement", makeASTFunction("arrayJoin",
+                                           std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::TimeSeries)),
+                                           std::make_shared<ASTLiteral>(Field{2u}));
+        res.value_column->setAlias(TimeSeriesColumnNames::Value);
+        res.from_subquery = addSubquery(std::move(piece));
         return res;
     }
 
