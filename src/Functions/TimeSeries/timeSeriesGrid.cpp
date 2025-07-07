@@ -43,8 +43,8 @@ public:
     {
         checkDataTypes(arguments);
 
-        auto timestamp_type = arguments[1].type;
-        auto value_type = removeNullable(typeid_cast<const DataTypeArray &>(*arguments[0].type).getNestedType());
+        auto timestamp_type = arguments[0].type;
+        auto value_type = removeNullable(typeid_cast<const DataTypeArray &>(*arguments[2].type).getNestedType());
 
         return std::make_shared<DataTypeArray>(std::make_shared<DataTypeTuple>(DataTypes{timestamp_type, value_type}));
     }

@@ -19,7 +19,7 @@ public:
     explicit ASTLiteral(Field value_) : value(std::move(value_)) {}
 
     // This methond and the custom_type are only used for Apache Gluten,
-    explicit ASTLiteral(Field value_, DataTypePtr & type_) : value(std::move(value_))
+    explicit ASTLiteral(Field value_, const DataTypePtr & type_) : value(std::move(value_))
     {
         custom_type = type_;
     }

@@ -16,7 +16,7 @@ public:
     /// Information about a TimeSeries table.
     struct TimeSeriesTableInfo
     {
-        StorageID storage_id;
+        StorageID storage_id = StorageID::createEmpty();
         DataTypePtr timestamp_data_type;
         DataTypePtr value_data_type;
     };

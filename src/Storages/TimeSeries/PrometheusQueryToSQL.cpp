@@ -10,6 +10,7 @@
 #include <Parsers/ASTIdentifier.h>
 #include <Parsers/ASTLiteral.h>
 #include <Parsers/ASTSelectQuery.h>
+#include <Parsers/ASTSelectWithUnionQuery.h>
 #include <Parsers/ASTSubquery.h>
 #include <Parsers/ASTTablesInSelectQuery.h>
 #include <Parsers/ASTWithElement.h>
@@ -280,8 +281,14 @@ private:
             }
             select_query->setExpression(ASTSelectQuery::Expression::WITH, std::move(with_expression_list_ast));
         }
-            
-        return select_query;
+
+        auto select_with_union_query = std::make_shared<ASTSelectWithUnionQuery>();
+        auto list_of_selects = std::make_shared<ASTExpressionList>();
+        list_of_selects->children.push_back(std::move(select_query));
+        select_with_union_query->list_of_selects = list_of_selects;
+        select_with_union_query->children.push_back(list_of_selects);
+
+        return select_with_union_query;
     }
 
     /// Finalizes a Piece built to evaluate a prometheus query.
@@ -392,10 +399,11 @@ private:
         else if (piece.time_series_column)
         {
             res.where = makeASTFunction("notEmpty", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::TimeSeries));
-            auto array_element = makeASTFunction("arrayLast", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::TimeSeries));
-            res.timestamp_column = makeASTFunction("tupleElement", array_element, std::make_shared<ASTLiteral>(Field{1}));
+            auto array_element = makeASTFunction("arrayElement", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::TimeSeries),
+                                                 std::make_shared<ASTLiteral>(Field{0}));
+            res.timestamp_column = makeASTFunction("tupleElement", array_element, std::make_shared<ASTLiteral>(Field{1u}));
             res.timestamp_column->setAlias(TimeSeriesColumnNames::Timestamp);
-            res.value_column = makeASTFunction("tupleElement", array_element, std::make_shared<ASTLiteral>(Field{2}));
+            res.value_column = makeASTFunction("tupleElement", array_element, std::make_shared<ASTLiteral>(Field{2u}));
             res.value_column->setAlias(TimeSeriesColumnNames::Value);
         }
         else
@@ -671,10 +679,10 @@ private:
         res.result_type = ResultType::RANGE_VECTOR;
         res.group_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Group);
         res.timestamp_column = makeASTFunction("tupleElement", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::TimeSeries),
-                                               std::make_shared<ASTLiteral>(Field{1}));
+                                               std::make_shared<ASTLiteral>(Field{1u}));
         res.timestamp_column->setAlias(TimeSeriesColumnNames::Timestamp);
         res.value_column = makeASTFunction("tupleElement", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::TimeSeries),
-                                           std::make_shared<ASTLiteral>(Field{2}));
+                                           std::make_shared<ASTLiteral>(Field{2u}));
         res.value_column->setAlias(TimeSeriesColumnNames::Value);
         res.from_subquery = addSubquery(std::move(piece));
         res.timestamp_column_is_array = true;
@@ -684,9 +692,9 @@ private:
 
     /// Builds an AST to call functions generating time series on a grid.
     /// Returns something like timeSeriesGrid(<start_time>, <step>, timeSeries*ToGrid(<start_time>, <end_time>, <step>, <window>)(<timestamp>, <value>)
-    static ASTPtr makeGridFunction(std::string_view grid_function_name,
+    ASTPtr makeGridFunction(std::string_view grid_function_name,
                                    const Field & start_time, const Field & end_time, const Field & step, const Field & window,
-                                   ASTPtr timestamp_column, ASTPtr value_column)
+                                   ASTPtr timestamp_column, ASTPtr value_column) const
     {
         auto aggregate_function = makeASTFunction(grid_function_name, timestamp_column, value_column);
         aggregate_function->parameters = std::make_shared<ASTExpressionList>();
@@ -694,7 +702,10 @@ private:
         aggregate_function->parameters->children.push_back(std::make_shared<ASTLiteral>(end_time));
         aggregate_function->parameters->children.push_back(std::make_shared<ASTLiteral>(step));
         aggregate_function->parameters->children.push_back(std::make_shared<ASTLiteral>(window));
-        return makeASTFunction("timeSeriesGrid", std::make_shared<ASTLiteral>(start_time), std::make_shared<ASTLiteral>(step), aggregate_function);
+
+        return makeASTFunction("timeSeriesGrid",
+            std::make_shared<ASTLiteral>(start_time, getTimeSeriesTableInfo().timestamp_data_type),
+            std::make_shared<ASTLiteral>(step), aggregate_function);
     }
 
     /// Finds all subqueries and @ and offset operations related to a specific node
@@ -833,7 +844,7 @@ private:
                     return static_cast<Int64>(static_cast<Float64>(field.safeGet<Decimal64>()));
                 break;
             }
-            case TypeIndex::Decimal64:
+            case TypeIndex::DateTime64:
             {
                 UInt32 target_scale = getDecimalScale(*timestamp_data_type);
                 if (field_type == Field::Types::UInt64)
