@@ -18,6 +18,8 @@
 #include <Storages/ColumnsDescription.h>
 #include <Storages/TimeSeries/TimeSeriesColumnNames.h>
 
+#include <Common/logger_useful.h>
+
 
 namespace DB
 {
@@ -37,48 +39,97 @@ namespace
 {
     using ResultType = PrometheusQueryResultType;
 
-    /// Helper template for function alignStartTimeAndEndTime().
-    template <typename TimestampType, typename IntervalType>
-    bool alignStartTimeAndEndTimeTemplate(Field & start_time, Field & end_time, const Field & step)
+    /// Finds an interval data type corresponding to a specified timestamp data type.
+    /// We support only DateTime64, DateTime and UInt32 as types to specify time.
+    /// For them we use Decimal64 and Int32 to specify intervals.
+    DataTypePtr getIntervalDataType(const DataTypePtr & timestamp_data_type)
     {
-        TimestampType start_time_value = start_time.safeGet<TimestampType>();
-        TimestampType end_time_value = end_time.safeGet<TimestampType>();
-        IntervalType step_value = step.safeGet<IntervalType>();
-
-        start_time_value = (start_time_value + step_value - 1) / step_value * step_value;
-        end_time_value = end_time_value / step_value * step_value;
-
-        if (start_time_value > end_time_value)
-            return false;
-
-        start_time = start_time_value;
-        end_time = end_time_value;
-        return true;
+        switch (WhichDataType{*timestamp_data_type}.idx)
+        {
+            case TypeIndex::UInt32: // nobreak
+            case TypeIndex::DateTime:
+                return std::make_shared<DataTypeInt32>();
+            case TypeIndex::DateTime64:
+                return std::make_shared<DataTypeDecimal64>(getDecimalPrecision(*timestamp_data_type), getDecimalScale(*timestamp_data_type));
+            default:
+                break;
+        }
+        throw Exception(ErrorCodes::BAD_ARGUMENTS, "Cannot find an interval type for timestamp type {}", timestamp_data_type);
     }
 
-    /// Increases the start time by some value to make it divisible by `step`.
-    /// Decreases the end time by some value to make it divisible by `step`.
-    /// If after that still `start_time <= end_time` then the function returns true.
-    bool alignStartTimeAndEndTime(Field & start_time, Field & end_time, const Field & step)
+    /// Casts a timestamp or an interval to a specific data type.
+    Field castToType(const Field & field, const DataTypePtr & target_data_type)
     {
-        if ((start_time.getType() == end_time.getType()) && (start_time.getType() == step.getType()))
+        auto field_type = field.getType();
+        switch (WhichDataType{*target_data_type}.idx)
         {
-            switch (start_time.getType())
+            case TypeIndex::Int32:
             {
-                case Field::Types::Int64: return alignStartTimeAndEndTimeTemplate<Int64, Int64>(start_time, end_time, step);
-                case Field::Types::UInt64: return alignStartTimeAndEndTimeTemplate<UInt64, UInt64>(start_time, end_time, step);
-                case Field::Types::Decimal32: return alignStartTimeAndEndTimeTemplate<Decimal32, Decimal32>(start_time, end_time, step);
-                case Field::Types::Decimal64: return alignStartTimeAndEndTimeTemplate<Decimal64, Decimal64>(start_time, end_time, step);
-                default: break;
+                if (field_type == Field::Types::Int64)
+                    return field;
+                else if (field_type == Field::Types::UInt64)
+                    return static_cast<Int64>(field.safeGet<UInt64>());
+                else if (field_type == Field::Types::Float64)
+                    return static_cast<Int64>(field.safeGet<Float64>());
+                else if (field_type == Field::Types::Decimal32)
+                    return static_cast<Int64>(static_cast<Float64>(field.safeGet<Decimal32>()));
+                else if (field_type == Field::Types::Decimal64)
+                    return static_cast<Int64>(static_cast<Float64>(field.safeGet<Decimal64>()));
+                break;
             }
+            case TypeIndex::UInt32: /// nobreak
+            case TypeIndex::DateTime:
+            {
+                if (field_type == Field::Types::UInt64)
+                    return field;
+                else if (field_type == Field::Types::Int64)
+                    return static_cast<UInt64>(field.safeGet<Int64>());
+                else if (field_type == Field::Types::Float64)
+                    return static_cast<UInt64>(field.safeGet<Float64>());
+                else if (field_type == Field::Types::Decimal32)
+                    return static_cast<UInt64>(static_cast<Float64>(field.safeGet<Decimal32>()));
+                else if (field_type == Field::Types::Decimal64)
+                    return static_cast<UInt64>(static_cast<Float64>(field.safeGet<Decimal64>()));
+                break;
+            }
+            case TypeIndex::DateTime64: /// nobreak
+            case TypeIndex::Decimal64:
+            {
+                UInt32 target_scale = getDecimalScale(*target_data_type);
+                if (field_type == Field::Types::UInt64)
+                    return DecimalField<Decimal64>{field.safeGet<UInt64>() * DecimalUtils::scaleMultiplier<Decimal64>(target_scale), target_scale};
+                else if (field_type == Field::Types::Int64)
+                    return DecimalField<Decimal64>{field.safeGet<Int64>() * DecimalUtils::scaleMultiplier<Decimal64>(target_scale), target_scale};
+                else if (field_type == Field::Types::Float64)
+                    return DecimalField<Decimal64>{static_cast<Int64>(field.safeGet<Float64>() * DecimalUtils::scaleMultiplier<Decimal64>(target_scale)), target_scale};
+                else if (field_type == Field::Types::Decimal32)
+                {
+                    auto x = field.safeGet<Decimal32>();
+                    return DecimalField<Decimal64>{DecimalUtils::convertTo<Decimal64>(target_scale, x.getValue(), x.getScale()), target_scale};
+                }
+                else if (field_type == Field::Types::Decimal64)
+                {
+                    auto x = field.safeGet<Decimal64>();
+                    return DecimalField<Decimal64>{DecimalUtils::convertTo<Decimal64>(target_scale, x.getValue(), x.getScale()), target_scale};
+                }
+                break;
+            }
+            default:
+                break;
         }
-        else if ((start_time.getType() == end_time.getType()) && (start_time.getType() == Field::Types::UInt64) && (step.getType() == Field::Types::Int64))
-        {
-            return alignStartTimeAndEndTimeTemplate<UInt64, Int64>(start_time, end_time, step);
-        }
-        throw Exception(ErrorCodes::BAD_ARGUMENTS,
-                        "Cannot align start time by step because the combination of types is not supported: start_time: {}, end_time: {}, step: {}",
-                        start_time.getType(), step.getType(), end_time.getType());
+        throw Exception(ErrorCodes::BAD_ARGUMENTS, "Cannot cast field of type {} to data type {}", field_type, target_data_type);
+    }
+
+    /// Converts a timestamp or an interval to AST.
+    ASTPtr fieldToAST(const Field & field, const DataTypePtr & data_type)
+    {
+        auto data_type_idx = WhichDataType{*data_type}.idx;
+        if (data_type_idx == TypeIndex::DateTime64)
+            return makeASTFunction("toDateTime64", std::make_shared<ASTLiteral>(toString(field)), std::make_shared<ASTLiteral>(getDecimalScale(*data_type)));
+        else if (data_type_idx == TypeIndex::Decimal64)
+            return makeASTFunction("toDecimal64", std::make_shared<ASTLiteral>(toString(field)), std::make_shared<ASTLiteral>(getDecimalScale(*data_type)));
+        else
+            return std::make_shared<ASTLiteral>(field);
     }
 
     /// Adds a time interval to another time interval or to a timestamp.
@@ -90,8 +141,6 @@ namespace
             {
                 case Field::Types::Int64: return left.safeGet<Int64>() + right.safeGet<Int64>();
                 case Field::Types::UInt64: return left.safeGet<UInt64>() + right.safeGet<UInt64>();
-                case Field::Types::Float64: return left.safeGet<Float64>() + right.safeGet<Float64>();
-                case Field::Types::Decimal32: { auto sum = left.safeGet<Decimal32>(); sum += right.safeGet<Decimal32>(); return sum; }
                 case Field::Types::Decimal64: { auto sum = left.safeGet<Decimal64>(); sum += right.safeGet<Decimal64>(); return sum; }
                 default: break;
             }
@@ -112,8 +161,6 @@ namespace
             {
                 case Field::Types::Int64: return left.safeGet<Int64>() - right.safeGet<Int64>();
                 case Field::Types::UInt64: return left.safeGet<UInt64>() - right.safeGet<UInt64>();
-                case Field::Types::Float64: return left.safeGet<Float64>() - right.safeGet<Float64>();
-                case Field::Types::Decimal32: { auto diff = left.safeGet<Decimal32>(); diff -= right.safeGet<Decimal32>(); return diff; }
                 case Field::Types::Decimal64: { auto diff = left.safeGet<Decimal64>(); diff -= right.safeGet<Decimal64>(); return diff; }
                 default: break;
             }
@@ -124,6 +171,89 @@ namespace
         }
         throw Exception(ErrorCodes::BAD_ARGUMENTS, "Cannot subtract {} from {}", right.getType(), left.getType());
     }
+
+    /// Helper template for function alignStartTimeAndEndTime().
+    template <typename TimestampType, typename IntervalType>
+    bool alignStartTimeAndEndTimeTemplate(Field & start_time, Field & end_time, const Field & step)
+    {
+        TimestampType start_time_value = start_time.safeGet<TimestampType>();
+        TimestampType end_time_value = end_time.safeGet<TimestampType>();
+        IntervalType step_value = step.safeGet<IntervalType>();
+
+        auto x = start_time_value;
+        x %= step_value;
+        if (x)
+        {
+            start_time_value += step_value;
+            start_time_value -= x;
+        }
+
+        auto y = end_time_value;
+        y %= step_value;
+        end_time_value -= y;
+
+        if (start_time_value > end_time_value)
+            return false;
+
+        start_time = start_time_value;
+        end_time = end_time_value;
+        return true;
+    }
+
+    template <typename TimestampType, typename IntervalType>
+    bool alignStartTimeAndEndTimeTemplate2(Field & start_time, Field & end_time, const Field & step)
+    {
+        TimestampType start_time_value = start_time.safeGet<TimestampType>();
+        TimestampType end_time_value = end_time.safeGet<TimestampType>();
+        IntervalType step_value = step.safeGet<IntervalType>();
+
+        LOG_INFO(getLogger("!!!"), "start scale = {}", start_time_value.getScale());
+
+        auto x = start_time_value;
+        x %= step_value;
+        if (x)
+        {
+            start_time_value += step_value;
+            start_time_value -= x;
+        }
+
+        LOG_INFO(getLogger("!!!"), "start scale = {}", start_time_value.getScale());
+
+        auto y = end_time_value;
+        y %= step_value;
+        end_time_value -= y;
+
+        if (start_time_value > end_time_value)
+            return false;
+
+        start_time = start_time_value;
+        end_time = end_time_value;
+        return true;
+    }
+
+    /// Increases the start time by some value to make it divisible by `step`.
+    /// Decreases the end time by some value to make it divisible by `step`.
+    /// If after that still `start_time <= end_time` then the function returns true.
+    bool alignStartTimeAndEndTime(Field & start_time, Field & end_time, const Field & step)
+    {
+        if ((start_time.getType() == end_time.getType()) && (start_time.getType() == step.getType()))
+        {
+            switch (start_time.getType())
+            {
+                case Field::Types::Int64: return alignStartTimeAndEndTimeTemplate<Int64, Int64>(start_time, end_time, step);
+                case Field::Types::UInt64: return alignStartTimeAndEndTimeTemplate<UInt64, UInt64>(start_time, end_time, step);
+                case Field::Types::Decimal64: return alignStartTimeAndEndTimeTemplate2<DecimalField<Decimal64>, DecimalField<Decimal64>>(start_time, end_time, step);
+                default: break;
+            }
+        }
+        else if ((start_time.getType() == end_time.getType()) && (start_time.getType() == Field::Types::UInt64) && (step.getType() == Field::Types::Int64))
+        {
+            return alignStartTimeAndEndTimeTemplate<UInt64, Int64>(start_time, end_time, step);
+        }
+        throw Exception(ErrorCodes::BAD_ARGUMENTS,
+                        "Cannot align start time by step because the combination of types is not supported: start_time: {}, end_time: {}, step: {}",
+                        start_time.getType(), step.getType(), end_time.getType());
+    }
 }
 
 
@@ -133,6 +263,9 @@ class PrometheusQueryToSQLConverter::ASTBuilder
 public:
     ASTBuilder(const PrometheusQueryToSQLConverter & converter_)
         : converter(converter_)
+        , timestamp_data_type(getTimeSeriesTableInfo().timestamp_data_type)
+        , interval_data_type(getIntervalDataType(timestamp_data_type))
+        , value_data_type(getTimeSeriesTableInfo().value_data_type)
     {
     }
 
@@ -146,6 +279,9 @@ public:
 
 private:
     const PrometheusQueryToSQLConverter & converter;
+    DataTypePtr timestamp_data_type;
+    DataTypePtr interval_data_type;
+    DataTypePtr value_data_type;
 
     const PrometheusQueryTree & getPromQLTree() const { return converter.promql; }
     std::string_view getPromQLText(const PrometheusQueryTree::Node * node) const { return getPromQLTree().getQuery(node); }
@@ -400,7 +536,7 @@ private:
         {
             res.where = makeASTFunction("notEmpty", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::TimeSeries));
             auto array_element = makeASTFunction("arrayElement", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::TimeSeries),
-                                                 std::make_shared<ASTLiteral>(Field{0}));
+                                                 std::make_shared<ASTLiteral>(Field{1u}));
             res.timestamp_column = makeASTFunction("tupleElement", array_element, std::make_shared<ASTLiteral>(Field{1u}));
             res.timestamp_column->setAlias(TimeSeriesColumnNames::Timestamp);
             res.value_column = makeASTFunction("tupleElement", array_element, std::make_shared<ASTLiteral>(Field{2u}));
@@ -510,15 +646,23 @@ private:
     /// Builds a piece to evaluate an instant selector.
     Piece buildPieceForInstantSelector(const PrometheusQueryTree::InstantSelector * instant_selector) const
     {
-        Field window = castToIntervalDataType(getLookbackDelta());
+        Field window = castToIntervalType(getLookbackDelta());
 
         Field start_time, end_time, step;
         extractRangeAndStep(instant_selector, start_time, end_time, step);
+
+        LOG_INFO(getLogger("!!!"), "start_time = {}, scale = {}", start_time, start_time.safeGet<DateTime64>().getScale());
+        LOG_INFO(getLogger("!!!"), "end_time = {}, scale = {}", end_time, end_time.safeGet<DateTime64>().getScale());
 
         if (start_time == end_time)
             step = getDummyStep();
         else if (!alignStartTimeAndEndTime(start_time, end_time, step))
             return getEmptyPiece(ResultType::INSTANT_VECTOR);
+
+        LOG_INFO(getLogger("!!!"), "aligned_start_time = {}, scale = {}", start_time, start_time.safeGet<DateTime64>().getScale());
+        LOG_INFO(getLogger("!!!"), "aligned_end_time = {}, scale = {}", end_time, end_time.safeGet<DateTime64>().getScale());
+
+        LOG_INFO(getLogger("!!!"), "window = {}, scale = {}", window, window.safeGet<Decimal64>().getScale());
 
         Piece res;
 
@@ -526,8 +670,8 @@ private:
             std::make_shared<ASTLiteral>(getTimeSeriesTableInfo().storage_id.getDatabaseName()),
             std::make_shared<ASTLiteral>(getTimeSeriesTableInfo().storage_id.getTableName()),
             std::make_shared<ASTLiteral>(getPromQLText(instant_selector)),
-            std::make_shared<ASTLiteral>(subtract(start_time, window)),
-            std::make_shared<ASTLiteral>(end_time));
+            timestampToAST(subtract(start_time, window)),
+            timestampToAST(end_time));
 
         res.group_column = makeASTFunction("timeSeriesIdToGroup", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::ID));
         res.group_column->setAlias(TimeSeriesColumnNames::Group);
@@ -543,7 +687,7 @@ private:
     Piece buildPieceForRangeSelector(const PrometheusQueryTree::RangeSelector * range_selector) const
     {
         const auto * instant_selector = range_selector->getInstantSelector();
-        Field window = castToIntervalDataType(nodeToField(range_selector->getRange()));
+        Field window = castToIntervalType(nodeToField(range_selector->getRange()));
 
         Field start_time, end_time, step;
         extractRangeAndStep(range_selector, start_time, end_time, step);
@@ -554,8 +698,8 @@ private:
             std::make_shared<ASTLiteral>(getTimeSeriesTableInfo().storage_id.getDatabaseName()),
             std::make_shared<ASTLiteral>(getTimeSeriesTableInfo().storage_id.getTableName()),
             std::make_shared<ASTLiteral>(getPromQLText(instant_selector)),
-            std::make_shared<ASTLiteral>(subtract(start_time, window)),
-            std::make_shared<ASTLiteral>(end_time));
+            timestampToAST(subtract(start_time, window)),
+            timestampToAST(end_time));
 
         res.group_column = makeASTFunction("timeSeriesIdToGroup", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::ID));
         res.group_column->setAlias(TimeSeriesColumnNames::Group);
@@ -573,10 +717,10 @@ private:
         auto piece = buildPiece(subquery->getExpression());
 
         if (piece.empty())
-            return getEmptyPiece(ResultType::INSTANT_VECTOR);
+            return getEmptyPiece(ResultType::RANGE_VECTOR);
 
-        piece.result_type = ResultType::INSTANT_VECTOR;
-        piece.window = castToIntervalDataType(nodeToField(subquery->getRange()));
+        piece.result_type = ResultType::RANGE_VECTOR;
+        piece.window = castToIntervalType(nodeToField(subquery->getRange()));
         return piece;
     }
 
@@ -698,14 +842,11 @@ private:
     {
         auto aggregate_function = makeASTFunction(grid_function_name, timestamp_column, value_column);
         aggregate_function->parameters = std::make_shared<ASTExpressionList>();
-        aggregate_function->parameters->children.push_back(std::make_shared<ASTLiteral>(start_time));
-        aggregate_function->parameters->children.push_back(std::make_shared<ASTLiteral>(end_time));
-        aggregate_function->parameters->children.push_back(std::make_shared<ASTLiteral>(step));
-        aggregate_function->parameters->children.push_back(std::make_shared<ASTLiteral>(window));
-
-        return makeASTFunction("timeSeriesGrid",
-            std::make_shared<ASTLiteral>(start_time, getTimeSeriesTableInfo().timestamp_data_type),
-            std::make_shared<ASTLiteral>(step), aggregate_function);
+        aggregate_function->parameters->children.push_back(timestampToAST(start_time));
+        aggregate_function->parameters->children.push_back(timestampToAST(end_time));
+        aggregate_function->parameters->children.push_back(intervalToAST(step));
+        aggregate_function->parameters->children.push_back(intervalToAST(window));
+        return makeASTFunction("timeSeriesGrid", timestampToAST(start_time), intervalToAST(step), aggregate_function);
     }
 
     /// Finds all subqueries and @ and offset operations related to a specific node
@@ -728,14 +869,14 @@ private:
                 {
                     if (const auto * offset = at_node->getOffset())
                     {
-                        auto offset_interval = castToIntervalDataType(nodeToField(offset));
+                        auto offset_interval = castToIntervalType(nodeToField(offset));
                         if (end_time_offset.isNull())
                             end_time_offset = offset_interval;
                         else
                             end_time_offset = add(end_time_offset, offset_interval);
                     }
                     if (const auto * at = at_node->getAt())
-                        end_time = castToTimestampDataType(nodeToField(at));
+                        end_time = castToTimestampType(nodeToField(at));
                 }
             }
             else if (parent->node_type == NodeType::Subquery)
@@ -744,11 +885,11 @@ private:
                 if (step.isNull())
                 {
                     if (const auto * resolution = subquery_node->getResolution())
-                        step = castToIntervalDataType(nodeToField(resolution));
+                        step = castToIntervalType(nodeToField(resolution));
                     else
-                        step = castToIntervalDataType(getDefaultResolution());
+                        step = castToIntervalType(getDefaultResolution());
                 }
-                auto subquery_range = castToIntervalDataType(nodeToField(subquery_node->getRange()));
+                auto subquery_range = castToIntervalType(nodeToField(subquery_node->getRange()));
                 if (range.isNull())
                     range = subquery_range;
                 else
@@ -757,7 +898,7 @@ private:
         }
 
         if (end_time.isNull())
-            end_time = castToTimestampDataType(getEvaluationTime());
+            end_time = castToTimestampType(getEvaluationTime());
 
         if (!end_time_offset.isNull())
             end_time = subtract(end_time, end_time_offset);
@@ -780,100 +921,34 @@ private:
     }
 
     /// Converts a scalar or an interval value to a timestamp compatible with the data types used in the TimeSeries table.
-    Field castToTimestampDataType(const Field & field) const
+    Field castToTimestampType(const Field & field) const
     {
-        auto field_type = field.getType();
-        const auto & timestamp_data_type = getTimeSeriesTableInfo().timestamp_data_type;
-        switch (WhichDataType{*timestamp_data_type}.idx)
-        {
-            case TypeIndex::UInt32:
-            case TypeIndex::DateTime:
-            {
-                if (field_type == Field::Types::UInt64)
-                    return field;
-                else if (field_type == Field::Types::Int64)
-                    return static_cast<UInt64>(field.safeGet<Int64>());
-                else if (field_type == Field::Types::Decimal32)
-                    return static_cast<UInt64>(static_cast<Float64>(field.safeGet<Decimal32>()));
-                else if (field_type == Field::Types::Decimal64)
-                    return static_cast<UInt64>(static_cast<Float64>(field.safeGet<Decimal64>()));
-                break;
-            }
-            case TypeIndex::DateTime64:
-            {
-                UInt32 target_scale = getDecimalScale(*timestamp_data_type);
-                if (field_type == Field::Types::UInt64)
-                    return DecimalField<DateTime64>{field.safeGet<UInt64>() * DecimalUtils::scaleMultiplier<DateTime64>(target_scale), target_scale};
-                else if (field_type == Field::Types::Int64)
-                    return DecimalField<DateTime64>{field.safeGet<Int64>() * DecimalUtils::scaleMultiplier<DateTime64>(target_scale), target_scale};
-                else if (field_type == Field::Types::Decimal32)
-                {
-                    auto x = field.safeGet<Decimal32>();
-                    return DecimalField<DateTime64>{DecimalUtils::convertTo<DateTime64>(target_scale, x.getValue(), x.getScale()), target_scale};
-                }
-                else if (field_type == Field::Types::Decimal64)
-                {
-                    auto x = field.safeGet<Decimal64>();
-                    return DecimalField<DateTime64>{DecimalUtils::convertTo<DateTime64>(target_scale, x.getValue(), x.getScale()), target_scale};
-                }
-                break;
-            }
-            default:
-                break;
-        }
-        throw Exception(ErrorCodes::BAD_ARGUMENTS, "Cannot cast {} to {}", field_type, timestamp_data_type);
+        return castToType(field, timestamp_data_type);
     }
 
     /// Converts a scalar or an interval value to an interval compatible with the data types used in the TimeSeries table.
-    Field castToIntervalDataType(const Field & field) const
+    Field castToIntervalType(const Field & field) const
     {
-        auto field_type = field.getType();
-        const auto & timestamp_data_type = getTimeSeriesTableInfo().timestamp_data_type;
-        switch (WhichDataType{*timestamp_data_type}.idx)
-        {
-            case TypeIndex::UInt32:
-            case TypeIndex::DateTime:
-            {
-                if (field_type == Field::Types::Int64)
-                    return field;
-                else if (field_type == Field::Types::UInt64)
-                    return static_cast<Int64>(field.safeGet<Int64>());
-                else if (field_type == Field::Types::Decimal32)
-                    return static_cast<Int64>(static_cast<Float64>(field.safeGet<Decimal32>()));
-                else if (field_type == Field::Types::Decimal64)
-                    return static_cast<Int64>(static_cast<Float64>(field.safeGet<Decimal64>()));
-                break;
-            }
-            case TypeIndex::DateTime64:
-            {
-                UInt32 target_scale = getDecimalScale(*timestamp_data_type);
-                if (field_type == Field::Types::UInt64)
-                    return DecimalField<Decimal64>{field.safeGet<UInt64>() * DecimalUtils::scaleMultiplier<DateTime64>(target_scale), target_scale};
-                else if (field_type == Field::Types::Int64)
-                    return DecimalField<Decimal64>{field.safeGet<Int64>() * DecimalUtils::scaleMultiplier<DateTime64>(target_scale), target_scale};
-                else if (field_type == Field::Types::Decimal32)
-                {
-                    auto x = field.safeGet<Decimal32>();
-                    return DecimalField<Decimal64>{DecimalUtils::convertTo<Decimal64>(target_scale, x.getValue(), x.getScale()), target_scale};
-                }
-                else if (field_type == Field::Types::Decimal64)
-                {
-                    auto x = field.safeGet<Decimal64>();
-                    return DecimalField<Decimal64>{DecimalUtils::convertTo<Decimal64>(target_scale, x.getValue(), x.getScale()), target_scale};
-                }
-                break;
-            }
-            default:
-                break;
-        }
-        throw Exception(ErrorCodes::BAD_ARGUMENTS, "Cannot cast {} to the interval type for {}", field_type, timestamp_data_type);
+        return castToType(field, interval_data_type);
+    }
+
+    /// Converts a casted timestamp to AST.
+    ASTPtr timestampToAST(const Field & field) const
+    {
+        return fieldToAST(field, timestamp_data_type);
+    }
+
+    /// Converts a casted interval to AST.
+    ASTPtr intervalToAST(const Field & field) const
+    {
+        return fieldToAST(field, interval_data_type);
     }
 
     /// Generates a non-zero step for timeSeries*ToGrid() functions.
     /// (Those functions don't allow zero step even if start_time == end_time.)
     Field getDummyStep() const
     {
-        return castToIntervalDataType(Field{1});
+        return castToIntervalType(Field{1});
     }
 };
 

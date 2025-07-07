@@ -85,6 +85,15 @@ const DecimalField<T> & DecimalField<T>::operator -= (const DecimalField<T> & r)
 }
 
 template <is_decimal T>
+const DecimalField<T> & DecimalField<T>::operator %= (const DecimalField<T> & r)
+{
+    if (scale != r.getScale())
+        throw Exception(ErrorCodes::LOGICAL_ERROR, "Divide different decimal fields");
+    dec %= r.getValue();
+    return *this;
+}
+
+template <is_decimal T>
 template <std::floating_point F>
 DecimalField<T>::operator F() const
 {
