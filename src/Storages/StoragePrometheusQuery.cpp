@@ -1,5 +1,6 @@
 #include <Storages/StoragePrometheusQuery.h>
 
+#include <Common/logger_useful.h>
 #include <Interpreters/DatabaseCatalog.h>
 #include <Interpreters/InterpreterSelectQueryAnalyzer.h>
 #include <Interpreters/SelectQueryOptions.h>
@@ -7,8 +8,6 @@
 #include <Storages/StorageTimeSeries.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL.h>
 #include <Storages/TimeSeries/TimeSeriesColumnNames.h>
-
-#include <Common/logger_useful.h>
 
 
 namespace DB
@@ -24,6 +23,7 @@ StoragePrometheusQuery::StoragePrometheusQuery(
     , time_series_storage_id{time_series_storage_id_}
     , promql_query{promql_query_}
     , evaluation_time{evaluation_time_}
+    , log(getLogger("StoragePrometheusQuery"))
 {
     StorageInMemoryMetadata storage_metadata;
     storage_metadata.setColumns(columns_);
@@ -48,12 +48,12 @@ void StoragePrometheusQuery::read(
     time_series_table_info.timestamp_data_type = data_table_metadata->columns.get(TimeSeriesColumnNames::Timestamp).type;
     time_series_table_info.value_data_type = data_table_metadata->columns.get(TimeSeriesColumnNames::Value).type;
 
+    LOG_INFO(log, "Building SQL to evaluate promql: {}", promql_query);
     ASTPtr select_query = PrometheusQueryToSQLConverter{promql_query, evaluation_time, time_series_table_info, 5*60, 15}.getSQL();
 
-    LOG_INFO(getLogger("!!!"), "Evaluating {}", select_query->formatForLogging());
+    LOG_INFO(log, "Will execute query:\n{}", select_query->formatForLogging());
 
     auto options = SelectQueryOptions(QueryProcessingStage::Complete, 0, false, query_info.settings_limit_offset_done);
-
     InterpreterSelectQueryAnalyzer interpreter(select_query, context, options, column_names);
     interpreter.addStorageLimits(*query_info.storage_limits);
     query_plan = std::move(interpreter).extractQueryPlan();

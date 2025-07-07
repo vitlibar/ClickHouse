@@ -34,6 +34,8 @@ private:
     StorageID time_series_storage_id;
     PrometheusQueryTree promql_query;
     Field evaluation_time;
+
+    LoggerPtr log;
 };
 
 }
