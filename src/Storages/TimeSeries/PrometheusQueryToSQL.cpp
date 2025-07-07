@@ -1,4 +1,5 @@
 #include <Storages/TimeSeries/PrometheusQueryToSQL.h>
+
 #include <Parsers/Prometheus/PrometheusQueryTree.h>
 
 
@@ -176,10 +177,10 @@ private:
         ASTPtr scalar_column;
         ASTPtr string_column;
 
-        /// Whether the timestamp column and the value column are columns of arrays.
+        /// Whether the "timestamp" column and the "value" column are columns of arrays.
         bool timestamp_column_is_array = false;
         bool value_column_is_array = false;
-    
+
         size_t num_columns() const
         {
             return (group_column != nullptr) + (tags_column != nullptr) + (timestamp_column != nullptr)
@@ -385,27 +386,18 @@ private:
 
         if (piece.timestamp_column && piece.value_column)
         {
-            if (piece.timestamp_column_is_array && piece.value_column_is_array)
-            {
-                res.where = makeASTFunction("notEmpty", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Value));
-                res.timestamp_column = makeASTFunction("arrayLast", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Timestamp));
-                res.timestamp_column->setAlias(TimeSeriesColumnNames::Timestamp);
-                res.value_column = makeASTFunction("arrayLast", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Value));
-                res.value_column->setAlias(TimeSeriesColumnNames::Value);
-            }
-            else(piece.timestamp_column && piece.value_column)
-            {
-                res.timestamp_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Timestamp);
-                res.value_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Value);
-            }
+            chassert(!piece.timestamp_column_is_array && !piece.value_column_is_array);
+            res.timestamp_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Timestamp);
+            res.value_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Value);
         }
-
-        if (piece.time_series_column)
+        else if (piece.time_series_column)
         {
             res.where = makeASTFunction("notEmpty", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::TimeSeries));
             auto array_element = makeASTFunction("arrayLast", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::TimeSeries));
             res.timestamp_column = makeASTFunction("tupleElement", array_element, std::make_shared<ASTLiteral>(Field{1}));
+            res.timestamp_column->setAlias(TimeSeriesColumnNames::Timestamp);
             res.value_column = makeASTFunction("tupleElement", array_element, std::make_shared<ASTLiteral>(Field{2}));
+            res.value_column->setAlias(TimeSeriesColumnNames::Value);
         }
         else
         {
@@ -457,18 +449,10 @@ private:
         }
         else if (piece.timestamp_column && piece.value_column)
         {
-            if (piece.timestamp_column_is_array && piece.value_column_is_array)
-            {
-                res.time_series_column = makeASTFunction("arrayZip",
-                                                         std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Timestamp),
-                                                         std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Value));
-            }
-            else
-            {
-                res.time_series_column = makeASTFunction("timeSeriesGroupArraySorted",
-                                                         std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Timestamp),
-                                                         std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Value));
-            }
+            chassert(!piece.timestamp_column_is_array && !piece.value_column_is_array);
+            res.time_series_column = makeASTFunction("timeSeriesGroupArraySorted",
+                                                     std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Timestamp),
+                                                     std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Value));
             res.time_series_column->setAlias(TimeSeriesColumnNames::TimeSeries);
         }
         else
@@ -622,7 +606,7 @@ private:
         res.time_series_column = makeGridFunction(to_grid_function_name, start_time, max_time, step, std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Timestamp), std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Value));
         res.time_series_column->setAlias(TimeSeriesColumnNames::TimeSeries);
         res.group_by.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Group));
-        res.from_subquery = splitTimeSeriesColumn(arg);
+        res.from_subquery = splitTimeSeriesColumnToTwoArrays(arg);
         return res;
     }
 
@@ -632,7 +616,8 @@ private:
         throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Binary operator {} is not implemented", binary_operator->operator_name);
     }
 
-    Piece splitTimeSeriesColumn(Piece && piece)
+    /// Builds a piece splitting the "time_series" column into two columns "timestamp" and "values", both of them are arrays.
+    Piece splitTimeSeriesColumnToTwoArrays(Piece && piece)
     {
         if (!piece.time_series_column)
             return piece;
@@ -647,6 +632,8 @@ private:
                                            std::make_shared<ASTLiteral>(Field{2}));
         res.value_column->setAlias(TimeSeriesColumnNames::Value);
         res.from_subquery = addSubquery(std::move(piece));
+        res.timestamp_column_is_array = true;
+        res.value_column_is_array = true;
         return res;
     }
 
