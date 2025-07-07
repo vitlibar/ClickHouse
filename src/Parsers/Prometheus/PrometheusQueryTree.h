@@ -84,7 +84,7 @@ public:
     {
     public:
         IntervalType interval;
-        IntervalLiteral() { node_type = NodeType::IntervalLiteral; result_type = ResultType::INTERVAL; }
+        IntervalLiteral() { node_type = NodeType::IntervalLiteral; result_type = ResultType::SCALAR; }
         Node * clone(std::vector<std::unique_ptr<Node>> & node_list_) const override;
         String dumpTree(size_t indent) const override;
     };

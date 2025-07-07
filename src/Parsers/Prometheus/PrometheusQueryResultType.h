@@ -7,7 +7,6 @@ namespace DB
 enum class PrometheusQueryResultType
 {
     SCALAR,
-    INTERVAL,
     STRING,
     INSTANT_VECTOR,
     RANGE_VECTOR,

@@ -436,8 +436,7 @@ private:
         switch (piece.result_type)
         {
             case ResultType::STRING: res = finalizeWithStringResult(std::move(piece)); break;
-            case ResultType::SCALAR: /// nobreak
-            case ResultType::INTERVAL: res = finalizeWithScalarResult(std::move(piece)); break;
+            case ResultType::SCALAR: res = finalizeWithScalarResult(std::move(piece)); break;
             case ResultType::INSTANT_VECTOR: res = finalizeWithInstantVectorResult(std::move(piece)); break;
             case ResultType::RANGE_VECTOR: res = finalizeWithRangeVectorResult(std::move(piece)); break;
         }
@@ -978,8 +977,7 @@ ColumnsDescription PrometheusQueryToSQLConverter::getResultColumns() const
 
     switch (promql.getResultType())
     {
-        case ResultType::SCALAR: /// nobreak
-        case ResultType::INTERVAL:
+        case ResultType::SCALAR:
         {
             columns.add(ColumnDescription{TimeSeriesColumnNames::Scalar, time_series_table_info.value_data_type});
             break;
