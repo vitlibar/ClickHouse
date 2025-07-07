@@ -10,6 +10,49 @@ namespace ErrorCodes
     extern const int NOT_IMPLEMENTED;
 }
 
+namespace
+{
+    template <typename TimestampType, typename IntervalType>
+    bool alignStartTimeAndEndTimeImpl(Field & start_time, Field & end_time, const Field & step)
+    {
+        
+    }
+
+    /// Increases the start time by some value to make it divisible by `step`.
+    /// Decreases the end time by some value to make it divisible by `step`.
+    /// If after that still `start_time <= end_time` then the function returns true.
+    bool alignStartTimeAndEndTime(Field & start_time, Field & end_time, const Field & step)
+    {
+        auto align_int = [](auto start_time_, auto end_time_, auto step_)
+        {
+            if (step_ <= 0)
+                throw Exception();
+            auto aligned = (start_time_ + step_ - 1) / step_;
+            if (aligned > end_time_)
+                return Field{};
+            return Field{aligned};
+        };
+
+        if ((start_time.getType() == end_time.getType()) && (start_time.getType() == step.getType()))
+        {
+            switch (left.getType())
+            {
+                case Field::Types::Int64: return align_int(start_time.safeGet<Int64>(), end_time.safeGet<Int64>(), step.safeGet<Int64>());
+                case Field::Types::UInt64: return align_int(start_time.safeGet<UInt64>(), end_time.safeGet<UInt64>(), step.safeGet<UInt64>());
+                case Field::Types::Decimal32: return align_decimal(start_time.safeGet<Decimal32>(), end_time.safeGet<Decimal32>(), step.safeGet<Decimal32>());
+                case Field::Types::Decimal64: return align_decimal(start_time.safeGet<Decimal64>(), end_time.safeGet<Decimal64>(), step.safeGet<Decimal64>());
+                default: break;
+            }
+        }
+        else if ((start_time.getType() == end_time.getType()) && (start_time.getType() == Field::Types::UInt64) && (step.getType() == Field::Types::Int64))
+        {
+            return align_int(start_time.safeGet<UInt64>(), end_time.safeGet<UInt64>(), step.safeGet<Int64>());
+        }
+        throw Exception(ErrorCodes::LOGICAL_ERROR, "Cannot align start time of type {} by step of type {} with end time of type {}",
+                        start_time.getType(), step.getType(), end_time.getType());
+    }
+}
+
 class PrometheusQueryToSQLConverter::ASTBuilder
 {
 public:
@@ -46,8 +89,7 @@ private:
         Field window;
 
         /// Columns to select (nullptr if there is no such column).
-        /// The names of these columns are always TimeSeriesColumnNames::ID and so on.
-        ASTPtr id_column;
+        /// The names of these columns are always TimeSeriesColumnNames::Group, TimeSeriesColumnNames::Tags and so on.
         ASTPtr group_column;
         ASTPtr tags_column;
         ASTPtr timestamp_column;
@@ -58,7 +100,7 @@ private:
     
         size_t num_columns() const
         {
-            return (id_column != nullptr) + (group_column != nullptr) + (tags_column != nullptr) + (timestamp_column != nullptr)
+            return (group_column != nullptr) + (tags_column != nullptr) + (timestamp_column != nullptr)
                 + (value_column != nullptr) + (time_series_column != nullptr) + (scalar_column != nullptr) + (string_column != nullptr);
         }
 
@@ -93,8 +135,6 @@ private:
 
         auto select_list_exp = std::make_shared<ASTExpressionList>();
         auto & select_list = select_list_exp->children;
-        if (piece.id_column)
-            select_list.push_back(piece.id_column);
         if (piece.group_column)
             select_list.push_back(piece.group_column);
         if (piece.tags_column)
@@ -251,15 +291,9 @@ private:
             res.tags_column->setAlias(TimeSeriesColumnNames::Tags);
             res.group_by.push_back(std::make_shared<ASTIdentifier>(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Group)));
         }
-        else if (piece.id_column)
-        {
-            res.tags_column = makeASTFunction("timeSeriesIdToTags", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::ID));
-            res.tags_column->setAlias(TimeSeriesColumnNames::Tags);
-            res.group_by.push_back(makeASTFunction("timeSeriesIdToGroup", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::ID)));
-        }
         else
         {
-            throw Exception(ErrorCodes::LOGICAL_ERROR, "Expected columns {} or {} or {} while building an SQL query", TimeSeriesColumnNames::Tags, TimeSeriesColumnNames::Group, TimeSeriesColumnNames::ID);
+            throw Exception(ErrorCodes::LOGICAL_ERROR, "Expected columns {} or {} while building an SQL query", TimeSeriesColumnNames::Tags, TimeSeriesColumnNames::Group);
         }
 
         if (piece.timestamp_column && piece.value_column)
@@ -313,15 +347,9 @@ private:
             res.tags_column->setAlias(TimeSeriesColumnNames::Tags);
             res.group_by.push_back(std::make_shared<ASTIdentifier>(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Group)));
         }
-        else if (piece.id_column)
-        {
-            res.tags_column = makeASTFunction("timeSeriesIdToTags", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::ID));
-            res.tags_column->setAlias(TimeSeriesColumnNames::Tags);
-            res.group_by.push_back(makeASTFunction("timeSeriesIdToGroup", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::ID)));
-        }
         else
         {
-            throw Exception(ErrorCodes::LOGICAL_ERROR, "Expected columns {} or {} or {} while building an SQL query", TimeSeriesColumnNames::Tags, TimeSeriesColumnNames::Group, TimeSeriesColumnNames::ID);
+            throw Exception(ErrorCodes::LOGICAL_ERROR, "Expected columns {} or {} while building an SQL query", TimeSeriesColumnNames::Tags, TimeSeriesColumnNames::Group);
         }
 
         if (piece.time_series_column)
@@ -371,101 +399,32 @@ private:
     /// Builds a query piece to execute an instant selector.
     Piece buildPieceForSelector(const PrometheusQueryTree::InstantSelector * instant_selector)
     {
-        Field max_time, max_time_offset, window, range, step;
-        bool is_range_selector = false;
+        Field window = castToIntervalDataType(getLookbackDelta());
 
-        for (const auto * parent = instant_selector->parent; parent; parent = parent->parent)
+        Field min_time, max_time, step;
+        extractRangeAndStep(instant_selector, min_time, max_time, step);
+
+        if (min_time == max_time)
         {
-            if (parent->node_type == NodeType::RangeSelector)
-            {
-                const auto * range_selector = typeid_cast<const PrometheusQueryTree::RangeSelector *>(parent);
-                is_range_selector = true;
-                window = castToIntervalDataType(nodeToField(range_selector->range));
-            }
-            else if (parent->node_type == NodeType::At)
-            {
-                const auto * at_node = typeid_cast<const PrometheusQueryTree::At *>(parent);
-                if (max_time.isNull())
-                {
-                    if (const auto * offset = at_node->getOffset())
-                    {
-                        auto casted_offset = castToIntervalDataType(nodeToField(offset));
-                        if (max_time_offset.isNull())
-                            max_time_offset = casted_offset;
-                        else
-                            max_time_offset = add(max_time_offset, casted_offset);
-                    }
-                    if (const auto * at = at_node->getAt())
-                        max_time = castToTimestampDataType(nodeToField(at));
-                }
-            }
-            else if (parent->node_type == NodeType::Subquery)
-            {
-                const auto * subquery_node = typeid_cast<const PrometheusQueryTree::Subquery *>(parent);
-                if (step.isNull())
-                {
-                    if (const auto * resolution = subquery_node->getResolution())
-                        step = castToIntervalDataType(nodeToField(resolution));
-                    else
-                        step = castToIntervalDataType(getDefaultResolution());
-                }
-                auto subquery_range = castToIntervalDataType(nodeToField(subquery_node->getRange()));
-                if (range.isNull())
-                    range = subquery_range;
-                else
-                    range = add(range, subquery_range);
-            }
+            step = getDummyStep();
         }
-
-        if (max_time.isNull())
-            max_time = castToTimestampDataType(getEvaluationTime());
-        if (!max_time_offset.isNull())
-            max_time = sub(max_time, max_time_offset);
-
-        if (!is_range_selector)
-            window = castToIntervalDataType(getLookbackDelta());
-
-        Field min_time = sub(max_time, window);
-        if (!range.isNull())
-            min_time = sub(min_time, range);
+        else if (!alignStartTimeAndEndTime(min_time, max_time, step))
+        {
+            /// Couldn't align by `step`.
+            Piece empty;
+            empty.result_type = ResultType::INSTANT_VECTOR;
+            return empty;
+        }
 
         Piece res;
-        res.from_table_function = makeASTFunction("timeSeriesSelector", getPromQLText(instant_selector), std::make_shared<ASTLiteral>(min_time), std::make_shared<ASTLiteral>(max_time));
 
-        if (res.is_range_selector)
-        {
-            res.id = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::ID);
-            res.timestamp = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Timestamp);
-            res.value = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Value);
-            res.result_type = ResultType::RANGE_VECTOR;
-            res.window = window;
-        }
-        else
-        {
-            Field start_time = max_time;
-            if (step.isNull())
-            {
-                step = getDummyStep();
-            }
-            else
-            {
-                start_time = alignStartTime(sub(max_time, range), max_time, step);
-                if (!start_time)
-                {
-                    /// Couldn't align by `step` within a specified range.
-                    Piece empty;
-                    empty.result_type = ResultType::INSTANT_VECTOR;
-                    return empty;
-                }
-            }
-
-            res.group_column = makeASTFunction("timeSeriesIdToGroup", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::ID));
-            res.group_column->setAlias(TimeSeriesColumnNames::Group);
-            res.time_series_column = makeGridFunction("timeSeriesLastToGrid", start_time, max_time, step, res.timestamp, res.value);
-            res.time_series_column->setAlias(TimeSeriesColumnNames::TimeSeries);
-            res.group_by.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Group));
-            res.result_type = ResultType::INSTANT_VECTOR;
-        }
+        res.from_table_function = makeASTFunction("timeSeriesSelector", getPromQLText(instant_selector), std::make_shared<ASTLiteral>(subtract(min_time, window)), std::make_shared<ASTLiteral>(max_time));
+        res.group_column = makeASTFunction("timeSeriesIdToGroup", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::ID));
+        res.group_column->setAlias(TimeSeriesColumnNames::Group);
+        res.time_series_column = makeGridFunction("timeSeriesLastToGrid", min_time, max_time, step, std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Timestamp), std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Value));
+        res.time_series_column->setAlias(TimeSeriesColumnNames::TimeSeries);
+        res.group_by.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Group));
+        res.result_type = ResultType::INSTANT_VECTOR;
 
         return res;
     }
@@ -473,8 +432,23 @@ private:
     /// Builds a query piece to execute a range selector.
     Piece buildPieceForSelector(const PrometheusQueryTree::RangeSelector * range_selector)
     {
-        /// buildPieceForSelector() for an instant selector can understand when its' a part of a range selector.
-        return buildPieceForSelector(range_selector->getInstantSelector());
+        const auto * instant_selector = range_selector->getInstantSelector();
+        Field window = range_selector->range;
+
+        Field min_time, max_time, step;
+        extractRangeAndStep(range_selector, min_time, max_time, step);
+
+        Piece res;
+
+        res.from_table_function = makeASTFunction("timeSeriesSelector", getPromQLText(instant_selector), std::make_shared<ASTLiteral>(subtract(min_time, window)), std::make_shared<ASTLiteral>(max_time));
+        res.group_column = makeASTFunction("timeSeriesIdToGroup", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::ID));
+        res.group_column->setAlias(TimeSeriesColumnNames::Group);
+        res.timestamp = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Timestamp);
+        res.value = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Value);
+        res.result_type = ResultType::RANGE_VECTOR;
+        res.window = window;
+
+        return res;
     }
 
     Piece buildPieceForFunction(const PrometheusQueryTree::Function * func)
@@ -493,9 +467,80 @@ private:
         checkArgumentType(func->function_name, args[0], ResultType::RANGE_VECTOR);
 
         Field window = args[0].window;
-        Field max_time, max_time_offset, range, step;
 
-        for (const auto * parent = func->parent; parent; parent = parent->parent)
+        Field min_time, max_time, step;
+        extractRangeAndStep(func, min_time, max_time, step);
+
+        Field start_time = max_time;
+        if (step.isNull())
+        {
+            step = getDummyStep();
+        }
+        else
+        {
+            start_time = alignStartAndEndTime(sub(max_time, range), max_time, step);
+            if (!start_time)
+            {
+                /// Couldn't align by `step` within a specified range.
+                Piece empty;
+                empty.result_type = ResultType::INSTANT_VECTOR;
+                return empty;
+            }
+        }
+
+        Piece res;
+        res.result_type = ResultType::INSTANT_VECTOR;
+
+        res.group_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Group);
+        res.time_series_column = makeGridFunction(function_name, start_time, max_time, step, res.timestamp, res.value);
+        res.time_series_column->setAlias(TimeSeriesColumnNames::TimeSeries);
+        res.group_by.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Group));
+        res.result_type = ResultType::INSTANT_VECTOR;
+    }
+
+    Piece buildPieceForBinaryOperator(const PrometheusQueryTree::BinaryOperator * binary_operator)
+    {
+        throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Binary operator {} is not implemented", binary_operator->operator_name);
+    }
+
+    std::string_view getPromQLText(const PrometheusQueryTree::Node * node)
+    {
+        return getPromQLTree().getQuery(node);
+    }
+
+    ASTPtr makeGridFunction(const String & function_name, const Field & start_time, const Field & end_time, const Field & step,
+                            ASTPtr timestamp_column, ASTPtr value_column)
+    {
+        auto aggregate_function = makeASTFunction(function_name, timestamp_column, value_column);
+        aggregate_function->parameters = std::make_shared<ASTExpressionList>();
+        aggregate_function->parameters->children.push_back(std::make_shared<ASTLiteral>(start_time));
+        aggregate_function->parameters->children.push_back(std::make_shared<ASTLiteral>(end_time));
+        aggregate_function->parameters->children.push_back(std::make_shared<ASTLiteral>(step));
+        return makeASTFunction("timeSeriesGrid", std::make_shared<ASTLiteral>(start_time), std::make_shared<ASTLiteral>(step), aggregate_function);
+    }
+
+    /// Extracts a scalar value or an interval value.
+    static Field nodeToField(const PrometheusQueryTree::Node * scalar_or_interval_node)
+    {
+        auto node_type = scalar_or_interval_node->node_type;
+        if (node_type == NodeType::ScalarLiteral)
+            return Field{typeid_cast<const PrometheusQueryTree::ScalarLiteral *>(scalar_or_interval_node)->scalar};
+        else if (node_type == NodeType::IntervalLiteral)
+            return Field{typeid_cast<const PrometheusQueryTree::IntervalLiteral *>(scalar_or_interval_node)->interval};
+        else
+            throw Exception(ErrorCodes::LOGICAL_ERROR, "Expected a scalar literal or a interval literal, got {}", node_type);
+    }
+
+    /// Extracts a time range and a step based on operators @ offset and subqueries.
+    void extractRangeAndStep(const PrometheusQueryTree::Node * node, Field & min_time, Field & max_time, Field & step)
+    {
+        min_time = Field{};
+        max_time = Field{};
+        step = Field{};
+        Field max_time_offset;
+        Field range;
+
+        for (const auto * parent = node->parent; parent; parent = parent->parent)
         {
             if (parent->node_type == NodeType::At)
             {
@@ -534,72 +579,12 @@ private:
 
         if (max_time.isNull())
             max_time = castToTimestampDataType(getEvaluationTime());
+
         if (!max_time_offset.isNull())
             max_time = sub(max_time, max_time_offset);
 
-        Field min_time = sub(max_time, window);
         if (!range.isNull())
             min_time = sub(min_time, range);
-
-        Field start_time = max_time;
-        if (step.isNull())
-        {
-            step = getDummyStep();
-        }
-        else
-        {
-            start_time = alignStartTime(sub(max_time, range), max_time, step);
-            if (!start_time)
-            {
-                /// Couldn't align by `step` within a specified range.
-                Piece empty;
-                empty.result_type = ResultType::INSTANT_VECTOR;
-                return empty;
-            }
-        }
-
-        Piece res;
-        res.result_type = ResultType::INSTANT_VECTOR;
-
-        res.group_column = makeASTFunction("timeSeriesIdToGroup", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::ID));
-        res.group_column->setAlias(TimeSeriesColumnNames::Group);
-        res.time_series_column = makeGridFunction("timeSeriesLastToGrid", start_time, max_time, step, res.timestamp, res.value);
-        res.time_series_column->setAlias(TimeSeriesColumnNames::TimeSeries);
-        res.group_by.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Group));
-        res.result_type = ResultType::INSTANT_VECTOR;
-    }
-
-    Piece buildPieceForBinaryOperator(const PrometheusQueryTree::BinaryOperator * binary_operator)
-    {
-        throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Binary operator {} is not implemented", binary_operator->operator_name);
-    }
-
-    std::string_view getPromQLText(const PrometheusQueryTree::Node * node)
-    {
-        return getPromQLTree().getQuery(node);
-    }
-
-    ASTPtr makeGridFunction(const String & function_name, const Field & start_time, const Field & end_time, const Field & step,
-                            ASTPtr timestamp_column, ASTPtr value_column)
-    {
-        auto aggregate_function = makeASTFunction(function_name, timestamp_column, value_column);
-        aggregate_function->parameters = std::make_shared<ASTExpressionList>();
-        aggregate_function->parameters->children.push_back(std::make_shared<ASTLiteral>(start_time));
-        aggregate_function->parameters->children.push_back(std::make_shared<ASTLiteral>(end_time));
-        aggregate_function->parameters->children.push_back(std::make_shared<ASTLiteral>(step));
-        return makeASTFunction("timeSeriesGrid", std::make_shared<ASTLiteral>(start_time), std::make_shared<ASTLiteral>(step), aggregate_function);
-    }
-
-    /// Extracts a scalar value or an interval value.
-    static Field nodeToField(const PrometheusQueryTree::Node * scalar_or_interval_node)
-    {
-        auto node_type = scalar_or_interval_node->node_type;
-        if (node_type == NodeType::ScalarLiteral)
-            return Field{typeid_cast<const PrometheusQueryTree::ScalarLiteral *>(scalar_or_interval_node)->scalar};
-        else if (node_type == NodeType::IntervalLiteral)
-            return Field{typeid_cast<const PrometheusQueryTree::IntervalLiteral *>(scalar_or_interval_node)->interval};
-        else
-            throw Exception(ErrorCodes::LOGICAL_ERROR, "Expected a scalar literal or a interval literal, got {}", node_type);
     }
 
     /// Converts a scalar or an interval value to a timestamp compatible with the data types used in the TimeSeries table.
@@ -652,7 +637,7 @@ private:
     }
 
     /// Subtract a time interval from another time interval or from a timestamp.
-    static Field sub(const Field & left, const Field & right)
+    static Field subtract(const Field & left, const Field & right)
     {
         if (left.getType() == right.getType())
         {
@@ -671,39 +656,6 @@ private:
             return static_cast<UInt64>(left.safeGet<UInt64>() - right.safeGet<Int64>());
         }
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Cannot subtract {} from {}", right.getType(), left.getType());
-    }
-
-    /// Increases the start time by some value to make it divisible by `step`.
-    /// If such new aligned started time would be greater than `end_time` the function returns Null.
-    static Field alignStartTime(const Field & start_time, const Field & end_time, const Field & step)
-    {
-        auto align_int = [](auto start_time_, auto end_time_, auto step_)
-        {
-            if (step_ <= 0)
-                throw Exception();
-            auto aligned = (start_time_ + step_ - 1) / step_;
-            if (aligned > end_time_)
-                return Field{};
-            return Field{aligned};
-        };
-
-        if ((start_time.getType() == end_time.getType()) && (start_time.getType() == step.getType()))
-        {
-            switch (left.getType())
-            {
-                case Field::Types::Int64: return align_int(start_time.safeGet<Int64>(), end_time.safeGet<Int64>(), step.safeGet<Int64>());
-                case Field::Types::UInt64: return align_int(start_time.safeGet<UInt64>(), end_time.safeGet<UInt64>(), step.safeGet<UInt64>());
-                case Field::Types::Decimal32: return align_decimal(start_time.safeGet<Decimal32>(), end_time.safeGet<Decimal32>(), step.safeGet<Decimal32>());
-                case Field::Types::Decimal64: return align_decimal(start_time.safeGet<Decimal64>(), end_time.safeGet<Decimal64>(), step.safeGet<Decimal64>());
-                default: break;
-            }
-        }
-        else if ((start_time.getType() == end_time.getType()) && (start_time.getType() == Field::Types::UInt64) && (step.getType() == Field::Types::Int64))
-        {
-            return align_int(start_time.safeGet<UInt64>(), end_time.safeGet<UInt64>(), step.safeGet<Int64>());
-        }
-        throw Exception(ErrorCodes::LOGICAL_ERROR, "Cannot align start time of type {} by step of type {} with end time of type {}",
-                        start_time.getType(), step.getType(), end_time.getType());
     }
 };
 
