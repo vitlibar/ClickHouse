@@ -129,6 +129,7 @@ namespace
 }
 
 
+/// Builder of an AST query to evaluate a promql query.
 class PrometheusQueryToSQLConverter::ASTBuilder
 {
 public:
@@ -174,6 +175,10 @@ private:
         ASTPtr time_series_column;
         ASTPtr scalar_column;
         ASTPtr string_column;
+
+        /// Whether the timestamp column and the value column are columns of arrays.
+        bool timestamp_column_is_array = false;
+        bool value_column_is_array = false;
     
         size_t num_columns() const
         {
@@ -183,11 +188,13 @@ private:
 
         bool empty () const { return num_columns() == 0; }
 
-        /// The FROM expression - either a table function or the CTE name of a subquery.
+        /// The "FROM" expression when it's a table function. or the temporary table name denoting a subquery.
         ASTPtr from_table_function;
+
+        /// The "FROM" expression when it's a temporary table name denoting a subquery.
         String from_subquery;
 
-        /// The GROUP BY expression.
+        /// The "GROUP BY" expression.
         ASTs group_by;
 
         ASTPtr where;
@@ -231,7 +238,7 @@ private:
             select_list.push_back(piece.string_column);
         select_query->setExpression(ASTSelectQuery::Expression::SELECT, select_list_exp);
 
-        if (piece.from_table || piece.from_table_function)
+        if (piece.from_subquery || piece.from_table_function)
         {
             auto tables = std::make_shared<ASTTablesInSelectQuery>();
             auto table = std::make_shared<ASTTablesInSelectQueryElement>();
@@ -278,7 +285,7 @@ private:
         return select_query;
     }
 
-    /// Finalizes a Piece built to execute a prometheus query.
+    /// Finalizes a Piece built to evaluate a prometheus query.
     Piece finalize(Piece && piece)
     {
         Piece res;
@@ -378,10 +385,22 @@ private:
 
         if (piece.timestamp_column && piece.value_column)
         {
-            res.timestamp_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Timestamp);
-            res.value_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Value);
+            if (piece.timestamp_column_is_array && piece.value_column_is_array)
+            {
+                res.where = makeASTFunction("notEmpty", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Value));
+                res.timestamp_column = makeASTFunction("arrayLast", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Timestamp));
+                res.timestamp_column->setAlias(TimeSeriesColumnNames::Timestamp);
+                res.value_column = makeASTFunction("arrayLast", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Value));
+                res.value_column->setAlias(TimeSeriesColumnNames::Value);
+            }
+            else(piece.timestamp_column && piece.value_column)
+            {
+                res.timestamp_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Timestamp);
+                res.value_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Value);
+            }
         }
-        else if (piece.time_series_column)
+
+        if (piece.time_series_column)
         {
             res.where = makeASTFunction("notEmpty", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::TimeSeries));
             auto array_element = makeASTFunction("arrayLast", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::TimeSeries));
@@ -438,11 +457,19 @@ private:
         }
         else if (piece.timestamp_column && piece.value_column)
         {
-            auto group_array_function = makeASTFunction("timeSeriesGroupArraySorted",
-                                                        std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Timestamp),
-                                                        std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Value));
-            group_array_function->setAlias(TimeSeriesColumnNames::TimeSeries);
-            res.time_series_column = group_array_function;
+            if (piece.timestamp_column_is_array && piece.value_column_is_array)
+            {
+                res.time_series_column = makeASTFunction("arrayZip",
+                                                         std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Timestamp),
+                                                         std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Value));
+            }
+            else
+            {
+                res.time_series_column = makeASTFunction("timeSeriesGroupArraySorted",
+                                                         std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Timestamp),
+                                                         std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Value));
+            }
+            res.time_series_column->setAlias(TimeSeriesColumnNames::TimeSeries);
         }
         else
         {
@@ -453,7 +480,7 @@ private:
         return res;
     }
 
-    /// Builds a piece to execute a node in a prometheus query tree.
+    /// Builds a piece to evaluate a node in a prometheus query tree.
     Piece buildPiece(const PrometheusQueryTree::Node * node)
     {
         auto node_type = node->node_type;
@@ -484,7 +511,7 @@ private:
         return empty;
     }
 
-    /// Builds a piece to execute an instant selector.
+    /// Builds a piece to evaluate an instant selector.
     Piece buildPieceForInstantSelector(const PrometheusQueryTree::InstantSelector * instant_selector) const
     {
         Field window = castToIntervalDataType(getLookbackDelta());
@@ -510,7 +537,7 @@ private:
         return res;
     }
 
-    /// Builds a piece to execute a range selector.
+    /// Builds a piece to evaluate a range selector.
     Piece buildPieceForRangeSelector(const PrometheusQueryTree::RangeSelector * range_selector) const
     {
         const auto * instant_selector = range_selector->getInstantSelector();
@@ -532,17 +559,19 @@ private:
         return res;
     }
 
-    /// Builds a piece to execute a function.
+    /// Builds a piece to evaluate a function.
     Piece buildPieceForFunction(const PrometheusQueryTree::Function * func)
     {
-        std::vector<Piece> args = buildPiecesForArguments(func);
         const auto & function_name = func->function_name;
+        std::vector<Piece> args = buildPiecesForArguments(func);
+
         if (function_name == "rate" || function_name == "irate" || function_name == "delta" || function_name == "idelta" || function_name == "last_over_time")
             return buildPieceForRangeFunction(func, std::move(args));
-        else
-            throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Function {} is not implemented", func->function_name);
+
+        throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Function {} is not implemented", func->function_name);
     }
 
+    /// Builds pieces to evaluate the arguments of a function.
     std::vector<Piece> buildPiecesForArguments(const PrometheusQueryTree::Function * func)
     {
         std::vector<Piece> res;
@@ -552,6 +581,7 @@ private:
         return res;
     }
 
+    /// Builds a piece to evaluate a range function, i.e. a function accepting a range vector and returning an instant vector.
     Piece buildPieceForRangeFunction(const PrometheusQueryTree::Function * func, std::vector<Piece> && arguments)
     {
         checkNumberArguments(func->function_name, args, 1);
@@ -560,11 +590,7 @@ private:
         const auto & arg = args[0];
 
         if (arg.empty())
-        {
-            Piece empty;
-            empty.result_type = ResultType::INSTANT_VECTOR;
-            return empty;
-        }
+            return getEmptyPiece(ResultType::INSTANT_VECTOR);
 
         std::string_view grid_function_name;
         if (func->function_name == "rate")
@@ -583,19 +609,12 @@ private:
         Field window = arg.window;
 
         Field start_time, end_time, step;
-        extractRangeAndStep(func, min_time, max_time, step);
+        extractRangeAndStep(func, start_time, end_time, step);
 
         if (min_time == max_time)
-        {
             step = getDummyStep();
-        }
         else if (!alignStartTimeAndEndTime(min_time, max_time, step))
-        {
-            /// Couldn't align by `step`.
-            Piece empty;
-            empty.result_type = ResultType::INSTANT_VECTOR;
-            return empty;
-        }
+            return getEmptyPiece(ResultType::INSTANT_VECTOR);
 
         Piece res;
         res.result_type = ResultType::INSTANT_VECTOR;
@@ -605,6 +624,12 @@ private:
         res.group_by.push_back(std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Group));
         res.from_subquery = splitTimeSeriesColumn(arg);
         return res;
+    }
+
+    /// Builds a piece to evaluate a binary operator.
+    Piece buildPieceForBinaryOperator(const PrometheusQueryTree::BinaryOperator * binary_operator)
+    {
+        throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Binary operator {} is not implemented", binary_operator->operator_name);
     }
 
     Piece splitTimeSeriesColumn(Piece && piece)
@@ -625,11 +650,8 @@ private:
         return res;
     }
 
-    static Piece buildPieceForBinaryOperator(const PrometheusQueryTree::BinaryOperator * binary_operator)
-    {
-        throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Binary operator {} is not implemented", binary_operator->operator_name);
-    }
-
+    /// Builds an AST to call functions generating time series on a grid.
+    /// Returns something like timeSeriesGrid(<start_time>, <step>, timeSeries*ToGrid(<start_time>, <end_time>, <step>)(<timestamp>, <value>)
     static ASTPtr makeGridFunction(const String & to_grid_function_name, const Field & start_time, const Field & end_time, const Field & step,
                                    ASTPtr timestamp_column, ASTPtr value_column)
     {
@@ -790,8 +812,8 @@ private:
         throw Exception(ErrorCodes::BAD_ARGUMENTS, "Cannot cast {} to the interval type for {}", field_type, timestamp_data_type);
     }
 
-    /// Generates a non-zero step
-    /// (timeSeries*ToGrid() functions don't allow zero step even if start_time == end_time).
+    /// Generates a non-zero step for timeSeries*ToGrid() functions.
+    /// (Those functions don't allow zero step even if start_time == end_time.)
     Field getDummyStep() const
     {
         return castToIntervalDataType(Field{1});
@@ -824,7 +846,7 @@ ColumnsDescription PrometheusQueryToSQLConverter::getResultColumns() const
 
     switch (promql.getResultType())
     {
-        case ResultType::SCALAR:
+        case ResultType::SCALAR: /// nobreak
         case ResultType::INTERVAL:
         {
             columns.add(ColumnDescription{TimeSeriesColumnNames::Scalar, time_series_table_info.value_data_type});
