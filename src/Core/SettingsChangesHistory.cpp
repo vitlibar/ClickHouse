@@ -72,6 +72,9 @@ const VersionToSettingsChangesMap & getSettingsChangesHistory()
             {"backup_slow_all_threads_after_retryable_s3_error", true, true, "New setting"},
             {"iceberg_metadata_compression_method", "", "", "New setting"},
             {"allow_experimental_correlated_subqueries", false, true, "Mark correlated subqueries support as Beta."},
+            {"promql_database", "", "", "New experimental setting"},
+            {"promql_table", "", "", "New experimental setting"},
+            {"evaluation_time", 0, 0, "New experimental setting"},
         });
         addSettingsChanges(settings_changes_history, "25.7",
         {
