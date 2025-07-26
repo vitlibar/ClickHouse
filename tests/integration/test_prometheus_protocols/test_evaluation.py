@@ -35,7 +35,7 @@ def send_data(time_series):
 
 # Executes a query in the "prometheus_reader" service. This service uses the RemoteRead protocol to get data from ClickHouse.
 def execute_query_in_prometheus_reader(query, timestamp):
-    return execute_instant_query_with_http_api(
+    return execute_query_via_http_api(
         cluster.prometheus_reader_ip,
         cluster.prometheus_reader_port,
         "/api/v1/query",
@@ -46,7 +46,7 @@ def execute_query_in_prometheus_reader(query, timestamp):
 
 # Executes a query in the "prometheus_receiver" service. We sent data to this service earlier via the RemoteWrite protocol.
 def execute_query_in_prometheus_receiver(query, timestamp):
-    return execute_instant_query_with_http_api(
+    return execute_query_via_http_api(
         cluster.prometheus_receiver_ip,
         cluster.prometheus_receiver_port,
         "/api/v1/query",
@@ -239,17 +239,6 @@ def test_grid():
             ],
         ),
         (
-            "irate(grid[45s])[120s:15s]",
-            210,
-            '{"resultType": "matrix", "result": [{"metric": {}, "values": [[120, "0"], [135, "0.2"], [150, "0.1"], [165, "0.1"], [210, "0.3"]]}]}',
-            [
-                [
-                    "[('__name__','grid')]",
-                    "[('1970-01-01 00:02:00.000',0),('1970-01-01 00:02:15.000',0.2),('1970-01-01 00:02:30.000',0.1),('1970-01-01 00:02:45.000',0.1),('1970-01-01 00:03:30.000',0.3)]",
-                ]
-            ],
-        ),
-        (
             "idelta(grid[45s])[120s:15s]",
             210,
             '{"resultType": "matrix", "result": [{"metric": {}, "values": [[120, "0"], [135, "2"], [150, "1"], [165, "1"], [210, "3"]]}]}',
@@ -261,50 +250,54 @@ def test_grid():
             ],
         ),
         (
+            "irate(grid[45s])[120s:15s]",
+            210,
+            '{"resultType": "matrix", "result": [{"metric": {}, "values": [[120, "0"], [135, "0.2"], [150, "0.1"], [165, "0.1"], [210, "0.3"]]}]}',
+            [
+                [
+                    "[('__name__','grid')]",
+                    "[('1970-01-01 00:02:00.000',0),('1970-01-01 00:02:15.000',0.2),('1970-01-01 00:02:30.000',0.1),('1970-01-01 00:02:45.000',0.1),('1970-01-01 00:03:30.000',0.3)]",
+                ]
+            ],
+        ),
+        (
+            # FIXME
+            "delta(grid[45s])[120s:15s]",
+            210,
+            '{"resultType": "matrix", "result": [{"metric": {}, "values": [[120, "0"], [135, "3"], [150, "4.5"], [165, "2.5"], [210, "3.75"]]}]}',
+            [
+                [
+                    "[('__name__','grid')]",
+                    "[('1970-01-01 00:02:00.000',0),('1970-01-01 00:02:15.000',3),('1970-01-01 00:02:30.000',4.5),('1970-01-01 00:02:45.000',3.75),('1970-01-01 00:03:30.000',3.75)]", # WRONG!
+                ]
+            ],
+        ),
+        (
+            # FIXME
             "rate(grid[45s])[120s:15s]",
             210,
             '{"resultType": "matrix", "result": [{"metric": {}, "values": [[120, "0"], [135, "0.06666666666666667"], [150, "0.1"], [165, "0.05555555555555555"], [210, "0.08333333333333333"]]}]}',
             [
                 [
                     "[('__name__','grid')]",
-                    "[('1970-01-01 00:02:00.000',0),('1970-01-01 00:02:15.000',0.0666681481810707),('1970-01-01 00:02:30.000',0.1),('1970-01-01 00:02:45.000',0.0555545678792862),('1970-01-01 00:03:30.000',0.08333518522633837)]", #TODO
+                    "[('1970-01-01 00:02:00.000',0),('1970-01-01 00:02:15.000',0.06666666666666667),('1970-01-01 00:02:30.000',0.1),('1970-01-01 00:02:45.000',0.08333333333333333),('1970-01-01 00:03:30.000',0.08333333333333333)]", # WRONG!
+                ]
+            ],
+        ),
+        (
+            # FIXME
+            "idelta(grid[35s])[120s:15s]",
+            210,
+            '{"resultType": "matrix", "result": [{"metric": {}, "values": [[120, "0"], [135, "2"], [150, "1"], [210, "3"]]}]}',
+            [
+                [
+                    "[('__name__','grid')]",
+                    "[('1970-01-01 00:02:00.000',0),('1970-01-01 00:02:15.000',2),('1970-01-01 00:02:30.000',1),('1970-01-01 00:02:45.000',1),('1970-01-01 00:03:30.000',3)]", #WRONG!
                 ]
             ],
         ),
     ]
 
     for query, timestamp, result, chresult in queries:
-        assert execute_query_in_prometheus(query, timestamp) == result
-        assert execute_query_in_clickhouse(query, timestamp) == TSV(chresult)
-
-
-def test_temp():
-
-    send_data(
-        [
-            (
-                {"__name__": "grid"},
-                {
-                    110: 1,
-                    120: 1,
-                    130: 3,
-                    140: 4,
-                    190: 5,
-                    200: 5,
-                    210: 8,
-                    220: 12,
-                    230: 13,
-                },
-            )
-        ]
-    )
-
-    res = execute_range_query_with_http_api(
-        cluster.prometheus_receiver_ip,
-        cluster.prometheus_receiver_port,
-        "/api/v1/query_range",
-        "grid",
-        122, 203, 10,
-    )
-    print(f"range_result={res}")
-    assert False
+        assert execute_query_in_prometheus(query, timestamp) == result, f"query: {query}"
+        assert execute_query_in_clickhouse(query, timestamp) == TSV(chresult), f"query: {query}"

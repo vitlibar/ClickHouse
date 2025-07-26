@@ -42,7 +42,7 @@ def wait_for_data():
 
 # Executes a query in the "prometheus_reader" service. This service uses the RemoteRead protocol to get data from ClickHouse.
 def execute_query_in_prometheus_reader(query, timestamp):
-    return execute_instant_query_with_http_api(
+    return execute_query_via_http_api(
         cluster.prometheus_reader_ip,
         cluster.prometheus_reader_port,
         "/api/v1/query",
@@ -53,7 +53,7 @@ def execute_query_in_prometheus_reader(query, timestamp):
 
 # Executes a query in the "prometheus_receiver" service. We sent data to this service earlier via the RemoteWrite protocol.
 def execute_query_in_prometheus_writer(query, timestamp):
-    return execute_instant_query_with_http_api(
+    return execute_query_via_http_api(
         cluster.prometheus_writer_ip,
         cluster.prometheus_writer_port,
         "/api/v1/query",

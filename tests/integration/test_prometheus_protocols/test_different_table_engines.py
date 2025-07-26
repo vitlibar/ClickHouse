@@ -66,7 +66,7 @@ test_queries = [
 def check_queries_in_prometheus_receiver():
     for query, result, _ in test_queries:
         assert (
-            execute_instant_query_with_http_api(
+            execute_query_via_http_api(
                 cluster.prometheus_receiver_ip,
                 cluster.prometheus_receiver_port,
                 "/api/v1/query",
@@ -81,7 +81,7 @@ def check_queries_in_prometheus_receiver():
 def check_queries_in_prometheus_reader():
     for query, result, _ in test_queries:
         assert (
-            execute_instant_query_with_http_api(
+            execute_query_via_http_api(
                 cluster.prometheus_reader_ip,
                 cluster.prometheus_reader_port,
                 "/api/v1/query",

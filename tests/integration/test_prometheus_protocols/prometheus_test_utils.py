@@ -164,15 +164,13 @@ def extract_protobuf_from_remote_read_response(response):
 
 
 # Executes an instant query using Prometheus HTTP API.
-def execute_instant_query_with_http_api(host, port, path, query, timestamp=None):
-    response = get_response_to_http_api_instant_query(
-        host, port, path, query, timestamp
-    )
+def execute_query_via_http_api(host, port, path, query, timestamp=None):
+    response = get_response_to_http_api_query(host, port, path, query, timestamp)
     return extract_data_from_http_api_response(response)
 
 
 # Executes a range query using Prometheus HTTP API.
-def execute_range_query_with_http_api(
+def execute_range_query_via_http_api(
     host, port, path, query, start_timestamp, end_timestamp, step
 ):
     response = get_response_to_http_api_range_query(
@@ -181,7 +179,7 @@ def execute_range_query_with_http_api(
     return extract_data_from_http_api_response(response)
 
 
-def get_response_to_http_api_instant_query(host, port, path, query, timestamp=None):
+def get_response_to_http_api_query(host, port, path, query, timestamp=None):
     escaped_query = urllib.parse.quote_plus(query, safe="")
     url = f"http://{host}:{port}/{path.strip('/')}?query={escaped_query}"
     if timestamp is not None:
