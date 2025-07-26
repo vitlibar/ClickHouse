@@ -547,7 +547,7 @@ private:
             throw Exception(ErrorCodes::BAD_ARGUMENTS, "The lookback delta must be positive, got {}", toString(lookback_delta));
 
         /// Lookback deltas are left-open (and right-closed), so we decrease `window` a little bit to consider both boundaries close.
-        auto window = previous(lookback_delta);
+        auto window = lookback_delta;
 
         DecimalField<DateTime64> start_time;
         DecimalField<DateTime64> end_time;
@@ -564,7 +564,7 @@ private:
             std::make_shared<ASTLiteral>(getTimeSeriesTableInfo().storage_id.getDatabaseName()),
             std::make_shared<ASTLiteral>(getTimeSeriesTableInfo().storage_id.getTableName()),
             std::make_shared<ASTLiteral>(getPromQLText(instant_selector)),
-            timestampToAST(subtract(start_time, window)),
+            timestampToAST(subtract(start_time, previous(window))),
             timestampToAST(end_time));
 
         res.group_column = makeASTFunction("timeSeriesIdToGroup", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::ID));
@@ -591,7 +591,7 @@ private:
             throw Exception(ErrorCodes::BAD_ARGUMENTS, "Range specified in a range selector must be positive, got {}", getPromQLText(range_selector->getRange()));
 
         /// Ranges are left-open (and right-closed), so we decrease `window` a little bit to consider both boundaries close.
-        auto window = previous(range);
+        auto window = range;
 
         DecimalField<DateTime64> start_time;
         DecimalField<DateTime64> end_time;
@@ -608,7 +608,7 @@ private:
             std::make_shared<ASTLiteral>(getTimeSeriesTableInfo().storage_id.getDatabaseName()),
             std::make_shared<ASTLiteral>(getTimeSeriesTableInfo().storage_id.getTableName()),
             std::make_shared<ASTLiteral>(getPromQLText(instant_selector)),
-            timestampToAST(subtract(start_time, window)),
+            timestampToAST(subtract(start_time, previous(window))),
             timestampToAST(end_time));
 
         res.group_column = makeASTFunction("timeSeriesIdToGroup", std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::ID));
