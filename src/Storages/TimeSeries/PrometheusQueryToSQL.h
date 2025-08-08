@@ -3,6 +3,7 @@
 #include <DataTypes/IDataType.h>
 #include <Interpreters/StorageID.h>
 #include <Parsers/Prometheus/PrometheusQueryTree.h>
+#include <Storages/TimeSeries/PrometheusQueryEvaluationRange.h>
 
 
 namespace DB
@@ -22,10 +23,15 @@ public:
     };
 
     PrometheusQueryToSQLConverter(const PrometheusQueryTree & promql_,
-                                  const Field & evaluation_time_,
                                   const TimeSeriesTableInfo & time_series_table_info_,
                                   const Field & lookback_delta_,
                                   const Field & default_resolution_);
+
+    /// Sets the evaluation time.
+    void setEvaluationTime(const Field & time_);
+
+    /// Sets that the query should be evaluated over a range of time.
+    void setEvaluationRange(const PrometheusQueryEvaluationRange & range_);
 
     /// Builds an AST to execute this prometheus query.
     ASTPtr getSQL() const;
@@ -35,11 +41,14 @@ public:
 
 private:
     class ASTBuilder;
+
     PrometheusQueryTree promql;
-    Field evaluation_time;
     TimeSeriesTableInfo time_series_table_info;
     Field lookback_delta;
     Field default_resolution;
+
+    Field evaluation_time;
+    PrometheusQueryEvaluationRange evaluation_range;
 };
 
 }

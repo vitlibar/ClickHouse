@@ -91,7 +91,9 @@ ColumnsDescription TableFunctionPrometheusQuery::getActualTableStructure(Context
     time_series_table_info.storage_id = time_series_storage_id;
     time_series_table_info.timestamp_data_type = data_table_metadata->columns.get(TimeSeriesColumnNames::Timestamp).type;
     time_series_table_info.value_data_type = data_table_metadata->columns.get(TimeSeriesColumnNames::Value).type;
-    return PrometheusQueryToSQLConverter{promql_query, evaluation_time, time_series_table_info, Field{}, Field{}}.getResultColumns();
+    PrometheusQueryToSQLConverter converter{promql_query, time_series_table_info, Field{}, Field{}};
+    converter.setEvaluationTime(evaluation_time);
+    return converter.getResultColumns()
 }
 
 StoragePtr TableFunctionPrometheusQuery::executeImpl(
@@ -104,6 +106,7 @@ StoragePtr TableFunctionPrometheusQuery::executeImpl(
     auto columns = getActualTableStructure(context, is_insert_query);
     auto res = std::make_shared<StoragePrometheusQuery>(
         StorageID(getDatabaseName(), table_name), columns, time_series_storage_id, promql_query, evaluation_time);
+    res->setEvaluationTime(evaluation_time);
     res->startup();
     return res;
 }

@@ -156,11 +156,22 @@ public:
         , timestamp_data_type(getTimeSeriesTableInfo().timestamp_data_type)
         , interval_data_type(getIntervalDataType(timestamp_data_type))
         , value_data_type(getTimeSeriesTableInfo().value_data_type)
-        , evaluation_time(fieldToTimestamp(converter_.evaluation_time))
         , lookback_delta(fieldToInterval(converter_.lookback_delta))
         , default_resolution(fieldToInterval(converter_.default_resolution))
+        , result_type(converter_.result_type)
         , interval_scale(lookback_delta.getScale())
     {
+        if (!converter_.evaluation_time.isNull())
+        {
+            evaluation_time = fieldToTimestamp(converter_.evaluation_time);
+        }
+        else
+        {
+            evaluation_range.emplace();
+            evaluation_range->start_time = fieldToTimestamp(converter_.evaluation_range.start_time);
+            evaluation_range->end_time = fieldToTimestamp(converter_.evaluation_range.end_time);
+            evaluation_range->step = fieldToInterval(converter_.evaluation_range.step);
+        }
     }
 
     ASTPtr getSQL()
@@ -176,10 +187,19 @@ private:
     DataTypePtr timestamp_data_type;
     DataTypePtr interval_data_type;
     DataTypePtr value_data_type;
-    DecimalField<DateTime64> evaluation_time;
     DecimalField<Decimal64> lookback_delta;
     DecimalField<Decimal64> default_resolution;
     UInt32 interval_scale;
+
+    std::optional<DecimalField<DateTime64>> evaluation_time;
+
+    struct EvaluationRange
+    {
+        DecimalField<DateTime64> start_time;
+        DecimalField<DateTime64> end_time;
+        DecimalField<Decimal64> step;
+    };
+    std::optional<EvaluationRange> evaluation_range;
 
     const PrometheusQueryTree & getPromQLTree() const { return converter.promql; }
     std::string_view getPromQLText(const PrometheusQueryTree::Node * node) const { return getPromQLTree().getQuery(node); }
@@ -328,7 +348,7 @@ private:
         Piece res;
 
         /// Finalize depending on the result type.
-        switch (piece.result_type)
+        switch (result_type)
         {
             case ResultType::STRING: res = finalizeWithStringResult(std::move(piece)); break;
             case ResultType::SCALAR: res = finalizeWithScalarResult(std::move(piece)); break;
@@ -354,7 +374,7 @@ private:
             return piece;
 
         Piece res;
-        res.result_type = piece.result_type;
+        res.result_type = PrometheusQueryResultType::STRING;
         res.string_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::String);
 
         if (piece.empty())
@@ -372,7 +392,7 @@ private:
             return piece;
 
         Piece res;
-        res.result_type = piece.result_type;
+        res.result_type = PrometheusQueryResultType::SCALAR;
         res.scalar_column = std::make_shared<ASTIdentifier>(TimeSeriesColumnNames::Scalar);
 
         if (piece.empty())
@@ -390,7 +410,7 @@ private:
             return piece;
 
         Piece res;
-        res.result_type = piece.result_type;
+        res.result_type = PrometheusQueryResultType::INSTANT_VECTOR;
 
         if (piece.empty())
         {
@@ -452,7 +472,7 @@ private:
             return piece;
 
         Piece res;
-        res.result_type = piece.result_type;
+        res.result_type = PrometheusQueryResultType::RANGE_VECTOR;
 
         if (piece.empty())
         {
@@ -830,7 +850,7 @@ private:
                              DecimalField<Decimal64> & step) const
     {
         bool end_time_set = false;
-        auto end_time_offset = getZeroInterval();
+        auto time_offset = getZeroInterval();
 
         bool found_subquery = false;
         auto range = getZeroInterval();
@@ -843,7 +863,7 @@ private:
                 const auto * at_node = typeid_cast<const PrometheusQueryTree::At *>(parent);
                 if (const auto * offset = at_node->getOffset())
                 {
-                    end_time_offset += nodeToInterval(offset);
+                    time_offset += nodeToInterval(offset);
                 }
                 if (const auto * at = at_node->getAt())
                 {
@@ -879,12 +899,22 @@ private:
         }
 
         if (!end_time_set)
-            end_time = evaluation_time;
+        {
+            if (evaluation_time)
+            {
+                start_time = end_time = *evaluation_time;
+            }
+            else
+            {
+                start_time = evaluation_range->start_time;
+                end_time = evaluation_range->end_time;
+                end_time = alignDown(end_time, start_time, step);
+            }
+        }
 
-        /// The "offset" modifier moves the evaluation time backward, so we need to subtract `end_time_offset` from `end_time` here.
-        end_time = subtract(end_time, end_time_offset);
-
-        start_time = end_time;
+        /// The "offset" modifier moves the evaluation time backward, so we need to subtract `time_offset` from `end_time` here.
+        start_time = subtract(start_time, time_offset);
+        end_time = subtract(end_time, time_offset);
 
         chassert(!found_subquery || ((step.getValue() > 0) && (range.getValue() > 0)));
 
@@ -892,7 +922,7 @@ private:
         {
             /// Ranges are left-open (and right-closed), so we call previous() here to increase `start_time` a little bit
             /// to consider both boundaries close.
-            start_time = subtract(end_time, previous(range));
+            start_time = subtract(start_time, previous(range));
         }
 
         if (step)
@@ -901,6 +931,10 @@ private:
             /// (See https://www.robustperception.io/promql-subqueries-and-alignment/)
             start_time = alignUp(start_time, step);
             end_time = alignDown(end_time, step);
+        }
+        else if (evaluation_range)
+        {
+
         }
     }
 
@@ -960,7 +994,6 @@ private:
 
 PrometheusQueryToSQLConverter::PrometheusQueryToSQLConverter(
     const PrometheusQueryTree & promql_,
-    const Field & evaluation_time_,
     const TimeSeriesTableInfo & time_series_table_info_,
     const Field & lookback_delta_,
     const Field & default_resolution_)
@@ -972,6 +1005,20 @@ PrometheusQueryToSQLConverter::PrometheusQueryToSQLConverter(
 {
 }
 
+void PrometheusQueryToSQLConverter::setEvaluationTime(const Field & time_)
+{
+    evaluation_time = time_;
+    evaluation_range = {};
+    result_type = promql.getResultType();
+}
+
+void PrometheusQueryToSQLConverter::setEvaluationRange(const PrometheusQueryEvaluationRange & range_)
+{
+    evaluation_range = range_;
+    evaluation_time = {};
+    result_type = PrometheusQueryResultType::RANGE_VECTOR;
+}
+
 ASTPtr PrometheusQueryToSQLConverter::getSQL() const
 {
     return ASTBuilder{*this}.getSQL();
@@ -981,7 +1028,7 @@ ColumnsDescription PrometheusQueryToSQLConverter::getResultColumns() const
 {
     ColumnsDescription columns;
 
-    switch (promql.getResultType())
+    switch (result_type)
     {
         case ResultType::SCALAR:
         {
