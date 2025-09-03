@@ -258,10 +258,13 @@ arrow::Status ArrowFlightHandler::ListFlights(
 }
 
 arrow::Status ArrowFlightHandler::GetFlightInfo(
-    const arrow::flight::ServerCallContext & /*context*/,
-    const arrow::flight::FlightDescriptor & /*request*/,
-    std::unique_ptr<arrow::flight::FlightInfo> * /*info*/)
+    const arrow::flight::ServerCallContext & context,
+    const arrow::flight::FlightDescriptor & descriptor,
+    std::unique_ptr<arrow::flight::FlightInfo> * info)
 {
+    LOG_INFO(getLogger("!!!"), "ArrowFlightHandler::GetFlightInfo: info is {}", *info ? "not null" : "null");
+    auto schema = GetSchema(context, descriptor)
+    auton flight_info = arrow::flight::FlightInfo::Make(schema, descriptor, endpoints)
     return arrow::Status::OK();
 }
 
@@ -278,8 +281,8 @@ arrow::Status ArrowFlightHandler::PollFlightInfo(
 
 arrow::Status ArrowFlightHandler::GetSchema(
     const arrow::flight::ServerCallContext & context,
-    const arrow::flight::FlightDescriptor & /*request*/,
-    std::unique_ptr<arrow::flight::SchemaResult> * /*schema*/)
+    const arrow::flight::FlightDescriptor & descriptor,
+    std::unique_ptr<arrow::flight::SchemaResult> * schema)
 {
     auto session = createSession(context);
     session->makeSessionContext();

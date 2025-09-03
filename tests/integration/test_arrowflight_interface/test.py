@@ -216,6 +216,43 @@ def test_doput_invalid_query():
         assert "Unknown table expression identifier 'my_table' in scope SELECT * FROM my_table" in str(e)
 
 
+def test_doget_cmd_descriptor():
+    node.query(
+        """
+        CREATE TABLE doget_test (
+            id Int64,
+            name String
+        )
+        ORDER BY id
+        """
+    )
+    node.query(
+        """
+            INSERT INTO doget_test VALUES(10, 'abc'), (20, 'cde')
+        """)
+    
+    client, options = get_client()
+
+    descriptor = flight.FlightDescriptor.for_command("SELECT * FROM doget_test")
+    flight_info = client.get_flight_info(descriptor, options)
+    real_ticket = flight_info.endpoints[0].ticket
+
+    reader = client.do_get(real_ticket, options)
+    actual = reader.read_all()
+
+    expected_schema = pa.schema([
+        pa.field("id",   pa.int64(),  nullable=False),
+        pa.field("name", pa.string(), nullable=False),
+    ])
+    expected_ids   = pa.chunked_array([pa.array([10, 20],          type=pa.int64())])
+    expected_names = pa.chunked_array([pa.array(["abc", "cde"],    type=pa.string())])
+
+    assert actual.schema == expected_schema
+
+    assert actual.column("id").equals(expected_ids)
+    assert actual.column("name").equals(expected_names)
+
+
 def test_doget():
     node.query(
         """
