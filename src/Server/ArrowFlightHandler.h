@@ -83,6 +83,8 @@ public:
         std::unique_ptr<arrow::flight::ResultStream> * result) override;
 
 private:
+    arrow::Status evaluatePollDescriptor(const String & poll_descriptor);
+
     IServer & server;
     LoggerPtr log;
     const Poco::Net::SocketAddress address_to_listen;
@@ -92,7 +94,9 @@ private:
     std::atomic<bool> stopped = false;
 
     const UInt64 tickets_lifetime_seconds;
+    const UInt64 poll_descriptors_lifetime_seconds;
     const bool forget_tickets_after_do_get;
+    const bool forget_poll_descriptors_after_poll_flight_info;
 
     class CallsData;
     std::unique_ptr<CallsData> calls_data;
