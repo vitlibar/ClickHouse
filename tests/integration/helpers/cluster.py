@@ -3187,7 +3187,7 @@ class ClickHouseCluster:
 
             common_opts = ["--verbose", "up", "-d"]
 
-            images_pull_cmd = self.base_cmd + ["pull"]
+            images_pull_cmd = self.base_cmd + ["pull", "--ignore-pull-failures"]
             # sometimes dockerhub/proxy can be flaky
 
             def logging_pulling_images(**kwargs):
