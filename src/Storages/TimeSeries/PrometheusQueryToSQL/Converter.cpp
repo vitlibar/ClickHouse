@@ -93,6 +93,17 @@ namespace
                 return applyUnaryOperator(unary_operator, std::move(argument), context);
             }
 
+            case PrometheusQueryTree::NodeType::BinaryOperator:
+            {
+                const auto * binary_operator = static_cast<const PrometheusQueryTree::BinaryOperator *>(node);
+                SQLQueryPiece left_argument = visitNode(binary_operator->getLeftArgument(), context);
+                SQLQueryPiece right_argument = visitNode(binary_operator->getRightArgument(), context);
+                if (left_argument.type == ResultType::SCALAR || right_argument.type == ResultType::SCALAR)
+                    return applyBinaryOperatorWithScalar(binary_operator, std::move(left_argument), std::move(right_argument), context);
+                else
+                    throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Operator {} is supported only when at least one argument is scalar", binary_operator->operator_name);
+            }
+
             default:
             {
                 throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Prometheus query node type {} is not implemented", node->node_type);
