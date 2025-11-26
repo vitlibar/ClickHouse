@@ -5,6 +5,7 @@
 #include <Storages/TimeSeries/PrometheusQueryToSQL/applyFunctionOverRange.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/applyOffset.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/applySubquery.h>
+#include <Storages/TimeSeries/PrometheusQueryToSQL/applyUnaryOperator.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/finalizeSQL.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/fromLiteral.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/fromSelector.h>
@@ -78,6 +79,13 @@ namespace
                     return applyFunctionOverRange(node, function->function_name, std::move(arguments), context);
                 else
                     throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Function {} is not implemented", function->function_name);
+            }
+
+            case NodeType::UnaryOperator:
+            {
+                const auto * unary_operator = static_cast<const PQT::UnaryOperator *>(node);
+                SQLQueryPiece argument = visitNode(unary_operator->getArgument(), context);
+                return applyUnaryOperator(unary_operator, std::move(argument), context);
             }
 
             default:

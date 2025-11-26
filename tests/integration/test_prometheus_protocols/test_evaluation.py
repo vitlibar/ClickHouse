@@ -471,13 +471,12 @@ def test_literals():
         [["1970-01-01 00:04:10.000", 23]],
     )
 
-    # FIXME: Support unary operator '-'
-    # do_query_test(
-    #     "-2.43",
-    #     timestamp,
-    #     '{"resultType": "scalar", "result": [250, "-2.43"]}',
-    #     [["1970-01-01 00:04:10.000", -2.43]],
-    # )
+    do_query_test(
+        "-2.43",
+        timestamp,
+        '{"resultType": "scalar", "result": [250, "-2.43"]}',
+        [["1970-01-01 00:04:10.000", -2.43]],
+    )
 
     do_query_test(
         "3.4e-5",
@@ -493,13 +492,12 @@ def test_literals():
         [["1970-01-01 00:04:10.000", 143]],
     )
 
-    # FIXME: Support unary operator '-'
-    # do_query_test(
-    #     "-Inf",
-    #     timestamp,
-    #     '{"resultType": "scalar", "result": [250, "-Inf"]}',
-    #     [["1970-01-01 00:04:10.000", "-inf"]],
-    # )
+    do_query_test(
+        "-Inf",
+        timestamp,
+        '{"resultType": "scalar", "result": [250, "-Inf"]}',
+        [["1970-01-01 00:04:10.000", "-inf"]],
+    )
 
     do_query_test(
         "NaN",
@@ -562,6 +560,41 @@ def test_literals():
         timestamp,
         '{"resultType": "string", "result": [250, "this is a string"]}',
         [["1970-01-01 00:04:10.000", "this is a string"]],
+    )
+
+
+def test_unary_operators():
+    do_query_test(
+        "+test",
+        180,
+        '{"resultType": "vector", "result": [{"metric": {"__name__": "test"}, "value": [180, "4"]}]}',
+        [["[('__name__','test')]", "1970-01-01 00:03:00.000", 4]],
+    )
+
+    do_query_test(
+        "+test",
+        180,
+        '{"resultType": "vector", "result": [{"metric": {"__name__": "test"}, "value": [180, "4"]}]}',
+        [["[('__name__','test')]", "1970-01-01 00:03:00.000", 4]],
+    )
+
+    do_query_test(
+        "-test",
+        180,
+        '{"resultType": "vector", "result": [{"metric": {}, "value": [180, "-4"]}]}',
+        [["[]", "1970-01-01 00:03:00.000", -4]],
+    )
+
+    do_query_test(
+        "(-test)[120s:15s]",
+        180,
+        '{"resultType": "matrix", "result": [{"metric": {}, "values": [[120, "-1"], [135, "-3"], [150, "-4"], [165, "-4"], [180, "-4"]]}]}',
+        [
+            [
+                "[]",
+                "[('1970-01-01 00:02:00.000',-1),('1970-01-01 00:02:15.000',-3),('1970-01-01 00:02:30.000',-4),('1970-01-01 00:02:45.000',-4),('1970-01-01 00:03:00.000',-4)]",
+            ]
+        ],
     )
 
 
