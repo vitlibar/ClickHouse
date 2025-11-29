@@ -23,6 +23,18 @@ namespace DB::PrometheusQueryToSQL
 
 namespace
 {
+    void checkArgumentTypes(const String & promql_function_name, const SQLQueryPiece & argument, const ConverterContext & context)
+    {
+        if (argument.type != ResultType::RANGE_VECTOR)
+        {
+            throw Exception(ErrorCodes::CANNOT_EXECUTE_PROMQL_QUERY,
+                            "Function {} expects an argument of type {}, but expression {} has type {}",
+                            promql_function_name, ResultType::RANGE_VECTOR,
+                            getPromQLQuery(argument, context), argument.type);
+        }
+    }
+
+
     String getSQLFunctionName(const String & promql_function_name)
     {
         if (promql_function_name == "rate")
@@ -39,20 +51,6 @@ namespace
             return "timeSeriesLastToGrid";
         else
             throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Function {} is not implemented", promql_function_name);
-    }
-
-
-    void checkArgumentTypes(
-        const String & promql_function_name,
-        const SQLQueryPiece & argument,
-        const PrometheusQueryTree::Node * promql_node,
-        const ConverterContext & context)
-    {
-        if (argument.type != ResultType::RANGE_VECTOR)
-        {
-            throw Exception(ErrorCodes::CANNOT_EXECUTE_PROMQL_QUERY, "Function {} expects an argument of type {}, but expression {} has type {}",
-                            promql_function_name, ResultType::RANGE_VECTOR, context.promql_tree.getQuery(promql_node), argument.type);
-        }
     }
 
 
@@ -114,7 +112,7 @@ SQLQueryPiece applyFunctionOverRange(
     const PrometheusQueryTree::Node * promql_node,
     ConverterContext & context)
 {
-    checkArgumentTypes(promql_function_name, argument, promql_node, context);
+    checkArgumentTypes(promql_function_name, argument, context);
 
     auto evaluation_range = context.node_evaluation_range_getter.get(promql_node);
     auto start_time = evaluation_range.start_time;
@@ -259,7 +257,7 @@ SQLQueryPiece applyFunctionOverRange(
 
         case StoreMethod::CONST_STRING:
         {
-            throwStoreMethodIsNotSupported(argument, context.promql_tree);
+            throwStoreMethodIsNotSupported(argument, context);
         }
     }
 

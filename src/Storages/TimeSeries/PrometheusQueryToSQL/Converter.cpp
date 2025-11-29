@@ -93,6 +93,7 @@ namespace
                 return applyUnaryOperator(unary_operator, std::move(argument), context);
             }
 
+#if 0
             case PrometheusQueryTree::NodeType::BinaryOperator:
             {
                 const auto * binary_operator = static_cast<const PrometheusQueryTree::BinaryOperator *>(node);
@@ -103,6 +104,7 @@ namespace
                 else
                     throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Operator {} is supported only when at least one argument is scalar", binary_operator->operator_name);
             }
+#endif
 
             default:
             {

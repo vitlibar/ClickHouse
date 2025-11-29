@@ -79,7 +79,7 @@ namespace
     SQLQueryPiece setEvaluationTime(const PrometheusQueryTree::At * at_node, SQLQueryPiece && expression, ConverterContext & context)
     {
         /// <expression> is expected to be calculated at a fixed evaluation time.
-        checkStartTimeEqualsToEndTime(expression, context.promql_tree);
+        checkStartTimeEqualsToEndTime(expression, context);
 
         auto evaluation_range = context.node_evaluation_range_getter.get(at_node);
 

@@ -1,3 +1,4 @@
+#if 0
 #include <Storages/TimeSeries/PrometheusQueryToSQL/applyUnaryOperator.h>
 
 #include <Parsers/ASTFunction.h>
@@ -18,26 +19,31 @@ namespace DB::PrometheusQueryToSQL
 
 namespace
 {
-#if 0
     void checkArgumentTypes(
-        const String & operator_name,
-        const SQLQueryPiece & argument,
-        const PrometheusQueryTree::Node * promql_node,
+        const PrometheusQueryTree::BinaryOperator * operator_node,
+        const SQLQueryPiece & left_argument,
+        const SQLQueryPiece & right_argument,
         const ConverterContext & context)
     {
-        if (!(operator_name == "+" || operator_name == "-"))
+        if (!(operator_name == "+" || operator_name == "-" || operator_name == ""))
         {
             throw Exception(ErrorCodes::CANNOT_EXECUTE_PROMQL_QUERY, "Unknown unary operator with name {}", operator_name);
         }
 
-        if (!(argument.type == ResultType::SCALAR || argument.type == ResultType::INSTANT_VECTOR))
+        if (!(left_argument.type == ResultType::SCALAR || left_argument.type == ResultType::INSTANT_VECTOR))
         {
             throw Exception(ErrorCodes::CANNOT_EXECUTE_PROMQL_QUERY,
-                            "Operator '{}' expects an argument of type {} or {}, but expression {} has type {}",
+                            "Operator '{}' expects two arguments of type {} or {}, but expression {} has type {}",
+                            operator_name, ResultType::SCALAR, ResultType::INSTANT_VECTOR, context.promql_tree.getQuery(promql_node), argument.type);
+        }
+
+        if (!(right_argument.type == ResultType::SCALAR || right_argument.type == ResultType::INSTANT_VECTOR))
+        {
+            throw Exception(ErrorCodes::CANNOT_EXECUTE_PROMQL_QUERY,
+                            "Operator '{}' expects two arguments of type {} or {}, but expression {} has type {}",
                             operator_name, ResultType::SCALAR, ResultType::INSTANT_VECTOR, context.promql_tree.getQuery(promql_node), argument.type);
         }
     }
-#endif
 
     /// Binary operator when one of the arguments is of type ResultType::SCALAR with StoreMethod::CONST_SCALAR.
     /// Other argument can have any type.
@@ -240,4 +246,5 @@ SQLQueryPiece applyBinaryOperatorWithScalar(
 
     return binaryOperatorWithVectorGrids(operator_node, std::move(left_argument), std::move(right_argument), context);
 }
+
 #endif

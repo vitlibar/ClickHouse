@@ -9,6 +9,7 @@ namespace DB::PrometheusQueryToSQL
 {
 
 using ResultType = PrometheusQueryResultType;
+struct ConverterContext;
 
 /// How data is stored in a QueryPiece.
 enum class StoreMethod
@@ -72,7 +73,8 @@ struct SQLQueryPiece
     ASTPtr select_query;
 };
 
-void checkStartTimeEqualsToEndTime(const SQLQueryPiece & result, const PrometheusQueryTree & promql_tree);
-[[noreturn]] void throwStoreMethodIsNotSupported(const SQLQueryPiece & piece, const PrometheusQueryTree & promql_tree);
+std::string_view getPromQLQuery(const SQLQueryPiece & query_piece, const ConverterContext & context);
+[[noreturn]] void throwStoreMethodIsNotSupported(const SQLQueryPiece & query_piece, const ConverterContext & context);
+void checkStartTimeEqualsToEndTime(const SQLQueryPiece & result, const ConverterContext & context);
 
 }

@@ -46,7 +46,7 @@ namespace
     ASTPtr finalizeScalarAsSQL(SQLQueryPiece && result, ConverterContext & context)
     {
         chassert(result.type == ResultType::SCALAR);
-        checkStartTimeEqualsToEndTime(result, context.promql_tree);
+        checkStartTimeEqualsToEndTime(result, context);
 
         switch (result.store_method)
         {
@@ -88,7 +88,7 @@ namespace
             case StoreMethod::VECTOR_GRID:
             case StoreMethod::RAW_DATA:
             {
-                throwStoreMethodIsNotSupported(result, context.promql_tree);
+                throwStoreMethodIsNotSupported(result, context);
             }
         }
         UNREACHABLE();
@@ -99,10 +99,10 @@ namespace
     ASTPtr finalizeStringAsSQL(SQLQueryPiece && result, ConverterContext & context)
     {
         chassert(result.type == ResultType::STRING);
-        checkStartTimeEqualsToEndTime(result, context.promql_tree);
+        checkStartTimeEqualsToEndTime(result, context);
 
         if (result.store_method != StoreMethod::CONST_STRING)
-            throwStoreMethodIsNotSupported(result, context.promql_tree);
+            throwStoreMethodIsNotSupported(result, context);
 
         /// SELECT start_time, string_value
         SelectQueryParams params;
@@ -121,7 +121,7 @@ namespace
     ASTPtr finalizeInstantVectorAsSQL(SQLQueryPiece && result, ConverterContext & context)
     {
         chassert(result.type == ResultType::INSTANT_VECTOR);
-        checkStartTimeEqualsToEndTime(result, context.promql_tree);
+        checkStartTimeEqualsToEndTime(result, context);
 
         switch (result.store_method)
         {
@@ -221,7 +221,7 @@ namespace
             case StoreMethod::CONST_STRING:
             case StoreMethod::RAW_DATA:
             {
-                throwStoreMethodIsNotSupported(result, context.promql_tree);
+                throwStoreMethodIsNotSupported(result, context);
             }
         }
 
@@ -369,7 +369,7 @@ namespace
 
             case StoreMethod::CONST_STRING:
             {
-                throwStoreMethodIsNotSupported(result, context.promql_tree);
+                throwStoreMethodIsNotSupported(result, context);
             }
         }
 

@@ -14,15 +14,15 @@ namespace DB::PrometheusQueryToSQL
 
 namespace
 {
-    void checkExpressionType(
-        const PrometheusQueryTree::Subquery * subquery_node,
-        const SQLQueryPiece & expression,
-        const ConverterContext & context)
+    void checkExpressionType(const SQLQueryPiece & expression, const ConverterContext & context)
     {
         if (expression.type != ResultType::INSTANT_VECTOR)
         {
-            throw Exception(ErrorCodes::CANNOT_EXECUTE_PROMQL_QUERY, "Expression {} has type {} and can't be used in a subquery",
-                            context.promql_tree.getQuery(subquery_node), expression.type);
+            throw Exception(
+                ErrorCodes::CANNOT_EXECUTE_PROMQL_QUERY,
+                "Expression {} has type {} and can't be used in a subquery",
+                getPromQLQuery(expression, context),
+                expression.type);
         }
     }
 }
@@ -30,7 +30,7 @@ namespace
 
 SQLQueryPiece modifyResultTypeAfterSubquery(const PrometheusQueryTree::Subquery * subquery_node, SQLQueryPiece && expression, ConverterContext & context)
 {
-    checkExpressionType(subquery_node, expression, context);
+    checkExpressionType(expression, context);
 
     expression.promql_node = subquery_node;
     expression.type = ResultType::RANGE_VECTOR;
