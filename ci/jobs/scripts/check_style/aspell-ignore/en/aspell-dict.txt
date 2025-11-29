@@ -3246,6 +3246,7 @@ throwif
 timeDiff
 timeSeries
 timeSeriesChangesToGrid
+timeSeriesCoalesceGridValues
 timeSeriesData
 timeSeriesDeltaToGrid
 timeSeriesDerivToGrid
@@ -3259,10 +3260,13 @@ timeSeriesMetrics
 timeSeriesPredictLinearToGrid
 timeSeriesRange
 timeSeriesRateToGrid
+timeSeriesRemoveAllTagsExcept
+timeSeriesRemoveTag
 timeSeriesResampleToGridWithStaleness
 timeSeriesResetsToGrid
 timeSeriesSelector
 timeSeriesTags
+timeSeriesTagsToGroup
 timeSlot
 timeSlots
 timeZone
