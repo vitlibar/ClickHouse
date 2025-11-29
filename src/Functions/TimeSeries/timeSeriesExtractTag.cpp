@@ -70,7 +70,7 @@ public:
         auto null_map = ColumnUInt8::create();
         null_map->reserve(input_rows_count);
         for (size_t i = 0; i != input_rows_count; ++i)
-            null_map->insertValue(tag_values->getDataAt(i).size == 0);
+            null_map->insertValue(tag_values->getDataAt(i).empty());
 
         return ColumnNullable::create(std::move(tag_values), std::move(null_map));
     }
