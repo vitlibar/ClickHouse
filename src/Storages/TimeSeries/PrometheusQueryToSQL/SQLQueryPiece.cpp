@@ -14,7 +14,7 @@ namespace DB::PrometheusQueryToSQL
 
 std::string_view getPromQLQuery(const SQLQueryPiece & query_piece, const ConverterContext & context)
 {
-    return context.promql_tree.getQuery(query_piece.node);
+    return context.promql_tree->getQuery(query_piece.node);
 }
 
 

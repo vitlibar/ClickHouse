@@ -11,22 +11,22 @@
 namespace DB::PrometheusQueryToSQL
 {
 
-struct ConverterConfig;
-
 /// Contains information used for converting prometheus query to SQL query.
 struct ConverterContext
 {
-    const PQT & promql_tree;
+    const std::shared_ptr<const PrometheusQueryTree> promql_tree;
     const StorageID time_series_storage_id;
-    const UInt32 timestamp_scale;
+    const NodeEvaluationRangeGetter node_evaluation_range_getter;
+    const UInt32 time_scale;
+    const ResultType result_type;
     const DataTypePtr result_timestamp_type;
     const DataTypePtr result_scalar_type;
     const std::optional<size_t> limit;
-    const NodeEvaluationRangeGetter node_evaluation_range_getter;
     ResultSorting result_sorting;
     SQLSubqueries subqueries;
 
-    ConverterContext(const PQT & promql_tree_, const PrometheusQueryEvaluationSettings & settings_);
+    ConverterContext(std::shared_ptr<const PrometheusQueryTree> promql_tree_,
+                     const PrometheusQueryEvaluationSettings & settings_);
 };
 
 }

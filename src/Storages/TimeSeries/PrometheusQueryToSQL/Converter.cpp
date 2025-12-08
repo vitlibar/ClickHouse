@@ -7,6 +7,7 @@
 #include <Storages/TimeSeries/PrometheusQueryToSQL/applyUnaryOperator.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/finalizeSQL.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/fromLiteral.h>
+#include <Storages/TimeSeries/PrometheusQueryToSQL/getResultColumns.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/getResultType.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/makeSelector.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/modifyEvaluationTime.h>
@@ -111,24 +112,24 @@ namespace
 }
 
 
-Converter::Converter(PQT promql_tree_, PrometheusQueryEvaluationSettings settings_)
+Converter::Converter(std::shared_ptr<const PrometheusQueryTree> promql_tree_, PrometheusQueryEvaluationSettings settings_)
     : promql_tree(std::move(promql_tree_))
     , settings(std::move(settings_))
-    , result_type(DB::PrometheusQueryToSQL::getResultType(promql_tree, settings))
+    , result_type(DB::PrometheusQueryToSQL::getResultType(*promql_tree, settings))
 {
 }
 
 
 ColumnsDescription Converter::getResultColumns() const
 {
-    return DB::PrometheusQueryToSQL::getResultColumns(promql_tree, settings);
+    return DB::PrometheusQueryToSQL::getResultColumns(*promql_tree, settings);
 }
 
 
 ASTPtr Converter::getSQL() const
 {
     ConverterContext context{promql_tree, settings};
-    auto query_piece = visitNode(promql_tree.getRoot(), context);
+    auto query_piece = visitNode(promql_tree->getRoot(), context);
     if (settings.evaluation_range)
         query_piece.type = ResultType::RANGE_VECTOR;
     return finalizeSQL(std::move(query_piece), context);

@@ -54,7 +54,7 @@ namespace
 
 SQLQueryPiece makeSelector(const PQT::InstantSelector * instant_selector_node, ConverterContext & context)
 {
-    auto instant_selector_text = context.promql_tree.getQuery(instant_selector_node);
+    auto instant_selector_text = context.promql_tree->getQuery(instant_selector_node);
     auto range_selector = makeRangeSelector(instant_selector_text, instant_selector_node, context);
     return applyFunctionOverRange("last_over_time", std::move(range_selector), instant_selector_node, context);
 }
@@ -62,7 +62,7 @@ SQLQueryPiece makeSelector(const PQT::InstantSelector * instant_selector_node, C
 
 SQLQueryPiece makeSelector(const PQT::RangeSelector * range_selector_node, ConverterContext & context)
 {
-    auto instant_selector_text = context.promql_tree.getQuery(range_selector_node->getInstantSelector());
+    auto instant_selector_text = context.promql_tree->getQuery(range_selector_node->getInstantSelector());
     return makeRangeSelector(instant_selector_text, range_selector_node, context);
 }
 

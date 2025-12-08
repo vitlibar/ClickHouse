@@ -7,7 +7,8 @@
 namespace DB::PrometheusQueryToSQL
 {
 
-ResultSorting getResultSortingByDefault(const PQT & promql_tree, const PrometheusQueryEvaluationSettings & settings)
+ResultSorting getResultSortingByDefault(const PrometheusQueryTree & promql_tree,
+                                        const PrometheusQueryEvaluationSettings & settings)
 {
     ResultSorting result_sorting;
 

@@ -14,6 +14,7 @@
 #include <Storages/StorageTimeSeries.h>
 #include <Storages/TimeSeries/TimeSeriesColumnNames.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/Converter.h>
+#include <Storages/TimeSeries/PrometheusQueryToSQL/getResultType.h>
 #include <Storages/checkAndGetLiteralArgument.h>
 
 
@@ -92,10 +93,7 @@ StoragePrometheusQuery::Configuration StoragePrometheusQuery::getConfiguration(A
 
     auto time_series_storage = storagePtrToTimeSeries(DatabaseCatalog::instance().getTable(time_series_storage_id, context));
     auto data_table_metadata = time_series_storage->getTargetTable(ViewTarget::Data, context)->getInMemoryMetadataPtr();
-
-    auto timestamp_type = data_table_metadata->columns.get(TimeSeriesColumnNames::Timestamp).type;
-    UInt32 timestamp_scale = std::min<UInt32>(getTimeseriesScale(timestamp_type), 3);
-    String timezone = getTimeseriesTimezone(timestamp_type);
+    auto time_scale = PrometheusQueryToSQL::getResultTimestampScale(data_table_metadata);
 
     auto promql_query_field = evaluateConstantExpression(args[argument_index++], context).first;
     if (promql_query_field.getType() != Field::Types::String)
@@ -113,14 +111,14 @@ StoragePrometheusQuery::Configuration StoragePrometheusQuery::getConfiguration(A
         auto [step_field, step_type] = evaluateConstantExpression(args[argument_index++], context);
 
         evaluation_range.emplace();
-        evaluation_range->start_time = getTimeseriesTime(start_time_field, start_time_type, timestamp_scale);
-        evaluation_range->end_time = getTimeseriesTime(end_time_field, end_time_type, timestamp_scale);
-        evaluation_range->step = getTimeseriesDuration(step_field, step_type, timestamp_scale);
+        evaluation_range->start_time = getTimeseriesTime(start_time_field, start_time_type, time_scale);
+        evaluation_range->end_time = getTimeseriesTime(end_time_field, end_time_type, time_scale);
+        evaluation_range->step = getTimeseriesDuration(step_field, step_type, time_scale);
     }
     else
     {
         auto [evaluation_time_field, evaluation_time_type] = evaluateConstantExpression(args[argument_index++], context);
-        evaluation_time = getTimeseriesTime(evaluation_time_field, evaluation_time_type, timestamp_scale);
+        evaluation_time = getTimeseriesTime(evaluation_time_field, evaluation_time_type, time_scale);
     }
 
     chassert(argument_index == args.size());
@@ -128,12 +126,11 @@ StoragePrometheusQuery::Configuration StoragePrometheusQuery::getConfiguration(A
     Configuration configuration;
     auto & evaluation_settings = configuration.evaluation_settings;
 
-    configuration.promql_tree = std::move(promql_tree);
+    configuration.promql_tree = std::make_shared<PrometheusQueryTree>(std::move(promql_tree));
     evaluation_settings.time_series_storage_id = std::move(time_series_storage_id);
+    evaluation_settings.data_table_metadata = data_table_metadata;
     evaluation_settings.evaluation_time = evaluation_time;
     evaluation_settings.evaluation_range = evaluation_range;
-    evaluation_settings.result_timestamp_type = getTimeseriesTimeType(timestamp_scale, timezone);
-    evaluation_settings.result_scalar_type = std::make_shared<DataTypeFloat64>();
 
     return configuration;
 }
@@ -162,7 +159,7 @@ void StoragePrometheusQuery::read(
     size_t /* max_block_size */,
     size_t /* num_streams */)
 {
-    LOG_INFO(log, "Building SQL to evaluate promql query: {}", configuration.promql_tree);
+    LOG_INFO(log, "Building SQL to evaluate promql query: {}", *configuration.promql_tree);
     PrometheusQueryToSQL::Converter converter{configuration.promql_tree, configuration.evaluation_settings};
     ASTPtr select_query = converter.getSQL();
 

@@ -15,7 +15,7 @@ public:
     class Configuration
     {
     public:
-        PrometheusQueryTree promql_tree;
+        std::shared_ptr<const PrometheusQueryTree> promql_tree;
         PrometheusQueryEvaluationSettings evaluation_settings;
     };
 

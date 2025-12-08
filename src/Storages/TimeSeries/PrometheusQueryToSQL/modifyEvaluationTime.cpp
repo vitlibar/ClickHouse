@@ -51,7 +51,7 @@ namespace
                 params.select_list.push_back(std::make_shared<ASTIdentifier>(ColumnNames::Group));
 
                 /// Round up the scale to next number divisible by 3 but not greater than 9 (nanoseconds scale).
-                UInt32 scale = std::max<UInt32>((context.timestamp_scale + 2) / 3 * 3, 9);
+                UInt32 scale = std::max<UInt32>((context.time_scale + 2) / 3 * 3, 9);
                 Int64 scaled_offset = DecimalUtils::convertTo<Decimal64>(scale, offset.getValue(), offset.getScale());
 
                 static const std::string_view interval_functions[] = {"toIntervalSecond", "toIntervalMillisecond", "toIntervalMicrosecond", "toIntervalNanosecond"};
@@ -193,7 +193,7 @@ SQLQueryPiece modifyEvaluationTime(const PQT::At * at_node, SQLQueryPiece && exp
     else if (const auto * offset = at_node->getOffset())
     {
         /// Add offset to the evaluation time.
-        auto offset_value = nodeToDuration(offset, context.timestamp_scale);
+        auto offset_value = nodeToDuration(offset, context.time_scale);
         return offsetEvaluationTime(at_node, std::move(expression), offset_value, context);
     }
     else

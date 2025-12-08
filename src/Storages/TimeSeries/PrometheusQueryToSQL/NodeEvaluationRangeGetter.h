@@ -13,27 +13,21 @@ namespace DB::PrometheusQueryToSQL
 class NodeEvaluationRangeGetter
 {
 public:
-    NodeEvaluationRangeGetter(const PQT & promql_tree, const PrometheusQueryEvaluationSettings & settings);
+    NodeEvaluationRangeGetter(std::shared_ptr<const PrometheusQueryTree> promql_tree_,
+                              const PrometheusQueryEvaluationSettings & settings_);
 
     /// Returns the evaluation range for a specific node in a PQT.
     const NodeEvaluationRange & get(const Node * node) const;
 
 private:
-    void visitNode(
-        const Node * node,
-        const NodeEvaluationRange & range,
-        const PQT & promql_tree,
-        const PrometheusQueryEvaluationSettings & settings);
-
-    void visitChildren(
-        const Node * node,
-        const NodeEvaluationRange & range,
-        const PQT & promql_tree,
-        const PrometheusQueryEvaluationSettings & settings);
+    void visitNode(const Node * node, const NodeEvaluationRange & range, const PrometheusQueryEvaluationSettings & settings_);
+    void visitChildren(const Node * node, const NodeEvaluationRange & range, const PrometheusQueryEvaluationSettings & settings_);
 
     /// Finds range selectors and sets proper windows for functions taking range vectors.
-    void setWindows(const PrometheusQueryEvaluationSettings & settings);
+    void setWindows();
 
+    std::shared_ptr<const PrometheusQueryTree> promql_tree;
+    UInt32 time_scale;
     std::unordered_map<const Node *, NodeEvaluationRange> map;
 };
 

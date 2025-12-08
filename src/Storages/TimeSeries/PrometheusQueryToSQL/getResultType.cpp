@@ -1,10 +1,8 @@
 #include <Storages/TimeSeries/PrometheusQueryToSQL/getResultType.h>
 
-#include <DataTypes/DataTypeArray.h>
-#include <DataTypes/DataTypeString.h>
-#include <DataTypes/DataTypeTuple.h>
+#include <Core/TimeSeries/TimeSeriesDecimalUtils.h>
 #include <DataTypes/DataTypesNumber.h>
-#include <Storages/ColumnsDescription.h>
+#include <Storages/StorageInMemoryMetadata.h>
 #include <Storages/TimeSeries/PrometheusQueryEvaluationSettings.h>
 
 
@@ -54,52 +52,28 @@ ResultType getResultType(const PQT & promql_tree, const PrometheusQueryEvaluatio
 }
 
 
-ColumnsDescription getResultColumns(const PQT & promql_tree, const PrometheusQueryEvaluationSettings & settings)
+DataTypePtr getResultTimestampType(const PrometheusQueryEvaluationSettings & settings)
 {
-    ColumnsDescription columns;
+    auto timestamp_type = settings.data_table_metadata->columns.get(TimeSeriesColumnNames::Timestamp).type;
+    UInt32 timestamp_scale = std::min<UInt32>(getTimeseriesScale(timestamp_type), 3);
+    String timezone = getTimeseriesTimezone(timestamp_type);
+    return getTimeseriesTimeType(timestamp_scale, timezone);
+}
 
-    auto result_type = getResultType(promql_tree, settings);
-    switch (result_type)
-    {
-        case ResultType::SCALAR:
-        {
-            columns.add(ColumnDescription{ColumnNames::Timestamp, settings.result_timestamp_type});
-            columns.add(ColumnDescription{ColumnNames::Value, settings.result_scalar_type});
-            break;
-        }
-        case ResultType::STRING:
-        {
-            columns.add(ColumnDescription{ColumnNames::Timestamp, settings.result_timestamp_type});
-            columns.add(ColumnDescription{ColumnNames::Value, std::make_shared<DataTypeString>()});
-            break;
-        }
-        case ResultType::INSTANT_VECTOR:
-        {
-            columns.add(
-                ColumnDescription{
-                    ColumnNames::Tags,
-                    std::make_shared<DataTypeArray>(std::make_shared<DataTypeTuple>(
-                        DataTypes{std::make_shared<DataTypeString>(), std::make_shared<DataTypeString>()}))});
-            columns.add(ColumnDescription{ColumnNames::Timestamp, settings.result_timestamp_type});
-            columns.add(ColumnDescription{ColumnNames::Value, settings.result_scalar_type});
-            break;
-        }
-        case ResultType::RANGE_VECTOR:
-        {
-            columns.add(
-                ColumnDescription{
-                    ColumnNames::Tags,
-                    std::make_shared<DataTypeArray>(std::make_shared<DataTypeTuple>(
-                        DataTypes{std::make_shared<DataTypeString>(), std::make_shared<DataTypeString>()}))});
-            columns.add(
-                ColumnDescription{
-                    ColumnNames::TimeSeries,
-                    std::make_shared<DataTypeArray>(
-                        std::make_shared<DataTypeTuple>(DataTypes{settings.result_timestamp_type, settings.result_scalar_type}))});
-            break;
-        }
-    }
-    return columns;
+UInt32 getResultTimestampScale(const PrometheusQueryEvaluationSettings & settings)
+{
+    return getResultTimestampScale(settings.data_table_metadata);
+}
+
+UInt32 getResultTimestampScale(const StorageMetadataPtr & data_table_metadata)
+{
+    auto timestamp_type = data_table_metadata->columns.get(TimeSeriesColumnNames::Timestamp).type;
+    return std::min<UInt32>(getTimeseriesScale(timestamp_type), 3);
+}
+
+DataTypePtr getResultScalarType(const PrometheusQueryEvaluationSettings &)
+{
+    return std::make_shared<DataTypeFloat64>();
 }
 
 }

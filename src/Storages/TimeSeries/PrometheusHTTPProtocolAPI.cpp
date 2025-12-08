@@ -3,12 +3,14 @@
 #include <Common/logger_useful.h>
 #include <Common/thread_local_rng.h>
 #include <Core/Field.h>
+#include <Core/TimeSeries/TimeSeriesDecimalUtils.h>
 #include <IO/WriteBufferFromString.h>
 #include <IO/WriteHelpers.h>
 #include <Storages/StorageTimeSeries.h>
 #include <Parsers/Prometheus/PrometheusQueryTree.h>
 #include <Parsers/Prometheus/PrometheusQueryResultType.h>
-#include <Storages/TimeSeries/PrometheusQueryToSQL.h>
+#include <Storages/TimeSeries/PrometheusQueryToSQL/Converter.h>
+#include <Storages/TimeSeries/PrometheusQueryToSQL/getResultType.h>
 #include <Storages/TimeSeries/TimeSeriesColumnNames.h>
 #include <Interpreters/executeQuery.h>
 #include <Interpreters/Context.h>
@@ -49,54 +51,32 @@ void PrometheusHTTPProtocolAPI::executePromQLQuery(
     WriteBuffer & response,
     const Params & params)
 {
-    auto query_tree = std::make_unique<PrometheusQueryTree>();
-    query_tree->parse(params.promql_query);
-    if (!query_tree)
-        throw Exception(ErrorCodes::BAD_ARGUMENTS, "Failed to parse PromQL query");
+    auto data_table_metadata = time_series_storage->getTargetTable(ViewTarget::Data, getContext())->getInMemoryMetadataPtr();
+    UInt32 time_scale = PrometheusQueryToSQL::getResultTimestampScale(data_table_metadata);
 
-    LOG_TRACE(log, "Parsed PromQL query: {}. Result type: {}", params.promql_query, query_tree->getResultType());
+    PrometheusQueryTree query_tree{params.promql_query};
+    LOG_TRACE(log, "Parsed PromQL query: {}. Result type: {}", params.promql_query, query_tree.getResultType());
 
-    // Create TimeSeriesTableInfo structure
-    PrometheusQueryToSQLConverter::TimeSeriesTableInfo table_info;
-    table_info.storage_id = time_series_storage->getStorageID();
-    table_info.timestamp_data_type = std::make_shared<DataTypeDateTime64>(0);
-    table_info.value_data_type = std::make_shared<DataTypeFloat64>();
-
-    Field start_time;
-    Field end_time;
-    Field step;
-    Field evaluation_time;
-    Field lookback_delta;
+    PrometheusQueryEvaluationSettings evaluation_settings;
+    evaluation_settings.time_series_storage_id = time_series_storage->getStorageID();
+    evaluation_settings.data_table_metadata = data_table_metadata;
 
     if (params.type == Type::Instant)
     {
-        evaluation_time = parseTimestamp(params.time_param);
-        lookback_delta = Field(300.0);
-        step = Field(15.0);
+        evaluation_settings.evaluation_time = getTimeseriesTime(Field{params.time_param}, time_scale);
     }
     else if (params.type == Type::Range)
     {
-        start_time = parseTimestamp(params.start_param);
-        end_time = parseTimestamp(params.end_param);
-        step = parseStep(params.step_param);
-        lookback_delta = Field(end_time.safeGet<Float64>() - start_time.safeGet<Float64>());
+        evaluation_settings.evaluation_range = PrometheusQueryEvaluationRange{
+            .start_time = getTimeseriesTime(Field{params.start_param}, time_scale),
+            .end_time = getTimeseriesTime(Field{params.end_param}, time_scale),
+            .step = getTimeseriesDuration(Field{params.step_param}, time_scale)};
     }
 
-    PrometheusQueryToSQLConverter converter(
-        *query_tree,
-        table_info,
-        lookback_delta,
-        step
-    );
-
-    if (params.type == Type::Instant)
-        converter.setEvaluationTime(evaluation_time);
-    else if (params.type == Type::Range)
-        converter.setEvaluationRange({start_time, end_time, step});
+    PrometheusQueryToSQL::Converter converter(std::make_shared<PrometheusQueryTree>(std::move(query_tree)), evaluation_settings);
 
     auto sql_query = converter.getSQL();
-    if (!sql_query)
-        throw Exception(ErrorCodes::BAD_ARGUMENTS, "Failed to convert PromQL to SQL");
+    chassert(sql_query);
 
     auto query_context = getContext();
     query_context->makeQueryContext();
@@ -230,7 +210,7 @@ void DB::PrometheusHTTPProtocolAPI::writeInstantQueryHeader(WriteBuffer & respon
 
 void DB::PrometheusHTTPProtocolAPI::writeScalarQueryResponse(WriteBuffer & response, const Block & result_block)
 {
-    chassert(!result_block.empty() && result_block.has(TimeSeriesColumnNames::Scalar) && !result_block.has(TimeSeriesColumnNames::Tags));
+    chassert(!result_block.empty() && result_block.has(TimeSeriesColumnNames::Value) && !result_block.has(TimeSeriesColumnNames::Tags));
     writeString(R"("resultType":"scalar","result":)", response);
     writeScalarResult(response, result_block);
 }
@@ -269,9 +249,9 @@ void DB::PrometheusHTTPProtocolAPI::writeScalarResult(WriteBuffer & response, co
         writeString(",", response);
 
         // Write value
-        if (result_block.has(TimeSeriesColumnNames::Scalar))
+        if (result_block.has(TimeSeriesColumnNames::Value))
         {
-            const auto & scalar_column = result_block.getByName(TimeSeriesColumnNames::Scalar).column;
+            const auto & scalar_column = result_block.getByName(TimeSeriesColumnNames::Value).column;
             auto value = scalar_column->getFloat64(0);
             writeString("\"", response);
             writeFloatText(std::round(value * 100.0) / 100.0, response);
@@ -331,9 +311,9 @@ void DB::PrometheusHTTPProtocolAPI::writeVectorResult(WriteBuffer & response, co
                 writeFloatText(std::round(value * 100.0) / 100.0, response);
                 writeString("\"", response);
             }
-            else if (result_block.has(TimeSeriesColumnNames::Scalar))
+            else if (result_block.has(TimeSeriesColumnNames::Value))
             {
-                const auto & scalar_column = result_block.getByName(TimeSeriesColumnNames::Scalar).column;
+                const auto & scalar_column = result_block.getByName(TimeSeriesColumnNames::Value).column;
                 auto value = scalar_column->getFloat64(i);
                 writeString("\"", response);
                 writeFloatText(std::round(value * 100.0) / 100.0, response);

@@ -2,7 +2,7 @@
 
 #include <Parsers/ASTFunction.h>
 #include <Storages/StoragePrometheusQuery.h>
-#include <Storages/TimeSeries/PrometheusQueryToSQL/getResultType.h>
+#include <Storages/TimeSeries/PrometheusQueryToSQL/getResultColumns.h>
 #include <TableFunctions/TableFunctionFactory.h>
 
 
@@ -26,7 +26,7 @@ template <bool over_range>
 ColumnsDescription
 TableFunctionPrometheusQuery<over_range>::getActualTableStructure(ContextPtr /* context */, bool /* is_insert_query */) const
 {
-    return PrometheusQueryToSQL::getResultColumns(configuration.promql_tree, configuration.evaluation_settings);
+    return PrometheusQueryToSQL::getResultColumns(*configuration.promql_tree, configuration.evaluation_settings);
 }
 
 

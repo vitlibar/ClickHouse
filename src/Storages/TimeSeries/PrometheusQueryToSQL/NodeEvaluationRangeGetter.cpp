@@ -2,6 +2,7 @@
 
 #include <Core/TimeSeries/TimeSeriesDecimalUtils.h>
 #include <Storages/TimeSeries/PrometheusQueryEvaluationSettings.h>
+#include <Storages/TimeSeries/PrometheusQueryToSQL/getResultType.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/nodeToTime.h>
 
 
@@ -14,49 +15,50 @@ namespace DB::ErrorCodes
 namespace DB::PrometheusQueryToSQL
 {
 
-NodeEvaluationRangeGetter::NodeEvaluationRangeGetter(const PQT & promql_tree, const PrometheusQueryEvaluationSettings & settings)
+NodeEvaluationRangeGetter::NodeEvaluationRangeGetter(std::shared_ptr<const PrometheusQueryTree> promql_tree_,
+                                                     const PrometheusQueryEvaluationSettings & settings_)
+    : promql_tree(promql_tree_)
+    , time_scale(getResultTimestampScale(settings_))
 {
-    const auto * root = promql_tree.getRoot();
+    const auto * root = promql_tree->getRoot();
     if (root)
     {
-        if (settings.evaluation_time)
+        if (settings_.evaluation_time)
         {
             NodeEvaluationRange range{
-                .start_time = *settings.evaluation_time,
-                .end_time = *settings.evaluation_time,
+                .start_time = *settings_.evaluation_time,
+                .end_time = *settings_.evaluation_time,
                 .step = DecimalField<Decimal64>{},
-                .window = settings.lookback_delta};
-            visitNode(root, range, promql_tree, settings);
+                .window = settings_.lookback_delta};
+            visitNode(root, range, settings_);
         }
-        else if (settings.evaluation_range)
+        else if (settings_.evaluation_range)
         {
             NodeEvaluationRange range{
-                .start_time = settings.evaluation_range->start_time,
-                .end_time = settings.evaluation_range->end_time,
-                .step = settings.evaluation_range->step,
-                .window = settings.lookback_delta};
-            visitNode(root, range, promql_tree, settings);
+                .start_time = settings_.evaluation_range->start_time,
+                .end_time = settings_.evaluation_range->end_time,
+                .step = settings_.evaluation_range->step,
+                .window = settings_.lookback_delta};
+            visitNode(root, range, settings_);
         }
     }
-    setWindows(settings);
+    setWindows();
 }
 
 
 void NodeEvaluationRangeGetter::visitNode(
     const Node * node,
     const NodeEvaluationRange & range,
-    const PQT & promql_tree,
     const PrometheusQueryEvaluationSettings & settings)
 {
     map[node] = range;
-    visitChildren(node, range, promql_tree, settings);
+    visitChildren(node, range, settings);
 }
 
 
 void NodeEvaluationRangeGetter::visitChildren(
     const Node * node,
     const NodeEvaluationRange & range,
-    const PQT & promql_tree,
     const PrometheusQueryEvaluationSettings & settings)
 {
     switch (node->node_type)
@@ -68,11 +70,10 @@ void NodeEvaluationRangeGetter::visitChildren(
             NodeEvaluationRange expression_range = range;
             if (const auto * at = at_node->getAt())
             {
-                auto max_scale = getTimeseriesScale(settings.result_timestamp_type);
-                auto timestamp = nodeToTime(at, max_scale);
+                auto timestamp = nodeToTime(at, time_scale);
                 if (const auto * offset = at_node->getOffset())
                 {
-                    auto offset_value = nodeToDuration(offset, max_scale);
+                    auto offset_value = nodeToDuration(offset, time_scale);
                     timestamp = subtractTimeseriesDuration(timestamp, offset_value);
                 }
                 expression_range.start_time = timestamp;
@@ -80,24 +81,22 @@ void NodeEvaluationRangeGetter::visitChildren(
             }
             else if (const auto * offset = at_node->getOffset())
             {
-                auto max_scale = getTimeseriesScale(settings.result_timestamp_type);
-                auto offset_value = nodeToDuration(offset, max_scale);
+                auto offset_value = nodeToDuration(offset, time_scale);
                 expression_range.start_time = subtractTimeseriesDuration(expression_range.start_time, offset_value);
                 expression_range.end_time = subtractTimeseriesDuration(expression_range.end_time, offset_value);
             }
-            visitNode(expression, expression_range, promql_tree, settings);
+            visitNode(expression, expression_range, settings);
             break;
         }
 
         case NodeType::Subquery:
         {
             const auto * subquery_node = static_cast<const PQT::Subquery *>(node);
-            auto max_scale = getTimeseriesScale(settings.result_timestamp_type);
-            auto subquery_range = nodeToDuration(subquery_node->getRange(), max_scale);
+            auto subquery_range = nodeToDuration(subquery_node->getRange(), time_scale);
 
             DecimalField<Decimal64> subquery_step;
             if (const auto * resolution_node = subquery_node->getResolution())
-                subquery_step = nodeToDuration(resolution_node, max_scale);
+                subquery_step = nodeToDuration(resolution_node, time_scale);
             else
                 subquery_step = settings.default_resolution;
 
@@ -113,22 +112,21 @@ void NodeEvaluationRangeGetter::visitChildren(
 
             expression_range.step = subquery_step;
 
-            visitNode(expression, expression_range, promql_tree, settings);
+            visitNode(expression, expression_range, settings);
             break;
         }
 
         default:
         {
             for (const auto * child : node->children)
-                visitNode(child, range, promql_tree, settings);
+                visitNode(child, range, settings);
         }
     }
 }
 
 
-void NodeEvaluationRangeGetter::setWindows(const PrometheusQueryEvaluationSettings & settings)
+void NodeEvaluationRangeGetter::setWindows()
 {
-    auto max_scale = getTimeseriesScale(settings.result_timestamp_type);
     for (auto it = map.begin(); it != map.end(); ++it)
     {
         const auto * node = it->first;
@@ -137,7 +135,7 @@ void NodeEvaluationRangeGetter::setWindows(const PrometheusQueryEvaluationSettin
             /// We've found a range selector, we propagate its window to a range-vector function
             /// (if this range selector is used in any range-vector function).
             const auto * range_selector_node = static_cast<const PQT::RangeSelector *>(node);
-            auto window = nodeToDuration(range_selector_node->getRange(), max_scale);
+            auto window = nodeToDuration(range_selector_node->getRange(), time_scale);
             it->second.window = window;
             const auto * parent = node->parent;
             while (parent)
@@ -156,7 +154,10 @@ const NodeEvaluationRange & NodeEvaluationRangeGetter::get(const Node * node) co
 {
     auto it = map.find(node);
     if (it == map.end())
-        throw Exception(ErrorCodes::LOGICAL_ERROR, "Not found node {} in NodeEvaluationRangeGetter", node->node_type);
+    {
+        throw Exception(ErrorCodes::LOGICAL_ERROR,
+                        "Not found node {} in NodeEvaluationRangeGetter", promql_tree->getQuery(node));
+    }
     return it->second;
 }
 

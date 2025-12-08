@@ -13,7 +13,7 @@ namespace DB::PrometheusQueryToSQL
 class Converter
 {
 public:
-    Converter(PQT promql_tree_, PrometheusQueryEvaluationSettings settings_);
+    Converter(std::shared_ptr<const PrometheusQueryTree> promql_tree_, PrometheusQueryEvaluationSettings settings_);
 
     ResultType getResultType() const { return result_type; }
 
@@ -24,7 +24,7 @@ public:
     ASTPtr getSQL() const;
 
 private:
-    PQT promql_tree;
+    std::shared_ptr<const PrometheusQueryTree> promql_tree;
     PrometheusQueryEvaluationSettings settings;
     ResultType result_type;
 };
