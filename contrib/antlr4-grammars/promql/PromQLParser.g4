@@ -90,8 +90,8 @@ subqueryOp
     ;
 
 offsetOp
-    : AT NUMBER (OFFSET (ADD|SUB)? NUMBER)?
-    | OFFSET (ADD|SUB)? NUMBER (AT NUMBER)?
+    : AT TIMESTAMP (OFFSET (ADD|SUB)? DURATION)?
+    | OFFSET (ADD|SUB)? DURATION (AT TIMESTAMP)?
     ;
 
 vector
@@ -131,7 +131,7 @@ labelMatcherList
     ;
 
 matrixSelector
-    : instantSelector TIME_RANGE
+    : instantSelector SELECTOR_RANGE
     ;
 
 offset
