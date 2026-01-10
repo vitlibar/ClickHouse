@@ -28,8 +28,8 @@ public:
     RuleExpression = 0, RuleVectorOperation = 1, RuleUnaryOp = 2, RulePowOp = 3, 
     RuleMultOp = 4, RuleAddOp = 5, RuleCompareOp = 6, RuleAndUnlessOp = 7, 
     RuleOrOp = 8, RuleSubqueryOp = 9, RuleOffsetOp = 10, RuleVector = 11, 
-    RuleParens = 12, RuleInstantSelector = 13, RuleLabelMatcher = 14, RuleLabelMatcherOperator = 15, 
-    RuleLabelMatcherList = 16, RuleMatrixSelector = 17, RuleOffset = 18, 
+    RuleParens = 12, RuleSelector = 13, RuleInstantSelector = 14, RuleLabelMatcher = 15, 
+    RuleLabelMatcherOperator = 16, RuleLabelMatcherList = 17, RuleMatrixSelector = 18, 
     RuleFunction_ = 19, RuleParameter = 20, RuleParameterList = 21, RuleAggregation = 22, 
     RuleBy = 23, RuleWithout = 24, RuleGrouping = 25, RuleOn_ = 26, RuleIgnoring = 27, 
     RuleGroupLeft = 28, RuleGroupRight = 29, RuleLabelName = 30, RuleLabelNameList = 31, 
@@ -66,12 +66,12 @@ public:
   class OffsetOpContext;
   class VectorContext;
   class ParensContext;
+  class SelectorContext;
   class InstantSelectorContext;
   class LabelMatcherContext;
   class LabelMatcherOperatorContext;
   class LabelMatcherListContext;
   class MatrixSelectorContext;
-  class OffsetContext;
   class Function_Context;
   class ParameterContext;
   class ParameterListContext;
@@ -296,7 +296,6 @@ public:
     AggregationContext *aggregation();
     InstantSelectorContext *instantSelector();
     MatrixSelectorContext *matrixSelector();
-    OffsetContext *offset();
     LiteralContext *literal();
     ParensContext *parens();
 
@@ -326,14 +325,30 @@ public:
 
   ParensContext* parens();
 
-  class  InstantSelectorContext : public antlr4::ParserRuleContext {
+  class  SelectorContext : public antlr4::ParserRuleContext {
   public:
-    InstantSelectorContext(antlr4::ParserRuleContext *parent, size_t invokingState);
+    SelectorContext(antlr4::ParserRuleContext *parent, size_t invokingState);
     virtual size_t getRuleIndex() const override;
     MetricNameContext *metricName();
     antlr4::tree::TerminalNode *LEFT_BRACE();
     antlr4::tree::TerminalNode *RIGHT_BRACE();
     LabelMatcherListContext *labelMatcherList();
+
+    virtual void enterRule(antlr4::tree::ParseTreeListener *listener) override;
+    virtual void exitRule(antlr4::tree::ParseTreeListener *listener) override;
+
+    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
+   
+  };
+
+  SelectorContext* selector();
+
+  class  InstantSelectorContext : public antlr4::ParserRuleContext {
+  public:
+    InstantSelectorContext(antlr4::ParserRuleContext *parent, size_t invokingState);
+    virtual size_t getRuleIndex() const override;
+    SelectorContext *selector();
+    OffsetOpContext *offsetOp();
 
     virtual void enterRule(antlr4::tree::ParseTreeListener *listener) override;
     virtual void exitRule(antlr4::tree::ParseTreeListener *listener) override;
@@ -401,8 +416,9 @@ public:
   public:
     MatrixSelectorContext(antlr4::ParserRuleContext *parent, size_t invokingState);
     virtual size_t getRuleIndex() const override;
-    InstantSelectorContext *instantSelector();
+    SelectorContext *selector();
     antlr4::tree::TerminalNode *SELECTOR_RANGE();
+    OffsetOpContext *offsetOp();
 
     virtual void enterRule(antlr4::tree::ParseTreeListener *listener) override;
     virtual void exitRule(antlr4::tree::ParseTreeListener *listener) override;
@@ -412,23 +428,6 @@ public:
   };
 
   MatrixSelectorContext* matrixSelector();
-
-  class  OffsetContext : public antlr4::ParserRuleContext {
-  public:
-    OffsetContext(antlr4::ParserRuleContext *parent, size_t invokingState);
-    virtual size_t getRuleIndex() const override;
-    InstantSelectorContext *instantSelector();
-    OffsetOpContext *offsetOp();
-    MatrixSelectorContext *matrixSelector();
-
-    virtual void enterRule(antlr4::tree::ParseTreeListener *listener) override;
-    virtual void exitRule(antlr4::tree::ParseTreeListener *listener) override;
-
-    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
-  };
-
-  OffsetContext* offset();
 
   class  Function_Context : public antlr4::ParserRuleContext {
   public:

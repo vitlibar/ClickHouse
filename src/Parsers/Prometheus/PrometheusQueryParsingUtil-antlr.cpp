@@ -372,7 +372,7 @@ namespace
         }
 
         /// Makes a node for an instant selector.
-        Node * makeInstantSelector(antlr4_grammars::PromQLParser::InstantSelectorContext * ctx)
+        Node * makeSelector(antlr4_grammars::PromQLParser::SelectorContext * ctx)
         {
             auto new_node = std::make_unique<InstantSelector>();
             new_node->start_pos = getStartPos(ctx);
@@ -401,18 +401,30 @@ namespace
             return addNode(std::move(new_node));
         }
 
+        Node * makeInstantSelector(antlr4_grammars::PromQLParser::InstantSelectorContext * ctx)
+        {
+            auto * selector_ctx = ctx->selector();
+            Node * res_node = makeSelector(selector_ctx);
+            if (auto * offset_op_ctx = ctx->offsetOp())
+            {
+                res_node->length -= getLength(offset_op_ctx);
+                res_node = makeAt(offset_op_ctx, res_node);
+            }
+            return res_node;
+        }
+
         /// Makes a node for a range selector.
         Node * makeRangeSelector(antlr4_grammars::PromQLParser::MatrixSelectorContext * ctx)
         {
             auto new_node = std::make_unique<RangeSelector>();
             new_node->start_pos = getStartPos(ctx);
             new_node->length = getLength(ctx);
-            auto * selector_ctx = ctx->instantSelector();
+            auto * selector_ctx = ctx->selector();
             auto * selector_range_ctx = ctx->SELECTOR_RANGE();
             if (!selector_ctx || !selector_range_ctx)
                 throwInconsistentSchema("MatrixSelector", ctx->getText());
 
-            auto * instant_selector = makeInstantSelector(selector_ctx);
+            auto * instant_selector = makeSelector(selector_ctx);
             if (!instant_selector)
             {
                 chassert(error_listener.hasError());
@@ -436,7 +448,15 @@ namespace
             addChild(new_node.get(), instant_selector);
             addChild(new_node.get(), range_node);
 
-            return addNode(std::move(new_node));
+            auto * res_node = addNode(std::move(new_node));
+
+            if (auto * offset_op_ctx = ctx->offsetOp())
+            {
+                res_node->length -= getLength(offset_op_ctx);
+                res_node = makeAt(offset_op_ctx, res_node);
+            }
+
+            return res_node;
         }
 
         /// Makes a node for a subquery operator.
@@ -795,30 +815,6 @@ namespace
         std::any visitMatrixSelector(antlr4_grammars::PromQLParser::MatrixSelectorContext * ctx) override
         {
             return makeRangeSelector(ctx);
-        }
-
-        std::any visitOffset(antlr4_grammars::PromQLParser::OffsetContext * ctx) override
-        {
-            Node * res_node = nullptr;
-            if (auto * instant_selector_ctx = ctx->instantSelector())
-                res_node = makeInstantSelector(instant_selector_ctx);
-            else if (auto * matrix_selector_ctx = ctx->matrixSelector())
-                res_node = makeRangeSelector(matrix_selector_ctx);
-            else
-                throwInconsistentSchema("Offset", ctx->getText());
-
-            if (!res_node)
-            {
-                chassert(error_listener.hasError());
-                return nullptr;
-            }
-
-            auto * offset_op_ctx = ctx->offsetOp();
-            if (!offset_op_ctx)
-                throwInconsistentSchema("Offset", ctx->getText());
-
-            res_node = makeAt(offset_op_ctx, res_node);
-            return res_node;
         }
 
         std::any visitVectorOperation(antlr4_grammars::PromQLParser::VectorOperationContext * ctx) override

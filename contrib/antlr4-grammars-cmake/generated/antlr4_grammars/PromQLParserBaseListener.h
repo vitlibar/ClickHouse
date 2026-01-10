@@ -57,6 +57,9 @@ public:
   virtual void enterParens(PromQLParser::ParensContext * /*ctx*/) override { }
   virtual void exitParens(PromQLParser::ParensContext * /*ctx*/) override { }
 
+  virtual void enterSelector(PromQLParser::SelectorContext * /*ctx*/) override { }
+  virtual void exitSelector(PromQLParser::SelectorContext * /*ctx*/) override { }
+
   virtual void enterInstantSelector(PromQLParser::InstantSelectorContext * /*ctx*/) override { }
   virtual void exitInstantSelector(PromQLParser::InstantSelectorContext * /*ctx*/) override { }
 
@@ -71,9 +74,6 @@ public:
 
   virtual void enterMatrixSelector(PromQLParser::MatrixSelectorContext * /*ctx*/) override { }
   virtual void exitMatrixSelector(PromQLParser::MatrixSelectorContext * /*ctx*/) override { }
-
-  virtual void enterOffset(PromQLParser::OffsetContext * /*ctx*/) override { }
-  virtual void exitOffset(PromQLParser::OffsetContext * /*ctx*/) override { }
 
   virtual void enterFunction_(PromQLParser::Function_Context * /*ctx*/) override { }
   virtual void exitFunction_(PromQLParser::Function_Context * /*ctx*/) override { }

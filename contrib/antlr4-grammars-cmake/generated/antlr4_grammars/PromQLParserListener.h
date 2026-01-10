@@ -55,6 +55,9 @@ public:
   virtual void enterParens(PromQLParser::ParensContext *ctx) = 0;
   virtual void exitParens(PromQLParser::ParensContext *ctx) = 0;
 
+  virtual void enterSelector(PromQLParser::SelectorContext *ctx) = 0;
+  virtual void exitSelector(PromQLParser::SelectorContext *ctx) = 0;
+
   virtual void enterInstantSelector(PromQLParser::InstantSelectorContext *ctx) = 0;
   virtual void exitInstantSelector(PromQLParser::InstantSelectorContext *ctx) = 0;
 
@@ -69,9 +72,6 @@ public:
 
   virtual void enterMatrixSelector(PromQLParser::MatrixSelectorContext *ctx) = 0;
   virtual void exitMatrixSelector(PromQLParser::MatrixSelectorContext *ctx) = 0;
-
-  virtual void enterOffset(PromQLParser::OffsetContext *ctx) = 0;
-  virtual void exitOffset(PromQLParser::OffsetContext *ctx) = 0;
 
   virtual void enterFunction_(PromQLParser::Function_Context *ctx) = 0;
   virtual void exitFunction_(PromQLParser::Function_Context *ctx) = 0;

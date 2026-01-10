@@ -69,6 +69,10 @@ public:
     return visitChildren(ctx);
   }
 
+  virtual std::any visitSelector(PromQLParser::SelectorContext *ctx) override {
+    return visitChildren(ctx);
+  }
+
   virtual std::any visitInstantSelector(PromQLParser::InstantSelectorContext *ctx) override {
     return visitChildren(ctx);
   }
@@ -86,10 +90,6 @@ public:
   }
 
   virtual std::any visitMatrixSelector(PromQLParser::MatrixSelectorContext *ctx) override {
-    return visitChildren(ctx);
-  }
-
-  virtual std::any visitOffset(PromQLParser::OffsetContext *ctx) override {
     return visitChildren(ctx);
   }
 

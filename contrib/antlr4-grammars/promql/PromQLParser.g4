@@ -99,7 +99,6 @@ vector
     | aggregation
     | instantSelector
     | matrixSelector
-    | offset
     | literal
     | parens
     ;
@@ -110,9 +109,13 @@ parens
 
 // Selectors
 
-instantSelector
+selector
     : metricName (LEFT_BRACE labelMatcherList? RIGHT_BRACE)?
     | LEFT_BRACE labelMatcherList RIGHT_BRACE
+    ;
+
+instantSelector
+    : selector offsetOp?
     ;
 
 labelMatcher
@@ -131,12 +134,7 @@ labelMatcherList
     ;
 
 matrixSelector
-    : instantSelector SELECTOR_RANGE
-    ;
-
-offset
-    : instantSelector offsetOp
-    | matrixSelector offsetOp
+    : selector SELECTOR_RANGE offsetOp?
     ;
 
 // Functions
