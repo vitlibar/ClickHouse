@@ -12,6 +12,8 @@
 #include <IO/readDecimalText.h>
 #include <Core/Settings.h>
 #include <Core/Field.h>
+#include <Parsers/Prometheus/parseTimeSeriesTimestamp.h>
+
 
 namespace DB
 {
@@ -24,74 +26,6 @@ namespace ErrorCodes
     extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
 }
 
-
-/// Extracts integer or decimal parameter value and converts it to decimal with the target scale (scale of the timestamp column)
-Decimal64 normalizeParameter(const std::string & function_name, const std::string & parameter_name, const Field & parameter_field, UInt32 target_scale)
-{
-    auto target_scale_multiplier = DecimalUtils::scaleMultiplier<Int64>(target_scale);
-
-    if (parameter_field.getType() == Field::Types::Decimal64)
-    {
-        auto value = parameter_field.safeGet<DecimalField<Decimal64>>();
-        auto value_scale_multiplier = value.getScaleMultiplier();
-        return (Decimal128(value.getValue()) * Decimal128(target_scale_multiplier)) / Decimal128(value_scale_multiplier);
-    }
-    else if (parameter_field.getType() == Field::Types::Decimal32)
-    {
-        auto value = parameter_field.safeGet<DecimalField<Decimal32>>();
-        auto value_scale_multiplier = value.getScaleMultiplier();
-        return Decimal64(value.getValue()) / value_scale_multiplier * target_scale_multiplier;
-    }
-    else if (Int64 int_value = 0; parameter_field.tryGet(int_value))
-    {
-        return Decimal64(int_value) * target_scale_multiplier;
-    }
-    else if (UInt64 uint_value = 0; parameter_field.tryGet(uint_value))
-    {
-        return Decimal64(uint_value) * target_scale_multiplier;
-    }
-    else if (String string_value; parameter_field.tryGet(string_value))
-    {
-        Decimal64 value{};
-        UInt32 scale = target_scale;
-        ReadBufferFromString buf(string_value);
-        if (tryReadDecimalText(buf, value, 20, scale))
-            return value * DecimalUtils::scaleMultiplier<Decimal64>(scale);
-        else
-            throw Exception(ErrorCodes::BAD_ARGUMENTS,
-                "Cannot parse {} parameter for aggregate function {}", parameter_name, function_name);
-    }
-    else
-    {
-        throw Exception(ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT,
-            "Illegal type {} of {} parameter for aggregate function {}",
-            parameter_field.getTypeName(), parameter_name, function_name);
-    }
-}
-
-UInt64 extractIntParameter(const std::string & function_name, const std::string & parameter_name, const Field & parameter_field)
-{
-    if (UInt64 int_value = 0; parameter_field.tryGet(int_value))
-    {
-        return int_value;
-    }
-    else if (String string_value; parameter_field.tryGet(string_value))
-    {
-        UInt64 value{};
-        ReadBufferFromString buf(string_value);
-        if (tryReadIntText(value, buf))
-            return value;
-        else
-            throw Exception(ErrorCodes::BAD_ARGUMENTS,
-                "Cannot parse {} parameter for aggregate function {}", parameter_name, function_name);
-    }
-    else
-    {
-        throw Exception(ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT,
-            "Illegal type {} of {} parameter for aggregate function {}",
-            parameter_field.getTypeName(), parameter_name, function_name);
-    }
-}
 
 Float64 extractFloatParameter(const std::string & function_name, const std::string & parameter_name, const Field & parameter_field)
 {
@@ -168,10 +102,10 @@ AggregateFunctionPtr createWithValueType(const std::string & name, const DataTyp
         auto timestamp_decimal = std::dynamic_pointer_cast<const DataTypeDateTime64>(timestamp_type);
         auto target_scale = timestamp_decimal->getScale();
 
-        DateTime64 start_timestamp = normalizeParameter(name, "start", start_timestamp_param, target_scale);
-        DateTime64 end_timestamp = normalizeParameter(name, "end", end_timestamp_param, target_scale);
-        DateTime64 step = normalizeParameter(name, "step", step_param, target_scale);
-        DateTime64 window = normalizeParameter(name, "window", window_param, target_scale);
+        auto start_timestamp = parseTimeSeriesTimestamp(start_timestamp_param, target_scale);
+        auto end_timestamp = parseTimeSeriesTimestamp(end_timestamp_param, target_scale);
+        auto step = parseTimeSeriesDuration(step_param, target_scale);
+        auto window = parseTimeSeriesDuration(window_param, target_scale);
 
         if constexpr (is_predict)
         {
@@ -187,10 +121,10 @@ AggregateFunctionPtr createWithValueType(const std::string & name, const DataTyp
     }
     else if (isDateTime(timestamp_type) || isUInt32(timestamp_type))
     {
-        UInt64 start_timestamp = extractIntParameter(name, "start", start_timestamp_param);
-        UInt64 end_timestamp = extractIntParameter(name, "end", end_timestamp_param);
-        Int64 step = extractIntParameter(name, "step", step_param);
-        Int64 window = extractIntParameter(name, "window", window_param);
+        auto start_timestamp = parseTimeSeriesTimestamp(start_timestamp_param, /* timestamp_scale = */ 0);
+        auto end_timestamp = parseTimeSeriesTimestamp(end_timestamp_param, /* timestamp_scale = */ 0);
+        auto step = parseTimeSeriesDuration(step_param, /* duration_scale = */ 0);
+        auto window = parseTimeSeriesDuration(window_param, /* duration_scale = */ 0);
 
         if constexpr (is_predict)
         {
