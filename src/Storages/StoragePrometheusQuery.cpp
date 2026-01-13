@@ -125,13 +125,14 @@ StoragePrometheusQuery::Configuration StoragePrometheusQuery::getConfiguration(A
     chassert(argument_index == args.size());
 
     Configuration config;
-    config.time_series_storage_id = std::move(time_series_storage_id);
-    config.timestamp_type = std::move(timestamp_type);
-    config.timestamp_scale = timestamp_scale;
-    config.scalar_type = std::move(scalar_type);
     config.promql_query = std::make_shared<PrometheusQueryTree>(std::move(promql_query));
-    config.evaluation_time = evaluation_time;
-    config.evaluation_range = evaluation_range;
+    auto & evaluation_settings = config.evaluation_settings;
+    evaluation_settings.time_series_storage_id = std::move(time_series_storage_id);
+    evaluation_settings.timestamp_type = std::move(timestamp_type);
+    evaluation_settings.timestamp_scale = timestamp_scale;
+    evaluation_settings.scalar_type = std::move(scalar_type);
+    evaluation_settings.evaluation_time = evaluation_time;
+    evaluation_settings.evaluation_range = evaluation_range;
     return config;
 }
 
@@ -159,17 +160,7 @@ void StoragePrometheusQuery::read(
     size_t /* num_streams */)
 {
     LOG_INFO(log, "Building SQL to evaluate promql: {}", *config.promql_query);
-
-    PrometheusQueryToSQLConverter::TimeSeriesTableInfo time_series_table_info;
-    time_series_table_info.storage_id = config.time_series_storage_id;
-    time_series_table_info.timestamp_data_type = config.timestamp_type;
-    time_series_table_info.value_data_type = config.scalar_type;
-
-    PrometheusQueryToSQLConverter converter{*config.promql_query, time_series_table_info, 5*60, 15};
-    if (config.evaluation_time)
-        converter.setEvaluationTime(DecimalField<DateTime64>{*config.evaluation_time, config.timestamp_scale});
-    else if (config.evaluation_range)
-        converter.setEvaluationRange(PrometheusQueryToSQLConverter::EvaluationRange{*config.evaluation_range, config.timestamp_scale});
+    PrometheusQueryToSQLConverter converter{config.promql_query, config.evaluation_settings};
     ASTPtr select_query = converter.getSQL();
 
     LOG_INFO(log, "Will execute query:\n{}", select_query->formatForLogging());

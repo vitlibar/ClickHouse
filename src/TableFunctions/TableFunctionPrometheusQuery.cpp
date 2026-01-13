@@ -31,21 +31,7 @@ void TableFunctionPrometheusQuery<over_range>::parseArguments(const ASTPtr & ast
 template <bool over_range>
 ColumnsDescription TableFunctionPrometheusQuery<over_range>::getActualTableStructure(ContextPtr /* context */, bool /* is_insert_query */) const
 {
-    PrometheusQueryToSQLConverter::TimeSeriesTableInfo time_series_table_info;
-    time_series_table_info.storage_id = config.time_series_storage_id;
-    time_series_table_info.timestamp_data_type = config.timestamp_type;
-    time_series_table_info.value_data_type = config.scalar_type;
-    PrometheusQueryToSQLConverter converter{*config.promql_query, time_series_table_info, Field{}, Field{}};
-    if constexpr (over_range)
-    {
-        chassert(config.evaluation_range);
-        converter.setEvaluationRange(PrometheusQueryToSQLConverter::EvaluationRange{*config.evaluation_range, config.timestamp_scale});
-    }
-    else
-    {
-        chassert(config.evaluation_time);
-        converter.setEvaluationTime(DecimalField<DateTime64>{*config.evaluation_time, config.timestamp_scale});
-    }
+    PrometheusQueryToSQLConverter converter{config.promql_query, config.evaluation_settings};
     return converter.getResultColumns();
 }
 

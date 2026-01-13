@@ -2,7 +2,7 @@
 
 #include <Parsers/Prometheus/PrometheusQueryTree.h>
 #include <Storages/IStorage.h>
-#include <Storages/TimeSeries/PrometheusQueryEvaluationRange.h>
+#include <Storages/TimeSeries/PrometheusQueryEvaluationSettings.h>
 
 
 namespace DB
@@ -14,14 +14,8 @@ class StoragePrometheusQuery : public IStorage
 public:
     struct Configuration
     {
-        StorageID time_series_storage_id = StorageID::createEmpty();
-        DataTypePtr timestamp_type;
-        UInt32 timestamp_scale = 0;
-        DataTypePtr scalar_type;
-
         std::shared_ptr<const PrometheusQueryTree> promql_query;
-        std::optional<DateTime64> evaluation_time;
-        std::optional<PrometheusQueryEvaluationRange> evaluation_range;
+        PrometheusQueryEvaluationSettings evaluation_settings;
     };
 
     static Configuration getConfiguration(ASTs & args, const ContextPtr & context, bool over_range);
