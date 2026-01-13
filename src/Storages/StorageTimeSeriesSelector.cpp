@@ -128,12 +128,12 @@ StorageTimeSeriesSelector::Configuration StorageTimeSeriesSelector::getConfigura
     chassert(argument_index == args.size());
 
     Configuration config;
-    config.selector = std::move(selector);
     config.time_series_storage_id = std::move(time_series_storage_id);
     config.id_type = std::move(id_type);
     config.timestamp_type = std::move(timestamp_type);
     config.timestamp_scale = timestamp_scale;
     config.scalar_type = std::move(scalar_type);
+    config.selector = std::move(selector);
     config.min_time = min_time;
     config.max_time = max_time;
     return config;

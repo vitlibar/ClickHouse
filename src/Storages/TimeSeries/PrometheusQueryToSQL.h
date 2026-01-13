@@ -22,6 +22,28 @@ public:
         DataTypePtr value_data_type;
     };
 
+    struct EvaluationRange
+    {
+        Field start_time;
+        Field end_time;
+        Field step;
+
+        EvaluationRange() = default;
+        EvaluationRange(const Field & start_time_, const Field & end_time_, const Field & step_)
+            : start_time(start_time_)
+            , end_time(end_time_)
+            , step(step_)
+        {
+        }
+        EvaluationRange(const PrometheusQueryEvaluationRange & src, UInt32 timestamp_scale)
+            : start_time(DecimalField<DateTime64>{src.start_time, timestamp_scale})
+            , end_time(DecimalField<DateTime64>{src.end_time, timestamp_scale})
+            , step(DecimalField<Decimal64>{src.step, timestamp_scale})
+        {
+        }
+        bool isNull() const { return start_time.isNull(); }
+    };
+
     PrometheusQueryToSQLConverter(const PrometheusQueryTree & promql_,
                                   const TimeSeriesTableInfo & time_series_table_info_,
                                   const Field & lookback_delta_,
@@ -31,7 +53,7 @@ public:
     void setEvaluationTime(const Field & time_);
 
     /// Sets that the query should be evaluated over a range of time.
-    void setEvaluationRange(const PrometheusQueryEvaluationRange & range_);
+    void setEvaluationRange(const EvaluationRange & range_);
 
     /// Builds an AST to execute this prometheus query.
     ASTPtr getSQL() const;
@@ -51,7 +73,7 @@ private:
     Field default_resolution;
 
     Field evaluation_time;
-    PrometheusQueryEvaluationRange evaluation_range;
+    EvaluationRange evaluation_range;
 
     PrometheusQueryResultType result_type;
 };

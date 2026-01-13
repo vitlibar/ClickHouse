@@ -992,7 +992,7 @@ void PrometheusQueryToSQLConverter::setEvaluationTime(const Field & time_)
     result_type = promql.getResultType();
 }
 
-void PrometheusQueryToSQLConverter::setEvaluationRange(const PrometheusQueryEvaluationRange & range_)
+void PrometheusQueryToSQLConverter::setEvaluationRange(const EvaluationRange & range_)
 {
     if (promql.getResultType() != PrometheusQueryResultType::INSTANT_VECTOR &&
         promql.getResultType() != PrometheusQueryResultType::SCALAR)

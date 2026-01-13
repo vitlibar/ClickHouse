@@ -12,14 +12,21 @@ namespace DB
 class StoragePrometheusQuery : public IStorage
 {
 public:
-    StoragePrometheusQuery(
-        const StorageID & table_id_,
-        const ColumnsDescription & columns_,
-        const StorageID & time_series_storage_id_,
-        const PrometheusQueryTree & promql_query_);
+    struct Configuration
+    {
+        StorageID time_series_storage_id = StorageID::createEmpty();
+        DataTypePtr timestamp_type;
+        UInt32 timestamp_scale = 0;
+        DataTypePtr scalar_type;
 
-    void setEvaluationTime(const Field & time_);
-    void setEvaluationRange(const PrometheusQueryEvaluationRange & range_);
+        std::shared_ptr<const PrometheusQueryTree> promql_query;
+        std::optional<DateTime64> evaluation_time;
+        std::optional<PrometheusQueryEvaluationRange> evaluation_range;
+    };
+
+    static Configuration getConfiguration(ASTs & args, const ContextPtr & context, bool over_range);
+
+    StoragePrometheusQuery(const StorageID & table_id_, const ColumnsDescription & columns_, const Configuration & config_);
 
     std::string getName() const override { return "PrometheusQuery"; }
 
@@ -34,11 +41,7 @@ public:
         size_t num_streams) override;
 
 private:
-    StorageID time_series_storage_id;
-    PrometheusQueryTree promql_query;
-    Field evaluation_time;
-    PrometheusQueryEvaluationRange evaluation_range;
-
+    Configuration config;
     LoggerPtr log;
 };
 
