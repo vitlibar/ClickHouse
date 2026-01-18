@@ -19,8 +19,9 @@ public:
     ON = 23, IGNORING = 24, GROUP_LEFT = 25, GROUP_RIGHT = 26, OFFSET = 27, 
     BOOL = 28, AGGREGATION_OPERATOR = 29, FUNCTION = 30, LEFT_BRACE = 31, 
     RIGHT_BRACE = 32, LEFT_PAREN = 33, RIGHT_PAREN = 34, LEFT_BRACKET = 35, 
-    RIGHT_BRACKET = 36, COMMA = 37, AT = 38, SUBQUERY_RANGE = 39, TIME_RANGE = 40, 
-    METRIC_NAME = 41, LABEL_NAME = 42, WS = 43, SL_COMMENT = 44
+    RIGHT_BRACKET = 36, COMMA = 37, AT = 38, TIMESTAMP = 39, DURATION = 40, 
+    OFFSET_VALUE = 41, SUBQUERY_RANGE = 42, TIME_RANGE = 43, METRIC_NAME = 44, 
+    LABEL_NAME = 45, WS = 46, SL_COMMENT = 47
   };
 
   enum {
@@ -272,11 +273,9 @@ public:
     OffsetOpContext(antlr4::ParserRuleContext *parent, size_t invokingState);
     virtual size_t getRuleIndex() const override;
     antlr4::tree::TerminalNode *AT();
-    std::vector<antlr4::tree::TerminalNode *> NUMBER();
-    antlr4::tree::TerminalNode* NUMBER(size_t i);
+    antlr4::tree::TerminalNode *TIMESTAMP();
     antlr4::tree::TerminalNode *OFFSET();
-    antlr4::tree::TerminalNode *ADD();
-    antlr4::tree::TerminalNode *SUB();
+    antlr4::tree::TerminalNode *OFFSET_VALUE();
 
     virtual void enterRule(antlr4::tree::ParseTreeListener *listener) override;
     virtual void exitRule(antlr4::tree::ParseTreeListener *listener) override;

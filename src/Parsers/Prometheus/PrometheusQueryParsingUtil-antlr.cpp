@@ -272,7 +272,7 @@ namespace
         }
 
         /// Makes a node for a scalar or an interval literal after parsing it.
-        Node * makeNodeForScalarOrInterval(antlr4::tree::TerminalNode * ctx, bool negate = false)
+        Node * makeNodeForScalarOrInterval(antlr4::tree::TerminalNode * ctx)
         {
             PrometheusQueryParsingUtil::ScalarOrInterval scalar_or_interval;
             if (!parseScalarOrLiteral(ctx, scalar_or_interval))
@@ -280,8 +280,6 @@ namespace
                 chassert(error_listener.hasError());
                 return nullptr;
             }
-            if (negate)
-                scalar_or_interval.negate();
             return makeNodeForScalarOrInterval(scalar_or_interval, getStartPos(ctx), getLength(ctx));
         }
 
@@ -479,37 +477,24 @@ namespace
             new_node->length = expression->length + getLength(ctx);
             new_node->result_type = expression->result_type;
 
-            auto * at_ctx = ctx->AT();
-            auto * offset_ctx = ctx->OFFSET();
-            bool negative_offset = ctx->SUB();
+            auto * timestamp_ctx = ctx->TIMESTAMP();
+            auto * offset_value_ctx = ctx->OFFSET_VALUE();
 
             Node * at_node = nullptr;
             Node * offset_node = nullptr;
 
-            bool ok = false;
+            bool ok = true;
 
-            if (at_ctx && offset_ctx)
+            if (timestamp_ctx)
             {
-                size_t at_index = 0;
-                size_t offset_index = 1;
-                if (getStartPos(offset_ctx) < getStartPos(at_ctx))
-                    std::swap(at_index, offset_index);
-                at_node = makeNodeForScalarOrInterval(ctx->NUMBER(at_index));
-                if (at_node)
-                    offset_node = makeNodeForScalarOrInterval(ctx->NUMBER(offset_index), negative_offset);
-                ok = at_node && offset_node;
+                at_node = makeNodeForScalarOrInterval(timestamp_ctx);
+                ok &= (at_node != nullptr);
             }
-            else if (at_ctx)
+
+            if (offset_value_ctx)
             {
-                size_t at_index = 0;
-                at_node = makeNodeForScalarOrInterval(ctx->NUMBER(at_index));
-                ok = (at_node != nullptr);
-            }
-            else if (offset_ctx)
-            {
-                size_t offset_index = 0;
-                offset_node = makeNodeForScalarOrInterval(ctx->NUMBER(offset_index), negative_offset);
-                ok = (offset_node != nullptr);
+                offset_node = makeNodeForScalarOrInterval(offset_value_ctx);
+                ok &= (offset_node != nullptr);
             }
 
             if (!ok)
