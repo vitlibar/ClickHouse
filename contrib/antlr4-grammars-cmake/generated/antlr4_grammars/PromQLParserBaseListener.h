@@ -69,8 +69,8 @@ public:
   virtual void enterLabelMatcherList(PromQLParser::LabelMatcherListContext * /*ctx*/) override { }
   virtual void exitLabelMatcherList(PromQLParser::LabelMatcherListContext * /*ctx*/) override { }
 
-  virtual void enterMatrixSelector(PromQLParser::MatrixSelectorContext * /*ctx*/) override { }
-  virtual void exitMatrixSelector(PromQLParser::MatrixSelectorContext * /*ctx*/) override { }
+  virtual void enterRangeSelector(PromQLParser::RangeSelectorContext * /*ctx*/) override { }
+  virtual void exitRangeSelector(PromQLParser::RangeSelectorContext * /*ctx*/) override { }
 
   virtual void enterOffset(PromQLParser::OffsetContext * /*ctx*/) override { }
   virtual void exitOffset(PromQLParser::OffsetContext * /*ctx*/) override { }

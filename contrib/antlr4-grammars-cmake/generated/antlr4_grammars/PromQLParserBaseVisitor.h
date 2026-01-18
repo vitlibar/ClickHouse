@@ -85,7 +85,7 @@ public:
     return visitChildren(ctx);
   }
 
-  virtual std::any visitMatrixSelector(PromQLParser::MatrixSelectorContext *ctx) override {
+  virtual std::any visitRangeSelector(PromQLParser::RangeSelectorContext *ctx) override {
     return visitChildren(ctx);
   }
 

@@ -98,7 +98,7 @@ vector
     : function_
     | aggregation
     | instantSelector
-    | matrixSelector
+    | rangeSelector
     | offset
     | literal
     | parens
@@ -130,13 +130,13 @@ labelMatcherList
     : labelMatcher (COMMA labelMatcher)* COMMA?
     ;
 
-matrixSelector
-    : instantSelector TIME_RANGE
+rangeSelector
+    : instantSelector SELECTOR_RANGE
     ;
 
 offset
     : instantSelector offsetOp
-    | matrixSelector offsetOp
+    | rangeSelector offsetOp
     ;
 
 // Functions

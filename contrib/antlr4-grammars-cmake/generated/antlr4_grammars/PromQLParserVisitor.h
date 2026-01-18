@@ -54,7 +54,7 @@ public:
 
     virtual std::any visitLabelMatcherList(PromQLParser::LabelMatcherListContext *context) = 0;
 
-    virtual std::any visitMatrixSelector(PromQLParser::MatrixSelectorContext *context) = 0;
+    virtual std::any visitRangeSelector(PromQLParser::RangeSelectorContext *context) = 0;
 
     virtual std::any visitOffset(PromQLParser::OffsetContext *context) = 0;
 

@@ -57,7 +57,7 @@ void promqlparserParserInitialize() {
       "expression", "vectorOperation", "unaryOp", "powOp", "multOp", "addOp", 
       "compareOp", "andUnlessOp", "orOp", "subqueryOp", "offsetOp", "vector", 
       "parens", "instantSelector", "labelMatcher", "labelMatcherOperator", 
-      "labelMatcherList", "matrixSelector", "offset", "function_", "parameter", 
+      "labelMatcherList", "rangeSelector", "offset", "function_", "parameter", 
       "parameterList", "aggregation", "by", "without", "grouping", "on_", 
       "ignoring", "groupLeft", "groupRight", "labelName", "labelNameList", 
       "metricName", "keyword", "literal"
@@ -75,8 +75,8 @@ void promqlparserParserInitialize() {
       "RE", "NRE", "BY", "WITHOUT", "ON", "IGNORING", "GROUP_LEFT", "GROUP_RIGHT", 
       "OFFSET", "BOOL", "AGGREGATION_OPERATOR", "FUNCTION", "LEFT_BRACE", 
       "RIGHT_BRACE", "LEFT_PAREN", "RIGHT_PAREN", "LEFT_BRACKET", "RIGHT_BRACKET", 
-      "COMMA", "AT", "TIMESTAMP", "DURATION", "OFFSET_VALUE", "SUBQUERY_RANGE", 
-      "TIME_RANGE", "METRIC_NAME", "LABEL_NAME", "WS", "SL_COMMENT"
+      "COMMA", "AT", "DURATION", "TIMESTAMP", "OFFSET_VALUE", "SUBQUERY_RANGE", 
+      "SELECTOR_RANGE", "METRIC_NAME", "LABEL_NAME", "WS", "SL_COMMENT"
     }
   );
   static const int32_t serializedATNSegment[] = {
@@ -134,9 +134,9 @@ void promqlparserParserInitialize() {
   	50,25,0,134,133,1,0,0,0,134,135,1,0,0,0,135,15,1,0,0,0,136,138,5,10,0,
   	0,137,139,3,50,25,0,138,137,1,0,0,0,138,139,1,0,0,0,139,17,1,0,0,0,140,
   	142,5,42,0,0,141,143,3,20,10,0,142,141,1,0,0,0,142,143,1,0,0,0,143,19,
-  	1,0,0,0,144,145,5,38,0,0,145,148,5,39,0,0,146,147,5,27,0,0,147,149,5,
+  	1,0,0,0,144,145,5,38,0,0,145,148,5,40,0,0,146,147,5,27,0,0,147,149,5,
   	41,0,0,148,146,1,0,0,0,148,149,1,0,0,0,149,157,1,0,0,0,150,151,5,27,0,
-  	0,151,154,5,41,0,0,152,153,5,38,0,0,153,155,5,39,0,0,154,152,1,0,0,0,
+  	0,151,154,5,41,0,0,152,153,5,38,0,0,153,155,5,40,0,0,154,152,1,0,0,0,
   	154,155,1,0,0,0,155,157,1,0,0,0,156,144,1,0,0,0,156,150,1,0,0,0,157,21,
   	1,0,0,0,158,166,3,38,19,0,159,166,3,44,22,0,160,166,3,26,13,0,161,166,
   	3,34,17,0,162,166,3,36,18,0,163,166,3,68,34,0,164,166,3,24,12,0,165,158,
@@ -1411,8 +1411,8 @@ PromQLParser::InstantSelectorContext* PromQLParser::VectorContext::instantSelect
   return getRuleContext<PromQLParser::InstantSelectorContext>(0);
 }
 
-PromQLParser::MatrixSelectorContext* PromQLParser::VectorContext::matrixSelector() {
-  return getRuleContext<PromQLParser::MatrixSelectorContext>(0);
+PromQLParser::RangeSelectorContext* PromQLParser::VectorContext::rangeSelector() {
+  return getRuleContext<PromQLParser::RangeSelectorContext>(0);
 }
 
 PromQLParser::OffsetContext* PromQLParser::VectorContext::offset() {
@@ -1491,7 +1491,7 @@ PromQLParser::VectorContext* PromQLParser::vector() {
     case 4: {
       enterOuterAlt(_localctx, 4);
       setState(161);
-      matrixSelector();
+      rangeSelector();
       break;
     }
 
@@ -1987,48 +1987,48 @@ PromQLParser::LabelMatcherListContext* PromQLParser::labelMatcherList() {
   return _localctx;
 }
 
-//----------------- MatrixSelectorContext ------------------------------------------------------------------
+//----------------- RangeSelectorContext ------------------------------------------------------------------
 
-PromQLParser::MatrixSelectorContext::MatrixSelectorContext(ParserRuleContext *parent, size_t invokingState)
+PromQLParser::RangeSelectorContext::RangeSelectorContext(ParserRuleContext *parent, size_t invokingState)
   : ParserRuleContext(parent, invokingState) {
 }
 
-PromQLParser::InstantSelectorContext* PromQLParser::MatrixSelectorContext::instantSelector() {
+PromQLParser::InstantSelectorContext* PromQLParser::RangeSelectorContext::instantSelector() {
   return getRuleContext<PromQLParser::InstantSelectorContext>(0);
 }
 
-tree::TerminalNode* PromQLParser::MatrixSelectorContext::TIME_RANGE() {
-  return getToken(PromQLParser::TIME_RANGE, 0);
+tree::TerminalNode* PromQLParser::RangeSelectorContext::SELECTOR_RANGE() {
+  return getToken(PromQLParser::SELECTOR_RANGE, 0);
 }
 
 
-size_t PromQLParser::MatrixSelectorContext::getRuleIndex() const {
-  return PromQLParser::RuleMatrixSelector;
+size_t PromQLParser::RangeSelectorContext::getRuleIndex() const {
+  return PromQLParser::RuleRangeSelector;
 }
 
-void PromQLParser::MatrixSelectorContext::enterRule(tree::ParseTreeListener *listener) {
+void PromQLParser::RangeSelectorContext::enterRule(tree::ParseTreeListener *listener) {
   auto parserListener = dynamic_cast<PromQLParserListener *>(listener);
   if (parserListener != nullptr)
-    parserListener->enterMatrixSelector(this);
+    parserListener->enterRangeSelector(this);
 }
 
-void PromQLParser::MatrixSelectorContext::exitRule(tree::ParseTreeListener *listener) {
+void PromQLParser::RangeSelectorContext::exitRule(tree::ParseTreeListener *listener) {
   auto parserListener = dynamic_cast<PromQLParserListener *>(listener);
   if (parserListener != nullptr)
-    parserListener->exitMatrixSelector(this);
+    parserListener->exitRangeSelector(this);
 }
 
 
-std::any PromQLParser::MatrixSelectorContext::accept(tree::ParseTreeVisitor *visitor) {
+std::any PromQLParser::RangeSelectorContext::accept(tree::ParseTreeVisitor *visitor) {
   if (auto parserVisitor = dynamic_cast<PromQLParserVisitor*>(visitor))
-    return parserVisitor->visitMatrixSelector(this);
+    return parserVisitor->visitRangeSelector(this);
   else
     return visitor->visitChildren(this);
 }
 
-PromQLParser::MatrixSelectorContext* PromQLParser::matrixSelector() {
-  MatrixSelectorContext *_localctx = _tracker.createInstance<MatrixSelectorContext>(_ctx, getState());
-  enterRule(_localctx, 34, PromQLParser::RuleMatrixSelector);
+PromQLParser::RangeSelectorContext* PromQLParser::rangeSelector() {
+  RangeSelectorContext *_localctx = _tracker.createInstance<RangeSelectorContext>(_ctx, getState());
+  enterRule(_localctx, 34, PromQLParser::RuleRangeSelector);
 
 #if __cplusplus > 201703L
   auto onExit = finally([=, this] {
@@ -2042,7 +2042,7 @@ PromQLParser::MatrixSelectorContext* PromQLParser::matrixSelector() {
     setState(202);
     instantSelector();
     setState(203);
-    match(PromQLParser::TIME_RANGE);
+    match(PromQLParser::SELECTOR_RANGE);
    
   }
   catch (RecognitionException &e) {
@@ -2068,8 +2068,8 @@ PromQLParser::OffsetOpContext* PromQLParser::OffsetContext::offsetOp() {
   return getRuleContext<PromQLParser::OffsetOpContext>(0);
 }
 
-PromQLParser::MatrixSelectorContext* PromQLParser::OffsetContext::matrixSelector() {
-  return getRuleContext<PromQLParser::MatrixSelectorContext>(0);
+PromQLParser::RangeSelectorContext* PromQLParser::OffsetContext::rangeSelector() {
+  return getRuleContext<PromQLParser::RangeSelectorContext>(0);
 }
 
 
@@ -2124,7 +2124,7 @@ PromQLParser::OffsetContext* PromQLParser::offset() {
     case 2: {
       enterOuterAlt(_localctx, 2);
       setState(208);
-      matrixSelector();
+      rangeSelector();
       setState(209);
       offsetOp();
       break;

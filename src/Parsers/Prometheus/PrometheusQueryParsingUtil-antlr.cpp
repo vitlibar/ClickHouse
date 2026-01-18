@@ -174,7 +174,7 @@ namespace
             return true;
         }
 
-        bool parseTimeRange(const antlr4::tree::TerminalNode * ctx, ScalarOrInterval & res_range, size_t & res_start_pos, size_t & res_length)
+        bool parseSelectorRange(const antlr4::tree::TerminalNode * ctx, ScalarOrInterval & res_range, size_t & res_start_pos, size_t & res_length)
         {
             std::string_view sv = getText(ctx);
 
@@ -396,22 +396,22 @@ namespace
         }
 
         /// Makes a node for a range selector.
-        Node * makeRangeSelector(antlr4_grammars::PromQLParser::MatrixSelectorContext * ctx)
+        Node * makeRangeSelector(antlr4_grammars::PromQLParser::RangeSelectorContext * ctx)
         {
             auto new_node = std::make_unique<RangeSelector>();
             new_node->start_pos = getStartPos(ctx);
             new_node->length = getLength(ctx);
             auto * instant_selector_ctx = ctx->instantSelector();
-            auto * time_range_ctx = ctx->TIME_RANGE();
-            if (!instant_selector_ctx || !time_range_ctx)
-                throwInconsistentSchema("MatrixSelector", ctx->getText());
+            auto * selector_range_ctx = ctx->SELECTOR_RANGE();
+            if (!instant_selector_ctx || !selector_range_ctx)
+                throwInconsistentSchema("RangeSelector", ctx->getText());
 
             auto * instant_selector = makeInstantSelector(instant_selector_ctx);
 
             ScalarOrInterval range;
             size_t range_start_pos;
             size_t range_length;
-            if (!instant_selector || !parseTimeRange(time_range_ctx, range, range_start_pos, range_length))
+            if (!instant_selector || !parseSelectorRange(selector_range_ctx, range, range_start_pos, range_length))
             {
                 chassert(error_listener.hasError());
                 return nullptr;
@@ -773,7 +773,7 @@ namespace
             return makeInstantSelector(ctx);
         }
 
-        std::any visitMatrixSelector(antlr4_grammars::PromQLParser::MatrixSelectorContext * ctx) override
+        std::any visitRangeSelector(antlr4_grammars::PromQLParser::RangeSelectorContext * ctx) override
         {
             return makeRangeSelector(ctx);
         }
@@ -783,8 +783,8 @@ namespace
             Node * res_node = nullptr;
             if (auto * instant_selector_ctx = ctx->instantSelector())
                 res_node = makeInstantSelector(instant_selector_ctx);
-            else if (auto * matrix_selector_ctx = ctx->matrixSelector())
-                res_node = makeRangeSelector(matrix_selector_ctx);
+            else if (auto * range_selector_ctx = ctx->rangeSelector())
+                res_node = makeRangeSelector(range_selector_ctx);
             else
                 throwInconsistentSchema("Offset", ctx->getText());
 

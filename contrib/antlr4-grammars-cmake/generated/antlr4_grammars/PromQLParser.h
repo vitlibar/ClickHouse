@@ -19,8 +19,8 @@ public:
     ON = 23, IGNORING = 24, GROUP_LEFT = 25, GROUP_RIGHT = 26, OFFSET = 27, 
     BOOL = 28, AGGREGATION_OPERATOR = 29, FUNCTION = 30, LEFT_BRACE = 31, 
     RIGHT_BRACE = 32, LEFT_PAREN = 33, RIGHT_PAREN = 34, LEFT_BRACKET = 35, 
-    RIGHT_BRACKET = 36, COMMA = 37, AT = 38, TIMESTAMP = 39, DURATION = 40, 
-    OFFSET_VALUE = 41, SUBQUERY_RANGE = 42, TIME_RANGE = 43, METRIC_NAME = 44, 
+    RIGHT_BRACKET = 36, COMMA = 37, AT = 38, DURATION = 39, TIMESTAMP = 40, 
+    OFFSET_VALUE = 41, SUBQUERY_RANGE = 42, SELECTOR_RANGE = 43, METRIC_NAME = 44, 
     LABEL_NAME = 45, WS = 46, SL_COMMENT = 47
   };
 
@@ -29,7 +29,7 @@ public:
     RuleMultOp = 4, RuleAddOp = 5, RuleCompareOp = 6, RuleAndUnlessOp = 7, 
     RuleOrOp = 8, RuleSubqueryOp = 9, RuleOffsetOp = 10, RuleVector = 11, 
     RuleParens = 12, RuleInstantSelector = 13, RuleLabelMatcher = 14, RuleLabelMatcherOperator = 15, 
-    RuleLabelMatcherList = 16, RuleMatrixSelector = 17, RuleOffset = 18, 
+    RuleLabelMatcherList = 16, RuleRangeSelector = 17, RuleOffset = 18, 
     RuleFunction_ = 19, RuleParameter = 20, RuleParameterList = 21, RuleAggregation = 22, 
     RuleBy = 23, RuleWithout = 24, RuleGrouping = 25, RuleOn_ = 26, RuleIgnoring = 27, 
     RuleGroupLeft = 28, RuleGroupRight = 29, RuleLabelName = 30, RuleLabelNameList = 31, 
@@ -70,7 +70,7 @@ public:
   class LabelMatcherContext;
   class LabelMatcherOperatorContext;
   class LabelMatcherListContext;
-  class MatrixSelectorContext;
+  class RangeSelectorContext;
   class OffsetContext;
   class Function_Context;
   class ParameterContext;
@@ -293,7 +293,7 @@ public:
     Function_Context *function_();
     AggregationContext *aggregation();
     InstantSelectorContext *instantSelector();
-    MatrixSelectorContext *matrixSelector();
+    RangeSelectorContext *rangeSelector();
     OffsetContext *offset();
     LiteralContext *literal();
     ParensContext *parens();
@@ -395,12 +395,12 @@ public:
 
   LabelMatcherListContext* labelMatcherList();
 
-  class  MatrixSelectorContext : public antlr4::ParserRuleContext {
+  class  RangeSelectorContext : public antlr4::ParserRuleContext {
   public:
-    MatrixSelectorContext(antlr4::ParserRuleContext *parent, size_t invokingState);
+    RangeSelectorContext(antlr4::ParserRuleContext *parent, size_t invokingState);
     virtual size_t getRuleIndex() const override;
     InstantSelectorContext *instantSelector();
-    antlr4::tree::TerminalNode *TIME_RANGE();
+    antlr4::tree::TerminalNode *SELECTOR_RANGE();
 
     virtual void enterRule(antlr4::tree::ParseTreeListener *listener) override;
     virtual void exitRule(antlr4::tree::ParseTreeListener *listener) override;
@@ -409,7 +409,7 @@ public:
    
   };
 
-  MatrixSelectorContext* matrixSelector();
+  RangeSelectorContext* rangeSelector();
 
   class  OffsetContext : public antlr4::ParserRuleContext {
   public:
@@ -417,7 +417,7 @@ public:
     virtual size_t getRuleIndex() const override;
     InstantSelectorContext *instantSelector();
     OffsetOpContext *offsetOp();
-    MatrixSelectorContext *matrixSelector();
+    RangeSelectorContext *rangeSelector();
 
     virtual void enterRule(antlr4::tree::ParseTreeListener *listener) override;
     virtual void exitRule(antlr4::tree::ParseTreeListener *listener) override;
