@@ -90,8 +90,8 @@ subqueryOp
     ;
 
 offsetOp
-    : AT NUMBER (OFFSET (ADD|SUB)? NUMBER)?
-    | OFFSET (ADD|SUB)? NUMBER (AT NUMBER)?
+    : AT TIMESTAMP (OFFSET OFFSET_VALUE)?
+    | OFFSET OFFSET_VALUE (AT TIMESTAMP)?
     ;
 
 vector
