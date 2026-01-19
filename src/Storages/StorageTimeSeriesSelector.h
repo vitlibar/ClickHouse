@@ -11,13 +11,22 @@ namespace DB
 class StorageTimeSeriesSelector : public IStorage
 {
 public:
-    StorageTimeSeriesSelector(
-        const StorageID & table_id_,
-        const ColumnsDescription & columns_,
-        const StorageID & time_series_storage_id_,
-        const PrometheusQueryTree & instant_selector_,
-        const Field & min_time_,
-        const Field & max_time_);
+    struct Configuration
+    {
+        StorageID time_series_storage_id = StorageID::createEmpty();
+        DataTypePtr id_type;
+        DataTypePtr timestamp_data_type;
+        UInt32 timestamp_scale = 0;
+        DataTypePtr value_data_type;
+
+        PrometheusQueryTree selector;
+        DateTime64 min_time;
+        DateTime64 max_time;
+    };
+
+    static Configuration getConfiguration(ASTs & args, const ContextPtr & context);
+
+    StorageTimeSeriesSelector(const StorageID & table_id_, const ColumnsDescription & columns_, const Configuration & config_);
 
     std::string getName() const override { return "TimeSeriesSelector"; }
 
@@ -32,10 +41,7 @@ public:
         size_t num_streams) override;
 
 private:
-    StorageID time_series_storage_id;
-    PrometheusQueryTree instant_selector;
-    Field min_time;
-    Field max_time;
+    Configuration config;
 };
 
 }
