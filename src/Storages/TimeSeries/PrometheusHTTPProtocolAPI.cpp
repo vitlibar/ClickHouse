@@ -7,7 +7,7 @@
 #include <Storages/StorageTimeSeries.h>
 #include <Parsers/Prometheus/PrometheusQueryTree.h>
 #include <Parsers/Prometheus/PrometheusQueryResultType.h>
-#include <Parsers/Prometheus/parseTimeSeriesTimestamp.h>
+#include <Parsers/Prometheus/parseTimeSeriesTypes.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL.h>
 #include <Storages/TimeSeries/TimeSeriesColumnNames.h>
 #include <Interpreters/executeQuery.h>

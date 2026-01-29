@@ -14,14 +14,14 @@
 #include <Parsers/ASTSelectWithUnionQuery.h>
 #include <Parsers/ASTSubquery.h>
 #include <Parsers/ASTTablesInSelectQuery.h>
-#include <Parsers/Prometheus/parseTimeSeriesTimestamp.h>
-#include <Parsers/Prometheus/timeSeriesTimestampToAST.h>
+#include <Parsers/Prometheus/parseTimeSeriesTypes.h>
 #include <Parsers/makeASTForLogicalFunction.h>
 #include <Storages/SelectQueryInfo.h>
 #include <Storages/StorageTimeSeries.h>
 #include <Storages/TimeSeries/TimeSeriesColumnNames.h>
 #include <Storages/TimeSeries/TimeSeriesSettings.h>
 #include <Storages/TimeSeries/TimeSeriesTagNames.h>
+#include <Storages/TimeSeries/timeSeriesTypesToAST.h>
 
 
 namespace DB

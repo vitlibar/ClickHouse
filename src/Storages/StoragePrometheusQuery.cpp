@@ -8,7 +8,7 @@
 #include <Interpreters/SelectQueryOptions.h>
 #include <Interpreters/evaluateConstantExpression.h>
 #include <Parsers/ASTIdentifier.h>
-#include <Parsers/Prometheus/parseTimeSeriesTimestamp.h>
+#include <Parsers/Prometheus/parseTimeSeriesTypes.h>
 #include <Storages/SelectQueryInfo.h>
 #include <Storages/StorageTimeSeries.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL.h>
