@@ -1,0 +1,20 @@
+#pragma once
+
+#include <Parsers/IAST_fwd.h>
+#include <base/Decimal.h>
+
+
+namespace DB
+{
+class IDataType;
+using DataTypePtr = std::shared_ptr<const IDataType>;
+
+/// Converts a timestamp to SQL.
+/// The function assumes that `timestamp` uses the same decimal scale as `timestamp_data_type`.
+ASTPtr timeSeriesTimestampToAST(DateTime64 timestamp, const DataTypePtr & timestamp_data_type);
+
+/// Converts a duration to SQL.
+/// The function assumes that `duration` uses the same decimal scale as `timestamp_data_type`.
+ASTPtr timeSeriesDurationToAST(Decimal64 duration, const DataTypePtr & timestamp_data_type);
+
+}

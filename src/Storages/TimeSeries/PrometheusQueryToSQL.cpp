@@ -15,10 +15,10 @@
 #include <Parsers/ASTTablesInSelectQuery.h>
 #include <Parsers/ASTWithElement.h>
 #include <Parsers/Prometheus/PrometheusQueryTree.h>
-#include <Parsers/Prometheus/parseTimeSeriesTypes.h>
+#include <Parsers/Prometheus/parseTimeSeriesTimestamp.h>
+#include <Parsers/Prometheus/timeSeriesTimestampToAST.h>
 #include <Storages/ColumnsDescription.h>
 #include <Storages/TimeSeries/TimeSeriesColumnNames.h>
-#include <Storages/TimeSeries/timeSeriesTypesToAST.h>
 
 
 namespace DB

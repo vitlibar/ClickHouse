@@ -1,4 +1,4 @@
-#include <Parsers/Prometheus/parseTimeSeriesTypes.h>
+#include <Parsers/Prometheus/parseTimeSeriesTimestamp.h>
 
 #include <Common/IntervalKind.h>
 #include <Common/quoteString.h>
@@ -215,11 +215,6 @@ namespace
     }
 }
 
-DateTime64 parseTimeSeriesTimestamp(const String & str, UInt32 timestamp_scale)
-{
-    return parseFromString<DateTime64>(str, timestamp_scale);
-}
-
 DateTime64 parseTimeSeriesTimestamp(const Field & field, UInt32 timestamp_scale)
 {
     return getFromField<DateTime64>(field, nullptr, timestamp_scale);
@@ -228,11 +223,6 @@ DateTime64 parseTimeSeriesTimestamp(const Field & field, UInt32 timestamp_scale)
 DateTime64 parseTimeSeriesTimestamp(const Field & field, const DataTypePtr & field_data_type, UInt32 timestamp_scale)
 {
     return getFromField<DateTime64>(field, field_data_type, timestamp_scale);
-}
-
-Decimal64 parseTimeSeriesDuration(const String & str, UInt32 duration_scale)
-{
-    return parseFromString<Decimal64>(str, duration_scale);
 }
 
 Decimal64 parseTimeSeriesDuration(const Field & field, UInt32 duration_scale)
