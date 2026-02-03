@@ -231,7 +231,8 @@ public:
     PrometheusQueryTree & operator=(PrometheusQueryTree && src) noexcept;
 
     /// Constructs a PrometheusQueryTree from a prepared list of nodes.
-    PrometheusQueryTree(std::vector<std::unique_ptr<Node>> node_list_, const Node * root_, UInt32 timestamp_scale_);
+    PrometheusQueryTree(std::vector<std::unique_ptr<Node>> node_list_, const Node * root_, UInt32 timestamp_scale_ = 3);
+    explicit PrometheusQueryTree(std::unique_ptr<Node> single_node_, UInt32 timestamp_scale_ = 3);
 
     /// Parses a promql query.
     explicit PrometheusQueryTree(std::string_view promql_query_, UInt32 timestamp_scale_ = 3) { parse(promql_query_, timestamp_scale_); }

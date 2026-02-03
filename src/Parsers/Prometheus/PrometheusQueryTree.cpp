@@ -111,6 +111,13 @@ PrometheusQueryTree::PrometheusQueryTree(std::vector<std::unique_ptr<Node>> node
 {
 }
 
+PrometheusQueryTree::PrometheusQueryTree(std::unique_ptr<Node> single_node_, UInt32 timestamp_scale_)
+    : timestamp_scale(timestamp_scale_)
+{
+    node_list.emplace_back(std::move(single_node_));
+    root = node_list.back().get();
+}
+
 PrometheusQueryTree & PrometheusQueryTree::operator=(PrometheusQueryTree && src) noexcept
 {
     node_list = std::exchange(src.node_list, {});
