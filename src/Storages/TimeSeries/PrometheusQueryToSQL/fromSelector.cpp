@@ -35,16 +35,15 @@ namespace
         builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Timestamp));
         builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Value));
 
-        TimestampType min_time = node_range.start_time - node_range.window + 1;
-        TimestampType max_time = node_range.end_time;
-
         builder.from_table_function = makeASTFunction(
-            "timeSeriesSelector",
+            "timeSeriesSelectorToGrid",
             make_intrusive<ASTLiteral>(context.time_series_storage_id.getDatabaseName()),
             make_intrusive<ASTLiteral>(context.time_series_storage_id.getTableName()),
             make_intrusive<ASTLiteral>(String{instant_selector_text}),
-            timeSeriesTimestampToAST(min_time, context.timestamp_data_type),
-            timeSeriesTimestampToAST(max_time, context.timestamp_data_type));
+            timeSeriesTimestampToAST(node_range.start_time, context.timestamp_data_type),
+            timeSeriesTimestampToAST(node_range.end_time, context.timestamp_data_type),
+            timeSeriesDurationToAST(node_range.step, context.timestamp_data_type),
+            timeSeriesDurationToAST(node_range.window, context.timestamp_data_type));
 
         res.select_query = builder.getSelectQuery();
         return res;

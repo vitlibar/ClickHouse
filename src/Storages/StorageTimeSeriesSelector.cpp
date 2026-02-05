@@ -22,6 +22,7 @@
 #include <Storages/TimeSeries/TimeSeriesSettings.h>
 #include <Storages/TimeSeries/TimeSeriesTagNames.h>
 #include <Storages/TimeSeries/timeSeriesTypesToAST.h>
+#include <TableFunctions/TableFunctionTimeSeriesSelector.h>
 
 
 namespace DB
@@ -40,16 +41,18 @@ namespace TimeSeriesSetting
     extern const TimeSeriesSettingsBool filter_by_min_time_and_max_time;
 }
 
-StorageTimeSeriesSelector::Configuration StorageTimeSeriesSelector::getConfiguration(ASTs & args, const ContextPtr & context)
+StorageTimeSeriesSelector::Configuration StorageTimeSeriesSelector::getConfiguration(ASTs & args, const ContextPtr & context, bool to_grid)
 {
-    std::string_view function_name = "timeSeriesSelector";
+    std::string_view function_name = to_grid ? TableFunctionTimeSeriesSelector</* to_grid = */ true>::name
+                                             : TableFunctionTimeSeriesSelector</* to_grid = */ false>::name;
 
-    size_t min_num_args = 4;
-    size_t max_num_args = 5;
+    size_t min_num_args = 4 + to_grid * 2;
+    size_t max_num_args = 5 + to_grid * 2;
 
     if ((args.size() < min_num_args) || (args.size() > max_num_args))
     {
-        std::string_view expected_args = "[database, ] time_series_table, selector, min_time, max_time";
+        std::string_view expected_args = to_grid ? "[database, ] time_series_table, selector, start_time, end_time, step, window"
+                                                 : "[database, ] time_series_table, selector, min_time, max_time";
         throw Exception(ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH,
                         "Table function '{}' requires {}..{} arguments: {}({})",
                         function_name, min_num_args, max_num_args, function_name, expected_args);
@@ -117,13 +120,57 @@ StorageTimeSeriesSelector::Configuration StorageTimeSeriesSelector::getConfigura
 
     PrometheusQueryTree selector{selector_field.safeGet<String>()};
 
-    auto [min_time_field, min_time_type] = evaluateConstantExpression(args[argument_index++], context);
-    auto [max_time_field, max_time_type] = evaluateConstantExpression(args[argument_index++], context);
+    const auto * node = selector.getRoot();
+    if (!node || (node->node_type != PrometheusQueryTree::NodeType::InstantSelector))
+        throw Exception(ErrorCodes::BAD_ARGUMENTS, "{} is not an instant selector", quoteString(selector.getQuery()));
 
-    auto min_time = parseTimeSeriesTimestamp(min_time_field, min_time_type, timestamp_scale);
-    auto max_time = parseTimeSeriesTimestamp(max_time_field, max_time_type, timestamp_scale);
+    DateTime64 start_time;
+    DateTime64 end_time;
+    Decimal64 step;
+    Decimal64 window;
+
+    if (to_grid)
+    {
+        /// timeSeriesSelectorToGrid('mydb', 'my_ts_table', 'instant_selector', start_time, end_time, step, window)
+        auto [start_time_field, start_time_type] = evaluateConstantExpression(args[argument_index++], context);
+        auto [end_time_field, end_time_type] = evaluateConstantExpression(args[argument_index++], context);
+        auto [step_field, step_type] = evaluateConstantExpression(args[argument_index++], context);
+        auto [window_field, window_type] = evaluateConstantExpression(args[argument_index++], context);
+
+        start_time = parseTimeSeriesTimestamp(start_time_field, start_time_type, timestamp_scale);
+        end_time = parseTimeSeriesTimestamp(end_time_field, end_time_type, timestamp_scale);
+        step = parseTimeSeriesDuration(step_field, step_type, timestamp_scale);
+        window = parseTimeSeriesDuration(window_field, window_type, timestamp_scale);
+    }
+    else
+    {
+        /// timeSeriesSelector('mydb', 'my_ts_table', 'instant_selector', min_time, max_time)
+        auto [min_time_field, min_time_type] = evaluateConstantExpression(args[argument_index++], context);
+        auto [max_time_field, max_time_type] = evaluateConstantExpression(args[argument_index++], context);
+
+        auto min_time = parseTimeSeriesTimestamp(min_time_field, min_time_type, timestamp_scale);
+        auto max_time = parseTimeSeriesTimestamp(max_time_field, max_time_type, timestamp_scale);
+
+        start_time = max_time;
+        end_time = max_time;
+        step = 0;
+        window = max_time.value - min_time.value + 1; /// Here "+ 1" is to include the left boundary because the window is left-opened.
+    }
 
     chassert(argument_index == args.size());
+
+    if (start_time > end_time)
+        throw Exception(ErrorCodes::BAD_ARGUMENTS, "Start time ({}) shouldn't be greater than end time ({})",
+                        Field{DecimalField<DateTime64>{start_time, timestamp_scale}},
+                        Field{DecimalField<DateTime64>{end_time, timestamp_scale}});
+
+    if ((start_time != end_time) && (step <= 0))
+        throw Exception(ErrorCodes::BAD_ARGUMENTS, "Step ({}) should be positive",
+                        Field{DecimalField<Decimal64>{step, timestamp_scale}});
+
+    if (window < 0)
+        throw Exception(ErrorCodes::BAD_ARGUMENTS, "Window ({}) should be positive",
+                        Field{DecimalField<Decimal64>{window, timestamp_scale}});
 
     Configuration config;
     config.time_series_storage_id = std::move(time_series_storage_id);
@@ -131,8 +178,10 @@ StorageTimeSeriesSelector::Configuration StorageTimeSeriesSelector::getConfigura
     config.timestamp_data_type = std::move(timestamp_data_type);
     config.scalar_data_type = std::move(scalar_data_type);
     config.selector = std::move(selector);
-    config.min_time = min_time;
-    config.max_time = max_time;
+    config.start_time = start_time;
+    config.end_time = end_time;
+    config.step = step;
+    config.window = window;
     return config;
 }
 
@@ -141,13 +190,10 @@ StorageTimeSeriesSelector::StorageTimeSeriesSelector(
     : IStorage{table_id_}
     , config(config_)
 {
-    const auto * node = config.selector.getRoot();
-    if (!node || (node->node_type != PrometheusQueryTree::NodeType::InstantSelector))
-        throw Exception(ErrorCodes::BAD_ARGUMENTS, "{} is not an instant selector", quoteString(config.selector.toString()));
-
-    if (config.min_time > config.max_time)
-        throw Exception(ErrorCodes::BAD_ARGUMENTS, "Max time {} is less than min time {}",
-                        Field{config.min_time}, Field{config.max_time});
+    chassert(config.start_time <= config.end_time);
+    chassert((config.start_time == config.end_time) || config.step > 0);
+    chassert(config.window >= 0);
+    chassert(config.selector.getRoot() && (config.selector.getRoot()->node_type == PrometheusQueryTree::NodeType::InstantSelector));
 
     StorageInMemoryMetadata storage_metadata;
     storage_metadata.setColumns(columns_);
@@ -302,14 +348,19 @@ namespace
 
     ASTPtr makeWhereFilterForDataTable(
         ASTPtr select_query_from_tags_table,
-        DateTime64 min_time,
-        DateTime64 max_time,
+        DateTime64 start_time,
+        DateTime64 end_time,
+        Decimal64 step,
+        Decimal64 window,
         const DataTypePtr & timestamp_data_type)
     {
         ASTs conditions;
 
         /// id IN (SELECT id FROM (select_id_query))
         conditions.push_back(makeASTFunction("in", make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::ID), select_query_from_tags_table));
+
+        DateTime64 min_time = start_time.value - window.value + 1;
+        DateTime64 max_time = end_time;
 
         /// timestamp >= min_time
         conditions.push_back(makeASTFunction(
@@ -323,13 +374,30 @@ namespace
             make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Timestamp),
             timeSeriesTimestampToAST(max_time, timestamp_data_type)));
 
+        if ((start_time < end_time) && (step > window))
+        {
+            /// (timestamp - min_time) % step < window
+            conditions.push_back(makeASTFunction(
+                "less",
+                makeASTFunction(
+                    "modulo",
+                    makeASTFunction(
+                        "minus",
+                        make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Timestamp),
+                        timeSeriesTimestampToAST(min_time, timestamp_data_type)),
+                    timeSeriesDurationToAST(step, timestamp_data_type)),
+                timeSeriesDurationToAST(window, timestamp_data_type)));
+        }
+
         return makeASTForLogicalAnd(std::move(conditions));
     }
 
     ASTPtr makeSelectQueryFromDataTable(const StorageID & data_table_id,
                                         ASTPtr select_query_from_tags_table,
-                                        DateTime64 min_time,
-                                        DateTime64 max_time,
+                                        DateTime64 start_time,
+                                        DateTime64 end_time,
+                                        Decimal64 step,
+                                        Decimal64 window,
                                         const DataTypePtr & id_data_type,
                                         const DataTypePtr & timestamp_data_type,
                                         const DataTypePtr & scalar_data_type)
@@ -372,7 +440,7 @@ namespace
 
         /// WHERE id IN (SELECT id FROM (select_query_from_tags_table))
         {
-            auto where_filter = makeWhereFilterForDataTable(select_query_from_tags_table, min_time, max_time, timestamp_data_type);
+            auto where_filter = makeWhereFilterForDataTable(select_query_from_tags_table, start_time, end_time, step, window, timestamp_data_type);
             select_query->setExpression(ASTSelectQuery::Expression::WHERE, std::move(where_filter));
         }
 
@@ -428,8 +496,8 @@ void StorageTimeSeriesSelector::read(
     std::optional<DateTime64> max_time_to_filter_ids;
     if (time_series_settings[TimeSeriesSetting::filter_by_min_time_and_max_time])
     {
-        min_time_to_filter_ids = config.min_time;
-        max_time_to_filter_ids = config.max_time;
+        min_time_to_filter_ids = config.start_time.value - config.window.value + 1;
+        max_time_to_filter_ids = config.end_time;
     }
 
     ASTPtr select_query_from_tags_table = makeSelectQueryFromTagsTable(
@@ -438,8 +506,10 @@ void StorageTimeSeriesSelector::read(
     ASTPtr select_query_from_data_table = makeSelectQueryFromDataTable(
         data_table_id,
         select_query_from_tags_table,
-        config.min_time,
-        config.max_time,
+        config.start_time,
+        config.end_time,
+        config.step,
+        config.window,
         config.id_data_type,
         config.timestamp_data_type,
         config.scalar_data_type);
