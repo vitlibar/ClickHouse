@@ -14,7 +14,8 @@ namespace ErrorCodes
 }
 
 
-void TableFunctionTimeSeriesSelector::parseArguments(const ASTPtr & ast_function, ContextPtr context)
+template <bool to_grid>
+void TableFunctionTimeSeriesSelector<to_grid>::parseArguments(const ASTPtr & ast_function, ContextPtr context)
 {
     const auto & args_func = ast_function->as<ASTFunction &>();
 
@@ -22,10 +23,11 @@ void TableFunctionTimeSeriesSelector::parseArguments(const ASTPtr & ast_function
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Table function '{}' must have arguments.", name);
 
     auto & args = args_func.arguments->children;
-    config = StorageTimeSeriesSelector::getConfiguration(args, context);
+    config = StorageTimeSeriesSelector::getConfiguration(args, context, to_grid);
 }
 
-ColumnsDescription TableFunctionTimeSeriesSelector::getActualTableStructure(ContextPtr /* context */, bool /* is_insert_query */) const
+template <bool to_grid>
+ColumnsDescription TableFunctionTimeSeriesSelector<to_grid>::getActualTableStructure(ContextPtr /* context */, bool /* is_insert_query */) const
 {
     return ColumnsDescription({
         {TimeSeriesColumnNames::ID, config.id_data_type},
@@ -34,7 +36,8 @@ ColumnsDescription TableFunctionTimeSeriesSelector::getActualTableStructure(Cont
     });
 }
 
-StoragePtr TableFunctionTimeSeriesSelector::executeImpl(
+template <bool to_grid>
+StoragePtr TableFunctionTimeSeriesSelector<to_grid>::executeImpl(
         const ASTPtr & /* ast_function */,
         ContextPtr context,
         const String & table_name,
@@ -46,5 +49,8 @@ StoragePtr TableFunctionTimeSeriesSelector::executeImpl(
     res->startup();
     return res;
 }
+
+template class TableFunctionTimeSeriesSelector</* to_grid = */ false>;
+template class TableFunctionTimeSeriesSelector</* to_grid = */ true>;
 
 }

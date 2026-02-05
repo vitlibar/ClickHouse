@@ -7,7 +7,7 @@
 namespace DB
 {
 
-/// Represents a storage for table function timeSeriesSelector().
+/// Represents a storage for table function timeSeriesSelector() and timeSeriesSelectorToGrid().
 class StorageTimeSeriesSelector : public IStorage
 {
 public:
@@ -24,11 +24,15 @@ public:
         PrometheusQueryTree selector;
 
         /// The scale of these fields is the same as the scale used in `timestamp_data_type`.
-        DateTime64 min_time;
-        DateTime64 max_time;
+        DateTime64 start_time;
+        DateTime64 end_time;
+        Decimal64 step;
+
+        /// `window` is left-opened and right-closed.
+        Decimal64 window;
     };
 
-    static Configuration getConfiguration(ASTs & args, const ContextPtr & context);
+    static Configuration getConfiguration(ASTs & args, const ContextPtr & context, bool to_grid);
 
     StorageTimeSeriesSelector(const StorageID & table_id_, const ColumnsDescription & columns_, const Configuration & config_);
 
