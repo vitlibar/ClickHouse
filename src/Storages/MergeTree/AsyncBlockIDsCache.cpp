@@ -1,7 +1,10 @@
+#include <Storages/MergeTree/AsyncBlockIDsCache.h>
+#include <Storages/MergeTree/MergeTreeSettings.h>
+#include <Storages/StorageReplicatedMergeTree.h>
 #include <Common/CurrentMetrics.h>
 #include <Common/ProfileEvents.h>
-#include <Storages/MergeTree/AsyncBlockIDsCache.h>
-#include <Storages/StorageReplicatedMergeTree.h>
+#include <Core/BackgroundSchedulePool.h>
+#include <Interpreters/Context.h>
 
 #include <unordered_set>
 
@@ -17,6 +20,12 @@ namespace CurrentMetrics
 
 namespace DB
 {
+
+namespace MergeTreeSetting
+{
+    extern const MergeTreeSettingsMilliseconds async_block_ids_cache_update_wait_ms;
+    extern const MergeTreeSettingsBool use_async_block_ids_cache;
+}
 
 static constexpr int FAILURE_RETRY_MS = 3000;
 
@@ -55,21 +64,27 @@ catch (...)
 }
 
 template <typename TStorage>
-AsyncBlockIDsCache<TStorage>::AsyncBlockIDsCache(TStorage & storage_)
+AsyncBlockIDsCache<TStorage>::AsyncBlockIDsCache(TStorage & storage_, const std::string & dir_name)
     : storage(storage_)
-    , update_wait(storage.getSettings()->async_block_ids_cache_update_wait_ms)
-    , path(storage.getZooKeeperPath() + "/async_blocks")
+    , update_wait(std::chrono::milliseconds((*storage.getSettings())[MergeTreeSetting::async_block_ids_cache_update_wait_ms].totalMilliseconds()))
+    , path(fs::path(storage.getZooKeeperPath()) / dir_name)
     , log_name(storage.getStorageID().getFullTableName() + " (AsyncBlockIDsCache)")
     , log(getLogger(log_name))
 {
-    task = storage.getContext()->getSchedulePool().createTask(log_name, [this]{ update(); });
+    task = storage.getContext()->getSchedulePool().createTask(storage.getStorageID(), log_name, [this]{ update(); });
 }
 
 template <typename TStorage>
 void AsyncBlockIDsCache<TStorage>::start()
 {
-    if (storage.getSettings()->use_async_block_ids_cache)
+    if ((*storage.getSettings())[MergeTreeSetting::use_async_block_ids_cache])
         task->activateAndSchedule();
+}
+
+template <typename TStorage>
+void AsyncBlockIDsCache<TStorage>::stop()
+{
+    task->deactivate();
 }
 
 template <typename TStorage>
@@ -82,11 +97,19 @@ void AsyncBlockIDsCache<TStorage>::triggerCacheUpdate()
         LOG_TRACE(log, "Task is already scheduled, will wait for update for {}ms", update_wait.count());
 }
 
+template <typename TStorage>
+void AsyncBlockIDsCache<TStorage>::truncate()
+{
+    std::lock_guard lock(mu);
+    cache_ptr.reset();
+    version = 0;
+}
+
 /// Caller will keep the version of last call. When the caller calls again, it will wait util gets a newer version.
 template <typename TStorage>
-Strings AsyncBlockIDsCache<TStorage>::detectConflicts(const Strings & paths, UInt64 & last_version)
+std::vector<DeduplicationHash> AsyncBlockIDsCache<TStorage>::detectConflicts(const std::vector<DeduplicationHash> & deduplication_hashes, UInt64 & last_version)
 {
-    if (!storage.getSettings()->use_async_block_ids_cache)
+    if (!(*storage.getSettings())[MergeTreeSetting::use_async_block_ids_cache])
         return {};
 
     CachePtr cur_cache;
@@ -107,12 +130,12 @@ Strings AsyncBlockIDsCache<TStorage>::detectConflicts(const Strings & paths, UIn
     if (cur_cache == nullptr)
         return {};
 
-    Strings conflicts;
-    for (const String & p : paths)
+    std::vector<DeduplicationHash> conflicts;
+    for (const auto & hash : deduplication_hashes)
     {
-        if (cur_cache->contains(p))
+        if (cur_cache->contains(hash.getBlockId()))
         {
-            conflicts.push_back(p);
+            conflicts.push_back(hash);
         }
     }
 

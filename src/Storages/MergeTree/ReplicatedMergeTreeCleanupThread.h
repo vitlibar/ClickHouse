@@ -6,8 +6,7 @@
 #include <Common/randomSeed.h>
 #include <Common/Stopwatch.h>
 #include <Common/ActionBlocker.h>
-#include <Core/BackgroundSchedulePool.h>
-#include <thread>
+#include <Core/BackgroundSchedulePoolTaskHolder.h>
 
 #include <map>
 #include <unordered_map>
@@ -27,11 +26,11 @@ class ReplicatedMergeTreeCleanupThread
 public:
     explicit ReplicatedMergeTreeCleanupThread(StorageReplicatedMergeTree & storage_);
 
-    void start() { task->activateAndSchedule(); }
+    void start();
 
-    void wakeup() { task->schedule(); }
+    void wakeup();
 
-    void stop() { task->deactivate(); }
+    void stop();
 
     void wakeupEarlierIfNeeded();
 
@@ -41,7 +40,7 @@ private:
     StorageReplicatedMergeTree & storage;
     String log_name;
     LoggerPtr log;
-    BackgroundSchedulePool::TaskHolder task;
+    BackgroundSchedulePoolTaskHolder task;
     pcg64 rng{randomSeed()};
 
     UInt64 sleep_ms;
@@ -75,6 +74,7 @@ private:
     /// Remove old mutations that are done from ZooKeeper. This is done by the leader replica. Returns the number of removed mutations
     size_t clearOldMutations();
 
+    NodeCTimeAndVersionCache cached_stats_for_insert_deduplication_hashes;
     NodeCTimeAndVersionCache cached_block_stats_for_sync_inserts;
     NodeCTimeAndVersionCache cached_block_stats_for_async_inserts;
 

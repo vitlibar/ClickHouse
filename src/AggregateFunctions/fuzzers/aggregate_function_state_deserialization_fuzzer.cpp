@@ -12,42 +12,40 @@
 
 #include <Interpreters/Context.h>
 
+#include <AggregateFunctions/IAggregateFunction.h>
 #include <AggregateFunctions/registerAggregateFunctions.h>
 
 #include <base/scope_guard.h>
+
+using namespace DB;
+
+
+ContextMutablePtr context;
+
+extern "C" int LLVMFuzzerInitialize(int *, char ***)
+{
+    if (context)
+        return true;
+
+    static SharedContextHolder shared_context = Context::createShared();
+    context = Context::createGlobal(shared_context.get());
+    context->makeGlobalContext();
+
+    MainThreadStatus::getInstance();
+
+    registerAggregateFunctions();
+
+    return 0;
+}
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size)
 {
     try
     {
-        using namespace DB;
-
-        static SharedContextHolder shared_context;
-        static ContextMutablePtr context;
-
-        auto initialize = [&]() mutable
-        {
-            if (context)
-                return true;
-
-            shared_context = Context::createShared();
-            context = Context::createGlobal(shared_context.get());
-            context->makeGlobalContext();
-            context->setApplicationType(Context::ApplicationType::LOCAL);
-
-            MainThreadStatus::getInstance();
-
-            registerAggregateFunctions();
-            return true;
-        };
-
-        static bool initialized = initialize();
-        (void) initialized;
-
         total_memory_tracker.resetCounters();
-        total_memory_tracker.setHardLimit(1_GiB);
+        total_memory_tracker.setHardLimit(128_MiB);
         CurrentThread::get().memory_tracker.resetCounters();
-        CurrentThread::get().memory_tracker.setHardLimit(1_GiB);
+        CurrentThread::get().memory_tracker.setHardLimit(128_MiB);
 
         /// The input format is as follows:
         /// - the aggregate function name on the first line, possible with parameters, then data types of the arguments,

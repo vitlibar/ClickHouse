@@ -14,6 +14,8 @@ bool ParserTransactionControl::parseImpl(Pos & pos, ASTPtr & node, Expected & ex
 
     if (ParserKeyword(Keyword::BEGIN_TRANSACTION).ignore(pos, expected))
         action = ASTTransactionControl::BEGIN;
+    else if (ParserKeyword(Keyword::START_TRANSACTION).ignore(pos, expected))
+        action = ASTTransactionControl::BEGIN;
     else if (ParserKeyword(Keyword::COMMIT).ignore(pos, expected))
         action = ASTTransactionControl::COMMIT;
     else if (ParserKeyword(Keyword::ROLLBACK).ignore(pos, expected))
@@ -32,7 +34,7 @@ bool ParserTransactionControl::parseImpl(Pos & pos, ASTPtr & node, Expected & ex
     else
         return false;
 
-    auto ast = std::make_shared<ASTTransactionControl>(action);
+    auto ast = make_intrusive<ASTTransactionControl>(action);
     ast->snapshot = snapshot;
     node = ast;
     return true;

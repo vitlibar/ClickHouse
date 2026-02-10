@@ -18,14 +18,16 @@ namespace ErrorCodes
     extern const int SUPPORT_IS_DISABLED;
 }
 
-InterpreterUndropQuery::InterpreterUndropQuery(const ASTPtr & query_ptr_, ContextMutablePtr context_) : WithMutableContext(context_), query_ptr(query_ptr_)
+InterpreterUndropQuery::InterpreterUndropQuery(const ASTPtr & query_ptr_, ContextMutablePtr context_)
+    : WithMutableContext(context_)
+    , query_ptr(query_ptr_)
 {
 }
-
 
 BlockIO InterpreterUndropQuery::execute()
 {
     getContext()->checkAccess(AccessType::UNDROP_TABLE);
+
     auto & undrop = query_ptr->as<ASTUndropQuery &>();
     if (!undrop.cluster.empty() && !maybeRemoveOnCluster(query_ptr, getContext()))
     {
@@ -36,8 +38,7 @@ BlockIO InterpreterUndropQuery::execute()
 
     if (undrop.table)
         return executeToTable(undrop);
-    else
-        throw Exception(ErrorCodes::LOGICAL_ERROR, "Nothing to undrop, both names are empty");
+    throw Exception(ErrorCodes::LOGICAL_ERROR, "Nothing to undrop, both names are empty");
 }
 
 BlockIO InterpreterUndropQuery::executeToTable(ASTUndropQuery & query)
@@ -51,7 +52,7 @@ BlockIO InterpreterUndropQuery::executeToTable(ASTUndropQuery & query)
         query.setDatabase(table_id.database_name);
     }
 
-    auto guard = DatabaseCatalog::instance().getDDLGuard(table_id.database_name, table_id.table_name);
+    auto guard = DatabaseCatalog::instance().getDDLGuard(table_id.database_name, table_id.table_name, nullptr);
 
     auto database = DatabaseCatalog::instance().getDatabase(table_id.database_name);
     if (database->getEngineName() == "Replicated")
@@ -62,7 +63,7 @@ BlockIO InterpreterUndropQuery::executeToTable(ASTUndropQuery & query)
 
     database->checkMetadataFilenameAvailability(table_id.table_name);
 
-    DatabaseCatalog::instance().dequeueDroppedTableCleanup(table_id);
+    DatabaseCatalog::instance().undropTable(table_id);
     return {};
 }
 
