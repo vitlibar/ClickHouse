@@ -134,6 +134,7 @@ public:
             bool overflow_row_,
             size_t max_rows_to_group_by_,
             OverflowMode group_by_overflow_mode_,
+            bool group_by_each_block_no_merge_,
             size_t group_by_two_level_threshold_,
             size_t group_by_two_level_threshold_bytes_,
             size_t max_bytes_before_external_group_by_,
@@ -147,41 +148,6 @@ public:
             bool enable_prefetch_,
             bool only_merge_, // true for projections
             bool optimize_group_by_constant_keys_,
-<<<<<<< HEAD
-            double min_hit_rate_to_use_consecutive_keys_optimization_,
-            const StatsCollectingParams & stats_collecting_params_,
-            bool group_by_each_block_no_merge_)
-            : keys(keys_)
-            , aggregates(aggregates_)
-            , keys_size(keys.size())
-            , aggregates_size(aggregates.size())
-            , overflow_row(overflow_row_)
-            , max_rows_to_group_by(max_rows_to_group_by_)
-            , group_by_overflow_mode(group_by_overflow_mode_)
-            , group_by_each_block_no_merge(group_by_each_block_no_merge_)
-            , group_by_two_level_threshold(group_by_two_level_threshold_)
-            , group_by_two_level_threshold_bytes(group_by_two_level_threshold_bytes_)
-            , max_bytes_before_external_group_by(max_bytes_before_external_group_by_)
-            , empty_result_for_aggregation_by_empty_set(empty_result_for_aggregation_by_empty_set_)
-            , tmp_data_scope(std::move(tmp_data_scope_))
-            , max_threads(max_threads_)
-            , min_free_disk_space(min_free_disk_space_)
-            , compile_aggregate_expressions(compile_aggregate_expressions_)
-            , min_count_to_compile_aggregate_expression(min_count_to_compile_aggregate_expression_)
-            , max_block_size(max_block_size_)
-            , only_merge(only_merge_)
-            , enable_prefetch(enable_prefetch_)
-            , optimize_group_by_constant_keys(optimize_group_by_constant_keys_)
-            , min_hit_rate_to_use_consecutive_keys_optimization(min_hit_rate_to_use_consecutive_keys_optimization_)
-            , stats_collecting_params(stats_collecting_params_)
-        {
-        }
-
-        /// Only parameters that matter during merge.
-        Params(const Names & keys_, const AggregateDescriptions & aggregates_, bool overflow_row_, size_t max_threads_, size_t max_block_size_, double min_hit_rate_to_use_consecutive_keys_optimization_)
-            : Params(
-                keys_, aggregates_, overflow_row_, 0, OverflowMode::THROW, 0, 0, 0, false, nullptr, max_threads_, 0, false, 0, max_block_size_, false, true, false, min_hit_rate_to_use_consecutive_keys_optimization_, {}, false)
-=======
             float min_hit_rate_to_use_consecutive_keys_optimization_,
             const StatsCollectingParams & stats_collecting_params_,
             bool enable_producing_buckets_out_of_order_in_aggregation_,
@@ -198,7 +164,6 @@ public:
             bool serialize_string_with_zero_byte_);
 
         Params cloneWithKeys(const Names & keys_, bool only_merge_ = false)
->>>>>>> origin/master
         {
             Params new_params = *this;
             new_params.keys = keys_;

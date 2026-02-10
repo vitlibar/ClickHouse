@@ -871,7 +871,7 @@ void AggregatingTransform::work()
         consume(std::move(current_chunk));
         read_current_chunk = false;
         if (params->params.group_by_each_block_no_merge) {
-            to_push_chunk = convertToChunk(params->aggregator.convertToBlocks(variants, /* final= */ true, 1).front());
+            to_push_chunk = convertToChunk(params->aggregator.convertToBlocks(variants, /* final= */ true).front());
             variants.invalidate();
             variants.aggregates_pools = { std::make_shared<Arena>() };
             variants.aggregates_pool = variants.aggregates_pools.at(0).get();

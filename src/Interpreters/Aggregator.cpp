@@ -274,6 +274,7 @@ Aggregator::Params::Params(
     bool overflow_row_,
     size_t max_rows_to_group_by_,
     OverflowMode group_by_overflow_mode_,
+    bool group_by_each_block_no_merge_,
     size_t group_by_two_level_threshold_,
     size_t group_by_two_level_threshold_bytes_,
     size_t max_bytes_before_external_group_by_,
@@ -298,6 +299,7 @@ Aggregator::Params::Params(
     , overflow_row(overflow_row_)
     , max_rows_to_group_by(max_rows_to_group_by_)
     , group_by_overflow_mode(group_by_overflow_mode_)
+    , group_by_each_block_no_merge(group_by_each_block_no_merge_)
     , group_by_two_level_threshold(group_by_two_level_threshold_)
     , group_by_two_level_threshold_bytes(group_by_two_level_threshold_bytes_)
     , max_bytes_before_external_group_by(max_bytes_before_external_group_by_)

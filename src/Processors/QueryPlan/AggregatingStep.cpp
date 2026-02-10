@@ -40,6 +40,7 @@ namespace QueryPlanSerializationSetting
     extern const QueryPlanSerializationSettingsBool empty_result_for_aggregation_by_empty_set;
     extern const QueryPlanSerializationSettingsBool enable_software_prefetch_in_aggregation;
     extern const QueryPlanSerializationSettingsOverflowModeGroupBy group_by_overflow_mode;
+    extern const QueryPlanSerializationSettingsBool group_by_each_block_no_merge;
     extern const QueryPlanSerializationSettingsUInt64 group_by_two_level_threshold_bytes;
     extern const QueryPlanSerializationSettingsUInt64 group_by_two_level_threshold;
     extern const QueryPlanSerializationSettingsUInt64 max_block_size;
@@ -735,6 +736,7 @@ void AggregatingStep::serializeSettings(QueryPlanSerializationSettings & setting
 
     settings[QueryPlanSerializationSetting::max_rows_to_group_by] = params.max_rows_to_group_by;
     settings[QueryPlanSerializationSetting::group_by_overflow_mode] = params.group_by_overflow_mode;
+    settings[QueryPlanSerializationSetting::group_by_each_block_no_merge] = params.group_by_each_block_no_merge;
 
     settings[QueryPlanSerializationSetting::group_by_two_level_threshold] = params.group_by_two_level_threshold;
     settings[QueryPlanSerializationSetting::group_by_two_level_threshold_bytes] = params.group_by_two_level_threshold_bytes;
@@ -879,6 +881,7 @@ std::unique_ptr<IQueryPlanStep> AggregatingStep::deserialize(Deserialization & c
         overflow_row,
         ctx.settings[QueryPlanSerializationSetting::max_rows_to_group_by],
         ctx.settings[QueryPlanSerializationSetting::group_by_overflow_mode],
+        ctx.settings[QueryPlanSerializationSetting::group_by_each_block_no_merge],
         ctx.settings[QueryPlanSerializationSetting::group_by_two_level_threshold],
         ctx.settings[QueryPlanSerializationSetting::group_by_two_level_threshold_bytes],
         ctx.settings[QueryPlanSerializationSetting::max_bytes_before_external_group_by],
