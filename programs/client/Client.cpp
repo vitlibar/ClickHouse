@@ -1358,7 +1358,10 @@ int mainEntryClickHouseClient(int argc, char ** argv)
         DB::Client client;
         // Initialize command line options
         client.init(argc, argv);
-        return client.run();
+        auto code = client.run();
+        if (code == 0)
+            return 0;
+        return static_cast<UInt8>(code) ? code : 1;
     }
     catch (DB::Exception & e)
     {
