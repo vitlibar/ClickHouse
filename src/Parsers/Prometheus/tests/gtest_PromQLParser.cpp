@@ -1150,4 +1150,29 @@ PrometheusQueryTree(RANGE_VECTOR):
                 __name__ EQ 'http_requests_total'
 )");
 
+    EXPECT_EQ(parse("(2 ^ vector(3))[5m:1m]"), R"(
+(2 ^ vector(3))[300:60]
+
+PrometheusQueryTree(RANGE_VECTOR):
+    Subquery:
+        range: 300
+        step: 60
+        BinaryOperator(^)
+            Scalar(2)
+            Function(vector):
+                Scalar(3)
+)");
+
+    /// Subquery has higher precedence than power '^'
+    EXPECT_EQ(parse("2 ^ vector(3)[5m:1m]"), R"(
+2 ^ vector(3)[300:60]
+
+PrometheusQueryTree(INSTANT_VECTOR):
+    BinaryOperator(^)
+        Scalar(2)
+        Subquery:
+            range: 300
+            step: 60
+)");
+
 }
