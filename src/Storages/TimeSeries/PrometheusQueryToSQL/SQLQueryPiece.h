@@ -12,10 +12,6 @@ struct ConverterContext;
 /// Represents how data is stored in a SQLQueryPiece.
 enum class StoreMethod
 {
-    /// No data.
-    /// Can be used with types ResultType::INSTANT_VECTOR, ResultType::RANGE_VECTOR.
-    EMPTY,
-
     /// A const scalar value stored in `SQLQueryPiece::scalar_value`.
     /// CONST_SCALAR is produced by a float literal in a prometheus query.
     /// Can be used with types ResultType::SCALAR, ResultType::INSTANT_VECTOR, ResultType::RANGE_VECTOR.
@@ -55,8 +51,8 @@ struct SQLQueryPiece
         : node(node_), type(type_), store_method(store_method_) {}
 
     const Node * node = nullptr;
-    ResultType type = ResultType::RANGE_VECTOR;
-    StoreMethod store_method = StoreMethod::EMPTY;
+    ResultType type = ResultType::SCALAR;
+    StoreMethod store_method = StoreMethod::CONST_SCALAR;
 
     /// Operators and functions drop the metric name, i.e. the tag named '__name__.
     bool metric_name_dropped = false;

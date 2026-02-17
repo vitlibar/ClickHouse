@@ -129,12 +129,6 @@ SQLQueryPiece applyFunctionOverRange(
     auto end_time = node_range.end_time;
     auto step = node_range.step;
 
-    if (start_time > end_time)
-    {
-        /// Evaluation range is empty.
-        return SQLQueryPiece{node, ResultType::INSTANT_VECTOR, StoreMethod::EMPTY};
-    }
-
     auto argument = std::move(arguments[0]);
 
     SQLQueryPiece res = argument;
@@ -143,11 +137,6 @@ SQLQueryPiece applyFunctionOverRange(
 
     switch (argument.store_method)
     {
-        case StoreMethod::EMPTY:
-        {
-            return res;
-        }
-
         case StoreMethod::CONST_SCALAR:
         {
             /// SELECT <aggregate_function>(timeSeriesRange(<start_time>, <end_time>, <step>),

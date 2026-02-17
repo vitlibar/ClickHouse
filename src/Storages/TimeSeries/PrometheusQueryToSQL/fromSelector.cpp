@@ -19,11 +19,6 @@ namespace
                                     const Node * node,
                                     ConverterContext & context)
     {
-        auto node_range = context.node_range_getter.get(node);
-
-        if (node_range.start_time > node_range.end_time)
-            return SQLQueryPiece{node, ResultType::RANGE_VECTOR, StoreMethod::EMPTY};
-
         SQLQueryPiece res{node, ResultType::RANGE_VECTOR, StoreMethod::RAW_DATA};
 
         /// SELECT timeSeriesIdToGroup(id) AS group, timestamp, value
@@ -36,6 +31,7 @@ namespace
         builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Timestamp));
         builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Value));
 
+        auto node_range = context.node_range_getter.get(node);
         TimestampType min_time = node_range.start_time - node_range.window + 1;
         TimestampType max_time = node_range.end_time;
 

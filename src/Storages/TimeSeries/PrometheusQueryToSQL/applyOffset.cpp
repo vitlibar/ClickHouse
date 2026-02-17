@@ -33,11 +33,6 @@ namespace
 
         switch (expression.store_method)
         {
-            case StoreMethod::EMPTY:
-            {
-                return std::move(expression);
-            }
-
             case StoreMethod::CONST_SCALAR:
             case StoreMethod::CONST_STRING:
             case StoreMethod::SCALAR_GRID:
@@ -113,18 +108,10 @@ namespace
 
         auto node_range = context.node_range_getter.get(offset_node);
 
-        if (node_range.start_time > node_range.end_time)
-            return SQLQueryPiece{offset_node, offset_node->result_type, StoreMethod::EMPTY};
-
         expression.node = offset_node;
 
         switch (expression.store_method)
         {
-            case StoreMethod::EMPTY:
-            {
-                return std::move(expression);
-            }
-
             case StoreMethod::CONST_SCALAR:
             case StoreMethod::CONST_STRING:
             {

@@ -132,7 +132,7 @@ void NodeEvaluationRangeGetter::visitChildren(const Node * node, const NodeEvalu
 
             /// Subqueries use times that are aligned with the step.
             expression_range.start_time = alignTimestampWithStep(range.start_time - subquery_range + step, step);
-            expression_range.end_time = alignTimestampWithStep(range.end_time, step);
+            expression_range.end_time = std::max(expression_range.start_time, alignTimestampWithStep(range.end_time, step));
             expression_range.step = step;
 
             visitNode(expression, expression_range);
