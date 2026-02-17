@@ -84,7 +84,7 @@ namespace
 }
 
 
-bool isFunctionOverRange(const String & function_name)
+bool isFunctionOverRange(std::string_view function_name)
 {
     static const std::unordered_set<std::string_view> all_functions_over_range = {
         "rate",
@@ -117,11 +117,19 @@ bool isFunctionOverRange(const String & function_name)
 
 
 SQLQueryPiece applyFunctionOverRange(
+    const PQT::Function * function_node, std::vector<SQLQueryPiece> && arguments, ConverterContext & context)
+{
+    return applyFunctionOverRange(function_node, function_node->function_name, std::move(arguments), context);
+}
+
+
+SQLQueryPiece applyFunctionOverRange(
     const Node * node,
     const String & function_name,
     std::vector<SQLQueryPiece> && arguments,
     ConverterContext & context)
 {
+    chassert(isFunctionOverRange(function_name));
     checkArgumentTypes(function_name, arguments, context);
 
     auto node_range = context.node_range_getter.get(node);
