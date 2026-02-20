@@ -189,6 +189,11 @@ SQLQueryPiece applyDateTimeFunction(
 
     switch (argument.store_method)
     {
+        case StoreMethod::EMPTY:
+        {
+            return res;
+        }
+
         case StoreMethod::CONST_SCALAR:
         {
             time_t t = static_cast<time_t>(argument.scalar_value);

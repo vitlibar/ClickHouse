@@ -26,17 +26,29 @@ namespace
     {
         chassert(result.type == ResultType::SCALAR);
 
-        if (result.start_time != result.end_time)
+        auto check_start_time_equals_end_time = [&]
         {
-            throw Exception(ErrorCodes::LOGICAL_ERROR,
-                            "Expression {} is expected to produce a scalar result, got multiple values at different times",
-                            getPromQLQuery(result, context));
-        }
+            if (result.start_time != result.end_time)
+            {
+                throw Exception(ErrorCodes::LOGICAL_ERROR,
+                                "Expression {} is expected to produce a scalar result, got multiple values at different times",
+                                getPromQLQuery(result, context));
+            }
+        };
 
         switch (result.store_method)
         {
+            case StoreMethod::EMPTY:
+            {
+                throw Exception(ErrorCodes::LOGICAL_ERROR,
+                                "Expression {} is expected to produce a scalar result, got no values",
+                                getPromQLQuery(result, context));
+            }
+
             case StoreMethod::CONST_SCALAR:
             {
+                check_start_time_equals_end_time();
+
                 /// SELECT <start_time> AS timestamp, <scalar_value> AS value
                 /// [LIMIT ...]
                 SelectQueryBuilder builder;
@@ -52,6 +64,8 @@ namespace
 
             case StoreMethod::SCALAR_GRID:
             {
+                check_start_time_equals_end_time();
+
                 /// SELECT <start_time> AS timestamp, values[1] AS value
                 /// FROM <scalar_grid>
                 /// [LIMIT ...]
@@ -72,7 +86,6 @@ namespace
                 return builder.getSelectQuery();
             }
 
-            case StoreMethod::EMPTY:
             case StoreMethod::CONST_STRING:
             case StoreMethod::VECTOR_GRID:
             case StoreMethod::RAW_DATA:
@@ -91,10 +104,10 @@ namespace
     {
         chassert(result.type == ResultType::STRING);
 
-        if (result.start_time != result.end_time)
+        if (result.store_method == StoreMethod::EMPTY)
         {
             throw Exception(ErrorCodes::LOGICAL_ERROR,
-                            "Expression {} is expected to produce a string, got multiple values at different times",
+                            "Expression {} is expected to produce a string, got no strings",
                             getPromQLQuery(result, context));
         }
 
@@ -103,6 +116,13 @@ namespace
             throw Exception(ErrorCodes::LOGICAL_ERROR,
                             "Expression {} is of type {} and can't use store method {}",
                             getPromQLQuery(result, context), result.type, result.store_method);
+        }
+
+        if (result.start_time != result.end_time)
+        {
+            throw Exception(ErrorCodes::LOGICAL_ERROR,
+                            "Expression {} is expected to produce a scalar result, got multiple strings at different times",
+                            getPromQLQuery(result, context));
         }
 
         /// SELECT <start_time> AS timestamp, 'string_value' AS value
@@ -124,12 +144,15 @@ namespace
     {
         chassert(result.type == ResultType::INSTANT_VECTOR);
 
-        if (result.start_time != result.end_time)
+        auto check_start_time_equals_end_time = [&]
         {
-            throw Exception(ErrorCodes::LOGICAL_ERROR,
-                            "Expression {} is expected to produce an instant vector, got multiple vectors at different times",
-                            getPromQLQuery(result, context));
-        }
+            if (result.start_time != result.end_time)
+            {
+                throw Exception(ErrorCodes::LOGICAL_ERROR,
+                                "Expression {} is expected to produce an instant vector, got multiple vectors at different times",
+                                getPromQLQuery(result, context));
+            }
+        };
 
         switch (result.store_method)
         {
@@ -159,6 +182,8 @@ namespace
 
             case StoreMethod::CONST_SCALAR:
             {
+                check_start_time_equals_end_time();
+
                 /// SELECT materialize([]::Array(Tuple(String, String))) AS tags,
                 ///        <start_time> AS timestamp,
                 ///        <scalar_value> AS value
@@ -182,6 +207,8 @@ namespace
 
             case StoreMethod::SCALAR_GRID:
             {
+                check_start_time_equals_end_time();
+
                 /// SELECT materialize([]::Array(Tuple(String, String))) AS tags,
                 ///        <start_time> AS timestamp,
                 ///        values[1] AS value
@@ -212,6 +239,8 @@ namespace
 
             case StoreMethod::VECTOR_GRID:
             {
+                check_start_time_equals_end_time();
+
                 /// SELECT timeSeriesGroupToTags(group) AS tags,
                 ///        <start_time> AS timestamp,
                 ///        assumeNotNull(values[1]) AS value

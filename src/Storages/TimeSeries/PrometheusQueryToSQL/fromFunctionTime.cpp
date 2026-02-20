@@ -30,6 +30,8 @@ SQLQueryPiece fromFunctionTime(const PQT::Function * function_node, std::vector<
     }
 
     auto node_range = context.node_range_getter.get(function_node);
+    if (node_range.empty())
+        return SQLQueryPiece{function_node, ResultType::SCALAR, StoreMethod::EMPTY};
 
     if (node_range.start_time == node_range.end_time)
     {

@@ -57,6 +57,7 @@ SQLQueryPiece applyFunctionScalar(
 
     switch (argument.store_method)
     {
+        case StoreMethod::EMPTY:
         case StoreMethod::CONST_SCALAR:
         case StoreMethod::SCALAR_GRID:
         {

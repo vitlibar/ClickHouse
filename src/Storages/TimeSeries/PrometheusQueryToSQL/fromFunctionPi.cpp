@@ -26,10 +26,12 @@ SQLQueryPiece fromFunctionPi(const PQT::Function * function_node, std::vector<SQ
     }
 
     /// This implementation is similar to the implementation of function fromLiteral().
+    auto node_range = context.node_range_getter.get(function_node);
+    if (node_range.empty())
+        return SQLQueryPiece{function_node, ResultType::SCALAR, StoreMethod::EMPTY};
+
     SQLQueryPiece res{function_node, ResultType::SCALAR, StoreMethod::CONST_SCALAR};
     res.scalar_value = std::numbers::pi;
-
-    auto node_range = context.node_range_getter.get(function_node);
     res.start_time = node_range.start_time;
     res.end_time = node_range.end_time;
     res.step = node_range.step;

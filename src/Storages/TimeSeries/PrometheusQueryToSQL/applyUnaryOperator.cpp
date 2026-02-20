@@ -56,6 +56,11 @@ SQLQueryPiece applyUnaryOperator(
 
     switch (argument.store_method)
     {
+        case StoreMethod::EMPTY:
+        {
+            return res;
+        }
+
         case StoreMethod::CONST_SCALAR:
         {
             res.scalar_value = -argument.scalar_value;

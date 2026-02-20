@@ -32,10 +32,25 @@ ASTPtr timeSeriesTimestampToAST(DateTime64 timestamp, const DataTypePtr & timest
     if (isDateTime64(timestamp_data_type))
     {
         auto scale = getDecimalScale(*timestamp_data_type);
+        if (scale == 0)
+            return timeSeriesTimestampASTCast(make_intrusive<ASTLiteral>(timestamp.value), timestamp_data_type);
+
         String str = toString(static_cast<Decimal64>(timestamp), scale);
-        /// toDateTime64() doesn't accept an integer as its first argument, so we convert it to a floating-point number.
-        if (str.find_first_of(".eE") == String::npos)
-            str += ".";
+        if (!str.starts_with('-'))
+        {
+            /// Pad the timestamp with zeros because otherwise
+            /// for example toDateTime64('1234.567', 3) can try to parse 1234 as a year.
+            /// If a number starts with 5 or more digits then toDateTime64() understands that it's a timestamp.
+            trimLeft(str, '+');
+
+            size_t num_digits = 0;
+            while (num_digits < str.length() && std::isdigit(str[num_digits]))
+                ++num_digits;
+
+            if (num_digits < 5)
+                str.insert(0, 5 - num_digits, '0');
+        }
+
         return timeSeriesTimestampASTCast(make_intrusive<ASTLiteral>(std::move(str)), timestamp_data_type);
     }
     else if (isDecimal(timestamp_data_type))
