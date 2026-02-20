@@ -189,7 +189,7 @@ namespace
             {
                 /// SELECT timeSeriesGroupToTags(group) AS tags,
                 ///        <start_time> AS timestamp,
-                ///        values[1] AS value
+                ///        assumeNotNull(values[1]) AS value
                 /// FROM <vector_grid>
                 /// WHERE isNotNull(values[1])
                 /// [ORDER BY tags/value]
@@ -204,7 +204,10 @@ namespace
                 builder.select_list.back()->setAlias(ColumnNames::Timestamp);
 
                 builder.select_list.push_back(timeSeriesScalarASTCast(
-                    makeASTFunction("arrayElement", make_intrusive<ASTIdentifier>(ColumnNames::Values), make_intrusive<ASTLiteral>(1u)),
+                    makeASTFunction(
+                        "assumeNotNull",
+                        makeASTFunction(
+                            "arrayElement", make_intrusive<ASTIdentifier>(ColumnNames::Values), make_intrusive<ASTLiteral>(1u))),
                     context.scalar_data_type));
                 builder.select_list.back()->setAlias(ColumnNames::Value);
 
