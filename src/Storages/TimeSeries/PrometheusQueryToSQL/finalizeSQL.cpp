@@ -72,6 +72,7 @@ namespace
                 return builder.getSelectQuery();
             }
 
+            case StoreMethod::EMPTY:
             case StoreMethod::CONST_STRING:
             case StoreMethod::VECTOR_GRID:
             case StoreMethod::RAW_DATA:
@@ -132,6 +133,30 @@ namespace
 
         switch (result.store_method)
         {
+            case StoreMethod::EMPTY:
+            {
+                /// SELECT arrayJoin([]::Array(Array(Tuple(String, String))) AS tags,
+                ///        defaultValueOfTypeName(timestamp_data_type) AS timestamp,
+                ///        defaultValueOfTypeName(scalar_data_type) AS value
+                SelectQueryBuilder builder;
+
+                builder.select_list.push_back(makeASTFunction(
+                    "arrayJoin",
+                    makeASTFunction(
+                        "CAST", make_intrusive<ASTLiteral>(Array{}), make_intrusive<ASTLiteral>("Array(Array(Tuple(String, String)))"))));
+                builder.select_list.back()->setAlias(ColumnNames::Tags);
+
+                builder.select_list.push_back(
+                    makeASTFunction("defaultValueOfTypeName", make_intrusive<ASTLiteral>(context.timestamp_data_type->getName())));
+                builder.select_list.back()->setAlias(ColumnNames::Timestamp);
+
+                builder.select_list.push_back(
+                    makeASTFunction("defaultValueOfTypeName", make_intrusive<ASTLiteral>(context.scalar_data_type->getName())));
+                builder.select_list.back()->setAlias(ColumnNames::Value);
+
+                return builder.getSelectQuery();
+            }
+
             case StoreMethod::CONST_SCALAR:
             {
                 /// SELECT materialize([]::Array(Tuple(String, String))) AS tags,
@@ -243,6 +268,27 @@ namespace
 
         switch (result.store_method)
         {
+            case StoreMethod::EMPTY:
+            {
+                /// SELECT arrayJoin([]::Array(Array(Tuple(String, String)))) AS tags,
+                ///        defaultValueOfTypeName(Array(Tuple(timestamp_data_type, scalar_data_type))) AS time_series
+                SelectQueryBuilder builder;
+
+                builder.select_list.push_back(makeASTFunction(
+                    "arrayJoin",
+                    makeASTFunction(
+                        "CAST", make_intrusive<ASTLiteral>(Array{}), make_intrusive<ASTLiteral>("Array(Array(Tuple(String, String)))"))));
+                builder.select_list.back()->setAlias(ColumnNames::Tags);
+
+                builder.select_list.push_back(makeASTFunction(
+                    "defaultValueOfTypeName",
+                    make_intrusive<ASTLiteral>(
+                        fmt::format("Array(Tuple({}, {}))", context.timestamp_data_type->getName(), context.scalar_data_type->getName()))));
+                builder.select_list.back()->setAlias(ColumnNames::TimeSeries);
+
+                return builder.getSelectQuery();
+            }
+
             case StoreMethod::CONST_SCALAR:
             {
                 /// SELECT materialize([]::Array(Tuple(String, String))) AS tags,

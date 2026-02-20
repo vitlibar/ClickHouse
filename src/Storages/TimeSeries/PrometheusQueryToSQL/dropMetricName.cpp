@@ -23,6 +23,7 @@ SQLQueryPiece dropMetricName(SQLQueryPiece && query_piece, ConverterContext & co
 
     switch (query_piece.store_method)
     {
+        case StoreMethod::EMPTY:
         case StoreMethod::CONST_SCALAR:
         case StoreMethod::CONST_STRING:
         case StoreMethod::SCALAR_GRID:
