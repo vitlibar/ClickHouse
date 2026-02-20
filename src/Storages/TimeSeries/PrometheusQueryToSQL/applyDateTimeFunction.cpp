@@ -44,13 +44,13 @@ namespace
         }
     }
 
-    using MakeEvaluationAST = ASTPtr (*)(ASTPtr t);
-    using EvaluateWithConstArg = int (*)(time_t);
+    using TransformASTFunc = ASTPtr (*)(ASTPtr t);
+    using EvaluateWithConstArgumentFunc = int (*)(time_t);
 
     struct ImplInfo
     {
-        MakeEvaluationAST make_evaluation_ast;
-        EvaluateWithConstArg evaluate_with_const_arg;
+        TransformASTFunc transform_ast;
+        EvaluateWithConstArgumentFunc evaluate_with_const_argument;
     };
 
     const ImplInfo * getImplInfo(std::string_view function_name)
@@ -192,7 +192,7 @@ SQLQueryPiece applyDateTimeFunction(
         case StoreMethod::CONST_SCALAR:
         {
             time_t t = static_cast<time_t>(argument.scalar_value);
-            res.scalar_value = (impl_info->evaluate_with_const_arg)(t);
+            res.scalar_value = (impl_info->evaluate_with_const_argument)(t);
             return res;
         }
 
@@ -216,7 +216,7 @@ SQLQueryPiece applyDateTimeFunction(
                     "lambda",
                     makeASTFunction("tuple", make_intrusive<ASTIdentifier>("x")),
                     timeSeriesScalarASTCast(
-                        (impl_info->make_evaluation_ast)(makeASTFunction("toDateTime", make_intrusive<ASTIdentifier>("x"))),
+                        (impl_info->transform_ast)(makeASTFunction("toDateTime", make_intrusive<ASTIdentifier>("x"))),
                         context.scalar_data_type)),
                 make_intrusive<ASTIdentifier>(ColumnNames::Values)));
 

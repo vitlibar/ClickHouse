@@ -46,12 +46,12 @@ namespace
         }
     }
 
-    using EvaluateWithConstArg = Float64 (*)(Float64);
+    using EvaluateWithConstArgumentFunc = Float64 (*)(Float64);
 
     struct ImplInfo
     {
         std::string_view ch_function_name;
-        EvaluateWithConstArg evaluate_with_const_arg;
+        EvaluateWithConstArgumentFunc evaluate_with_const_argument;
     };
 
     const ImplInfo * getImplInfo(std::string_view function_name)
@@ -228,7 +228,7 @@ SQLQueryPiece applyMathSimpleFunction(
     {
         case StoreMethod::CONST_SCALAR:
         {
-            res.scalar_value = (impl_info->evaluate_with_const_arg)(argument.scalar_value);
+            res.scalar_value = (impl_info->evaluate_with_const_argument)(argument.scalar_value);
             return res;
         }
 
