@@ -164,8 +164,8 @@ namespace
             return nullptr;
 
         return &it->second;
-    };
     }
+}
 
 
 bool isDateTimeFunction(std::string_view function_name)

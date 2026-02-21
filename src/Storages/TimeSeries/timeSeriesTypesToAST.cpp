@@ -38,9 +38,10 @@ ASTPtr timeSeriesTimestampToAST(DateTime64 timestamp, const DataTypePtr & timest
         String str = toString(static_cast<Decimal64>(timestamp), scale);
         if (!str.starts_with('-'))
         {
-            /// Pad the timestamp with zeros because otherwise
-            /// for example toDateTime64('1234.567', 3) can try to parse 1234 as a year.
-            /// If a number starts with 5 or more digits then toDateTime64() understands that it's a timestamp.
+            /// Pad the timestamp with zeros because otherwise for example toDateTime64('2020', 3)
+            /// can try to parse 2020 as a year.
+            /// If a number starts with 5 or more digits (even zeros) then toDateTime64() understands that
+            /// it's a timestamp and not a year.
             trimLeft(str, '+');
 
             size_t num_digits = 0;
