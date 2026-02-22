@@ -82,7 +82,9 @@ def execute_query_in_clickhouse_http_api(query, timestamp, expect_error=False):
 # Executes a prometheus query in ClickHouse via SQL query
 def execute_query_in_clickhouse_sql(query, timestamp, expect_error=False):
     quoted_query = "'" + query.replace("'", "''") + "'"
-    sql_query = f"SELECT * FROM prometheusQuery(prometheus, {quoted_query}, {timestamp})"
+    sql_query = (
+        f"SELECT * FROM prometheusQuery(prometheus, {quoted_query}, {timestamp})"
+    )
     if expect_error:
         return node.query_and_get_error(sql_query)
     return node.query(sql_query)
@@ -556,7 +558,7 @@ def test_literals():
     )
 
     do_query_test(
-        "\"this is a string\"",
+        '"this is a string"',
         timestamp,
         '{"resultType": "string", "result": [250, "this is a string"]}',
         [["1970-01-01 00:04:10.000", "this is a string"]],
@@ -593,6 +595,106 @@ def test_unary_operators():
             [
                 "[]",
                 "[('1970-01-01 00:02:00.000',-1),('1970-01-01 00:02:15.000',-3),('1970-01-01 00:02:30.000',-4),('1970-01-01 00:02:45.000',-4),('1970-01-01 00:03:00.000',-4)]",
+            ]
+        ],
+    )
+
+
+def test_conversion_functions():
+    do_query_test(
+        "vector(1)",
+        180,
+        '{"resultType": "vector", "result": [{"metric": {}, "value": [180, "1"]}]}',
+        [["[]", "1970-01-01 00:03:00.000", 1]],
+    )
+
+    do_query_test(
+        "vector(-1)",
+        180,
+        '{"resultType": "vector", "result": [{"metric": {}, "value": [180, "-1"]}]}',
+        [["[]", "1970-01-01 00:03:00.000", -1]],
+    )
+
+    do_query_test(
+        "-vector(1)",
+        180,
+        '{"resultType": "vector", "result": [{"metric": {}, "value": [180, "-1"]}]}',
+        [["[]", "1970-01-01 00:03:00.000", -1]],
+    )
+
+    # FIXME: Implement function time()
+    # do_query_test(
+    #     "vector(time())",
+    #     180,
+    #     '{"resultType": "vector", "result": [{"metric": {}, "value": [180, "180"]}]}',
+    #     [["[]", "1970-01-01 00:03:00.000", 180]],
+    # )
+
+    do_query_test(
+        "vector(1)[40:10]",
+        180,
+        '{"resultType": "matrix", "result": [{"metric": {}, "values": [[150, "1"], [160, "1"], [170, "1"], [180, "1"]]}]}',
+        [
+            [
+                "[]",
+                "[('1970-01-01 00:02:30.000',1),('1970-01-01 00:02:40.000',1),('1970-01-01 00:02:50.000',1),('1970-01-01 00:03:00.000',1)]",
+            ]
+        ],
+    )
+
+    # FIXME: Implement function time()
+    # do_query_test(
+    #     "vector(time())[40:10]",
+    #     180,
+    #     '{"resultType": "matrix", "result": [{"metric": {}, "values": [[150, "150"], [160, "160"], [170, "170"], [180, "180"]]}]}',
+    #     [
+    #         [
+    #             "[]",
+    #             "[('1970-01-01 00:02:30.000',150),('1970-01-01 00:02:40.000',160),('1970-01-01 00:02:50.000',170),('1970-01-01 00:03:00.000',180)]",
+    #         ]
+    #     ],
+    # )
+
+    do_query_test(
+        "scalar(vector(1))",
+        180,
+        '{"resultType": "scalar", "result": [180, "1"]}',
+        [["1970-01-01 00:03:00.000", 1]],
+    )
+
+    # FIXME: Implement function time()
+    # do_query_test(
+    #     "vector(scalar(vector(time())))[40:10]",
+    #     180,
+    #     '{"resultType": "matrix", "result": [{"metric": {}, "values": [[150, "150"], [160, "160"], [170, "170"], [180, "180"]]}]}',
+    #     [
+    #         [
+    #             "[]",
+    #             "[('1970-01-01 00:02:30.000',150),('1970-01-01 00:02:40.000',160),('1970-01-01 00:02:50.000',170),('1970-01-01 00:03:00.000',180)]",
+    #         ]
+    #     ],
+    # )
+
+    do_query_test(
+        "vector(scalar({http_code='404'}))[80:10]",
+        180,
+        '{"resultType": "matrix", "result": [{"metric": {}, "values": [[110, "1"], [120, "5"], [130, "NaN"], [140, "NaN"], [150, "NaN"], [160, "NaN"], [170, "NaN"], [180, "NaN"]]}]}',
+        [
+            [
+                "[]",
+                "[('1970-01-01 00:01:50.000',1),('1970-01-01 00:02:00.000',5),('1970-01-01 00:02:10.000',nan),('1970-01-01 00:02:20.000',nan),('1970-01-01 00:02:30.000',nan),('1970-01-01 00:02:40.000',nan),('1970-01-01 00:02:50.000',nan),('1970-01-01 00:03:00.000',nan)]",
+            ]
+        ],
+    )
+
+    do_query_test(
+        "vector(scalar(last_over_time({http_code='404'}[10])))[80:10]",
+        180,
+        '{"resultType": "matrix", "result": [{"metric": {}, "values": [[110, "1"], [120, "5"], [130, "0"], [140, "NaN"], [150, "1"], [160, "NaN"], [170, "NaN"], [180, "NaN"]]}]}',
+        [
+            [
+                "[]",
+                "[('1970-01-01 00:01:50.000',1),('1970-01-01 00:02:00.000',5),('1970-01-01 00:02:10.000',0),('1970-01-01 00:02:20.000',nan),('1970-01-01 00:02:30.000',1),('1970-01-01 00:02:40.000',nan),('1970-01-01 00:02:50.000',nan),('1970-01-01 00:03:00.000',nan)]",
             ]
         ],
     )
