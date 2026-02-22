@@ -1,6 +1,7 @@
 #include <Storages/TimeSeries/PrometheusQueryToSQL/finalizeSQL.h>
 
 #include <IO/WriteHelpers.h>
+#include <Parsers/ASTAsterisk.h>
 #include <Parsers/ASTFunction.h>
 #include <Parsers/ASTIdentifier.h>
 #include <Parsers/ASTLiteral.h>
@@ -138,24 +139,16 @@ namespace
         {
             case StoreMethod::EMPTY:
             {
-                /// SELECT arrayJoin([]::Array(Array(Tuple(String, String))) AS tags,
-                ///        defaultValueOfTypeName(timestamp_data_type) AS timestamp,
-                ///        defaultValueOfTypeName(scalar_data_type) AS value
+                /// SELECT * FROM null('tags Array(Tuple(String, String)), timestamp timestamp_data_type, value scalar_data_type')
                 SelectQueryBuilder builder;
+                builder.select_list.push_back(make_intrusive<ASTAsterisk>());
 
-                builder.select_list.push_back(makeASTFunction(
-                    "arrayJoin",
-                    makeASTFunction(
-                        "CAST", make_intrusive<ASTLiteral>(Array{}), make_intrusive<ASTLiteral>("Array(Array(Tuple(String, String)))"))));
-                builder.select_list.back()->setAlias(ColumnNames::Tags);
+                String structure = fmt::format("{} Array(Tuple(String, String)), {} {}, {} {}",
+                    ColumnNames::Tags,
+                    ColumnNames::Timestamp, context.timestamp_data_type->getName(),
+                    ColumnNames::Value, context.scalar_data_type->getName());
 
-                builder.select_list.push_back(
-                    makeASTFunction("defaultValueOfTypeName", make_intrusive<ASTLiteral>(context.timestamp_data_type->getName())));
-                builder.select_list.back()->setAlias(ColumnNames::Timestamp);
-
-                builder.select_list.push_back(
-                    makeASTFunction("defaultValueOfTypeName", make_intrusive<ASTLiteral>(context.scalar_data_type->getName())));
-                builder.select_list.back()->setAlias(ColumnNames::Value);
+                builder.from_table_function = makeASTFunction("null", make_intrusive<ASTLiteral>(std::move(structure)));
 
                 return builder.getSelectQuery();
             }
@@ -281,23 +274,17 @@ namespace
         {
             case StoreMethod::EMPTY:
             {
-                /// SELECT arrayJoin([]::Array(Array(Tuple(String, String)))) AS tags,
-                ///        defaultValueOfTypeName(Array(Tuple(timestamp_data_type, scalar_data_type))) AS time_series
+                /// SELECT * FROM null('tags Array(Tuple(String, String)), time_series Array(Tuple(timestamp_data_type, scalar_data_type))')
                 SelectQueryBuilder builder;
+                builder.select_list.push_back(make_intrusive<ASTAsterisk>());
 
-                builder.select_list.push_back(makeASTFunction(
-                    "arrayJoin",
-                    makeASTFunction(
-                        "CAST", make_intrusive<ASTLiteral>(Array{}), make_intrusive<ASTLiteral>("Array(Array(Tuple(String, String)))"))));
-                builder.select_list.back()->setAlias(ColumnNames::Tags);
+                String structure = fmt::format("{} Array(Tuple(String, String)), {} Array(Tuple({}, {}))",
+                    ColumnNames::Tags,
+                    ColumnNames::TimeSeries, context.timestamp_data_type->getName(), context.scalar_data_type->getName());
 
-                builder.select_list.push_back(makeASTFunction(
-                    "defaultValueOfTypeName",
-                    make_intrusive<ASTLiteral>(
-                        fmt::format("Array(Tuple({}, {}))", context.timestamp_data_type->getName(), context.scalar_data_type->getName()))));
-                builder.select_list.back()->setAlias(ColumnNames::TimeSeries);
+                builder.from_table_function = makeASTFunction("null", make_intrusive<ASTLiteral>(std::move(structure)));
 
-                return builder.getSelectQuery();
+                return builder.getSelectQuery();  
             }
 
             case StoreMethod::CONST_SCALAR:
