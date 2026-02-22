@@ -11,4 +11,11 @@ String getPromQLQuery(const SQLQueryPiece & query_piece, const ConverterContext 
     return query_piece.node->toString(*context.promql_tree);
 }
 
+[[noreturn]] throwWrongStoreMethod(const SQLQueryPiece & query_piece, const ConverterContext & context)
+{
+    throw Exception(ErrorCodes::LOGICAL_ERROR,
+                    "Expression '{}' uses incompatible type {} and store_method {}",
+                    getPromQLQuery(query_piece, context), query_piece.type, query_piece.store_method);
+}
+
 }

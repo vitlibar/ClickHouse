@@ -295,6 +295,8 @@ SQLQueryPiece applyFunctionOverRange(
 
         case StoreMethod::CONST_STRING:
         {
+            throwWrongStoreMethod(argument, context);
+
             /// Can't get in here, the store method CONST_STRING is incompatible
             /// with the allowed argument types (see checkArgumentTypes()).
             throw Exception(ErrorCodes::LOGICAL_ERROR,

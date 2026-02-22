@@ -21,36 +21,37 @@ namespace DB::PrometheusQueryToSQL
 
 namespace
 {
+    [[noreturn]] void throwCannotFinalize(const SQLQueryPiece & result, ConverterContext & context)
+    {
+        throw Exception(ErrorCodes::LOGICAL_ERROR,
+                        "Cannot finalize expression {} with type: {}, store method: {}, start_time: {}, end_time: {}, step: {}",
+                        getPromQLQuery(result, context),
+                        result.type,
+                        result.store_method,
+                        DecimalField<DateTime64>{result.start_time, context.timestamp_scale},
+                        DecimalField<DateTime64>{result.end_time, context.timestamp_scale},
+                        DecimalField<Decimal64>{result.step, context.timestamp_scale});
+    }
+
+
     /// Finalizes a SQL query returning a scalar as two columns "time", "value".
     ASTPtr finalizeScalarAsSQL(SQLQueryPiece && result, ConverterContext & context)
     {
         chassert(result.type == ResultType::SCALAR);
 
-        auto check_start_time_equals_end_time = [&]
-        {
-            if (result.start_time != result.end_time)
-            {
-                throw Exception(ErrorCodes::LOGICAL_ERROR,
-                                "Expression {} is expected to produce a scalar result, got multiple values at different times",
-                                getPromQLQuery(result, context));
-            }
-        };
-
         switch (result.store_method)
         {
             case StoreMethod::EMPTY:
             {
-                throw Exception(ErrorCodes::LOGICAL_ERROR,
-                                "Expression {} is expected to produce a scalar result, got no values",
-                                getPromQLQuery(result, context));
+                throwCannotFinalize(result, context);
             }
 
             case StoreMethod::CONST_SCALAR:
             {
-                check_start_time_equals_end_time();
+                if (result.start_time != result.end_time)
+                    throwCannotFinalize(result, context);
 
                 /// SELECT <start_time> AS timestamp, <scalar_value> AS value
-                /// [LIMIT ...]
                 SelectQueryBuilder builder;
 
                 builder.select_list.push_back(timeSeriesTimestampToAST(result.start_time, context.timestamp_data_type));
@@ -64,11 +65,11 @@ namespace
 
             case StoreMethod::SCALAR_GRID:
             {
-                check_start_time_equals_end_time();
+                if (result.start_time != result.end_time)
+                    throwCannotFinalize(result, context);
 
                 /// SELECT <start_time> AS timestamp, values[1] AS value
                 /// FROM <scalar_grid>
-                /// [LIMIT ...]
                 SelectQueryBuilder builder;
 
                 builder.select_list.push_back(timeSeriesTimestampToAST(result.start_time, context.timestamp_data_type));
@@ -90,9 +91,7 @@ namespace
             case StoreMethod::VECTOR_GRID:
             case StoreMethod::RAW_DATA:
             {
-                throw Exception(ErrorCodes::LOGICAL_ERROR,
-                                "Expression {} is of type {} and can't use store method {}",
-                                getPromQLQuery(result, context), result.type, result.store_method);
+                throwWrongStoreMethod(result, context);
             }
         }
         UNREACHABLE();
@@ -104,29 +103,13 @@ namespace
     {
         chassert(result.type == ResultType::STRING);
 
-        if (result.store_method == StoreMethod::EMPTY)
-        {
-            throw Exception(ErrorCodes::LOGICAL_ERROR,
-                            "Expression {} is expected to produce a string, got no strings",
-                            getPromQLQuery(result, context));
-        }
-
         if (result.store_method != StoreMethod::CONST_STRING)
-        {
-            throw Exception(ErrorCodes::LOGICAL_ERROR,
-                            "Expression {} is of type {} and can't use store method {}",
-                            getPromQLQuery(result, context), result.type, result.store_method);
-        }
+            throwWrongStoreMethod(result, context);
 
         if (result.start_time != result.end_time)
-        {
-            throw Exception(ErrorCodes::LOGICAL_ERROR,
-                            "Expression {} is expected to produce a scalar result, got multiple strings at different times",
-                            getPromQLQuery(result, context));
-        }
+            throwCannotFinalize(result, context);
 
         /// SELECT <start_time> AS timestamp, 'string_value' AS value
-        /// [LIMIT ...]
         SelectQueryBuilder builder;
 
         builder.select_list.push_back(timeSeriesTimestampToAST(result.start_time, context.timestamp_data_type));
@@ -144,50 +127,32 @@ namespace
     {
         chassert(result.type == ResultType::INSTANT_VECTOR);
 
-        auto check_start_time_equals_end_time = [&]
-        {
-            if (result.start_time != result.end_time)
-            {
-                throw Exception(ErrorCodes::LOGICAL_ERROR,
-                                "Expression {} is expected to produce an instant vector, got multiple vectors at different times",
-                                getPromQLQuery(result, context));
-            }
-        };
-
         switch (result.store_method)
         {
             case StoreMethod::EMPTY:
             {
-                /// SELECT arrayJoin([]::Array(Array(Tuple(String, String))) AS tags,
-                ///        defaultValueOfTypeName(timestamp_data_type) AS timestamp,
-                ///        defaultValueOfTypeName(scalar_data_type) AS value
+                /// SELECT * FROM null('tags Array(Tuple(String, String), timestamp timestamp_data_type, value scalar_data_type')
                 SelectQueryBuilder builder;
+                builder.select_list.push_back(make_intrusive<ASTAsterisk>());
 
-                builder.select_list.push_back(makeASTFunction(
-                    "arrayJoin",
-                    makeASTFunction(
-                        "CAST", make_intrusive<ASTLiteral>(Array{}), make_intrusive<ASTLiteral>("Array(Array(Tuple(String, String)))"))));
-                builder.select_list.back()->setAlias(ColumnNames::Tags);
+                String structure = fmt::format("{} Array(Tuple(String, String), {} {}, {} {}",
+                    ColumnNames::Tags,
+                    ColumnNames::Timestamp, context.timestamp_data_type->getName(),
+                    ColumnNames::Value, context.scalar_data_type->getName());
 
-                builder.select_list.push_back(
-                    makeASTFunction("defaultValueOfTypeName", make_intrusive<ASTLiteral>(context.timestamp_data_type->getName())));
-                builder.select_list.back()->setAlias(ColumnNames::Timestamp);
-
-                builder.select_list.push_back(
-                    makeASTFunction("defaultValueOfTypeName", make_intrusive<ASTLiteral>(context.scalar_data_type->getName())));
-                builder.select_list.back()->setAlias(ColumnNames::Value);
+                builder.from_table_function = makeASTFunction("null", make_intrusive<ASTLiteral>(std::move(structure)));
 
                 return builder.getSelectQuery();
             }
 
             case StoreMethod::CONST_SCALAR:
             {
-                check_start_time_equals_end_time();
+                if (result.start_time != result.end_time)
+                    throwCannotFinalize(result, context);
 
                 /// SELECT materialize([]::Array(Tuple(String, String))) AS tags,
                 ///        <start_time> AS timestamp,
                 ///        <scalar_value> AS value
-                /// [LIMIT ...]
                 SelectQueryBuilder builder;
 
                 builder.select_list.push_back(makeASTFunction(
@@ -207,13 +172,13 @@ namespace
 
             case StoreMethod::SCALAR_GRID:
             {
-                check_start_time_equals_end_time();
+                if (result.start_time != result.end_time)
+                    throwCannotFinalize(result, context);
 
                 /// SELECT materialize([]::Array(Tuple(String, String))) AS tags,
                 ///        <start_time> AS timestamp,
                 ///        values[1] AS value
                 /// FROM <scalar_grid>
-                /// [LIMIT ...]
                 SelectQueryBuilder builder;
 
                 builder.select_list.push_back(makeASTFunction(
@@ -239,7 +204,8 @@ namespace
 
             case StoreMethod::VECTOR_GRID:
             {
-                check_start_time_equals_end_time();
+                if (result.start_time != result.end_time)
+                    throwCannotFinalize(result, context);
 
                 /// SELECT timeSeriesGroupToTags(group) AS tags,
                 ///        <start_time> AS timestamp,
@@ -247,7 +213,6 @@ namespace
                 /// FROM <vector_grid>
                 /// WHERE isNotNull(values[1])
                 /// [ORDER BY tags/value]
-                /// [LIMIT ...]
                 SelectQueryBuilder builder;
 
                 builder.select_list.push_back(
@@ -280,9 +245,7 @@ namespace
             case StoreMethod::CONST_STRING:
             case StoreMethod::RAW_DATA:
             {
-                throw Exception(ErrorCodes::LOGICAL_ERROR,
-                                "Expression {} is of type {} and can't use store method {}",
-                                getPromQLQuery(result, context), result.type, result.store_method);
+                throwWrongStoreMethod(result, context);
             }
         }
 
@@ -299,21 +262,15 @@ namespace
         {
             case StoreMethod::EMPTY:
             {
-                /// SELECT arrayJoin([]::Array(Array(Tuple(String, String)))) AS tags,
-                ///        defaultValueOfTypeName(Array(Tuple(timestamp_data_type, scalar_data_type))) AS time_series
+                /// SELECT * FROM null('tags Array(Tuple(String, String), time_series Array(Tuple(timestamp_data_type, scalar_data_type))')
                 SelectQueryBuilder builder;
+                builder.select_list.push_back(make_intrusive<ASTAsterisk>());
 
-                builder.select_list.push_back(makeASTFunction(
-                    "arrayJoin",
-                    makeASTFunction(
-                        "CAST", make_intrusive<ASTLiteral>(Array{}), make_intrusive<ASTLiteral>("Array(Array(Tuple(String, String)))"))));
-                builder.select_list.back()->setAlias(ColumnNames::Tags);
+                String structure = fmt::format("{} Array(Tuple(String, String), {} Array(Tuple({}, {}))",
+                    ColumnNames::Tags,
+                    ColumnNames::TimeSeries, context.timestamp_data_type->getName(), context.scalar_data_type->getName());
 
-                builder.select_list.push_back(makeASTFunction(
-                    "defaultValueOfTypeName",
-                    make_intrusive<ASTLiteral>(
-                        fmt::format("Array(Tuple({}, {}))", context.timestamp_data_type->getName(), context.scalar_data_type->getName()))));
-                builder.select_list.back()->setAlias(ColumnNames::TimeSeries);
+                builder.from_table_function = makeASTFunction("null", make_intrusive<ASTLiteral>(std::move(structure)));
 
                 return builder.getSelectQuery();
             }
@@ -323,7 +280,6 @@ namespace
                 /// SELECT materialize([]::Array(Tuple(String, String))) AS tags,
                 ///        timeSeriesFromGrid(<start_time>, <end_time>, <step>,
                 ///                           arrayResize([], <count_of_time_steps>, <scalar_value>)) AS time_series
-                /// [LIMIT ...]
                 SelectQueryBuilder builder;
 
                 builder.select_list.push_back(makeASTFunction(
@@ -354,7 +310,6 @@ namespace
                 ///        timeSeriesFromGrid(<start_time>, <end_time>, <step>,
                 ///                           CAST(values, Array(scalar_data_type))) AS time_series
                 /// FROM <scalar_grid>
-                /// [LIMIT ...]
                 SelectQueryBuilder builder;
 
                 builder.select_list.push_back(makeASTFunction(
@@ -389,7 +344,6 @@ namespace
                 ///                           CAST(values, Array(Nullable(scalar_data_type)))) AS time_series
                 /// FROM <vector_grid>
                 /// [ORDER BY tags]
-                /// [LIMIT ...]
                 SelectQueryBuilder builder;
 
                 builder.select_list.push_back(
@@ -428,7 +382,6 @@ namespace
                 /// FROM <raw_data>
                 /// GROUP BY group
                 /// [ORDER BY tags]
-                /// [LIMIT ...]
                 SelectQueryBuilder builder;
 
                 builder.select_list.push_back(
@@ -457,9 +410,7 @@ namespace
 
             case StoreMethod::CONST_STRING:
             {
-                throw Exception(ErrorCodes::LOGICAL_ERROR,
-                                "Expression {} is of type {} and can't use store method {}",
-                                getPromQLQuery(result, context), result.type, result.store_method);
+                throwWrongStoreMethod(result, context);
             }
         }
 

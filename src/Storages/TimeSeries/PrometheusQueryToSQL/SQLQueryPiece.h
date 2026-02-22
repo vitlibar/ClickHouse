@@ -85,4 +85,6 @@ struct SQLQueryPiece
 
 String getPromQLQuery(const SQLQueryPiece & query_piece, const ConverterContext & context);
 
+[[noreturn]] throwWrongStoreMethod(const SQLQueryPiece & query_piece, const ConverterContext & context);
+
 }
