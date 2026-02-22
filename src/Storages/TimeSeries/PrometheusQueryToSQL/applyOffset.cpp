@@ -112,8 +112,7 @@ namespace
         }
 
         auto node_range = context.node_range_getter.get(offset_node);
-
-        if (node_range.start_time > node_range.end_time)
+        if (node_range.empty())
             return SQLQueryPiece{offset_node, offset_node->result_type, StoreMethod::EMPTY};
 
         expression.node = offset_node;

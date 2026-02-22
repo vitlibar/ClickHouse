@@ -125,15 +125,12 @@ SQLQueryPiece applyFunctionOverRange(
     checkArgumentTypes(function_name, arguments, context);
 
     auto node_range = context.node_range_getter.get(node);
+    if (node_range.empty())
+        return SQLQueryPiece{node, ResultType::INSTANT_VECTOR, StoreMethod::EMPTY};
+
     auto start_time = node_range.start_time;
     auto end_time = node_range.end_time;
     auto step = node_range.step;
-
-    if (start_time > end_time)
-    {
-        /// Evaluation range is empty.
-        return SQLQueryPiece{node, ResultType::INSTANT_VECTOR, StoreMethod::EMPTY};
-    }
 
     auto argument = std::move(arguments[0]);
 
