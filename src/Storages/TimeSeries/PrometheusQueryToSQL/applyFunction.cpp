@@ -2,9 +2,11 @@
 
 #include <Common/Exception.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/applyDateTimeFunction.h>
+#include <Storages/TimeSeries/PrometheusQueryToSQL/applyMathSimpleFunction.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/applyFunctionOverRange.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/applyFunctionScalar.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/applyFunctionVector.h>
+#include <Storages/TimeSeries/PrometheusQueryToSQL/fromFunctionPi.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/fromFunctionTime.h>
 
 
@@ -32,6 +34,12 @@ SQLQueryPiece applyFunction(const PQT::Function * function_node, std::vector<SQL
 
     if (isDateTimeFunction(function_name))
         return applyDateTimeFunction(function_node, std::move(arguments), context);
+
+    if (isMathSimpleFunction(function_name))
+        return applyMathSimpleFunction(function_node, std::move(arguments), context);
+
+    if (isFunctionPi(function_name))
+        return fromFunctionPi(function_node, std::move(arguments), context);
 
     if (isFunctionOverRange(function_name))
         return applyFunctionOverRange(function_node, std::move(arguments), context);
