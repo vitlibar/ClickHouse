@@ -26,7 +26,7 @@ namespace DB::PrometheusQueryToSQL
 namespace
 {
     /// Checks if the types of the specified arguments are valid for the function.
-    void checkArgumentTypes(const String & function_name, const std::vector<SQLQueryPiece> & arguments, const ConverterContext & context)
+    void checkArgumentTypes(std::string_view function_name, const std::vector<SQLQueryPiece> & arguments, const ConverterContext & context)
     {
         size_t expected_number_of_arguments = 1;
 
@@ -48,80 +48,117 @@ namespace
         }
     }
 
+    struct ImplInfo
+    {
+        std::string_view ch_function_name;
+        bool drop_metric_name = true;
+    };
+
+    /// Returns information about how the specified prometheus function is implemented.
+    /// Returns nullptr if not found.
+    const ImplInfo * getImplInfo(std::string_view function_name)
+    {
+        static const std::unordered_map<std::string_view, ImplInfo> impl_map = {
+            {"rate",
+             {
+                 "timeSeriesRateToGrid",
+                 /* drop_metric_name = */ true,
+             }},
+
+            {"irate",
+             {
+                 "timeSeriesInstantRateToGrid",
+                 /* drop_metric_name = */ true,
+             }},
+
+            {"delta",
+             {
+                 "timeSeriesDeltaToGrid",
+                 /* drop_metric_name = */ true,
+             }},
+
+            {"idelta",
+             {
+                 "timeSeriesInstantDeltaToGrid",
+                 /* drop_metric_name = */ true,
+             }},
+
+            {"last_over_time",
+             {
+                 "timeSeriesLastToGrid",
+                 /* drop_metric_name = */ false,
+             }},
+
+            /// TODO:
+            /// resets
+            /// predict_linear
+            /// deriv
+            /// avg_over_time
+            /// min_over_time
+            /// max_over_time
+            /// sum_over_time
+            /// count_over_time
+            /// quantile_over_time
+            /// stddev_over_time"
+            /// stdvar_over_time
+            /// present_over_time
+            /// absent_over_time
+            /// mad_over_time
+            /// ts_of_min_over_time
+            /// ts_of_max_over_time
+            /// ts_of_last_over_time
+            /// first_over_time
+            /// ts_of_first_over_time
+        };
+
+        auto it = impl_map.find(function_name);
+        if (it == impl_map.end())
+            return nullptr;
+
+        return &it->second;
+    }
+
+
     /// Returns an AST to do the aggregation over time.
     ASTPtr makeExpressionForResultVector(
-        const String & function_name,
+        std::string_view ch_function_name,
         const NodeEvaluationRange & node_range,
         ASTPtr && timestamps_argument,
         ASTPtr && values_argument,
         ConverterContext & context)
     {
-        static const std::unordered_map<String, String> sql_function_names{
-            {"rate", "timeSeriesRateToGrid"},
-            {"irate", "timeSeriesInstantRateToGrid"},
-            {"delta", "timeSeriesDeltaToGrid"},
-            {"idelta", "timeSeriesInstantDeltaToGrid"},
-            {"last_over_time", "timeSeriesLastToGrid"},
-        };
-
-        auto it = sql_function_names.find(function_name);
-        if (it == sql_function_names.end())
-            throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Function {} is not implemented", function_name);
-        const auto & sql_function_name = it->second;
-
         return addParametersToAggregateFunction(
-            makeASTFunction(sql_function_name, std::move(timestamps_argument), std::move(values_argument)),
+            makeASTFunction(ch_function_name, std::move(timestamps_argument), std::move(values_argument)),
             timeSeriesTimestampToAST(node_range.start_time, context.timestamp_data_type),
             timeSeriesTimestampToAST(node_range.end_time, context.timestamp_data_type),
             timeSeriesDurationToAST(node_range.step, context.timestamp_data_type),
             timeSeriesDurationToAST(node_range.window, context.timestamp_data_type));
     }
-
-    bool shouldDropMetricName(const String & promql_function_name)
-    {
-        return promql_function_name != "last_over_time";
-    }
 }
 
 
-bool isFunctionOverRange(const String & function_name)
+bool isFunctionOverRange(std::string_view function_name)
 {
-    static const std::unordered_set<std::string_view> all_functions_over_range = {
-        "rate",
-        "irate",
-        "delta",
-        "idelta",
-        "resets",
-        "predict_linear",
-        "deriv",
-        "avg_over_time",
-        "min_over_time",
-        "max_over_time",
-        "sum_over_time",
-        "count_over_time",
-        "quantile_over_time",
-        "stddev_over_time",
-        "stdvar_over_time",
-        "last_over_time",
-        "present_over_time",
-        "absent_over_time",
-        "mad_over_time",
-        "ts_of_min_over_time",
-        "ts_of_max_over_time",
-        "ts_of_last_over_time",
-        "first_over_time",
-        "ts_of_first_over_time",
-    };
-    return all_functions_over_range.contains(function_name);
+    return getImplInfo(function_name) != nullptr;
+}
+
+
+SQLQueryPiece applyFunctionOverRange(
+    const PQT::Function * function_node, std::vector<SQLQueryPiece> && arguments, ConverterContext & context)
+{
+    return applyFunctionOverRange(function_node, function_node->function_name, std::move(arguments), context);
 }
 
 
 SQLQueryPiece applyFunctionOverRange(
     const Node * node,
-    const String & function_name,
+    std::string_view function_name,
     std::vector<SQLQueryPiece> && arguments,
     ConverterContext & context)
 {
+    const auto * impl_info = getImplInfo(function_name);
+    chassert(impl_info);
+
     checkArgumentTypes(function_name, arguments, context);
 
     auto node_range = context.node_range_getter.get(node);
@@ -152,7 +189,7 @@ SQLQueryPiece applyFunctionOverRange(
             SelectQueryBuilder builder;
 
             auto new_values = makeExpressionForResultVector(
-                function_name,
+                impl_info->ch_function_name,
                 node_range,
                 makeASTFunction(
                     "timeSeriesRange",
@@ -223,7 +260,7 @@ SQLQueryPiece applyFunctionOverRange(
             }
 
             auto new_values = makeExpressionForResultVector(
-                function_name, node_range, std::move(timestamps_argument), std::move(values_argument), context);
+                impl_info->ch_function_name, node_range, std::move(timestamps_argument), std::move(values_argument), context);
 
             new_values->setAlias(ColumnNames::Values);
             builder.select_list.push_back(std::move(new_values));
@@ -240,7 +277,7 @@ SQLQueryPiece applyFunctionOverRange(
             res.end_time = end_time;
             res.step = step;
 
-            if ((res.store_method == StoreMethod::VECTOR_GRID) && shouldDropMetricName(function_name))
+            if (impl_info->drop_metric_name && (res.store_method == StoreMethod::VECTOR_GRID))
                 res = dropMetricName(std::move(res), context);
 
             return res;
@@ -257,7 +294,7 @@ SQLQueryPiece applyFunctionOverRange(
             builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Group));
 
             auto new_values = makeExpressionForResultVector(
-                function_name,
+                impl_info->ch_function_name,
                 node_range,
                 make_intrusive<ASTIdentifier>(ColumnNames::Timestamp),
                 make_intrusive<ASTIdentifier>(ColumnNames::Value),
@@ -279,7 +316,7 @@ SQLQueryPiece applyFunctionOverRange(
             res.end_time = end_time;
             res.step = step;
 
-            if (shouldDropMetricName(function_name))
+            if (impl_info->drop_metric_name)
                 res = dropMetricName(std::move(res), context);
 
             return res;
