@@ -160,6 +160,18 @@ def send_test_data():
     send_data(
         [
             (
+                {"__name__": "timestamps", "job": "test"},
+                {
+                    110: 1764498605,
+                    120: 1765035045,
+                },
+            ),
+        ]
+    )
+
+    send_data(
+        [
+            (
                 {"__name__": "http_errors", "http_code": "401"},
                 {
                     150: 0,
@@ -622,13 +634,12 @@ def test_conversion_functions():
         [["[]", "1970-01-01 00:03:00.000", -1]],
     )
 
-    # FIXME: Implement function time()
-    # do_query_test(
-    #     "vector(time())",
-    #     180,
-    #     '{"resultType": "vector", "result": [{"metric": {}, "value": [180, "180"]}]}',
-    #     [["[]", "1970-01-01 00:03:00.000", 180]],
-    # )
+    do_query_test(
+        "vector(time())",
+        180,
+        '{"resultType": "vector", "result": [{"metric": {}, "value": [180, "180"]}]}',
+        [["[]", "1970-01-01 00:03:00.000", 180]],
+    )
 
     do_query_test(
         "vector(1)[40:10]",
@@ -642,18 +653,17 @@ def test_conversion_functions():
         ],
     )
 
-    # FIXME: Implement function time()
-    # do_query_test(
-    #     "vector(time())[40:10]",
-    #     180,
-    #     '{"resultType": "matrix", "result": [{"metric": {}, "values": [[150, "150"], [160, "160"], [170, "170"], [180, "180"]]}]}',
-    #     [
-    #         [
-    #             "[]",
-    #             "[('1970-01-01 00:02:30.000',150),('1970-01-01 00:02:40.000',160),('1970-01-01 00:02:50.000',170),('1970-01-01 00:03:00.000',180)]",
-    #         ]
-    #     ],
-    # )
+    do_query_test(
+        "vector(time())[40:10]",
+        180,
+        '{"resultType": "matrix", "result": [{"metric": {}, "values": [[150, "150"], [160, "160"], [170, "170"], [180, "180"]]}]}',
+        [
+            [
+                "[]",
+                "[('1970-01-01 00:02:30.000',150),('1970-01-01 00:02:40.000',160),('1970-01-01 00:02:50.000',170),('1970-01-01 00:03:00.000',180)]",
+            ]
+        ],
+    )
 
     do_query_test(
         "scalar(vector(1))",
@@ -662,18 +672,17 @@ def test_conversion_functions():
         [["1970-01-01 00:03:00.000", 1]],
     )
 
-    # FIXME: Implement function time()
-    # do_query_test(
-    #     "vector(scalar(vector(time())))[40:10]",
-    #     180,
-    #     '{"resultType": "matrix", "result": [{"metric": {}, "values": [[150, "150"], [160, "160"], [170, "170"], [180, "180"]]}]}',
-    #     [
-    #         [
-    #             "[]",
-    #             "[('1970-01-01 00:02:30.000',150),('1970-01-01 00:02:40.000',160),('1970-01-01 00:02:50.000',170),('1970-01-01 00:03:00.000',180)]",
-    #         ]
-    #     ],
-    # )
+    do_query_test(
+        "vector(scalar(vector(time())))[40:10]",
+        180,
+        '{"resultType": "matrix", "result": [{"metric": {}, "values": [[150, "150"], [160, "160"], [170, "170"], [180, "180"]]}]}',
+        [
+            [
+                "[]",
+                "[('1970-01-01 00:02:30.000',150),('1970-01-01 00:02:40.000',160),('1970-01-01 00:02:50.000',170),('1970-01-01 00:03:00.000',180)]",
+            ]
+        ],
+    )
 
     do_query_test(
         "vector(scalar({http_code='404'}))[80:10]",
@@ -695,6 +704,156 @@ def test_conversion_functions():
             [
                 "[]",
                 "[('1970-01-01 00:01:50.000',1),('1970-01-01 00:02:00.000',5),('1970-01-01 00:02:10.000',0),('1970-01-01 00:02:20.000',nan),('1970-01-01 00:02:30.000',1),('1970-01-01 00:02:40.000',nan),('1970-01-01 00:02:50.000',nan),('1970-01-01 00:03:00.000',nan)]",
+            ]
+        ],
+    )
+
+
+def test_date_time_functions():
+    do_query_test(
+        "day_of_week(vector(time()))",
+        1770582640,
+        '{"resultType": "vector", "result": [{"metric": {}, "value": [1770582640, "0"]}]}',
+        [["[]", "2026-02-08 20:30:40.000", 0]],
+    )
+
+    do_query_test(
+        "day_of_week(timestamps)[20:10]",
+        120,
+        '{"resultType": "matrix", "result": [{"metric": {"job": "test"}, "values": [[110, "0"], [120, "6"]]}]}',
+        [
+            [
+                "[('job','test')]",
+                "[('1970-01-01 00:01:50.000',0),('1970-01-01 00:02:00.000',6)]",
+            ]
+        ],
+    )
+
+    do_query_test(
+        "day_of_month(vector(time()))",
+        1770582640,
+        '{"resultType": "vector", "result": [{"metric": {}, "value": [1770582640, "8"]}]}',
+        [["[]", "2026-02-08 20:30:40.000", 8]],
+    )
+
+    do_query_test(
+        "day_of_month(timestamps)[20:10]",
+        120,
+        '{"resultType": "matrix", "result": [{"metric": {"job": "test"}, "values": [[110, "30"], [120, "6"]]}]}',
+        [
+            [
+                "[('job','test')]",
+                "[('1970-01-01 00:01:50.000',30),('1970-01-01 00:02:00.000',6)]",
+            ]
+        ],
+    )
+
+    # FIXME: Function 'days_in_month' is not implemented yet.
+    # do_query_test(
+    #     "days_in_month(vector(time()))",
+    #     1770582640,
+    #     '{"resultType": "vector", "result": [{"metric": {}, "value": [1770582640, "28"]}]}',
+    #     [["[]", "2026-02-08 20:30:40.000", 28]]
+    # )
+    #
+    # do_query_test(
+    #     "days_in_month(timestamps)[20:10]",
+    #     120,
+    #     '{"resultType": "matrix", "result": [{"metric": {"job": "test"}, "values": [[110, "30"], [120, "31"]]}]}',
+    #     [["[('job','test')]", "[('1970-01-01 00:01:50.000',30),('1970-01-01 00:02:00.000',31)]"]]
+    # )
+
+    do_query_test(
+        "day_of_year(vector(time()))",
+        1770582640,
+        '{"resultType": "vector", "result": [{"metric": {}, "value": [1770582640, "39"]}]}',
+        [["[]", "2026-02-08 20:30:40.000", 39]],
+    )
+
+    do_query_test(
+        "day_of_year(timestamps)[20:10]",
+        120,
+        '{"resultType": "matrix", "result": [{"metric": {"job": "test"}, "values": [[110, "334"], [120, "340"]]}]}',
+        [
+            [
+                "[('job','test')]",
+                "[('1970-01-01 00:01:50.000',334),('1970-01-01 00:02:00.000',340)]",
+            ]
+        ],
+    )
+
+    do_query_test(
+        "minute(vector(time()))",
+        1770582640,
+        '{"resultType": "vector", "result": [{"metric": {}, "value": [1770582640, "30"]}]}',
+        [["[]", "2026-02-08 20:30:40.000", 30]],
+    )
+
+    do_query_test(
+        "minute(timestamps)[20:10]",
+        120,
+        '{"resultType": "matrix", "result": [{"metric": {"job": "test"}, "values": [[110, "30"], [120, "30"]]}]}',
+        [
+            [
+                "[('job','test')]",
+                "[('1970-01-01 00:01:50.000',30),('1970-01-01 00:02:00.000',30)]",
+            ]
+        ],
+    )
+
+    do_query_test(
+        "hour(vector(time()))",
+        1770582640,
+        '{"resultType": "vector", "result": [{"metric": {}, "value": [1770582640, "20"]}]}',
+        [["[]", "2026-02-08 20:30:40.000", 20]],
+    )
+
+    do_query_test(
+        "hour(timestamps)[20:10]",
+        120,
+        '{"resultType": "matrix", "result": [{"metric": {"job": "test"}, "values": [[110, "10"], [120, "15"]]}]}',
+        [
+            [
+                "[('job','test')]",
+                "[('1970-01-01 00:01:50.000',10),('1970-01-01 00:02:00.000',15)]",
+            ]
+        ],
+    )
+
+    do_query_test(
+        "month(vector(time()))",
+        1770582640,
+        '{"resultType": "vector", "result": [{"metric": {}, "value": [1770582640, "2"]}]}',
+        [["[]", "2026-02-08 20:30:40.000", 2]],
+    )
+
+    do_query_test(
+        "month(timestamps)[20:10]",
+        120,
+        '{"resultType": "matrix", "result": [{"metric": {"job": "test"}, "values": [[110, "11"], [120, "12"]]}]}',
+        [
+            [
+                "[('job','test')]",
+                "[('1970-01-01 00:01:50.000',11),('1970-01-01 00:02:00.000',12)]",
+            ]
+        ],
+    )
+
+    do_query_test(
+        "year(vector(time()))",
+        1770582640,
+        '{"resultType": "vector", "result": [{"metric": {}, "value": [1770582640, "2026"]}]}',
+        [["[]", "2026-02-08 20:30:40.000", 2026]],
+    )
+
+    do_query_test(
+        "year(timestamps)[20:10]",
+        120,
+        '{"resultType": "matrix", "result": [{"metric": {"job": "test"}, "values": [[110, "2025"], [120, "2025"]]}]}',
+        [
+            [
+                "[('job','test')]",
+                "[('1970-01-01 00:01:50.000',2025),('1970-01-01 00:02:00.000',2025)]",
             ]
         ],
     )
