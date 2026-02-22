@@ -83,6 +83,9 @@ struct SQLQueryPiece
     ASTPtr select_query;
 };
 
-String getPromQLQuery(const SQLQueryPiece & query_piece, const ConverterContext & context);
+String getPromQLText(const SQLQueryPiece & query_piece, const ConverterContext & context);
+
+/// Called when the store method can't be handled because it's incompatible with the type of `query_piece`.
+[[noreturn]] void throwUnexpectedStoreMethod(const SQLQueryPiece & query_piece, const ConverterContext & context);
 
 }

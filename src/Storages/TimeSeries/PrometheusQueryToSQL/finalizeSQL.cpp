@@ -1,5 +1,6 @@
 #include <Storages/TimeSeries/PrometheusQueryToSQL/finalizeSQL.h>
 
+#include <IO/WriteHelpers.h>
 #include <Parsers/ASTFunction.h>
 #include <Parsers/ASTIdentifier.h>
 #include <Parsers/ASTLiteral.h>
@@ -21,22 +22,35 @@ namespace DB::PrometheusQueryToSQL
 
 namespace
 {
+    [[noreturn]] void throwCannotFinalize(const SQLQueryPiece & result, const ConverterContext & context)
+    {
+        throw Exception(ErrorCodes::LOGICAL_ERROR,
+                        "Cannot finalize expression {} with type: {}, store method: {}, start_time: {}, end_time: {}, step: {}",
+                        getPromQLText(result, context),
+                        result.type,
+                        result.store_method,
+                        toString(result.start_time, context.timestamp_scale),
+                        toString(result.end_time, context.timestamp_scale),
+                        toString(result.step, context.timestamp_scale));
+    }
+
     /// Finalizes a SQL query returning a scalar as two columns "time", "value".
     ASTPtr finalizeScalarAsSQL(SQLQueryPiece && result, ConverterContext & context)
     {
         chassert(result.type == ResultType::SCALAR);
 
-        if (result.start_time != result.end_time)
-        {
-            throw Exception(ErrorCodes::LOGICAL_ERROR,
-                            "Expression {} is expected to produce a scalar result, got multiple values at different times",
-                            getPromQLQuery(result, context));
-        }
-
         switch (result.store_method)
         {
+            case StoreMethod::EMPTY:
+            {
+                throwCannotFinalize(result, context);
+            }
+
             case StoreMethod::CONST_SCALAR:
             {
+                if (result.start_time != result.end_time)
+                    throwCannotFinalize(result, context);
+
                 /// SELECT <start_time> AS timestamp, <scalar_value> AS value
                 /// [LIMIT ...]
                 SelectQueryBuilder builder;
@@ -52,6 +66,9 @@ namespace
 
             case StoreMethod::SCALAR_GRID:
             {
+                if (result.start_time != result.end_time)
+                    throwCannotFinalize(result, context);
+
                 /// SELECT <start_time> AS timestamp, values[1] AS value
                 /// FROM <scalar_grid>
                 /// [LIMIT ...]
@@ -72,14 +89,12 @@ namespace
                 return builder.getSelectQuery();
             }
 
-            case StoreMethod::EMPTY:
             case StoreMethod::CONST_STRING:
             case StoreMethod::VECTOR_GRID:
             case StoreMethod::RAW_DATA:
             {
-                throw Exception(ErrorCodes::LOGICAL_ERROR,
-                                "Expression {} is of type {} and can't use store method {}",
-                                getPromQLQuery(result, context), result.type, result.store_method);
+                /// Can't get in here because these store methods are incompatible with ResultType::SCALAR.
+                throwUnexpectedStoreMethod(result, context);
             }
         }
         UNREACHABLE();
@@ -91,19 +106,14 @@ namespace
     {
         chassert(result.type == ResultType::STRING);
 
-        if (result.start_time != result.end_time)
-        {
-            throw Exception(ErrorCodes::LOGICAL_ERROR,
-                            "Expression {} is expected to produce a string, got multiple values at different times",
-                            getPromQLQuery(result, context));
-        }
-
         if (result.store_method != StoreMethod::CONST_STRING)
         {
-            throw Exception(ErrorCodes::LOGICAL_ERROR,
-                            "Expression {} is of type {} and can't use store method {}",
-                            getPromQLQuery(result, context), result.type, result.store_method);
+            /// Can't get in here because other store methods are incompatible with ResultType::STRING.
+            throwUnexpectedStoreMethod(result, context);
         }
+
+        if (result.start_time != result.end_time)
+            throwCannotFinalize(result, context);
 
         /// SELECT <start_time> AS timestamp, 'string_value' AS value
         /// [LIMIT ...]
@@ -123,13 +133,6 @@ namespace
     ASTPtr finalizeInstantVectorAsSQL(SQLQueryPiece && result, ConverterContext & context)
     {
         chassert(result.type == ResultType::INSTANT_VECTOR);
-
-        if (result.start_time != result.end_time)
-        {
-            throw Exception(ErrorCodes::LOGICAL_ERROR,
-                            "Expression {} is expected to produce an instant vector, got multiple vectors at different times",
-                            getPromQLQuery(result, context));
-        }
 
         switch (result.store_method)
         {
@@ -159,6 +162,9 @@ namespace
 
             case StoreMethod::CONST_SCALAR:
             {
+                if (result.start_time != result.end_time)
+                    throwCannotFinalize(result, context);
+
                 /// SELECT []::Array(Tuple(String, String)) AS tags,
                 ///        <start_time> AS timestamp,
                 ///        <scalar_value> AS value
@@ -180,6 +186,9 @@ namespace
 
             case StoreMethod::SCALAR_GRID:
             {
+                if (result.start_time != result.end_time)
+                    throwCannotFinalize(result, context);
+
                 /// SELECT []::Array(Tuple(String, String)) AS tags,
                 ///        <start_time> AS timestamp,
                 ///        values[1] AS value
@@ -208,6 +217,9 @@ namespace
 
             case StoreMethod::VECTOR_GRID:
             {
+                if (result.start_time != result.end_time)
+                    throwCannotFinalize(result, context);
+
                 /// SELECT timeSeriesGroupToTags(group) AS tags,
                 ///        <start_time> AS timestamp,
                 ///        values[1] AS value
@@ -244,9 +256,8 @@ namespace
             case StoreMethod::CONST_STRING:
             case StoreMethod::RAW_DATA:
             {
-                throw Exception(ErrorCodes::LOGICAL_ERROR,
-                                "Expression {} is of type {} and can't use store method {}",
-                                getPromQLQuery(result, context), result.type, result.store_method);
+                /// Can't get in here because these store methods are incompatible with ResultType::INSTANT_VECTOR.
+                throwUnexpectedStoreMethod(result, context);
             }
         }
 
@@ -417,9 +428,8 @@ namespace
 
             case StoreMethod::CONST_STRING:
             {
-                throw Exception(ErrorCodes::LOGICAL_ERROR,
-                                "Expression {} is of type {} and can't use store method {}",
-                                getPromQLQuery(result, context), result.type, result.store_method);
+                /// Can't get in here because this store method are incompatible with ResultType::RANGE_VECTOR.
+                throwUnexpectedStoreMethod(result, context);
             }
         }
 

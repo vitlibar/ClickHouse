@@ -108,7 +108,7 @@ namespace
         {
             throw Exception(ErrorCodes::LOGICAL_ERROR,
                             "Expression {} is expected to be calculated at a fixed evaluation time",
-                            getPromQLQuery(expression, context));
+                            getPromQLText(expression, context));
         }
 
         auto node_range = context.node_range_getter.get(offset_node);

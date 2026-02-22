@@ -44,7 +44,7 @@ namespace
             throw Exception(ErrorCodes::CANNOT_EXECUTE_PROMQL_QUERY,
                             "Function {} expects an argument of type {}, but expression {} has type {}",
                             function_name, ResultType::RANGE_VECTOR,
-                            getPromQLQuery(argument, context), argument.type);
+                            getPromQLText(argument, context), argument.type);
         }
     }
 
@@ -287,11 +287,9 @@ SQLQueryPiece applyFunctionOverRange(
 
         case StoreMethod::CONST_STRING:
         {
-            /// Can't get in here, the store method CONST_STRING is incompatible
-            /// with the allowed argument types (see checkArgumentTypes()).
-            throw Exception(ErrorCodes::LOGICAL_ERROR,
-                            "Argument for function '{}' in expression {} has unexpected type {} (store_method: {})",
-                            function_name, getPromQLQuery(argument, context), argument.type, argument.store_method);
+            /// Can't get in here because the store method CONST_STRING is incompatible with the allowed
+            /// argument types (see checkArgumentTypes()).
+            throwUnexpectedStoreMethod(argument, context);
         }
     }
 

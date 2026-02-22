@@ -6,9 +6,17 @@
 namespace DB::PrometheusQueryToSQL
 {
 
-String getPromQLQuery(const SQLQueryPiece & query_piece, const ConverterContext & context)
+String getPromQLText(const SQLQueryPiece & query_piece, const ConverterContext & context)
 {
+    chassert(query_piece.node);
     return query_piece.node->toString(*context.promql_tree);
+}
+
+[[noreturn]] void throwUnexpectedStoreMethod(const SQLQueryPiece & query_piece, const ConverterContext & context)
+{
+    throw Exception(ErrorCodes::LOGICAL_ERROR,
+                    "Expression '{}' (type {}) has unexpected store method {}",
+                    getPromQLText(query_piece, context), query_piece.type, query_piece.store_method);
 }
 
 }

@@ -113,7 +113,7 @@ SQLQueryPiece dropMetricName(SQLQueryPiece && query_piece, ConverterContext & co
             /// dropMetricName() must not be called with StoreMethod::RAW_DATA.
             throw Exception(ErrorCodes::LOGICAL_ERROR,
                             "Cannot drop the metric name from the result of expression {} because of its store method {}",
-                            getPromQLQuery(query_piece, context), query_piece.store_method);
+                            getPromQLText(query_piece, context), query_piece.store_method);
         }
     }
 
