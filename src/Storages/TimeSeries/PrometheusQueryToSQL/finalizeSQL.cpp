@@ -165,14 +165,16 @@ namespace
                 if (result.start_time != result.end_time)
                     throwCannotFinalize(result, context);
 
-                /// SELECT []::Array(Tuple(String, String)) AS tags,
+                /// SELECT materialize([]::Array(Tuple(String, String))) AS tags,
                 ///        <start_time> AS timestamp,
                 ///        <scalar_value> AS value
                 /// [LIMIT ...]
                 SelectQueryBuilder builder;
 
                 builder.select_list.push_back(makeASTFunction(
-                    "CAST", make_intrusive<ASTLiteral>(Array{}), make_intrusive<ASTLiteral>("Array(Tuple(String, String))")));
+                    "materialize",
+                    makeASTFunction(
+                        "CAST", make_intrusive<ASTLiteral>(Array{}), make_intrusive<ASTLiteral>("Array(Tuple(String, String))"))));
                 builder.select_list.back()->setAlias(ColumnNames::Tags);
 
                 builder.select_list.push_back(timeSeriesTimestampToAST(result.start_time, context.timestamp_data_type));
@@ -189,7 +191,7 @@ namespace
                 if (result.start_time != result.end_time)
                     throwCannotFinalize(result, context);
 
-                /// SELECT []::Array(Tuple(String, String)) AS tags,
+                /// SELECT materialize([]::Array(Tuple(String, String))) AS tags,
                 ///        <start_time> AS timestamp,
                 ///        values[1] AS value
                 /// FROM <scalar_grid>
@@ -197,7 +199,9 @@ namespace
                 SelectQueryBuilder builder;
 
                 builder.select_list.push_back(makeASTFunction(
-                    "CAST", make_intrusive<ASTLiteral>(Array{}), make_intrusive<ASTLiteral>("Array(Tuple(String, String))")));
+                    "materialize",
+                    makeASTFunction(
+                        "CAST", make_intrusive<ASTLiteral>(Array{}), make_intrusive<ASTLiteral>("Array(Tuple(String, String))"))));
                 builder.select_list.back()->setAlias(ColumnNames::Tags);
 
                 builder.select_list.push_back(timeSeriesTimestampToAST(result.start_time, context.timestamp_data_type));
@@ -295,14 +299,16 @@ namespace
 
             case StoreMethod::CONST_SCALAR:
             {
-                /// SELECT []::Array(Tuple(String, String)) AS tags,
+                /// SELECT materialize([]::Array(Tuple(String, String))) AS tags,
                 ///        timeSeriesFromGrid(<start_time>, <end_time>, <step>,
                 ///                           arrayResize([], <count_of_time_steps>, <scalar_value>)) AS time_series
                 /// [LIMIT ...]
                 SelectQueryBuilder builder;
 
                 builder.select_list.push_back(makeASTFunction(
-                    "CAST", make_intrusive<ASTLiteral>(Array{}), make_intrusive<ASTLiteral>("Array(Tuple(String, String))")));
+                    "materialize",
+                    makeASTFunction(
+                        "CAST", make_intrusive<ASTLiteral>(Array{}), make_intrusive<ASTLiteral>("Array(Tuple(String, String))"))));
                 builder.select_list.back()->setAlias(ColumnNames::Tags);
 
                 builder.select_list.push_back(makeASTFunction(
@@ -323,7 +329,7 @@ namespace
 
             case StoreMethod::SCALAR_GRID:
             {
-                /// SELECT []::Array(Tuple(String, String)) AS tags,
+                /// SELECT materialize([]::Array(Tuple(String, String))) AS tags,
                 ///        timeSeriesFromGrid(<start_time>, <end_time>, <step>,
                 ///                           CAST(values, Array(scalar_data_type))) AS time_series
                 /// FROM <scalar_grid>
@@ -331,7 +337,9 @@ namespace
                 SelectQueryBuilder builder;
 
                 builder.select_list.push_back(makeASTFunction(
-                    "CAST", make_intrusive<ASTLiteral>(Array{}), make_intrusive<ASTLiteral>("Array(Tuple(String, String))")));
+                    "materialize",
+                    makeASTFunction(
+                        "CAST", make_intrusive<ASTLiteral>(Array{}), make_intrusive<ASTLiteral>("Array(Tuple(String, String))"))));
                 builder.select_list.back()->setAlias(ColumnNames::Tags);
 
                 builder.select_list.push_back(makeASTFunction(
