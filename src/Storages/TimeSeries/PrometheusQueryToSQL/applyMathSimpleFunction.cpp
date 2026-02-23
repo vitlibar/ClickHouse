@@ -236,6 +236,21 @@ SQLQueryPiece applyMathSimpleFunction(
             return res;
         }
 
+        case StoreMethod::SINGLE_SCALAR:
+        {
+            /// SELECT f(value) AS value FROM <subquery>
+            SelectQueryBuilder builder;
+
+            builder.select_list.push_back(makeASTFunction(impl_info->ch_function_name, make_intrusive<ASTIdentifier>(ColumnNames::Value)));
+            builder.select_list.back()->setAlias(ColumnNames::Value);
+
+            context.subqueries.emplace_back(SQLSubquery{context.subqueries.size(), std::move(argument.select_query), SQLSubqueryType::TABLE});
+            builder.from_table = context.subqueries.back().name;
+
+            res.select_query = builder.getSelectQuery();
+            return res;
+        }
+
         case StoreMethod::SCALAR_GRID:
         case StoreMethod::VECTOR_GRID:
         {

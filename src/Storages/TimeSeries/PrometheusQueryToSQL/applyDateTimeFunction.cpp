@@ -150,28 +150,34 @@ SQLQueryPiece applyDateTimeFunction(
         }
 
         case StoreMethod::CONST_SCALAR:
+        case StoreMethod::SINGLE_SCALAR:
         {
-            /// SELECT arrayResize(
-            ///     [], <count_of_time_steps>,
-            ///     f(toDateTime64(<scalar_value>, 0, 'UTC'))::scalar_data_type) AS values
+            /// SELECT f(toDateTime64(value, 0, 'UTC'))::scalar_data_type) AS value
+            /// FROM <subquery>
             SelectQueryBuilder builder;
-            builder.select_list.push_back(makeASTFunction(
-                "arrayResize",
-                make_intrusive<ASTLiteral>(Array{}),
-                make_intrusive<ASTLiteral>(stepsInTimeSeriesRange(res.start_time, res.end_time, res.step)),
-                timeSeriesScalarASTCast(
-                        (impl_info->transform_ast)(makeASTFunction(
-                            "toDateTime64",
-                            timeSeriesScalarToAST(argument.scalar_value, context.scalar_data_type),
-                            make_intrusive<ASTLiteral>(0u),
-                            make_intrusive<ASTLiteral>("UTC"))),
-                        context.scalar_data_type)));
 
-            builder.select_list.back()->setAlias(ColumnNames::Values);
+            ASTPtr current_value = (argument.store_method == StoreMethod::CONST_SCALAR)
+                ? timeSeriesScalarToAST(argument.scalar_value, context.scalar_data_type)
+                : make_intrusive<ASTIdentifier>(ColumnNames::Value);
+
+            ASTPtr new_value = timeSeriesScalarASTCast(
+                (impl_info->transform_ast)(makeASTFunction(
+                    "toDateTime64", std::move(current_value), make_intrusive<ASTLiteral>(0u), make_intrusive<ASTLiteral>("UTC"))),
+                context.scalar_data_type);
+
+            builder.select_list.push_back(std::move(new_value));
+            builder.select_list.back()->setAlias(ColumnNames::Value);
+
+            if (argument.select_query)
+            {
+                context.subqueries.emplace_back(SQLSubquery{context.subqueries.size(), std::move(argument.select_query), SQLSubqueryType::TABLE});
+                builder.from_table = context.subqueries.back().name;
+            }
 
             res.select_query = builder.getSelectQuery();
-            res.store_method = StoreMethod::SCALAR_GRID;
+            res.store_method = StoreMethod::SINGLE_SCALAR;
             res.scalar_value = {};
+
             return res;
         }
 
@@ -186,6 +192,7 @@ SQLQueryPiece applyDateTimeFunction(
             /// SELECT group, arrayMap(x -> f(toDateTime64(x, 0, 'UTC'))::scalar_data_type, values) AS values
             /// FROM <vector_grid>
             SelectQueryBuilder builder;
+
             if (argument.store_method == StoreMethod::VECTOR_GRID)
                 builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Group));
 

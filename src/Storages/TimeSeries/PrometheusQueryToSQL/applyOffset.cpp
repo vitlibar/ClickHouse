@@ -40,6 +40,7 @@ namespace
 
             case StoreMethod::CONST_SCALAR:
             case StoreMethod::CONST_STRING:
+            case StoreMethod::SINGLE_SCALAR:
             case StoreMethod::SCALAR_GRID:
             case StoreMethod::VECTOR_GRID:
             {
@@ -126,6 +127,7 @@ namespace
 
             case StoreMethod::CONST_SCALAR:
             case StoreMethod::CONST_STRING:
+            case StoreMethod::SINGLE_SCALAR:
             {
                 expression.start_time = node_range.start_time;
                 expression.end_time = node_range.end_time;

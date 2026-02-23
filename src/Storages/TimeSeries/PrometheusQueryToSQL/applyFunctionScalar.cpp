@@ -58,9 +58,10 @@ SQLQueryPiece applyFunctionScalar(
     {
         case StoreMethod::EMPTY:
         case StoreMethod::CONST_SCALAR:
+        case StoreMethod::SINGLE_SCALAR:
         case StoreMethod::SCALAR_GRID:
         {
-            /// These store methods are compatible with scalars.
+            /// These store methods are already compatible with scalars, so we do nothing here.
             return res;
         }
 

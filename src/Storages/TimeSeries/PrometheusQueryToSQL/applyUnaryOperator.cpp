@@ -66,6 +66,21 @@ SQLQueryPiece applyUnaryOperator(
             return res;
         }
 
+        case StoreMethod::SINGLE_SCALAR:
+        {
+            /// SELECT -value AS value FROM <subquery>
+            SelectQueryBuilder builder;
+
+            builder.select_list.push_back(makeASTFunction("negate", make_intrusive<ASTIdentifier>(ColumnNames::Value)));
+            builder.select_list.back()->setAlias(ColumnNames::Value);
+
+            context.subqueries.emplace_back(SQLSubquery{context.subqueries.size(), std::move(argument.select_query), SQLSubqueryType::TABLE});
+            builder.from_table = context.subqueries.back().name;
+
+            res.select_query = builder.getSelectQuery();
+            return res;
+        }
+
         case StoreMethod::SCALAR_GRID:
         case StoreMethod::VECTOR_GRID:
         {
