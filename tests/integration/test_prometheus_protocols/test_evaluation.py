@@ -748,20 +748,19 @@ def test_date_time_functions():
         ],
     )
 
-    # FIXME: Function 'days_in_month' is not implemented yet.
-    # do_query_test(
-    #     "days_in_month(vector(time()))",
-    #     1770582640,
-    #     '{"resultType": "vector", "result": [{"metric": {}, "value": [1770582640, "28"]}]}',
-    #     [["[]", "2026-02-08 20:30:40.000", 28]]
-    # )
-    #
-    # do_query_test(
-    #     "days_in_month(timestamps)[20:10]",
-    #     120,
-    #     '{"resultType": "matrix", "result": [{"metric": {"job": "test"}, "values": [[110, "30"], [120, "31"]]}]}',
-    #     [["[('job','test')]", "[('1970-01-01 00:01:50.000',30),('1970-01-01 00:02:00.000',31)]"]]
-    # )
+    do_query_test(
+        "days_in_month(vector(time()))",
+        1770582640,
+        '{"resultType": "vector", "result": [{"metric": {}, "value": [1770582640, "28"]}]}',
+        [["[]", "2026-02-08 20:30:40.000", 28]]
+    )
+
+    do_query_test(
+        "days_in_month(timestamps)[20:10]",
+        120,
+        '{"resultType": "matrix", "result": [{"metric": {"job": "test"}, "values": [[110, "30"], [120, "31"]]}]}',
+        [["[('job','test')]", "[('1970-01-01 00:01:50.000',30),('1970-01-01 00:02:00.000',31)]"]]
+    )
 
     do_query_test(
         "day_of_year(vector(time()))",

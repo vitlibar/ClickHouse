@@ -3,6 +3,7 @@
 #include <Parsers/ASTFunction.h>
 #include <Parsers/ASTIdentifier.h>
 #include <Parsers/ASTLiteral.h>
+#include <Parsers/Prometheus/stepsInTimeSeriesRange.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/ConverterContext.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/SelectQueryBuilder.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/dropMetricName.h>
@@ -44,12 +45,10 @@ namespace
     }
 
     using TransformASTFunc = ASTPtr (*)(ASTPtr t);
-    using EvaluateWithConstArgumentFunc = int (*)(time_t);
 
     struct ImplInfo
     {
         TransformASTFunc transform_ast;
-        EvaluateWithConstArgumentFunc evaluate_with_const_argument;
     };
 
     const ImplInfo * getImplInfo(std::string_view function_name)
@@ -60,101 +59,58 @@ namespace
                  /// Returned values should be from 0 to 6, where 0 means Sunday.
                  [](ASTPtr t) -> ASTPtr
                  { return makeASTFunction("toDayOfWeek", std::move(t), /* mode = */ make_intrusive<ASTLiteral>(2u)); },
-                 [](time_t t) -> int
-                 {
-                     struct tm utc_tm;
-                     gmtime_r(&t, &utc_tm);
-                     return utc_tm.tm_wday;
-                 },
              }},
 
             {"day_of_month",
              {
                  /// Returned values should be from 1 to 31.
                  [](ASTPtr t) -> ASTPtr { return makeASTFunction("toDayOfMonth", std::move(t)); },
-                 [](time_t t) -> int
-                 {
-                     struct tm utc_tm;
-                     gmtime_r(&t, &utc_tm);
-                     return utc_tm.tm_mday;
-                 },
              }},
 
-#if 0
-            /// FIXME: Implement calculating the number of days in month.
             {"days_in_month",
              {
                  /// Returned values should be from 28 to 31.
                  [](ASTPtr t) -> ASTPtr
                  {
-                     /// There is no function toDaysInMonth() in ClickHouse, we could use here
-                     /// dateDiff('day', toStartOfMonth(x), toLastDayOfMonth(x)) + 1
-                    return makeASTFunction("toDaysInMonth", std::move(t));
-                 },
-                 [](time_t t) -> int
-                 {
-                     ...
+                     /// TODO: Consider adding function toDaysInMonth() to ClickHouse.
+                     return makeASTFunction(
+                         "plus",
+                         makeASTFunction(
+                             "dateDiff",
+                             make_intrusive<ASTLiteral>("days"),
+                             makeASTFunction("toStartOfMonth", t),
+                             makeASTFunction("toLastDayOfMonth", t->clone())),
+                         make_intrusive<ASTLiteral>(1u));
                  },
              }},
-#endif
 
             {"day_of_year",
              {
                  /// Returned values should be from 1 to 365 for non-leap years, and 1 to 366 in leap years.
                  [](ASTPtr t) -> ASTPtr { return makeASTFunction("toDayOfYear", std::move(t)); },
-                 [](time_t t) -> int
-                 {
-                     struct tm utc_tm;
-                     gmtime_r(&t, &utc_tm);
-                     return utc_tm.tm_yday + 1;
-                 },
              }},
 
             {"minute",
              {
                  /// Returned values should be from 0 to 59.
                  [](ASTPtr t) -> ASTPtr { return makeASTFunction("toMinute", std::move(t)); },
-                 [](time_t t) -> int
-                 {
-                     struct tm utc_tm;
-                     gmtime_r(&t, &utc_tm);
-                     return utc_tm.tm_min;
-                 },
              }},
 
             {"hour",
              {
                  /// Returned values should be from 0 to 23.
                  [](ASTPtr t) -> ASTPtr { return makeASTFunction("toHour", std::move(t)); },
-                 [](time_t t) -> int
-                 {
-                     struct tm utc_tm;
-                     gmtime_r(&t, &utc_tm);
-                     return utc_tm.tm_hour;
-                 },
              }},
 
             {"month",
              {
                  /// Returned values should be from 1 to 12, where 1 means January.
                  [](ASTPtr t) -> ASTPtr { return makeASTFunction("toMonth", std::move(t)); },
-                 [](time_t t) -> int
-                 {
-                     struct tm utc_tm;
-                     gmtime_r(&t, &utc_tm);
-                     return utc_tm.tm_mon + 1;
-                 },
              }},
 
             {"year",
              {
                  [](ASTPtr t) -> ASTPtr { return makeASTFunction("toYear", std::move(t)); },
-                 [](time_t t) -> int
-                 {
-                     struct tm utc_tm;
-                     gmtime_r(&t, &utc_tm);
-                     return utc_tm.tm_year + 1900;
-                 },
              }},
         };
 
@@ -195,8 +151,27 @@ SQLQueryPiece applyDateTimeFunction(
 
         case StoreMethod::CONST_SCALAR:
         {
-            time_t t = static_cast<time_t>(argument.scalar_value);
-            res.scalar_value = (impl_info->evaluate_with_const_argument)(t);
+            /// SELECT arrayResize(
+            ///     [], <count_of_time_steps>,
+            ///     f(toDateTime64(<scalar_value>, 0, 'UTC'))::scalar_data_type) AS values
+            SelectQueryBuilder builder;
+            builder.select_list.push_back(makeASTFunction(
+                "arrayResize",
+                make_intrusive<ASTLiteral>(Array{}),
+                make_intrusive<ASTLiteral>(stepsInTimeSeriesRange(res.start_time, res.end_time, res.step)),
+                timeSeriesScalarASTCast(
+                        (impl_info->transform_ast)(makeASTFunction(
+                            "toDateTime64",
+                            timeSeriesScalarToAST(argument.scalar_value, context.scalar_data_type),
+                            make_intrusive<ASTLiteral>(0u),
+                            make_intrusive<ASTLiteral>("UTC"))),
+                        context.scalar_data_type)));
+
+            builder.select_list.back()->setAlias(ColumnNames::Values);
+
+            res.select_query = builder.getSelectQuery();
+            res.store_method = StoreMethod::SCALAR_GRID;
+            res.scalar_value = {};
             return res;
         }
 
@@ -204,11 +179,11 @@ SQLQueryPiece applyDateTimeFunction(
         case StoreMethod::VECTOR_GRID:
         {
             /// For scalar grid:
-            /// SELECT arrayMap(x -> f(x), values) AS values
+            /// SELECT arrayMap(x -> f(toDateTime64(x, 0, 'UTC'))::scalar_data_type, values) AS values
             /// FROM <scalar_grid>
             ///
             /// For vector grid:
-            /// SELECT group, arrayMap(x -> f(x), values) AS values
+            /// SELECT group, arrayMap(x -> f(toDateTime64(x, 0, 'UTC'))::scalar_data_type, values) AS values
             /// FROM <vector_grid>
             SelectQueryBuilder builder;
             if (argument.store_method == StoreMethod::VECTOR_GRID)
@@ -220,8 +195,11 @@ SQLQueryPiece applyDateTimeFunction(
                     "lambda",
                     makeASTFunction("tuple", make_intrusive<ASTIdentifier>("x")),
                     timeSeriesScalarASTCast(
-                        (impl_info->transform_ast)(
-                            makeASTFunction("toDateTime", make_intrusive<ASTIdentifier>("x"), make_intrusive<ASTLiteral>("UTC"))),
+                        (impl_info->transform_ast)(makeASTFunction(
+                            "toDateTime64",
+                            make_intrusive<ASTIdentifier>("x"),
+                            make_intrusive<ASTLiteral>(0u),
+                            make_intrusive<ASTLiteral>("UTC"))),
                         context.scalar_data_type)),
                 make_intrusive<ASTIdentifier>(ColumnNames::Values)));
 
