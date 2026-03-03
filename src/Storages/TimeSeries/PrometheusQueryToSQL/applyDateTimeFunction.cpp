@@ -3,9 +3,9 @@
 #include <Parsers/ASTFunction.h>
 #include <Parsers/ASTIdentifier.h>
 #include <Parsers/ASTLiteral.h>
-#include <Parsers/Prometheus/stepsInTimeSeriesRange.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/ConverterContext.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/SelectQueryBuilder.h>
+#include <Storages/TimeSeries/PrometheusQueryToSQL/SimpleFunctionArgumentHelper.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/dropMetricName.h>
 #include <Storages/TimeSeries/timeSeriesTypesToAST.h>
 
@@ -139,97 +139,42 @@ SQLQueryPiece applyDateTimeFunction(
     checkArgumentTypes(function_node, arguments, context);
     auto & argument = arguments[0];
 
-    auto res = argument;
-    res.node = function_node;
-
-    switch (argument.store_method)
+    /// If the argument is empty then the result is also empty.
+    if (argument.store_method == StoreMethod::EMPTY)
     {
-        case StoreMethod::EMPTY:
-        {
-            return res;
-        }
-
-        case StoreMethod::CONST_SCALAR:
-        case StoreMethod::SINGLE_SCALAR:
-        {
-            /// SELECT f(toDateTime64(value, 0, 'UTC'))::scalar_data_type) AS value
-            /// FROM <subquery>
-            SelectQueryBuilder builder;
-
-            ASTPtr current_value = (argument.store_method == StoreMethod::CONST_SCALAR)
-                ? timeSeriesScalarToAST(argument.scalar_value, context.scalar_data_type)
-                : make_intrusive<ASTIdentifier>(ColumnNames::Value);
-
-            ASTPtr new_value = timeSeriesScalarASTCast(
-                (impl_info->transform_ast)(makeASTFunction(
-                    "toDateTime64", std::move(current_value), make_intrusive<ASTLiteral>(0u), make_intrusive<ASTLiteral>("UTC"))),
-                context.scalar_data_type);
-
-            builder.select_list.push_back(std::move(new_value));
-            builder.select_list.back()->setAlias(ColumnNames::Value);
-
-            if (argument.select_query)
-            {
-                context.subqueries.emplace_back(SQLSubquery{context.subqueries.size(), std::move(argument.select_query), SQLSubqueryType::TABLE});
-                builder.from_table = context.subqueries.back().name;
-            }
-
-            res.select_query = builder.getSelectQuery();
-            res.store_method = StoreMethod::SINGLE_SCALAR;
-            res.scalar_value = {};
-
-            return res;
-        }
-
-        case StoreMethod::SCALAR_GRID:
-        case StoreMethod::VECTOR_GRID:
-        {
-            /// For scalar grid:
-            /// SELECT arrayMap(x -> f(toDateTime64(x, 0, 'UTC'))::scalar_data_type, values) AS values
-            /// FROM <scalar_grid>
-            ///
-            /// For vector grid:
-            /// SELECT group, arrayMap(x -> f(toDateTime64(x, 0, 'UTC'))::scalar_data_type, values) AS values
-            /// FROM <vector_grid>
-            SelectQueryBuilder builder;
-
-            if (argument.store_method == StoreMethod::VECTOR_GRID)
-                builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Group));
-
-            builder.select_list.push_back(makeASTFunction(
-                "arrayMap",
-                makeASTFunction(
-                    "lambda",
-                    makeASTFunction("tuple", make_intrusive<ASTIdentifier>("x")),
-                    timeSeriesScalarASTCast(
-                        (impl_info->transform_ast)(makeASTFunction(
-                            "toDateTime64",
-                            make_intrusive<ASTIdentifier>("x"),
-                            make_intrusive<ASTLiteral>(0u),
-                            make_intrusive<ASTLiteral>("UTC"))),
-                        context.scalar_data_type)),
-                make_intrusive<ASTIdentifier>(ColumnNames::Values)));
-
-            builder.select_list.back()->setAlias(ColumnNames::Values);
-
-            context.subqueries.emplace_back(SQLSubquery{context.subqueries.size(), std::move(argument.select_query), SQLSubqueryType::TABLE});
-            builder.from_table = context.subqueries.back().name;
-
-            res.select_query = builder.getSelectQuery();
-
-            return dropMetricName(std::move(res), context);
-        }
-
-        case StoreMethod::CONST_STRING:
-        case StoreMethod::RAW_DATA:
-        {
-            /// Can't get in here because these store methods are incompatible with the allowed argument types
-            /// (see checkArgumentTypes()).
-            throwUnexpectedStoreMethod(argument, context);
-        }
+        return SQLQueryPiece{function_node, function_node->result_type, StoreMethod::EMPTY};
     }
 
-    UNREACHABLE();
+    SimpleFunctionArgumentHelper arg_helper{0, std::move(argument), context};
+    auto result_store_method = getResultStoreMethod(arg_helper);
+
+    SelectQueryBuilder builder;
+
+    if (result_store_method == StoreMethod::VECTOR_GRID)
+        builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Group));
+
+    auto transform_ast_with_cast = [&](ASTPtr x) -> ASTPtr
+    {
+        return timeSeriesScalarASTCast(
+            (impl_info->transform_ast)(
+                makeASTFunction("toDateTime64", std::move(x), make_intrusive<ASTLiteral>(0u), make_intrusive<ASTLiteral>("UTC"))),
+            context.scalar_data_type);
+    };
+
+    builder.select_list.push_back(makeExpressionToEvaluateSimpleFunction(transform_ast_with_cast, arg_helper));
+
+    builder.select_list.back()->setAlias((result_store_method == StoreMethod::SINGLE_SCALAR) ? ColumnNames::Value : ColumnNames::Values);
+
+    builder.from_table = arg_helper.table_to_select_from;
+
+    SQLQueryPiece res{function_node, function_node->result_type, result_store_method};
+
+    res.select_query = builder.getSelectQuery();
+    res.start_time = arg_helper.start_time;
+    res.end_time = arg_helper.end_time;
+    res.step = arg_helper.step;
+
+    return dropMetricName(std::move(res), context);
 }
 
 }

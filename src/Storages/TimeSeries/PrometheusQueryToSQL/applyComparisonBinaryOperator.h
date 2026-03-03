@@ -8,10 +8,10 @@ namespace DB::PrometheusQueryToSQL
 
 /// Returns whether a specified string is the name of a prometheus comparison operator:
 /// '==', '!=', '>', '<', '>=', '<='
-bool isCompareBinaryOperator(std::string_view operator_name);
+bool isComparisonBinaryOperator(std::string_view operator_name);
 
-/// Applies a prometheus compare operator.
-SQLQueryPiece applyCompareBinaryOperator(
+/// Applies a prometheus comparison operator.
+SQLQueryPiece applyComparisonBinaryOperator(
     const PQT::BinaryOperator * operator_node,
     SQLQueryPiece && left_argument,
     SQLQueryPiece && right_argument,

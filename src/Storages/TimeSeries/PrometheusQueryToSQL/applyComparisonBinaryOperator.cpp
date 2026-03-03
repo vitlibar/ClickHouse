@@ -1,4 +1,4 @@
-#include <Storages/TimeSeries/PrometheusQueryToSQL/applyMathBinaryOperator.h>
+#include <Storages/TimeSeries/PrometheusQueryToSQL/applyComparisonBinaryOperator.h>
 
 #include <Parsers/ASTFunction.h>
 #include <Parsers/ASTIdentifier.h>
@@ -46,10 +46,10 @@ namespace
                             getPromQLText(right_argument, context), right_argument.type);
         }
 
-        if (operator_node->bool_modifier)
+        if ((left_argument.type == ResultType::SCALAR) && (right_argument.type == ResultType::SCALAR) && !operator_node->bool_modifier)
         {
             throw Exception(ErrorCodes::CANNOT_EXECUTE_PROMQL_QUERY,
-                            "Binary operator '{}' doesn't allow bool modifier",
+                            "Binary operator '{}' on scalars requires bool modifier",
                             operator_name);
         }
     }
@@ -62,13 +62,12 @@ namespace
     const ImplInfo * getImplInfo(std::string_view function_name)
     {
         static const std::unordered_map<std::string_view, ImplInfo> impl_map = {
-            {"+",     {"plus"}},
-            {"-",     {"minus"}},
-            {"*",     {"multiply"}},
-            {"/",     {"divide"}},
-            {"%",     {"modulo"}},
-            {"^",     {"pow"}},
-            {"atan2", {"atan2"}},
+            {"==", {"equals"}},
+            {"!=", {"notEquals"}},
+            {">",  {"greater"}},
+            {"<",  {"less"}},
+            {">=", {"greaterOrEquals"}},
+            {"<=", {"lessOrEquals"}},
         };
 
         auto it = impl_map.find(function_name);
@@ -79,7 +78,7 @@ namespace
     }
 
     /// Applies a math-like operator if at least one operand is scalar.
-    SQLQueryPiece applyMathLikeBinaryOperatorToScalar(
+    SQLQueryPiece applyComparisonOperatorToScalar(
         const PQT::BinaryOperator * operator_node,
         SQLQueryPiece && left_argument,
         SQLQueryPiece && right_argument,
@@ -115,7 +114,7 @@ namespace
 
 
     /// Applied a math-like operator if both operands are instant vectors.
-    SQLQueryPiece applyMathLikeBinaryOperatorToVectors(
+    SQLQueryPiece applyComparisonOperatorToVectors(
         const PQT::BinaryOperator * operator_node,
         SQLQueryPiece && left_argument,
         SQLQueryPiece && right_argument,
@@ -232,13 +231,13 @@ namespace
 }
 
 
-bool isMathBinaryOperator(std::string_view operator_name)
+bool isComparisonBinaryOperator(std::string_view operator_name)
 {
     return getImplInfo(operator_name) != nullptr;
 }
 
 
-SQLQueryPiece applyMathBinaryOperator(
+SQLQueryPiece applyComparisonBinaryOperator(
     const PQT::BinaryOperator * operator_node,
     SQLQueryPiece && left_argument,
     SQLQueryPiece && right_argument,
@@ -248,18 +247,12 @@ SQLQueryPiece applyMathBinaryOperator(
     const auto * impl_info = getImplInfo(operator_name);
     chassert(impl_info);
 
-    return applyMathLikeBinaryOperator(operator_node, std::move(left_argument), std::move(right_argument), context, impl_info->ch_function_name);
-}
-
-
-SQLQueryPiece applyMathLikeBinaryOperator(
-    const PQT::BinaryOperator * operator_node,
-    SQLQueryPiece && left_argument,
-    SQLQueryPiece && right_argument,
-    ConverterContext & context,
-    std::string_view ch_function_name)
-{
     checkArgumentTypes(operator_node, left_argument, right_argument, context);
+
+    if (operator_node->bool_modifier)
+    {
+        return applyMathLikeBinaryOperator(operator_node, std::move(left_argument), std::move(right_argument), context, impl_info->ch_function_name);
+    }
 
     /// If one of the arguments is empty then the result is also empty.
     if ((left_argument.store_method == StoreMethod::EMPTY) || (right_argument.store_method == StoreMethod::EMPTY))
@@ -270,12 +263,12 @@ SQLQueryPiece applyMathLikeBinaryOperator(
     if ((left_argument.type == ResultType::SCALAR) || (right_argument.type == ResultType::SCALAR))
     {
         /// At least one operand is scalar.
-        return applyMathLikeBinaryOperatorToScalar(operator_node, std::move(left_argument), std::move(right_argument), context, ch_function_name);
+        return applyComparisonOperatorToScalar(operator_node, std::move(left_argument), std::move(right_argument), context, impl_info->ch_function_name);
     }
 
     /// Both operands are instant vectors.
     chassert((left_argument.type == ResultType::INSTANT_VECTOR) && (right_argument.type == ResultType::INSTANT_VECTOR));
-    return applyMathLikeBinaryOperatorToVectors(operator_node, std::move(left_argument), std::move(right_argument), context, ch_function_name);
+    return applyComparisonOperatorToVectors(operator_node, std::move(left_argument), std::move(right_argument), context, impl_info->ch_function_name);
 }
 
 }
