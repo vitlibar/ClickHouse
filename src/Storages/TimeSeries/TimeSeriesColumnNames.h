@@ -43,6 +43,8 @@ struct TimeSeriesColumnNames
     static constexpr const char * Group = "group";
     static constexpr const char * NewGroup = "new_group";
     static constexpr const char * Values = "values";
+    static constexpr const char * JoinGroup = "join_group";
+    static constexpr const char * JoinCounts = "join_counts";
 
     /// TODO: This column is not used, remove it.
     static constexpr const char * Scalar = "scalar";

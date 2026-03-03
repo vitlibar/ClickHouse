@@ -1,0 +1,43 @@
+#include <Storages/TimeSeries/PrometheusQueryToSQL/applyFunction.h>
+
+#include <Common/Exception.h>
+#include <Storages/TimeSeries/PrometheusQueryToSQL/applyBinaryOperatorAnd.h>
+#include <Storages/TimeSeries/PrometheusQueryToSQL/applyBinaryOperatorOr.h>
+#include <Storages/TimeSeries/PrometheusQueryToSQL/applyBinaryOperatorUnless.h>
+
+
+namespace DB::ErrorCodes
+{
+    extern const int NOT_IMPLEMENTED;
+}
+
+
+namespace DB::PrometheusQueryToSQL
+{
+
+SQLQueryPiece applyBinaryOperator(
+    const PQT::BinaryOperator * operator_node, SQLQueryPiece && left_argument, SQLQueryPiece && right_argument, ConverterContext & context)
+{
+    std::string_view operator_name = operator_node->operator_name;
+
+#if 0
+    if (isMathBinaryOperator(operator_name))
+        return applyMathBinaryOperator(operator_node, std::move(left_argument), std::move(right_argument), context);
+
+    if (isCompareBinaryOperator(operator_name))
+        return applyCompareBinaryOperator(operator_node, std::move(left_argument), std::move(right_argument), context);
+#endif
+
+    if (isBinaryOperatorAnd(operator_name))
+        return applyBinaryOperatorAnd(operator_node, std::move(left_argument), std::move(right_argument), context);
+
+    if (isBinaryOperatorOr(operator_name))
+        return applyBinaryOperatorOr(operator_node, std::move(left_argument), std::move(right_argument), context);
+
+    if (isBinaryOperatorUnless(operator_name))
+        return applyBinaryOperatorUnless(operator_node, std::move(left_argument), std::move(right_argument), context);
+
+    throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Binary operator {} is not implemented", operator_name);
+}
+
+}
