@@ -83,7 +83,7 @@ SimpleFunctionArgumentHelper::SimpleFunctionArgumentHelper(size_t argument_index
 }
 
 
-ASTPtr makeExpressionToEvaluateSimpleFunction(const std::function<ASTPtr(ASTPtr)> & transform_ast,
+ASTPtr makeExpressionToEvaluateSimpleFunction(const std::function<ASTPtr(ASTPtr)> & apply_function_to_ast,
                                               const SimpleFunctionArgumentHelper & argument)
 {
     bool need_array_map = (argument.array_map_source_array != nullptr);
@@ -92,17 +92,17 @@ ASTPtr makeExpressionToEvaluateSimpleFunction(const std::function<ASTPtr(ASTPtr)
     {
         return makeASTFunction(
             "arrayMap",
-            makeASTFunction("lambda", makeASTFunction("tuple", argument.array_map_lambda_arg), transform_ast(argument.ast)),
+            makeASTFunction("lambda", makeASTFunction("tuple", argument.array_map_lambda_arg), apply_function_to_ast(argument.ast)),
             argument.array_map_source_array);
     }
     else
     {
-        return transform_ast(argument.ast);
+        return apply_function_to_ast(argument.ast);
     }
 }
 
 
-ASTPtr makeExpressionToEvaluateSimpleFunction(const std::function<ASTPtr(ASTPtr, ASTPtr)> & transform_ast,
+ASTPtr makeExpressionToEvaluateSimpleFunction(const std::function<ASTPtr(ASTPtr, ASTPtr)> & apply_function_to_ast,
                                               const SimpleFunctionArgumentHelper & argument1,
                                               const SimpleFunctionArgumentHelper & argument2)
 {
@@ -117,7 +117,7 @@ ASTPtr makeExpressionToEvaluateSimpleFunction(const std::function<ASTPtr(ASTPtr,
             tuple->arguments->children.push_back(argument2.array_map_lambda_arg);
         auto array_map_function = makeASTFunction(
             "arrayMap",
-            makeASTFunction("lambda", tuple, transform_ast(argument1.ast, argument2.ast)));
+            makeASTFunction("lambda", tuple, apply_function_to_ast(argument1.ast, argument2.ast)));
         if (argument1.array_map_source_array)
             array_map_function->arguments->children.push_back(argument1.array_map_source_array);
         if (argument2.array_map_source_array)
@@ -126,12 +126,12 @@ ASTPtr makeExpressionToEvaluateSimpleFunction(const std::function<ASTPtr(ASTPtr,
     }
     else
     {
-        return transform_ast(argument1.ast, argument2.ast);
+        return apply_function_to_ast(argument1.ast, argument2.ast);
     }
 }
 
 
-ASTPtr makeExpressionToEvaluateSimpleFunction(const std::function<ASTPtr(ASTPtr, ASTPtr, ASTPtr)> & transform_ast,
+ASTPtr makeExpressionToEvaluateSimpleFunction(const std::function<ASTPtr(ASTPtr, ASTPtr, ASTPtr)> & apply_function_to_ast,
                                               const SimpleFunctionArgumentHelper & argument1,
                                               const SimpleFunctionArgumentHelper & argument2,
                                               const SimpleFunctionArgumentHelper & argument3)
@@ -149,7 +149,7 @@ ASTPtr makeExpressionToEvaluateSimpleFunction(const std::function<ASTPtr(ASTPtr,
             tuple->arguments->children.push_back(argument3.array_map_lambda_arg);
         auto array_map_function = makeASTFunction(
             "arrayMap",
-            makeASTFunction("lambda", tuple, transform_ast(argument1.ast, argument2.ast, argument3.ast)));
+            makeASTFunction("lambda", tuple, apply_function_to_ast(argument1.ast, argument2.ast, argument3.ast)));
         if (argument1.array_map_source_array)
             array_map_function->arguments->children.push_back(argument1.array_map_source_array);
         if (argument2.array_map_source_array)
@@ -160,7 +160,7 @@ ASTPtr makeExpressionToEvaluateSimpleFunction(const std::function<ASTPtr(ASTPtr,
     }
     else
     {
-        return transform_ast(argument1.ast, argument2.ast, argument3.ast);
+        return apply_function_to_ast(argument1.ast, argument2.ast, argument3.ast);
     }
 }
 

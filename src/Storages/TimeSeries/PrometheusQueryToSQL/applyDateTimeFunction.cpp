@@ -153,7 +153,7 @@ SQLQueryPiece applyDateTimeFunction(
     if (result_store_method == StoreMethod::VECTOR_GRID)
         builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Group));
 
-    auto transform_ast_with_cast = [&](ASTPtr x) -> ASTPtr
+    auto apply_function_to_ast = [&](ASTPtr x) -> ASTPtr
     {
         return timeSeriesScalarASTCast(
             (impl_info->transform_ast)(
@@ -161,7 +161,7 @@ SQLQueryPiece applyDateTimeFunction(
             context.scalar_data_type);
     };
 
-    builder.select_list.push_back(makeExpressionToEvaluateSimpleFunction(transform_ast_with_cast, arg_helper));
+    builder.select_list.push_back(makeExpressionToEvaluateSimpleFunction(apply_function_to_ast, arg_helper));
 
     builder.select_list.back()->setAlias((result_store_method == StoreMethod::SINGLE_SCALAR) ? ColumnNames::Value : ColumnNames::Values);
 

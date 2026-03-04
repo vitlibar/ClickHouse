@@ -31,16 +31,16 @@ struct SimpleFunctionArgumentHelper
 
 
 /// Makes AST for evaluating a simple function taking one argument.
-ASTPtr makeExpressionToEvaluateSimpleFunction(const std::function<ASTPtr(ASTPtr)> & transform_ast,
+ASTPtr makeExpressionToEvaluateSimpleFunction(const std::function<ASTPtr(ASTPtr)> & apply_function_to_ast,
                                               const SimpleFunctionArgumentHelper & argument);
 
 /// Makes AST for evaluating a simple function taking two arguments.
-ASTPtr makeExpressionToEvaluateSimpleFunction(const std::function<ASTPtr(ASTPtr, ASTPtr)> & transform_ast,
+ASTPtr makeExpressionToEvaluateSimpleFunction(const std::function<ASTPtr(ASTPtr, ASTPtr)> & apply_function_to_ast,
                                               const SimpleFunctionArgumentHelper & argument1,
                                               const SimpleFunctionArgumentHelper & argument2);
 
 /// Makes AST for evaluating a simple function taking two arguments.
-ASTPtr makeExpressionToEvaluateSimpleFunction(const std::function<ASTPtr(ASTPtr, ASTPtr, ASTPtr)> & transform_ast,
+ASTPtr makeExpressionToEvaluateSimpleFunction(const std::function<ASTPtr(ASTPtr, ASTPtr, ASTPtr)> & apply_function_to_ast,
                                               const SimpleFunctionArgumentHelper & argument1,
                                               const SimpleFunctionArgumentHelper & argument2,
                                               const SimpleFunctionArgumentHelper & argument3);

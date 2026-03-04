@@ -22,6 +22,6 @@ SQLQueryPiece applyMathLikeBinaryOperator(
     SQLQueryPiece && left_argument,
     SQLQueryPiece && right_argument,
     ConverterContext & context,
-    std::string_view ch_function_name);
+    std::function<ASTPtr(ASTPtr, ASTPtr)> apply_function_to_ast);
 
 }

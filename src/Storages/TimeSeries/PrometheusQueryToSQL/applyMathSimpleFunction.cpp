@@ -116,9 +116,9 @@ SQLQueryPiece applyMathSimpleFunction(
     if (result_store_method == StoreMethod::VECTOR_GRID)
         builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Group));
 
-    auto transform_ast = [&](ASTPtr x) -> ASTPtr { return makeASTFunction(impl_info->ch_function_name, x); };
+    auto apply_function_to_ast = [&](ASTPtr x) -> ASTPtr { return makeASTFunction(impl_info->ch_function_name, x); };
 
-    builder.select_list.push_back(makeExpressionToEvaluateSimpleFunction(transform_ast, arg_helper));
+    builder.select_list.push_back(makeExpressionToEvaluateSimpleFunction(apply_function_to_ast, arg_helper));
 
     builder.select_list.back()->setAlias((result_store_method == StoreMethod::SINGLE_SCALAR) ? ColumnNames::Value : ColumnNames::Values);
 
