@@ -4,6 +4,7 @@
 #include <Storages/TimeSeries/PrometheusQueryToSQL/applyBinaryOperatorAnd.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/applyBinaryOperatorOr.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/applyBinaryOperatorUnless.h>
+#include <Storages/TimeSeries/PrometheusQueryToSQL/applyMathBinaryOperator.h>
 
 
 namespace DB::ErrorCodes
@@ -20,10 +21,10 @@ SQLQueryPiece applyBinaryOperator(
 {
     std::string_view operator_name = operator_node->operator_name;
 
-#if 0
     if (isMathBinaryOperator(operator_name))
         return applyMathBinaryOperator(operator_node, std::move(left_argument), std::move(right_argument), context);
 
+#if 0
     if (isCompareBinaryOperator(operator_name))
         return applyCompareBinaryOperator(operator_node, std::move(left_argument), std::move(right_argument), context);
 #endif

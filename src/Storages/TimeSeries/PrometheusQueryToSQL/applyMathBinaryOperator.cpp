@@ -52,6 +52,16 @@ namespace
                             "Binary operator '{}' doesn't allow bool modifier",
                             operator_name);
         }
+
+        if ((left_argument.type != ResultType::INSTANT_VECTOR) || (right_argument.type != ResultType::INSTANT_VECTOR))
+        {
+            if (operator_node->group_left || operator_node->group_right)
+            {
+                throw Exception(ErrorCodes::CANNOT_EXECUTE_PROMQL_QUERY,
+                                "Binary operator '{}' with the group modifier expectes two arguments of type {}, got {} and {}",
+                                operator_name, ResultType::INSTANT_VECTOR, left_argument.type, right_argument.type);
+            }
+        }
     }
 
     struct ImplInfo
@@ -78,7 +88,8 @@ namespace
         return &it->second;
     }
 
-    /// Applies a math-like operator if at least one operand is scalar.
+    /// Applies a math-like binary operator to operands if at least one of them is scalar.
+    /// Other operand can be either scalar or instant vector.
     SQLQueryPiece applyMathLikeOperatorToScalarsOrVectorAndScalar(
         const PQT::BinaryOperator * operator_node,
         SQLQueryPiece && left_argument,
@@ -99,7 +110,8 @@ namespace
 
         builder.select_list.back()->setAlias((result_store_method == StoreMethod::SINGLE_SCALAR) ? ColumnNames::Value : ColumnNames::Values);
 
-        builder.from_table = getTableToSelectFrom(left, right);
+        chassert(left.table_to_select_from.empty() || right.table_to_select_from.empty());
+        builder.from_table = !left.table_to_select_from.empty() ? left.table_to_select_from : right.table_to_select_from;
 
         SQLQueryPiece res{operator_node, operator_node->result_type, result_store_method};
 
@@ -111,14 +123,13 @@ namespace
         return dropMetricName(std::move(res), context);
     }
 
-
     /// Applied a math-like operator if both operands are instant vectors.
     SQLQueryPiece applyMathLikeOperatorToVectors(
         const PQT::BinaryOperator * operator_node,
         SQLQueryPiece && left_argument,
         SQLQueryPiece && right_argument,
         ConverterContext & context,
-        std::string_view ch_function_name)
+        std::function<ASTPtr(ASTPtr, ASTPtr)> apply_function_to_ast)
     {
         left_argument = toVectorGrid(std::move(left_argument), context);
         right_argument = toVectorGrid(std::move(right_argument), context);
@@ -129,36 +140,45 @@ namespace
         context.subqueries.emplace_back(SQLSubquery{context.subqueries.size(), std::move(right_argument.select_query), SQLSubqueryType::TABLE});
         String right = context.subqueries.back().name;
 
+        const auto & on_labels = operator_node->labels;
+        bool group_left = operator_node->group_left;
+        bool group_right = operator_node->group_right;
+        const auto & extra_labels = operator_node->extra_labels;
+
         /// Step 1:
         /// SELECT timeSeriesRemoveAllTagsExcept(group, on_tags) AS join_group,
-        ///        [group, ] (if group_left or group_right with extra labels)
+        ///        [group, ]
         ///        values
         /// FROM left
-        /// [GROUP BY join_group HAVING timeSeriesThrowDuplicateSeriesIf(count() > 1, join_group) = 0] (if not group_left)
+        /// [GROUP BY join_group HAVING timeSeriesThrowDuplicateSeriesIf(count() > 1, join_group) = 0]
         ///
         String step1;
-        bool metric_name_dropped_from_join_group;
+        bool metric_name_dropped_from_join_group = false;
         {
             SelectQueryBuilder builder;
 
-            builder.select_list.push_back(
-                makeExpressionForJoinGroup(
-                operator_node, make_intrusive<ASTIdentifier>(ColumnNames::Group), left_argument.metric_name_dropped,
+            builder.select_list.push_back(makeExpressionForJoinGroup(
+                operator_node,
+                make_intrusive<ASTIdentifier>(ColumnNames::Group),
+                left_argument.metric_name_dropped,
                 &metric_name_dropped_from_join_group));
 
             builder.select_list.back()->setAlias(ColumnNames::JoinGroup);
 
-            if (operator_node->group_left || (operator_node->group_right && !operator_node->extra_labels.empty()))
+            /// We add column `group` only if we need it at step 3.
+            if (group_left || (group_right && !extra_labels.empty()))
                 builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Group));
 
             builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Values));
 
             builder.from_table = left;
 
-            bool need_check_not_many = !operator_node->group_left;
+            /// If `group_left` is not specified it's either one-to-one or one-to-many matches.
+            bool need_check_one_on_left = !group_left;
 
-            if (need_check_not_many && (!operator_node->labels.empty() || !left_argument.metric_name_dropped))
+            if (need_check_one_on_left && (!on_labels.empty() || !left_argument.metric_name_dropped))
             {
+                /// We throw an exception if there are many matches on the left but group_left isn't specified.
                 builder.group_by.push_back(make_intrusive<ASTIdentifier>(ColumnNames::JoinGroup));
 
                 builder.having = makeASTFunction(
@@ -186,28 +206,32 @@ namespace
         {
             SelectQueryBuilder builder;
 
-            bool metric_name_dropped_from_join_group_2;
+            bool metric_name_dropped_from_join_group_2 = false;
 
-            builder.select_list.push_back(
-                makeExpressionForJoinGroup(
-                operator_node, make_intrusive<ASTIdentifier>(ColumnNames::Group), right_argument.metric_name_dropped,
+            builder.select_list.push_back(makeExpressionForJoinGroup(
+                operator_node,
+                make_intrusive<ASTIdentifier>(ColumnNames::Group),
+                right_argument.metric_name_dropped,
                 &metric_name_dropped_from_join_group));
 
             metric_name_dropped_from_join_group |= metric_name_dropped_from_join_group_2;
 
             builder.select_list.back()->setAlias(ColumnNames::JoinGroup);
 
-            if (operator_node->group_right || (operator_node->group_left && !operator_node->extra_labels.empty()))
+            /// We add column `group` only if we need it at step 3.
+            if (group_right || (group_left && !extra_labels.empty()))
                 builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Group));
 
             builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Values));
 
             builder.from_table = left;
 
-            bool need_check_not_many = !operator_node->group_right;
+            /// If `group_right` is not specified it's either one-to-one or many-to-one matches.
+            bool need_check_one_on_right = !group_right;
 
-            if (need_check_not_many && (!operator_node->labels.empty() || !right_argument.metric_name_dropped))
+            if (need_check_one_on_right && (!on_labels.empty() || !right_argument.metric_name_dropped))
             {
+                /// We throw an exception if there are many matches on the right but group_right isn't specified.
                 builder.group_by.push_back(make_intrusive<ASTIdentifier>(ColumnNames::JoinGroup));
 
                 builder.having = makeASTFunction(
@@ -224,16 +248,16 @@ namespace
             step2 = context.subqueries.back().name;
         }
 
-        /// Step 3. (without group_left or group_right):
+        /// Step 3:
+        /// without group_left or group_right:
         /// SELECT timeSeriesRemoveTag(join_group, '__name__') AS group,
         ///        arrayMap(x, y -> f(x, y), step1.values, step2.values) AS values
         /// FROM step1 INNER ANY JOIN step2
         /// ON step1.join_group = step2.join_group
         /// [GROUP BY group HAVING timeSeriesThrowDuplicateSeriesIf(count() > 1, group) = 0]
         ///
-
-        /// Step 3. (without group_left or group_right):
-        /// SELECT timeSeriesRemoveTag(join_group, '__name__') AS group,
+        /// with group_left/group_right:
+        /// SELECT timeSeriesCopyTag(timeSeriesRemoveTag(side_many.group, '__name__'), side_one, extra_labels) AS group,
         ///        arrayMap(x, y -> f(x, y), step1.values, step2.values) AS values
         /// FROM step1 INNER ANY JOIN step2
         /// ON step1.join_group = step2.join_group
@@ -245,25 +269,58 @@ namespace
             SelectQueryBuilder builder;
             bool need_check_no_duplicate_group = false;
             ASTPtr new_group;
-            
-            if (!operator_node->group_left && !operator_node->group_right)
+            JoinKind join_kind = JoinKind::Inner;
+            JoinStrictness join_strictness = JoinStrictness::Unspecified;
+
+            if (!group_left && !group_right)
             {
+                /// Neither group_left nor group_right is specified.
                 new_group = make_intrusive<ASTIdentifier>(ColumnNames::JoinGroup);
                 if (!metric_name_dropped_from_join_group)
                 {
+                    /// Usually the metric name is already dropped from the join group, however
+                    /// it can be not dropped if it's specified explicitly in on(), for example a + on(__name__) b
                     new_group = makeASTFunction("timeSeriesRemoveTag", new_group, make_intrusive<ASTLiteral>(kMetricName));
                     need_check_no_duplicate_group = true;
                 }
                 metric_name_dropped_from_result = true;
+
+                join_kind = JoinKind::Inner;
+                join_strictness = JoinStrictness::Any;
             }
             else
             {
-                chassert(operator_node->group_left != operator_node->group_right);
-                String side_many = operator_node->group_left ? step1 : step2;
-                String side_one  = operator_node->group_left ? step2 : step1;
+                chassert(group_left != group_right);
 
+                /// Either group_left or group_right is specified.
+                /// So there are two sides: "one" and "many".
+                String side_many;
+                String side_one;
+                bool metric_name_dropped_from_side_many = false;
+                bool metric_name_dropped_from_side_one = false;
+
+                if (group_left)
+                {
+                    side_many = step1;
+                    side_one = step2;
+                    metric_name_dropped_from_side_many = left_argument.metric_name_dropped;
+                    metric_name_dropped_from_side_one = right_argument.metric_name_dropped;
+                    join_kind = JoinKind::Left;
+                }
+                else
+                {
+                    side_many = step2;
+                    side_one = step1;
+                    metric_name_dropped_from_side_many = right_argument.metric_name_dropped;
+                    metric_name_dropped_from_side_one = left_argument.metric_name_dropped;
+                    join_kind = JoinKind::Right;
+                }
+
+                join_strictness = JoinStrictness::Semi;
+
+                /// Drop the metric name from side "many" and add extra labels from side "one".
                 new_group = make_intrusive<ASTIdentifier>(Strings{side_many, ColumnNames::Group});
-                if (!metric_name_dropped_from_join_group)
+                if (!metric_name_dropped_from_side_many)
                 {
                     new_group = makeASTFunction("timeSeriesRemoveTag", new_group, make_intrusive<ASTLiteral>(kMetricName));
                     need_check_no_duplicate_group = true;
@@ -273,15 +330,18 @@ namespace
                 if (!extra_labels.empty())
                 {
                     new_group = makeASTFunction(
-                        "timeSeriesCopyTag",
+                        "timeSeriesCopyTags",
                         new_group,
                         make_intrusive<ASTIdentifier>(Strings{side_one, ColumnNames::Group}),
-                        extra_labels);
+                        make_intrusive<ASTLiteral>(Array{extra_labels.begin(), extra_labels.end()}));
 
                     need_check_no_duplicate_group = true;
 
-                    if (std::find(extra_labels.begin(), extra_labels.end(), kMetricName))
+                    if ((std::find(extra_labels.begin(), extra_labels.end(), kMetricName) != extra_labels.end())
+                        && !metric_name_dropped_from_side_one)
+                    {
                         metric_name_dropped_from_result = false;
+                    }
                 }
             }
 
@@ -297,12 +357,12 @@ namespace
                 make_intrusive<ASTIdentifier>(Strings{left, ColumnNames::Values}),
                 make_intrusive<ASTIdentifier>(Strings{right, ColumnNames::Values})));
 
-            builder.select_list.back()->setAlias(make_intrusive<ASTIdentifier>(ColumnNames::Values));
+            builder.select_list.back()->setAlias(ColumnNames::Values);
 
             builder.from_table = step1;
 
-            builder.join_kind = JoinKind::Inner;
-            builder.join_strictness = JoinStrictness::Any;
+            builder.join_kind = join_kind;
+            builder.join_strictness = join_strictness;
             builder.join_table = step2;
 
             if (need_check_no_duplicate_group)
@@ -328,189 +388,6 @@ namespace
         res.end_time = left_argument.end_time;
         res.step = left_argument.step;
         res.metric_name_dropped = metric_name_dropped_from_result;
-
-        return res;
-    }
-
-    
-
-        return dropMetricName(std::move(res), context);
-
-
-
-
-                /// SELECT timeSeriesCopyTags(left.group, right.group, extra_labels) AS group,
-                ///        arrayMap(x, y -> f(x, y), step1.values, step2.values) AS values
-                /// FROM step1 LEFT SEMI JOIN step2
-                /// ON step1.join_group = step2.join_group
-                /// [GROUP BY group HAVING timeSeriesThrowDuplicateSeriesIf(count() > 1, group) = 0] (if extra_labels are specified)
-
-            }
-
-
-        if (!operator_node->group_left && !operator_node->group_right)
-        {
-            SelectQueryBuilder builder;
-
-            if (metric_name_dropped_from_join_group)
-                builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::JoinGroup));
-            else
-                builder.select_list.push_back(
-                    makeASTFunction("timeSeriesRemoveTag", make_intrusive<ASTIdentifier>(ColumnNames::JoinGroup),
-                        make_intrusive<ASTLiteral>(kMetricName)));
-
-            metric_name_dropped_from_result = true;
-            
-            builder.select_list.back()->setAlias(make_intrusive<ASTIdentifier>(ColumnNames::Group));
-
-            builder.select_list.push_back(makeASTFunction(
-                "arrayMap",
-                makeASTFunction(
-                    "lambda",
-                    makeASTFunction("tuple", make_intrusive<ASTIdentifier>("x"), make_intrusive<ASTIdentifier>("y")),
-                    apply_function_to_ast(make_intrusive<ASTIdentifier>("x"), make_intrusive<ASTIdentifier>("y"))),
-                make_intrusive<ASTIdentifier>(Strings{left, ColumnNames::Values}),
-                make_intrusive<ASTIdentifier>(Strings{right, ColumnNames::Values})));
-
-            builder.select_list.back()->setAlias(make_intrusive<ASTIdentifier>(ColumnNames::Values));
-
-            builder.from_table = step1;
-
-            builder.join_kind = JoinKind::Inner;
-            builder.join_strictness = JoinStrictness::Any;
-            builder.join_table = step2;
-
-            if (!metric_name_dropped_from_join_group)
-            {
-                builder.group_by.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Group));
-
-                builder.having = makeASTFunction(
-                    "equals",
-                    makeASTFunction(
-                        "timeSeriesThrowDuplicateSeriesIf",
-                        makeASTFunction("greater", makeASTFunction("count"), make_intrusive<ASTLiteral>(1u)),
-                        make_intrusive<ASTIdentifier>(ColumnNames::Group)),
-                    make_intrusive<ASTLiteral>(0u));
-            }
-
-            step3 = builder.getSelectQuery();
-        }
-
-        /// Step 3b (with group_left):
-        /// SELECT timeSeriesCopyTags(left.group, right.group, extra_labels) AS group,
-        ///        arrayMap(x, y -> f(x, y), step1.values, step2.values) AS values
-        /// FROM step1 LEFT SEMI JOIN step2
-        /// ON step1.join_group = step2.join_group
-        /// [GROUP BY group HAVING timeSeriesThrowDuplicateSeriesIf(count() > 1, group) = 0] (if extra_labels are specified)
-
-        /// Step 3c (with group_right):
-        /// SELECT timeSeriesCopyTags(right.group, left.group, extra_labels) AS group,
-        ///        arrayMap(x, y -> f(x, y), step1.values, step2.values) AS values
-        /// FROM step1 RIGHT SEMI JOIN step2
-        /// ON step1.join_group = step2.join_group
-        /// [GROUP BY group HAVING timeSeriesThrowDuplicateSeriesIf(count() > 1, group) = 0] (if extra_labels are specified)
-
-        ...
-
-        ...
-        /// SELECT group AS group, arrayMap(x, y -> f(x, y), step1.values, step2.values) AS values
-
-
-        bool metric_name_dropped_from_join_group;
-        auto join_group = makeExpressionForJoinGroup(
-            operator_node,
-            make_intrusive<ASTIdentifier>(Strings{left, ColumnNames::Group}),
-            left_argument.metric_name_dropped,
-            &metric_name_dropped_from_join_group);
-
-        bool metric_name_dropped_from_result;
-        auto result_group = makeExpressionForResultGroup(
-            operator_node,
-            make_intrusive<ASTIdentifier>(Strings{left, ColumnNames::Group}),
-            make_intrusive<ASTIdentifier>(Strings{right, ColumnNames::Group}),
-            make_intrusive<ASTIdentifier>(ColumnNames::JoinGroup),
-            left_argument.metric_name_dropped,
-            right_argument.metric_name_dropped,
-            metric_name_dropped_from_join_group,
-            &metric_name_dropped_from_result);
-
-        /// Step 1:
-        /// SELECT timeSeriesCopyTags(join_group, left.group, tags_to_copy) AS new_group,
-        ///        arrayMap(x, y -> x + y, left.values, right.values) AS values
-        /// FROM left INNER ALL JOIN right
-        /// ON (timeSeriesRemoveAllTagsExcept(left.group, on_tags) AS join_group) == timeSeriesRemoveAllTagsExcept(right.group, on_tags)
-        /// GROUP BY new_group
-        /// HAVING timeSeriesThrowDuplicateSeriesIf(count() > 1, new_group) = 0
-        String step1;
-        {
-            SelectQueryBuilder builder;
-
-            builder.select_list.push_back(result_group);
-            builder.select_list.back()->setAlias(ColumnNames::NewGroup);
-
-            builder.select_list.push_back(makeASTFunction(
-                "arrayMap",
-                makeASTFunction(
-                    "lambda",
-                    makeASTFunction("tuple", make_intrusive<ASTIdentifier>("x"), make_intrusive<ASTIdentifier>("y")),
-                    makeASTFunction(ch_function_name, make_intrusive<ASTIdentifier>("x"), make_intrusive<ASTIdentifier>("y"))),
-                make_intrusive<ASTIdentifier>(Strings{left, ColumnNames::Values}),
-                make_intrusive<ASTIdentifier>(Strings{right, ColumnNames::Values})));
-
-            builder.select_list.back()->setAlias(ColumnNames::Values);
-
-            builder.from_table = left;
-
-            builder.join_kind = JoinKind::Inner;
-            builder.join_strictness = JoinStrictness::All;
-            builder.join_table = right;
-
-            join_group->setAlias(ColumnNames::JoinGroup);
-            builder.join_on = makeASTFunction(
-                "equals",
-                std::move(join_group),
-                makeExpressionForJoinGroup(
-                    operator_node, make_intrusive<ASTIdentifier>(Strings{right, ColumnNames::Group}), right_argument.metric_name_dropped));
-
-            builder.group_by.push_back(make_intrusive<ASTIdentifier>(ColumnNames::NewGroup));
-
-            builder.having = makeASTFunction(
-                "equals",
-                makeASTFunction(
-                    "timeSeriesThrowDuplicateSeriesIf",
-                    makeASTFunction("greater", makeASTFunction("count"), make_intrusive<ASTLiteral>(1u)),
-                    make_intrusive<ASTIdentifier>(ColumnNames::NewGroup)),
-                make_intrusive<ASTLiteral>(0u));
-
-            ASTPtr step1_ast = builder.getSelectQuery();
-            context.subqueries.emplace_back(SQLSubquery{context.subqueries.size(), std::move(step1_ast), SQLSubqueryType::TABLE});
-            step1 = context.subqueries.back().name;
-        }
-
-        /// Step 2:
-        /// SELECT new_group AS group, values
-        /// FROM step1
-        ASTPtr step2;
-        {
-            SelectQueryBuilder builder;
-
-            builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::NewGroup));
-            builder.select_list.back()->setAlias(ColumnNames::Group);
-
-            builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Values));
-
-            builder.from_table = step1;
-
-            step2 = builder.getSelectQuery();
-        }
-
-        SQLQueryPiece res{operator_node, operator_node->result_type, StoreMethod::VECTOR_GRID};
-
-        res.select_query = step2;
-        res.metric_name_dropped = metric_name_dropped_from_result;
-        res.start_time = left_argument.start_time;
-        res.end_time = left_argument.end_time;
-        res.step = left_argument.step;
 
         return res;
     }

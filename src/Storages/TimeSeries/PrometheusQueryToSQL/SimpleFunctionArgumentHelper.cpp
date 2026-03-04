@@ -197,30 +197,4 @@ StoreMethod getResultStoreMethod(const SimpleFunctionArgumentHelper & argument1,
     return StoreMethod::SINGLE_SCALAR;
 }
 
-
-String getTableToSelectFrom(const SimpleFunctionArgumentHelper & argument)
-{
-    return argument.table_to_select_from;
-}
-
-String getTableToSelectFrom(const SimpleFunctionArgumentHelper & argument1, const SimpleFunctionArgumentHelper & argument2)
-{
-    chassert(!argument1.table_to_select_from.empty() + !argument2.table_to_select_from.empty() == 1);
-    if (!argument1.table_to_select_from.empty())
-        return argument1.table_to_select_from;
-    else
-        return argument2.table_to_select_from;
-}
-
-String getTableToSelectFrom(const SimpleFunctionArgumentHelper & argument1, const SimpleFunctionArgumentHelper & argument2, const SimpleFunctionArgumentHelper & argument3)
-{
-    chassert(!argument1.table_to_select_from.empty() + !argument2.table_to_select_from.empty() + !argument3.table_to_select_from.empty() == 1);
-    if (!argument1.table_to_select_from.empty())
-        return argument1.table_to_select_from;
-    else if (!argument2.table_to_select_from.empty())
-        return argument2.table_to_select_from;
-    else
-        return argument3.table_to_select_from;
-}
-
 }

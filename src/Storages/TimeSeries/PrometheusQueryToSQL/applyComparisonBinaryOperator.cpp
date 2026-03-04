@@ -1,3 +1,4 @@
+#if 0
 #include <Storages/TimeSeries/PrometheusQueryToSQL/applyComparisonBinaryOperator.h>
 
 #include <Parsers/ASTFunction.h>
@@ -272,3 +273,4 @@ SQLQueryPiece applyComparisonBinaryOperator(
 }
 
 }
+#endif

@@ -50,8 +50,4 @@ StoreMethod getResultStoreMethod(const SimpleFunctionArgumentHelper & argument);
 StoreMethod getResultStoreMethod(const SimpleFunctionArgumentHelper & argument1, const SimpleFunctionArgumentHelper & argument2);
 StoreMethod getResultStoreMethod(const SimpleFunctionArgumentHelper & argument1, const SimpleFunctionArgumentHelper & argument2, const SimpleFunctionArgumentHelper & argument3);
 
-String getTableToSelectFrom(const SimpleFunctionArgumentHelper & argument);
-String getTableToSelectFrom(const SimpleFunctionArgumentHelper & argument1, const SimpleFunctionArgumentHelper & argument2);
-String getTableToSelectFrom(const SimpleFunctionArgumentHelper & argument1, const SimpleFunctionArgumentHelper & argument2, const SimpleFunctionArgumentHelper & argument3);
-
 }
