@@ -95,31 +95,19 @@ namespace
         SQLQueryPiece && left_argument,
         SQLQueryPiece && right_argument,
         ConverterContext & context,
-        std::function<ASTPtr(ASTPtr, ASTPtr)> apply_function_to_ast)
+        std::function<ASTPtr(ASTPtr, ASTPtr)> apply_operator_to_ast)
     {
-        SimpleFunctionArgumentHelper left{0, std::move(left_argument), context};
-        SimpleFunctionArgumentHelper right{1, std::move(right_argument), context};
-        auto result_store_method = getResultStoreMethod(left, right);
+        auto apply_function_to_ast = [&](ASTs args) -> ASTPtr
+        {
+            chassert(args.size() == 2);
+            return apply_operator_to_ast(args[0], args[1]);
+        };
 
-        SelectQueryBuilder builder;
+        std::vector<SQLQueryPiece> arguments;
+        arguments.push_back(std::move(left_argument));
+        arguments.push_back(std::move(right_argument));
 
-        if (result_store_method == StoreMethod::VECTOR_GRID)
-            builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Group));
-
-        builder.select_list.push_back(makeExpressionToEvaluateSimpleFunction(apply_function_to_ast, left, right));
-
-        builder.select_list.back()->setAlias((result_store_method == StoreMethod::SINGLE_SCALAR) ? ColumnNames::Value : ColumnNames::Values);
-
-        chassert(left.table_to_select_from.empty() || right.table_to_select_from.empty());
-        builder.from_table = !left.table_to_select_from.empty() ? left.table_to_select_from : right.table_to_select_from;
-
-        SQLQueryPiece res{operator_node, operator_node->result_type, result_store_method};
-
-        res.select_query = builder.getSelectQuery();
-        res.start_time = left.start_time;
-        res.end_time = left.end_time;
-        res.step = left.step;
-
+        auto res = applySimpleFunctionHelper(function_node, context, apply_function_to_ast, std::move(arguments));
         return dropMetricName(std::move(res), context);
     }
 
