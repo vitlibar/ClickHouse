@@ -26,6 +26,9 @@ SQLQueryPiece applySimpleFunctionHelper(
     const std::function<ASTPtr(ASTs)> & apply_function_to_ast,
     std::vector<SQLQueryPiece> && arguments)
 {
+    if (arguments.empty())
+        throw Exception(ErrorCodes::LOGICAL_ERROR, "applySimpleFunctionHelper require arguments");
+
     SQLQueryPiece res{node, node->result_type, StoreMethod::EMPTY};
 
     ASTs asts;
@@ -96,6 +99,9 @@ SQLQueryPiece applySimpleFunctionHelper(
 
                 chassert(table_to_select_from.empty());
                 table_to_select_from = subquery_name;
+
+                if (res.store_method == StoreMethod::VECTOR_GRID)
+                    throw Exception(ErrorCodes::LOGICAL_ERROR, "applySimpleFunctionHelper can't handle multiple instant vector arguments");
 
                 res.store_method = StoreMethod::VECTOR_GRID;
                 res.metric_name_dropped = argument.metric_name_dropped;
