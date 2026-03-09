@@ -60,7 +60,7 @@ void TimeSeriesColumnsValidator::validateColumnsImpl(const ColumnsDescription & 
         return *column;
     };
 
-    /// Validate columns for the "data" table.
+    /// Validate columns for the "samples" table.
     validateColumnForID(get_column_description(TimeSeriesColumnNames::ID));
     validateColumnForTimestamp(get_column_description(TimeSeriesColumnNames::Timestamp));
     validateColumnForValue(get_column_description(TimeSeriesColumnNames::Value));
@@ -96,7 +96,7 @@ void TimeSeriesColumnsValidator::validateTargetColumns(ViewTarget::Kind target_k
     catch (Exception & e)
     {
         e.addMessage("While checking columns of table {} which is the {} target of TimeSeries table {}", target_table_id.getNameForLogs(),
-                     toString(target_kind), time_series_storage_id.getNameForLogs());
+                     target_kind, time_series_storage_id.getNameForLogs());
         throw;
     }
 }
@@ -116,7 +116,7 @@ void TimeSeriesColumnsValidator::validateTargetColumnsImpl(ViewTarget::Kind targ
 
     switch (target_kind)
     {
-        case ViewTarget::Data:
+        case ViewTarget::Samples:
         {
             /// Here "check_default = false" because it's ok for the "id" column in the target table not to contain
             /// an expression for calculating the identifier of a time series.

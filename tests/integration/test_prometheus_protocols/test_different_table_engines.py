@@ -128,8 +128,9 @@ def cleanup_after_test():
     finally:
         node.query("DROP TABLE IF EXISTS prometheus SYNC")
         node.query("DROP TABLE IF EXISTS original SYNC")
-        node.query("DROP TABLE IF EXISTS mydata SYNC")
         node.query("DROP TABLE IF EXISTS mytable SYNC")
+        node.query("DROP TABLE IF EXISTS mysamples SYNC")
+        node.query("DROP TABLE IF EXISTS mytags SYNC")
         node.query("DROP TABLE IF EXISTS mymetrics SYNC")
 
 
@@ -166,7 +167,7 @@ def test_create_as_table():
 def test_inner_engines():
     node.query(
         "CREATE TABLE prometheus ENGINE=TimeSeries "
-        "DATA ENGINE=MergeTree ORDER BY (id, timestamp) "
+        "SAMPLES ENGINE=MergeTree ORDER BY (id, timestamp) "
         "TAGS ENGINE=AggregatingMergeTree ORDER BY (metric_name, id) "
         "METRICS ENGINE=ReplacingMergeTree ORDER BY metric_family_name"
     )
@@ -174,15 +175,11 @@ def test_inner_engines():
 
 
 def test_external_tables():
-    node.query("DROP TABLE IF EXISTS mydata")
-    node.query("DROP TABLE IF EXISTS mytags")
-    node.query("DROP TABLE IF EXISTS mymetrics")
-    node.query("DROP TABLE IF EXISTS prometheus")
-
     node.query(
-        "CREATE TABLE mydata (id UUID, timestamp DateTime64(3), value Float64) "
+        "CREATE TABLE mysamples (id UUID, timestamp DateTime64(3), value Float64) "
         "ENGINE=MergeTree ORDER BY (id, timestamp)"
     )
+
     node.query(
         "CREATE TABLE mytags ("
         "id UUID, "
@@ -202,6 +199,42 @@ def test_external_tables():
     )
     node.query(
         "CREATE TABLE prometheus ENGINE=TimeSeries "
-        "DATA mydata TAGS mytags METRICS mymetrics"
+        "SAMPLES mysamples TAGS mytags METRICS mymetrics"
+    )
+    check()
+
+
+# The keyword `SAMPLES` has an alias `DATA`, which also works.
+def test_data_keyword():
+    node.query(
+        "CREATE TABLE prometheus ENGINE=TimeSeries "
+        "DATA ENGINE=MergeTree ORDER BY (id, timestamp) "
+        "TAGS ENGINE=AggregatingMergeTree ORDER BY (metric_name, id) "
+        "METRICS ENGINE=ReplacingMergeTree ORDER BY metric_family_name"
+    )
+    check()
+
+    node.query("DROP TABLE prometheus")
+
+    node.query(
+        "CREATE TABLE mysamples (id UUID, timestamp DateTime64(3), value Float64) "
+        "ENGINE=MergeTree ORDER BY (id, timestamp)"
+    )
+    node.query(
+        "CREATE TABLE mytags ("
+        "id UUID, "
+        "metric_name LowCardinality(String), "
+        "tags Map(LowCardinality(String), String), "
+        "min_time SimpleAggregateFunction(min, Nullable(DateTime64(3))), "
+        "max_time SimpleAggregateFunction(max, Nullable(DateTime64(3)))) "
+        "ENGINE=AggregatingMergeTree ORDER BY (metric_name, id)"
+    )
+    node.query(
+        "CREATE TABLE mymetrics (metric_family_name String, type String, unit String, help String) "
+        "ENGINE=ReplacingMergeTree ORDER BY metric_family_name"
+    )
+    node.query(
+        "CREATE TABLE prometheus ENGINE=TimeSeries "
+        "DATA mysamples TAGS mytags METRICS mymetrics"
     )
     check()
