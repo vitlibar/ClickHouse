@@ -154,7 +154,7 @@ StorageTimeSeries::StorageTimeSeries(
 
     has_inner_tables = false;
 
-    for (auto target_kind : {ViewTarget::Data, ViewTarget::Tags, ViewTarget::Metrics})
+    for (auto target_kind : {ViewTarget::Samples, ViewTarget::Tags, ViewTarget::Metrics})
     {
         const ViewTarget * target_info = query.targets ? query.targets->tryGetTarget(target_kind) : nullptr;
         auto & target = targets.emplace_back();
