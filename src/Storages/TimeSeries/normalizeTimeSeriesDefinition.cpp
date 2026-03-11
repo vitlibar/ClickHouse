@@ -1,8 +1,12 @@
-#include <Storages/TimeSeries/TimeSeriesDefinitionNormalizer.h>
+#include <Storages/TimeSeries/normalizeTimeSeriesDefinition.h>
 
+#include <Interpreters/Context.h>
+#include <Interpreters/DatabaseCatalog.h>
+#include <Interpreters/StorageID.h>
 #include <Common/quoteString.h>
 #include <DataTypes/DataTypeFactory.h>
 #include <DataTypes/DataTypeFixedString.h>
+#include <Databases/IDatabase.h>
 #include <Parsers/ASTColumnDeclaration.h>
 #include <Parsers/ASTCreateQuery.h>
 #include <Parsers/ASTDataType.h>
@@ -31,30 +35,11 @@ namespace ErrorCodes
 }
 
 
-TimeSeriesDefinitionNormalizer::TimeSeriesDefinitionNormalizer(StorageID time_series_storage_id_,
-                                                               std::reference_wrapper<const TimeSeriesSettings> time_series_settings_,
-                                                               const ASTCreateQuery * as_create_query_)
-    : time_series_storage_id(std::move(time_series_storage_id_))
-    , time_series_settings(time_series_settings_)
-    , as_create_query(as_create_query_)
+namespace
 {
-}
 
-
-void TimeSeriesDefinitionNormalizer::normalize(ASTCreateQuery & create_query) const
-{
-    reorderColumns(create_query);
-    addMissingColumns(create_query);
-    addMissingDefaultForIDColumn(create_query);
-
-    if (as_create_query)
-        addMissingInnerEnginesFromAsTable(create_query);
-
-    addMissingInnerEngines(create_query);
-}
-
-
-void TimeSeriesDefinitionNormalizer::reorderColumns(ASTCreateQuery & create) const
+/// Reorders existing columns in the canonical way.
+void reorderColumns(ASTCreateQuery & create, const StorageID & time_series_storage_id, const TimeSeriesSettings & time_series_settings)
 {
     if (!create.columns_list || !create.columns_list->columns)
         return;
@@ -130,7 +115,8 @@ void TimeSeriesDefinitionNormalizer::reorderColumns(ASTCreateQuery & create) con
 }
 
 
-void TimeSeriesDefinitionNormalizer::addMissingColumns(ASTCreateQuery & create) const
+/// Adds missing columns with data types set by default.
+void addMissingColumns(ASTCreateQuery & create, const TimeSeriesSettings & time_series_settings)
 {
     if (!create.as_table.empty())
     {
@@ -260,33 +246,11 @@ void TimeSeriesDefinitionNormalizer::addMissingColumns(ASTCreateQuery & create) 
 }
 
 
-void TimeSeriesDefinitionNormalizer::addMissingDefaultForIDColumn(ASTCreateQuery & create) const
-{
-    /// Find the 'id' column and make a default expression for it.
-    if (!create.columns_list || !create.columns_list->columns)
-        return;
-
-    auto & columns = create.columns_list->columns->children;
-    auto it = std::find_if(columns.begin(), columns.end(), [](const ASTPtr & column)
-    {
-        return typeid_cast<const ASTColumnDeclaration &>(*column).name == TimeSeriesColumnNames::ID;
-    });
-
-    if (it == columns.end())
-        return;
-
-    auto & column_declaration = typeid_cast<ASTColumnDeclaration &>(**it);
-
-    /// We add a DEFAULT for the 'id' column only if it's not specified yet.
-    if (column_declaration.default_specifier == ColumnDefaultSpecifier::Empty && !column_declaration.getDefaultExpression())
-    {
-        column_declaration.default_specifier = ColumnDefaultSpecifier::Default;
-        column_declaration.setDefaultExpression(chooseIDAlgorithm(column_declaration));
-    }
-}
-
-
-ASTPtr TimeSeriesDefinitionNormalizer::chooseIDAlgorithm(const ASTColumnDeclaration & id_column) const
+/// Generates a formulae for calculating the identifier of a time series from the metric name and all the tags.
+ASTPtr chooseIDAlgorithm(
+    const ASTColumnDeclaration & id_column,
+    const StorageID & time_series_storage_id,
+    const TimeSeriesSettings & time_series_settings)
 {
     /// Build a list of arguments for a hash function.
     /// All hash functions below allow multiple arguments, so we use two arguments: metric_name, all_tags.
@@ -355,64 +319,41 @@ ASTPtr TimeSeriesDefinitionNormalizer::chooseIDAlgorithm(const ASTColumnDeclarat
 }
 
 
-void TimeSeriesDefinitionNormalizer::addMissingInnerEnginesFromAsTable(ASTCreateQuery & create) const
+/// Adds the DEFAULT expression for the 'id' column if it isn't specified yet.
+void addMissingDefaultForIDColumn(
+    ASTCreateQuery & create,
+    const StorageID & time_series_storage_id,
+    const TimeSeriesSettings & time_series_settings)
 {
-    if (!as_create_query)
+    /// Find the 'id' column and make a default expression for it.
+    if (!create.columns_list || !create.columns_list->columns)
         return;
 
-    for (auto target_kind : {ViewTarget::Samples, ViewTarget::Tags, ViewTarget::Metrics})
+    auto & columns = create.columns_list->columns->children;
+    auto it = std::find_if(columns.begin(), columns.end(), [](const ASTPtr & column)
     {
-        if (as_create_query->hasTargetTableID(target_kind))
-        {
-            /// It's unlikely correct to use "CREATE table AS other_table" when "other_table" has external tables like this:
-            /// CREATE TABLE other_table ENGINE=TimeSeries data mydata
-            /// (because `table` would use the same table "mydata").
-            /// Thus we just prohibit that.
-            QualifiedTableName as_table{as_create_query->getDatabase(), as_create_query->getTable()};
-            throw Exception(
-                ErrorCodes::INCORRECT_QUERY,
-                "Cannot CREATE a table AS {}.{} because it has external tables",
-                backQuoteIfNeed(as_table.database), backQuoteIfNeed(as_table.table));
-        }
+        return typeid_cast<const ASTColumnDeclaration &>(*column).name == TimeSeriesColumnNames::ID;
+    });
 
-        auto * inner_table_engine = create.getTargetInnerEngine(target_kind);
-        if (!inner_table_engine)
-        {
-            /// Copy an inner engine's definition from the other table.
-            inner_table_engine = as_create_query->getTargetInnerEngine(target_kind);
-            if (inner_table_engine)
-                create.setTargetInnerEngine(target_kind, boost::static_pointer_cast<ASTStorage>(inner_table_engine->clone()));
-        }
+    if (it == columns.end())
+        return;
+
+    auto & column_declaration = typeid_cast<ASTColumnDeclaration &>(**it);
+
+    /// We add a DEFAULT for the 'id' column only if it's not specified yet.
+    if (column_declaration.default_specifier == ColumnDefaultSpecifier::Empty && !column_declaration.getDefaultExpression())
+    {
+        column_declaration.default_specifier = ColumnDefaultSpecifier::Default;
+        column_declaration.setDefaultExpression(chooseIDAlgorithm(column_declaration, time_series_storage_id, time_series_settings));
     }
 }
 
 
-void TimeSeriesDefinitionNormalizer::addMissingInnerEngines(ASTCreateQuery & create) const
-{
-    for (auto target_kind : {ViewTarget::Samples, ViewTarget::Tags, ViewTarget::Metrics})
-    {
-        if (create.hasTargetTableID(target_kind))
-            continue; /// External target is set, inner engine is not needed.
-
-        auto * inner_table_engine = create.getTargetInnerEngine(target_kind);
-        if (inner_table_engine && inner_table_engine->engine)
-            continue; /// Engine is set already, skip it.
-
-        if (!inner_table_engine)
-        {
-            /// Some part of storage definition (such as PARTITION BY) is specified, but the inner ENGINE is not: just set default one.
-            auto new_inner_table_engine = make_intrusive<ASTStorage>();
-            inner_table_engine = new_inner_table_engine.get();
-            create.setTargetInnerEngine(target_kind, std::move(new_inner_table_engine));
-        }
-
-        /// Set engine by default.
-        setInnerEngineByDefault(target_kind, *inner_table_engine);
-    }
-}
-
-
-void TimeSeriesDefinitionNormalizer::setInnerEngineByDefault(ViewTarget::Kind inner_table_kind, ASTStorage & inner_storage_def) const
+/// Sets the engine of an inner table by default.
+void setInnerEngineByDefault(
+    ViewTarget::Kind inner_table_kind,
+    ASTStorage & inner_storage_def,
+    const TimeSeriesSettings & time_series_settings)
 {
     switch (inner_table_kind)
     {
@@ -482,6 +423,90 @@ void TimeSeriesDefinitionNormalizer::setInnerEngineByDefault(ViewTarget::Kind in
         default:
             UNREACHABLE(); /// This function must not be called with any other `kind`.
     }
+}
+
+
+/// Copies the definitions of inner engines from "CREATE AS <table>" if this is that kind of query.
+void addMissingInnerEnginesFromAsTable(ASTCreateQuery & create, const ASTCreateQuery & as_create_query)
+{
+    for (auto target_kind : {ViewTarget::Samples, ViewTarget::Tags, ViewTarget::Metrics})
+    {
+        if (as_create_query.hasTargetTableID(target_kind))
+        {
+            /// It's unlikely correct to use "CREATE table AS other_table" when "other_table" has external tables like this:
+            /// CREATE TABLE other_table ENGINE=TimeSeries data mydata
+            /// (because `table` would use the same table "mydata").
+            /// Thus we just prohibit that.
+            QualifiedTableName as_table{as_create_query.getDatabase(), as_create_query.getTable()};
+            throw Exception(
+                ErrorCodes::INCORRECT_QUERY,
+                "Cannot CREATE a table AS {}.{} because it has external tables",
+                backQuoteIfNeed(as_table.database), backQuoteIfNeed(as_table.table));
+        }
+
+        auto * inner_table_engine = create.getTargetInnerEngine(target_kind);
+        if (!inner_table_engine)
+        {
+            /// Copy an inner engine's definition from the other table.
+            inner_table_engine = as_create_query.getTargetInnerEngine(target_kind);
+            if (inner_table_engine)
+                create.setTargetInnerEngine(target_kind, boost::static_pointer_cast<ASTStorage>(inner_table_engine->clone()));
+        }
+    }
+}
+
+
+/// Adds engines of inner tables to the definition if they aren't specified yet.
+void addMissingInnerEngines(ASTCreateQuery & create, const TimeSeriesSettings & time_series_settings)
+{
+    for (auto target_kind : {ViewTarget::Samples, ViewTarget::Tags, ViewTarget::Metrics})
+    {
+        if (create.hasTargetTableID(target_kind))
+            continue; /// External target is set, inner engine is not needed.
+
+        auto * inner_table_engine = create.getTargetInnerEngine(target_kind);
+        if (inner_table_engine && inner_table_engine->engine)
+            continue; /// Engine is set already, skip it.
+
+        if (!inner_table_engine)
+        {
+            /// Some part of storage definition (such as PARTITION BY) is specified, but the inner ENGINE is not: just set default one.
+            auto new_inner_table_engine = make_intrusive<ASTStorage>();
+            inner_table_engine = new_inner_table_engine.get();
+            create.setTargetInnerEngine(target_kind, std::move(new_inner_table_engine));
+        }
+
+        /// Set engine by default.
+        setInnerEngineByDefault(target_kind, *inner_table_engine, time_series_settings);
+    }
+}
+
+}
+
+
+void normalizeTimeSeriesDefinition(ASTCreateQuery & create_query, const ContextPtr & local_context)
+{
+    StorageID time_series_storage_id{create_query.getDatabase(), create_query.getTable()};
+    TimeSeriesSettings time_series_settings;
+    if (create_query.storage)
+        time_series_settings.loadFromQuery(*create_query.storage);
+
+    boost::intrusive_ptr<const ASTCreateQuery> as_create_query;
+    if (!create_query.as_table.empty())
+    {
+        auto as_database = local_context->resolveDatabase(create_query.as_database);
+        as_create_query = boost::static_pointer_cast<const ASTCreateQuery>(
+            DatabaseCatalog::instance().getDatabase(as_database)->getCreateTableQuery(create_query.as_table, local_context));
+    }
+
+    reorderColumns(create_query, time_series_storage_id, time_series_settings);
+    addMissingColumns(create_query, time_series_settings);
+    addMissingDefaultForIDColumn(create_query, time_series_storage_id, time_series_settings);
+
+    if (as_create_query)
+        addMissingInnerEnginesFromAsTable(create_query, *as_create_query);
+
+    addMissingInnerEngines(create_query, time_series_settings);
 }
 
 }
