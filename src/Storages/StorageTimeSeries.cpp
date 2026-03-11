@@ -10,10 +10,9 @@
 #include <Storages/AlterCommands.h>
 #include <Storages/StorageFactory.h>
 #include <Storages/TimeSeries/TimeSeriesColumnNames.h>
-#include <Storages/TimeSeries/TimeSeriesColumnsValidator.h>
-#include <Storages/TimeSeries/TimeSeriesDefinitionNormalizer.h>
 #include <Storages/TimeSeries/TimeSeriesInnerTablesCreator.h>
 #include <Storages/TimeSeries/TimeSeriesSettings.h>
+#include <Storages/TimeSeries/checkTimeSeriesTargetTable.h>
 
 #include <base/insertAtEnd.h>
 #include <filesystem>
@@ -75,8 +74,7 @@ namespace
                 auto target_table = DatabaseCatalog::instance().getTable(target_table_id, context);
                 auto target_metadata = target_table->getInMemoryMetadataPtr();
                 const auto & target_columns = target_metadata->columns;
-                TimeSeriesColumnsValidator validator{time_series_storage_id, time_series_settings};
-                validator.validateTargetColumns(kind, target_table_id, target_columns);
+                checkTimeSeriesTargetTable(target_table_id, target_columns, kind, time_series_settings);
             }
         }
         else
@@ -103,23 +101,6 @@ namespace
 }
 
 
-void StorageTimeSeries::normalizeTableDefinition(ASTCreateQuery & create_query, const ContextPtr & local_context)
-{
-    StorageID time_series_storage_id{create_query.getDatabase(), create_query.getTable()};
-    TimeSeriesSettings time_series_settings;
-    if (create_query.storage)
-        time_series_settings.loadFromQuery(*create_query.storage);
-    boost::intrusive_ptr<const ASTCreateQuery> as_create_query;
-    if (!create_query.as_table.empty())
-    {
-        auto as_database = local_context->resolveDatabase(create_query.as_database);
-        as_create_query = boost::static_pointer_cast<const ASTCreateQuery>(
-            DatabaseCatalog::instance().getDatabase(as_database)->getCreateTableQuery(create_query.as_table, local_context));
-    }
-    TimeSeriesDefinitionNormalizer normalizer{time_series_storage_id, time_series_settings, as_create_query.get()};
-    normalizer.normalize(create_query);
-}
-
 
 StorageTimeSeries::StorageTimeSeries(
     const StorageID & table_id,
@@ -139,12 +120,6 @@ StorageTimeSeries::StorageTimeSeries(
     }
 
     storage_settings = getTimeSeriesSettingsFromQuery(query);
-
-    if (mode < LoadingStrictnessLevel::ATTACH)
-    {
-        TimeSeriesColumnsValidator validator{table_id, *storage_settings};
-        validator.validateColumns(columns);
-    }
 
     StorageInMemoryMetadata storage_metadata;
     storage_metadata.setColumns(columns);
