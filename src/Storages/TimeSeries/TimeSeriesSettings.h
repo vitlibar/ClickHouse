@@ -32,7 +32,11 @@ struct TimeSeriesSettings
 
     TIMESERIES_SETTINGS_SUPPORTED_TYPES(TimeSeriesSettings, DECLARE_SETTING_SUBSCRIPT_OPERATOR)
 
-    void loadFromQuery(ASTStorage & storage_def);
+    /// Loads the settings from a CREATE TABLE query (SETTINGS clause).
+    void loadFromQuery(const ASTStorage & storage_def);
+
+    /// Saves the settings to a CREATE TABLE query (SETTINGS clause), keeping any pre-existing entries.
+    void copyToQuery(ASTStorage & storage_def);
 
     static bool hasBuiltin(std::string_view name);
 

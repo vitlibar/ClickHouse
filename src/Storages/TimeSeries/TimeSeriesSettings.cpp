@@ -4,6 +4,7 @@
 #include <Core/BaseSettingsFwdMacrosImpl.h>
 #include <Parsers/ASTCreateQuery.h>
 #include <Parsers/ASTFunction.h>
+#include <Parsers/ASTSetQuery.h>
 
 
 namespace DB
@@ -59,7 +60,7 @@ TimeSeriesSettings::~TimeSeriesSettings() = default;
 
 TIMESERIES_SETTINGS_SUPPORTED_TYPES(TimeSeriesSettings, IMPLEMENT_SETTING_SUBSCRIPT_OPERATOR)
 
-void TimeSeriesSettings::loadFromQuery(ASTStorage & storage_def)
+void TimeSeriesSettings::loadFromQuery(const ASTStorage & storage_def)
 {
     if (storage_def.settings)
     {
@@ -73,6 +74,24 @@ void TimeSeriesSettings::loadFromQuery(ASTStorage & storage_def)
                 e.addMessage("for storage " + storage_def.engine->name);
             throw;
         }
+    }
+}
+
+void TimeSeriesSettings::copyToQuery(ASTStorage & storage_def)
+{
+    if (!storage_def.settings)
+    {
+        auto settings_ast = make_intrusive<ASTSetQuery>();
+        settings_ast->is_standalone = false;
+        storage_def.set(storage_def.settings, settings_ast);
+    }
+
+    auto & dest_changes = storage_def.settings->changes;
+    for (const auto & src_change : impl->changes())
+    {
+        bool exists = dest_changes.tryGet(src_change.name) != nullptr;
+        if (!exists)
+            dest_changes.push_back(src_change);
     }
 }
 
