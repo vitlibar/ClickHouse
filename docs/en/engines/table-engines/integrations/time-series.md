@@ -314,6 +314,10 @@ Here is a list of settings which can be specified while defining a `TimeSeries` 
 
 | Name | Type | Default | Description |
 |---|---|---|---|
+| `timestamp_type` | DataType | `DateTime64(3)` | Data type used to represent timestamps. Supported types: `DateTime64(X)`, `DateTime`, `UInt32`. Can also be set by specifying the type of the `timestamp` column explicitly |
+| `scalar_type` | DataType | `Float64` | Data type used to represent scalar values. Supported types: `Float32` or `Float64`. Can also be set by specifying the type of the `value` column explicitly |
+| `id_type` | DataType | `UUID` | Data type used to represent identifiers (fingerprints) of time series. Supported types: `UUID`, `UInt64`, `UInt128`, `FixedString(16)`. Can also be set by specifying the type of the `id` column explicitly |
+| `id_generator` | Expression | depends on `id_type` | Expression used to generate identifiers of time series from their tags. For the default `id_type = UUID` the default expression is `reinterpretAsUUID(sipHash128(metric_name, all_tags))`. Can also be set by specifying the `DEFAULT` expression of the `id` column explicitly |
 | `tags_to_columns` | Map | {} | Map specifying which tags should be put to separate columns in the [tags](#tags-table) table. Syntax: `{'tag1': 'column1', 'tag2' : column2, ...}` |
 | `use_all_tags_column_to_generate_id` | Bool | true | When generating an expression to calculate an identifier of a time series, this flag enables using the `all_tags` column in that calculation |
 | `store_min_time_and_max_time` | Bool | true | If set to true then the table will store `min_time` and `max_time` for each time series |
