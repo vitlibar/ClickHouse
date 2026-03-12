@@ -10,9 +10,9 @@
 #include <Storages/AlterCommands.h>
 #include <Storages/StorageFactory.h>
 #include <Storages/TimeSeries/TimeSeriesColumnNames.h>
-#include <Storages/TimeSeries/TimeSeriesColumnsValidator.h>
 #include <Storages/TimeSeries/TimeSeriesInnerTablesCreator.h>
 #include <Storages/TimeSeries/TimeSeriesSettings.h>
+#include <Storages/TimeSeries/checkTimeSeriesTargetTable.h>
 
 #include <base/insertAtEnd.h>
 #include <filesystem>
@@ -74,8 +74,7 @@ namespace
                 auto target_table = DatabaseCatalog::instance().getTable(target_table_id, context);
                 auto target_metadata = target_table->getInMemoryMetadataPtr();
                 const auto & target_columns = target_metadata->columns;
-                TimeSeriesColumnsValidator validator{time_series_storage_id, time_series_settings};
-                validator.validateTargetColumns(kind, target_table_id, target_columns);
+                checkTimeSeriesTargetTable(target_table_id, target_columns, kind, time_series_settings);
             }
         }
         else
@@ -121,12 +120,6 @@ StorageTimeSeries::StorageTimeSeries(
     }
 
     storage_settings = getTimeSeriesSettingsFromQuery(query);
-
-    if (mode < LoadingStrictnessLevel::ATTACH)
-    {
-        TimeSeriesColumnsValidator validator{table_id, *storage_settings};
-        validator.validateColumns(columns);
-    }
 
     StorageInMemoryMetadata storage_metadata;
     storage_metadata.setColumns(columns);
