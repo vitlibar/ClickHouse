@@ -10,9 +10,10 @@
 #include <Storages/AlterCommands.h>
 #include <Storages/StorageFactory.h>
 #include <Storages/TimeSeries/TimeSeriesColumnNames.h>
-#include <Storages/TimeSeries/TimeSeriesInnerTablesCreator.h>
 #include <Storages/TimeSeries/TimeSeriesSettings.h>
 #include <Storages/TimeSeries/checkTimeSeriesTargetTable.h>
+#include <Storages/TimeSeries/createTimeSeriesInnerTable.h>
+#include <Storages/TimeSeries/normalizeTimeSeriesDefinition.h>
 
 #include <base/insertAtEnd.h>
 #include <filesystem>
@@ -34,72 +35,7 @@ namespace ErrorCodes
     extern const int UNEXPECTED_TABLE_ENGINE;
 }
 
-
-namespace
-{
-    namespace fs = std::filesystem;
-
-    /// Loads TimeSeries storage settings from a create query.
-    std::shared_ptr<const TimeSeriesSettings> getTimeSeriesSettingsFromQuery(const ASTCreateQuery & query)
-    {
-        auto storage_settings = std::make_shared<TimeSeriesSettings>();
-        if (query.storage)
-            storage_settings->loadFromQuery(*query.storage);
-        return storage_settings;
-    }
-
-    /// Creates an inner target table or just makes its storage ID.
-    /// This function is used by the constructor of StorageTimeSeries to find (or create) its target tables.
-    StorageID initTarget(
-        ViewTarget::Kind kind,
-        const ViewTarget * target_info,
-        const ContextPtr & context,
-        const StorageID & time_series_storage_id,
-        const ColumnsDescription & time_series_columns,
-        const TimeSeriesSettings & time_series_settings,
-        LoadingStrictnessLevel mode)
-    {
-        StorageID target_table_id = StorageID::createEmpty();
-
-        bool is_external_target = target_info && !target_info->table_id.empty();
-        if (is_external_target)
-        {
-            /// A target table is specified.
-            target_table_id = target_info->table_id;
-
-            if (mode < LoadingStrictnessLevel::ATTACH)
-            {
-                /// If it's not an ATTACH request then
-                /// check that the specified target table has all the required columns.
-                auto target_table = DatabaseCatalog::instance().getTable(target_table_id, context);
-                auto target_metadata = target_table->getInMemoryMetadataPtr();
-                const auto & target_columns = target_metadata->columns;
-                checkTimeSeriesTargetTable(target_table_id, target_columns, kind, time_series_settings);
-            }
-        }
-        else
-        {
-            TimeSeriesInnerTablesCreator inner_tables_creator{context, time_series_storage_id, time_series_columns, time_series_settings};
-            auto inner_uuid = target_info ? target_info->inner_uuid : UUIDHelpers::Nil;
-
-            /// An inner target table should be used.
-            if (mode >= LoadingStrictnessLevel::ATTACH)
-            {
-                /// If it's an ATTACH request, then the inner target table must be already created.
-                target_table_id = inner_tables_creator.getInnerTableID(kind, inner_uuid);
-            }
-            else
-            {
-                /// Create the inner target table.
-                auto inner_table_engine = target_info ? target_info->inner_engine : nullptr;
-                target_table_id = inner_tables_creator.createInnerTable(kind, inner_uuid, inner_table_engine->as<ASTStorage>());
-            }
-        }
-
-        return target_table_id;
-    }
-}
-
+namespace fs = std::filesystem;
 
 
 StorageTimeSeries::StorageTimeSeries(
@@ -119,35 +55,70 @@ StorageTimeSeries::StorageTimeSeries(
                         "is not enabled (the setting 'allow_experimental_time_series_table')");
     }
 
-    storage_settings = getTimeSeriesSettingsFromQuery(query);
+    auto normalized_settings = std::make_shared<TimeSeriesSettings>();
+    if (query.storage)
+        normalized_settings->loadFromQuery(*query.storage);
+    normalizeTimeSeriesSettings(*normalized_settings, query, local_context);
+    storage_settings = normalized_settings;
+
+    auto normalized_columns = columns;
+    normalizeTimeSeriesColumns(normalized_columns, *storage_settings);
 
     StorageInMemoryMetadata storage_metadata;
-    storage_metadata.setColumns(columns);
+    storage_metadata.setColumns(normalized_columns);
     if (!comment.empty())
         storage_metadata.setComment(comment);
     setInMemoryMetadata(storage_metadata);
 
-    has_inner_tables = false;
-
     for (auto target_kind : {ViewTarget::Samples, ViewTarget::Tags, ViewTarget::Metrics})
     {
-        const ViewTarget * target_info = query.targets ? query.targets->tryGetTarget(target_kind) : nullptr;
-        auto & target = targets.emplace_back();
+        Target target;
         target.kind = target_kind;
-        target.table_id = initTarget(target_kind, target_info, local_context, getStorageID(), columns, *storage_settings, mode);
-        target.is_inner_table = target_info && target_info->table_id.empty();
 
-        if (target_kind == ViewTarget::Metrics && !target.is_inner_table)
+        if (auto target_table_id = query.getTargetTableID(target_kind))
         {
-            auto table = DatabaseCatalog::instance().tryGetTable(target.table_id, getContext());
-            auto metadata = table->getInMemoryMetadataPtr();
+            /// A target table is specified.
+            target.table_id = target_table_id;
 
-            for (const auto & column : metadata->columns)
-                if (column.type->lowCardinality())
-                    throw Exception(ErrorCodes::SUPPORT_IS_DISABLED, "External metrics table cannot have LowCardnality columns for now.");
+            if (mode < LoadingStrictnessLevel::ATTACH)
+            {
+                /// If it's not an ATTACH request then
+                /// check that the specified target table has all the required columns.
+                auto target_table = DatabaseCatalog::instance().getTable(target_table_id, local_context);
+                auto target_metadata = target_table->getInMemoryMetadataPtr();
+                const auto & target_columns = target_metadata->columns;
+                checkTimeSeriesTargetTable(target_table_id, target_columns, target_kind, *storage_settings);
+
+                if (target_kind == ViewTarget::Metrics)
+                {
+                    for (const auto & column : target_columns)
+                        if (column.type->lowCardinality())
+                            throw Exception(ErrorCodes::SUPPORT_IS_DISABLED,
+                                            "External metrics table cannot have LowCardinality columns for now.");
+                }
+            }
+        }
+        else
+        {
+            /// An inner target table should be used.
+            target.is_inner_table = true;
+            has_inner_tables = true;
+            auto inner_uuid = query.getTargetInnerUUID(target_kind);
+
+            if (mode >= LoadingStrictnessLevel::ATTACH)
+            {
+                /// If it's an ATTACH request, then the inner target table must be already created.
+                target.table_id = getTimeSeriesInnerTableID(target_kind, inner_uuid, table_id);
+            }
+            else
+            {
+                /// Create the inner target table.
+                auto inner_engine = getTimeSeriesInnerEngine(target_kind, query, *storage_settings, local_context);
+                target.table_id = createTimeSeriesInnerTable(target_kind, inner_uuid, inner_engine, table_id, normalized_columns, *storage_settings, local_context);
+            }
         }
 
-        has_inner_tables |= target.is_inner_table;
+        targets.emplace_back(std::move(target));
     }
 }
 

@@ -91,11 +91,11 @@ private:
     {
         ViewTarget::Kind kind;
         StorageID table_id = StorageID::createEmpty();
-        bool is_inner_table;
+        bool is_inner_table = false;
     };
 
     std::vector<Target> targets;
-    bool has_inner_tables;
+    bool has_inner_tables = false;
 };
 
 std::shared_ptr<StorageTimeSeries> storagePtrToTimeSeries(StoragePtr storage);
