@@ -6,13 +6,16 @@
 #include <algorithm>
 #include <Columns/ColumnArray.h>
 #include <Columns/ColumnMap.h>
+#include <Columns/ColumnString.h>
 #include <Columns/ColumnTuple.h>
 #include <Core/Field.h>
 #include <Core/DecimalFunctions.h>
 #include <DataTypes/DataTypeDateTime64.h>
+#include <DataTypes/DataTypesDecimal.h>
 #include <DataTypes/DataTypeLowCardinality.h>
 #include <DataTypes/DataTypeMap.h>
 #include <DataTypes/DataTypeNullable.h>
+#include <DataTypes/DataTypeString.h>
 #include <Common/logger_useful.h>
 #include <Storages/ColumnsDescription.h>
 #include <Storages/StorageTimeSeries.h>
@@ -38,6 +41,10 @@ namespace DB
 
 namespace TimeSeriesSetting
 {
+    extern const TimeSeriesSettingsASTFunction id_generator;
+    extern const TimeSeriesSettingsDataType id_type;
+    extern const TimeSeriesSettingsDataType timestamp_type;
+    extern const TimeSeriesSettingsDataType scalar_type;
     extern const TimeSeriesSettingsBool store_min_time_and_max_time;
     extern const TimeSeriesSettingsMap tags_to_columns;
     extern const TimeSeriesSettingsBool use_all_tags_column_to_generate_id;
@@ -46,118 +53,73 @@ namespace TimeSeriesSetting
 namespace ErrorCodes
 {
     extern const int ILLEGAL_TIME_SERIES_TAGS;
-    extern const int ILLEGAL_COLUMN;
-    extern const int INCOMPATIBLE_COLUMNS;
 }
 
 
 namespace
 {
-    /// Validates that the "id" column has a DEFAULT expression.
-    void validateColumnForID(const ColumnDescription & column)
+    /// Returns the type unchanged if it is String or LowCardinality(String), otherwise returns DataTypeString.
+    /// We use insertData() to fill these columns, which requires String or LowCardinality(String),
+    /// and the block will be converted to the target type before insertion anyway.
+    DataTypePtr castToStringType(const DataTypePtr & type)
     {
-        if (!column.default_desc.expression)
-            throw Exception(ErrorCodes::INCOMPATIBLE_COLUMNS,
-                "The DEFAULT expression for column {} must contain an expression "
-                "which will be used to calculate the identifier of each time series: {} {} DEFAULT ...",
-                column.name, column.name, column.type->getName());
+        if (isString(removeLowCardinality(type)))
+            return type;
+        return std::make_shared<DataTypeString>();
     }
 
-    /// Validates that a timestamp column has type DateTime64, and extracts its scale.
-    void validateColumnForTimestamp(const ColumnDescription & column, UInt32 & out_scale)
+    /// Returns the type unchanged if it is Map with string-like keys and values, otherwise returns Map(String, String).
+    std::shared_ptr<const DataTypeMap> castToStringMapType(const DataTypePtr & type)
     {
-        auto maybe_datetime64_type = removeNullable(column.type);
-        if (!isDateTime64(maybe_datetime64_type))
-            throw Exception(ErrorCodes::INCOMPATIBLE_COLUMNS,
-                "Column {} has illegal data type {}, expected DateTime64",
-                column.name, column.type->getName());
-        out_scale = typeid_cast<const DataTypeDateTime64 &>(*maybe_datetime64_type).getScale();
+        if (const auto * map_type = typeid_cast<const DataTypeMap *>(type.get());
+            map_type
+            && isString(removeLowCardinality(map_type->getKeyType()))
+            && isString(removeLowCardinality(map_type->getValueType())))
+            return std::static_pointer_cast<const DataTypeMap>(type);
+        return std::make_shared<DataTypeMap>(std::make_shared<DataTypeString>(), std::make_shared<DataTypeString>());
     }
 
-    /// Validates that the "value" column has a Float type.
-    void validateColumnForValue(const ColumnDescription & column)
+    /// Sorts labels by name, removes exact duplicates and labels with empty values.
+    /// Throws if any label name is empty or if two labels have the same name but different values.
+    /// Stores the result as string_view pairs pointing into the original protobuf data.
+    void sortTagsAndRemoveDuplicates(
+        const google::protobuf::RepeatedPtrField<prometheus::Label> & labels,
+        std::vector<std::pair<std::string_view, std::string_view>> & res)
     {
-        if (!isFloat(removeNullable(column.type)))
-            throw Exception(ErrorCodes::INCOMPATIBLE_COLUMNS,
-                "Column {} has illegal data type {}, expected Float32 or Float64",
-                column.name, column.type->getName());
-    }
+        res.clear();
+        res.reserve(labels.size());
 
-    /// Validates that a tag value column has a String or LowCardinality(String) type.
-    void validateColumnForTagValue(const ColumnDescription & column)
-    {
-        if (!isString(removeLowCardinalityAndNullable(column.type)))
-            throw Exception(ErrorCodes::INCOMPATIBLE_COLUMNS,
-                "Column {} has illegal data type {}, expected String or LowCardinality(String)",
-                column.name, column.type->getName());
-    }
-
-    /// Validates that a tags map column has type Map(String, String) or Map(LowCardinality(String), String).
-    void validateColumnForTagsMap(const ColumnDescription & column)
-    {
-        if (!isMap(column.type)
-            || !isString(removeLowCardinality(typeid_cast<const DataTypeMap &>(*column.type).getKeyType()))
-            || !isString(removeLowCardinality(typeid_cast<const DataTypeMap &>(*column.type).getValueType())))
-            throw Exception(ErrorCodes::INCOMPATIBLE_COLUMNS,
-                "Column {} has illegal data type {}, expected Map(String, String) or Map(LowCardinality(String), String)",
-                column.name, column.type->getName());
-    }
-
-    /// Checks that a specified set of labels is sorted and has no duplications, and there is one label named "__name__".
-    void checkLabels(const google::protobuf::RepeatedPtrField<prometheus::Label> & labels)
-    {
-        bool metric_name_found = false;
-        for (size_t i = 0; i != static_cast<size_t>(labels.size()); ++i)
+        for (const auto & label : labels)
         {
-            const auto & label = labels[static_cast<int>(i)];
-            const auto & label_name = label.name();
-            const auto & label_value = label.value();
-
-            if (label_name.empty())
+            if (label.name().empty())
                 throw Exception(ErrorCodes::ILLEGAL_TIME_SERIES_TAGS, "Label name should not be empty");
-            if (label_value.empty())
-                continue; /// Empty label value is treated like the label doesn't exist.
-
-            if (label_name == TimeSeriesTagNames::MetricName)
-                metric_name_found = true;
-
-            if (i)
-            {
-                /// Check that labels are sorted.
-                const auto & previous_label_name = labels[static_cast<int>(i - 1)].name();
-                if (label_name <= previous_label_name)
-                {
-                    if (label_name == previous_label_name)
-                        throw Exception(ErrorCodes::ILLEGAL_TIME_SERIES_TAGS, "Found duplicate label {}", label_name);
-                    throw Exception(
-                        ErrorCodes::ILLEGAL_TIME_SERIES_TAGS,
-                        "Label names are not sorted in lexicographical order ({} > {})",
-                        previous_label_name,
-                        label_name);
-                }
-            }
+            res.emplace_back(label.name(), label.value());
         }
 
-        if (!metric_name_found)
-            throw Exception(ErrorCodes::ILLEGAL_TIME_SERIES_TAGS, "Metric name (label {}) not found", TimeSeriesTagNames::MetricName);
-    }
+        std::sort(res.begin(), res.end(), [](const auto & left, const auto & right) { return left.first < right.first; });
+        res.erase(std::unique(res.begin(), res.end()), res.end());
 
-    /// Finds the description of an insertable column in the list.
-    const ColumnDescription & getInsertableColumnDescription(const ColumnsDescription & columns, const String & column_name, const StorageID & time_series_storage_id)
-    {
-        const ColumnDescription * column = columns.tryGet(column_name);
-        if (!column || ((column->default_desc.kind != ColumnDefaultKind::Default) && (column->default_desc.kind != ColumnDefaultKind::Ephemeral)))
+        auto adjacent = std::adjacent_find(res.begin(), res.end(), [](const auto & left, const auto & right) { return left.first == right.first; });
+        if (adjacent != res.end())
         {
-            throw Exception(ErrorCodes::ILLEGAL_COLUMN, "{}: Column {} {}",
-                            time_series_storage_id.getNameForLogs(), column_name, column ? "non-insertable" : "doesn't exist");
+            throw Exception(
+                ErrorCodes::ILLEGAL_TIME_SERIES_TAGS,
+                "Found two labels with the same name {} but different values {} and {}",
+                adjacent->first, adjacent->second, std::next(adjacent)->second);
         }
-        return *column;
+
+        std::erase_if(res, [](const auto & x) { return x.second.empty(); });
     }
 
     /// Calculates the identifier of each time series in "tags_block" using the default expression for the "id" column,
-    /// and adds column "id" with the results to "tags_block".
-    IColumn & calculateId(const ContextPtr & context, const ColumnDescription & id_column_description, Block & tags_block)
+    /// and returns column "id" with the results.
+    ColumnPtr calculateId(const ContextPtr & context, const TimeSeriesSettings & time_series_settings, const Block & tags_block)
     {
+        DataTypePtr id_type = time_series_settings[TimeSeriesSetting::id_type];
+        ColumnDescription id_column_description{TimeSeriesColumnNames::ID, id_type};
+        id_column_description.default_desc.kind = ColumnDefaultKind::Default;
+        id_column_description.default_desc.expression = time_series_settings[TimeSeriesSetting::id_generator].value;
+
         auto blocks = std::make_shared<Blocks>();
         blocks->push_back(tags_block);
 
@@ -166,7 +128,6 @@ namespace
 
         Block header_with_id;
         const auto & id_name = id_column_description.name;
-        auto id_type = id_column_description.type;
         header_with_id.insert(ColumnWithTypeAndName{id_type, id_name});
 
         auto adding_missing_defaults_dag = addMissingDefaults(
@@ -215,19 +176,7 @@ namespace
         if (!id_column)
             id_column = id_type->createColumn();
 
-        IColumn & id_column_ref = *id_column;
-        tags_block.insert(0, ColumnWithTypeAndName{std::move(id_column), id_type, id_name});
-        return id_column_ref;
-    }
-
-    /// Converts a timestamp in milliseconds to a DateTime64 with a specified scale.
-    DateTime64 scaleTimestamp(Int64 timestamp_ms, UInt32 scale)
-    {
-        if (scale == 3)
-            return timestamp_ms;
-        if (scale > 3)
-            return timestamp_ms * DecimalUtils::scaleMultiplier<DateTime64>(scale - 3);
-        return timestamp_ms / DecimalUtils::scaleMultiplier<DateTime64>(3 - scale);
+        return std::move(id_column);
     }
 
     /// Finds min time and max time in a time series.
@@ -253,9 +202,9 @@ namespace
     /// Converts time series from the protobuf format to prepared blocks for inserting into target tables.
     BlocksToInsert toBlocks(const google::protobuf::RepeatedPtrField<prometheus::TimeSeries> & time_series,
                             const ContextPtr & context,
-                            const StorageID & time_series_storage_id,
-                            const StorageInMemoryMetadata & time_series_storage_metadata,
-                            const TimeSeriesSettings & time_series_settings)
+                            const TimeSeriesSettings & time_series_settings,
+                            const StorageInMemoryMetadata & tags_metadata,
+                            const StorageInMemoryMetadata & samples_metadata)
     {
         size_t num_time_series = time_series.size();
 
@@ -266,117 +215,82 @@ namespace
         if (!num_samples)
             return {}; /// Nothing to insert into target tables.
 
-        /// Column types must be extracted from the target tables' metadata.
-        const auto & columns_description = time_series_storage_metadata.columns;
-
-        auto get_column_description = [&](const String & column_name) -> const ColumnDescription &
-        {
-            return getInsertableColumnDescription(columns_description, column_name, time_series_storage_id);
-        };
-
-        /// We're going to prepare two blocks - one for the "samples" table, and one for the "tags" table.
-        Block samples_block;
-        Block tags_block;
-
-        auto make_column_for_samples_block = [&](const ColumnDescription & column_description) -> IColumn &
-        {
-            auto column = column_description.type->createColumn();
-            column->reserve(num_samples);
-            auto * column_ptr = column.get();
-            samples_block.insert(ColumnWithTypeAndName{std::move(column), column_description.type, column_description.name});
-            return *column_ptr;
-        };
-
-        auto make_column_for_tags_block = [&](const ColumnDescription & column_description) -> IColumn &
-        {
-            auto column = column_description.type->createColumn();
-            column->reserve(num_time_series);
-            auto * column_ptr = column.get();
-            tags_block.insert(ColumnWithTypeAndName{std::move(column), column_description.type, column_description.name});
-            return *column_ptr;
-        };
-
-        /// Create columns.
-
-        /// Column "id".
-        const auto & id_description = get_column_description(TimeSeriesColumnNames::ID);
-        validateColumnForID(id_description);
-        auto & id_column_in_data_table = make_column_for_samples_block(id_description);
-
-        /// Column "timestamp".
-        const auto & timestamp_description = get_column_description(TimeSeriesColumnNames::Timestamp);
-        UInt32 timestamp_scale;
-        validateColumnForTimestamp(timestamp_description, timestamp_scale);
-        auto & timestamp_column = make_column_for_samples_block(timestamp_description);
-
-        /// Column "value".
-        const auto & value_description = get_column_description(TimeSeriesColumnNames::Value);
-        validateColumnForValue(value_description);
-        auto & value_column = make_column_for_samples_block(value_description);
+        /// Prepare a block for inserting to the "tags" table.
+        DataTypePtr timestamp_type = samples_metadata.columns.get(TimeSeriesColumnNames::Timestamp).type;
+        UInt32 timestamp_scale = tryGetDecimalScale(*timestamp_type).value_or(0);
 
         /// Column "metric_name".
-        const auto & metric_name_description = get_column_description(TimeSeriesColumnNames::MetricName);
-        validateColumnForTagValue(metric_name_description);
-        auto & metric_name_column = make_column_for_tags_block(metric_name_description);
+        DataTypePtr metric_name_type = castToStringType(tags_metadata.columns.get(TimeSeriesColumnNames::MetricName).type);
+        auto metric_name_column = metric_name_type->createColumn();
+        metric_name_column->reserve(num_time_series);
 
         /// Columns we should check explicitly that they're filled after filling each row.
         std::vector<IColumn *> columns_to_fill_in_tags_table;
 
         /// Columns corresponding to specific tags specified in the "tags_to_columns" setting.
-        std::unordered_map<String, IColumn *> columns_by_tag_name;
+        std::unordered_map<std::string_view, std::pair<MutableColumnPtr, DataTypePtr>> columns_by_tag_name;
         const Map & tags_to_columns = time_series_settings[TimeSeriesSetting::tags_to_columns];
         for (const auto & tag_name_and_column_name : tags_to_columns)
         {
             const auto & tuple = tag_name_and_column_name.safeGet<Tuple>();
             const auto & tag_name = tuple.at(0).safeGet<String>();
             const auto & column_name = tuple.at(1).safeGet<String>();
-            const auto & column_description = get_column_description(column_name);
-            validateColumnForTagValue(column_description);
-            auto & column = make_column_for_tags_block(column_description);
-            columns_by_tag_name[tag_name] = &column;
-            columns_to_fill_in_tags_table.emplace_back(&column);
+            DataTypePtr column_type = castToStringType(tags_metadata.columns.get(column_name).type);
+            auto column = column_type->createColumn();
+            column->reserve(num_time_series);
+            columns_to_fill_in_tags_table.emplace_back(column.get());
+            columns_by_tag_name[tag_name] = {std::move(column), column_type};
         }
 
         /// Column "tags".
-        const auto & tags_description = get_column_description(TimeSeriesColumnNames::Tags);
-        validateColumnForTagsMap(tags_description);
-        auto & tags_column = typeid_cast<ColumnMap &>(make_column_for_tags_block(tags_description));
-        IColumn & tags_names = tags_column.getNestedData().getColumn(0);
-        IColumn & tags_values = tags_column.getNestedData().getColumn(1);
-        auto & tags_offsets = tags_column.getNestedColumn().getOffsets();
+        auto tags_map_type = castToStringMapType(tags_metadata.columns.get(TimeSeriesColumnNames::Tags).type);
+        auto tags_names = tags_map_type->getKeyType()->createColumn();
+        tags_names->reserve(num_time_series);
+        auto tags_values = tags_map_type->getValueType()->createColumn();
+        tags_values->reserve(num_time_series);
+        auto tags_offsets = ColumnVector<IColumn::Offset>::create();
+        tags_offsets->reserve(num_time_series);
 
         /// Column "all_tags".
-        IColumn * all_tags_names = nullptr;
-        IColumn * all_tags_values = nullptr;
-        IColumn::Offsets * all_tags_offsets = nullptr;
+        MutableColumnPtr all_tags_names;
+        MutableColumnPtr all_tags_values;
+        ColumnVector<IColumn::Offset>::MutablePtr all_tags_offsets;
+        std::shared_ptr<const DataTypeMap> all_tags_map_type;
         if (time_series_settings[TimeSeriesSetting::use_all_tags_column_to_generate_id])
         {
-            const auto & all_tags_description = get_column_description(TimeSeriesColumnNames::AllTags);
-            validateColumnForTagsMap(all_tags_description);
-            auto & all_tags_column = typeid_cast<ColumnMap &>(make_column_for_tags_block(all_tags_description));
-            all_tags_names = &all_tags_column.getNestedData().getColumn(0);
-            all_tags_values = &all_tags_column.getNestedData().getColumn(1);
-            all_tags_offsets = &all_tags_column.getNestedColumn().getOffsets();
+            /// The "all_tags" column may not exist in external target tables.
+            if (tags_metadata.columns.has(TimeSeriesColumnNames::AllTags))
+                all_tags_map_type = castToStringMapType(tags_metadata.columns.get(TimeSeriesColumnNames::AllTags).type);
+            else
+                all_tags_map_type = std::make_shared<DataTypeMap>(std::make_shared<DataTypeString>(), std::make_shared<DataTypeString>());
+            all_tags_names = all_tags_map_type->getKeyType()->createColumn();
+            all_tags_names->reserve(num_time_series);
+            all_tags_values = all_tags_map_type->getValueType()->createColumn();
+            all_tags_values->reserve(num_time_series);
+            all_tags_offsets = ColumnVector<IColumn::Offset>::create();
+            all_tags_offsets->reserve(num_time_series);
         }
 
         /// Columns "min_time" and "max_time".
-        IColumn * min_time_column = nullptr;
-        IColumn * max_time_column = nullptr;
-        UInt32 min_time_scale = 0;
-        UInt32 max_time_scale = 0;
+        MutableColumnPtr min_time_column;
+        MutableColumnPtr max_time_column;
+        DataTypePtr min_time_type;
+        DataTypePtr max_time_type;
         if (time_series_settings[TimeSeriesSetting::store_min_time_and_max_time])
         {
-            const auto & min_time_description = get_column_description(TimeSeriesColumnNames::MinTime);
-            const auto & max_time_description = get_column_description(TimeSeriesColumnNames::MaxTime);
-            validateColumnForTimestamp(min_time_description, min_time_scale);
-            validateColumnForTimestamp(max_time_description, max_time_scale);
-            min_time_column = &make_column_for_tags_block(min_time_description);
-            max_time_column = &make_column_for_tags_block(max_time_description);
-            columns_to_fill_in_tags_table.emplace_back(min_time_column);
-            columns_to_fill_in_tags_table.emplace_back(max_time_column);
+            min_time_type = tags_metadata.columns.get(TimeSeriesColumnNames::MinTime).type;
+            max_time_type = tags_metadata.columns.get(TimeSeriesColumnNames::MaxTime).type;
+            min_time_column = min_time_type->createColumn();
+            max_time_column = max_time_type->createColumn();
+            min_time_column->reserve(num_time_series);
+            max_time_column->reserve(num_time_series);
+            columns_to_fill_in_tags_table.emplace_back(min_time_column.get());
+            columns_to_fill_in_tags_table.emplace_back(max_time_column.get());
         }
 
-        /// Prepare a block for inserting into the "tags" table.
+        std::vector<std::pair<std::string_view, std::string_view>> sorted_tags;
+
+        /// Fill tag columns.
         size_t current_row_in_tags = 0;
         for (size_t i = 0; i != static_cast<size_t>(time_series.size()); ++i)
         {
@@ -384,52 +298,47 @@ namespace
             if (!element.samples_size())
                 continue;
 
-            const auto & labels = element.labels();
-            checkLabels(labels);
+            sortTagsAndRemoveDuplicates(element.labels(), sorted_tags);
 
-            for (size_t j = 0; j != static_cast<size_t>(labels.size()); ++j)
+            for (const auto [tag_name, tag_value] : sorted_tags)
             {
-                const auto & label = labels[static_cast<int>(j)];
-                const auto & tag_name = label.name();
-                const auto & tag_value = label.value();
-
                 if (tag_name == TimeSeriesTagNames::MetricName)
                 {
-                    metric_name_column.insertData(tag_value.data(), tag_value.length());
+                    metric_name_column->insertData(tag_value.data(), tag_value.size());
                 }
                 else
                 {
                     if (time_series_settings[TimeSeriesSetting::use_all_tags_column_to_generate_id])
                     {
-                        all_tags_names->insertData(tag_name.data(), tag_name.length());
-                        all_tags_values->insertData(tag_value.data(), tag_value.length());
+                        all_tags_names->insertData(tag_name.data(), tag_name.size());
+                        all_tags_values->insertData(tag_value.data(), tag_value.size());
                     }
 
                     auto it = columns_by_tag_name.find(tag_name);
                     bool has_column_for_tag_value = (it != columns_by_tag_name.end());
                     if (has_column_for_tag_value)
                     {
-                        auto * column = it->second;
-                        column->insertData(tag_value.data(), tag_value.length());
+                        auto & column = it->second.first;
+                        column->insertData(tag_value.data(), tag_value.size());
                     }
                     else
                     {
-                        tags_names.insertData(tag_name.data(), tag_name.length());
-                        tags_values.insertData(tag_value.data(), tag_value.length());
+                        tags_names->insertData(tag_name.data(), tag_name.size());
+                        tags_values->insertData(tag_value.data(), tag_value.size());
                     }
                 }
             }
 
-            tags_offsets.push_back(tags_names.size());
+            tags_offsets->insertValue(tags_names->size());
 
             if (time_series_settings[TimeSeriesSetting::use_all_tags_column_to_generate_id])
-                all_tags_offsets->push_back(all_tags_names->size());
+                all_tags_offsets->insertValue(all_tags_names->size());
 
             if (time_series_settings[TimeSeriesSetting::store_min_time_and_max_time])
             {
                 auto [min_time, max_time] = findMinTimeAndMaxTime(element.samples());
-                min_time_column->insert(scaleTimestamp(min_time, min_time_scale));
-                max_time_column->insert(scaleTimestamp(max_time, max_time_scale));
+                min_time_column->insert(DecimalUtils::convertTo<DateTime64>(timestamp_scale, DateTime64{min_time}, 3));
+                max_time_column->insert(DecimalUtils::convertTo<DateTime64>(timestamp_scale, DateTime64{max_time}, 3));
             }
 
             for (auto * column : columns_to_fill_in_tags_table)
@@ -441,8 +350,61 @@ namespace
             ++current_row_in_tags;
         }
 
-        /// Calculate an identifier for each time series, make a new column from those identifiers, and add it to "tags_block".
-        auto & id_column_in_tags_table = calculateId(context, columns_description.get(TimeSeriesColumnNames::ID), tags_block);
+        /// Build tags block.
+        Block tags_block;
+        tags_block.insert(ColumnWithTypeAndName{std::move(metric_name_column), metric_name_type, TimeSeriesColumnNames::MetricName});
+        for (const auto & tag_name_and_column_name : tags_to_columns)
+        {
+            const auto & tuple = tag_name_and_column_name.safeGet<Tuple>();
+            const auto & tag_name = tuple.at(0).safeGet<String>();
+            const auto & column_name = tuple.at(1).safeGet<String>();
+            auto & [column, column_type] = columns_by_tag_name.at(tag_name);
+            tags_block.insert(ColumnWithTypeAndName{std::move(column), column_type, column_name});
+        }
+        MutableColumns tags_tuple_cols;
+        tags_tuple_cols.push_back(std::move(tags_names));
+        tags_tuple_cols.push_back(std::move(tags_values));
+        auto tags_column = ColumnMap::create(ColumnArray::create(ColumnTuple::create(std::move(tags_tuple_cols)), std::move(tags_offsets)));
+        tags_block.insert(ColumnWithTypeAndName{std::move(tags_column), tags_map_type, TimeSeriesColumnNames::Tags});
+        if (all_tags_names)
+        {
+            MutableColumns all_tags_tuple_cols;
+            all_tags_tuple_cols.push_back(std::move(all_tags_names));
+            all_tags_tuple_cols.push_back(std::move(all_tags_values));
+            auto all_tags_column = ColumnMap::create(ColumnArray::create(
+                ColumnTuple::create(std::move(all_tags_tuple_cols)),
+                std::move(all_tags_offsets)));
+            tags_block.insert(ColumnWithTypeAndName{std::move(all_tags_column), all_tags_map_type, TimeSeriesColumnNames::AllTags});
+        }
+        if (min_time_column)
+        {
+            tags_block.insert(ColumnWithTypeAndName{std::move(min_time_column), min_time_type, TimeSeriesColumnNames::MinTime});
+            tags_block.insert(ColumnWithTypeAndName{std::move(max_time_column), max_time_type, TimeSeriesColumnNames::MaxTime});
+        }
+
+        /// Calculate an identifier for each time series and add the result column to "tags_block".
+        DataTypePtr id_type = tags_metadata.columns.get(TimeSeriesColumnNames::ID).type;
+        auto id_column_in_tags_table = calculateId(context, time_series_settings, tags_block);
+        tags_block.insert(0, ColumnWithTypeAndName{id_column_in_tags_table, id_type, TimeSeriesColumnNames::ID});
+
+        /// The "all_tags" column in the "tags" table is either ephemeral or doesn't exists.
+        /// We've used the "all_tags" column to calculate the "id" column already,
+        /// and now we don't need it to insert to the "tags" table.
+        tags_block.erase(TimeSeriesColumnNames::AllTags);
+
+        /// Column "id".
+        DataTypePtr samples_id_type = samples_metadata.columns.get(TimeSeriesColumnNames::ID).type;
+        auto id_column_in_data_table = samples_id_type->createColumn();
+        id_column_in_data_table->reserve(num_samples);
+
+        /// Column "timestamp".
+        auto timestamp_column = timestamp_type->createColumn();
+        timestamp_column->reserve(num_samples);
+
+        /// Column "value".
+        DataTypePtr scalar_type = samples_metadata.columns.get(TimeSeriesColumnNames::Value).type;
+        auto value_column = scalar_type->createColumn();
+        value_column->reserve(num_samples);
 
         /// Prepare a block for inserting to the "samples" table.
         current_row_in_tags = 0;
@@ -452,20 +414,21 @@ namespace
             if (!element.samples_size())
                 continue;
 
-            id_column_in_data_table.insertManyFrom(id_column_in_tags_table, current_row_in_tags, element.samples_size());
+            id_column_in_data_table->insertManyFrom(*id_column_in_tags_table, current_row_in_tags, element.samples_size());
             for (const auto & sample : element.samples())
             {
-                timestamp_column.insert(scaleTimestamp(sample.timestamp(), timestamp_scale));
-                value_column.insert(sample.value());
+                timestamp_column->insert(DecimalUtils::convertTo<DateTime64>(timestamp_scale, DateTime64{sample.timestamp()}, 3));
+                value_column->insert(sample.value());
             }
 
             ++current_row_in_tags;
         }
 
-        /// The "all_tags" column in the "tags" table is either ephemeral or doesn't exists.
-        /// We've used the "all_tags" column to calculate the "id" column already,
-        /// and now we don't need it to insert to the "tags" table.
-        tags_block.erase(TimeSeriesColumnNames::AllTags);
+        /// Build samples block.
+        Block samples_block;
+        samples_block.insert(ColumnWithTypeAndName{std::move(id_column_in_data_table), samples_id_type, TimeSeriesColumnNames::ID});
+        samples_block.insert(ColumnWithTypeAndName{std::move(timestamp_column), timestamp_type, TimeSeriesColumnNames::Timestamp});
+        samples_block.insert(ColumnWithTypeAndName{std::move(value_column), scalar_type, TimeSeriesColumnNames::Value});
 
         BlocksToInsert res;
 
@@ -497,71 +460,48 @@ namespace
 
     /// Converts metrics metadata from the protobuf format to prepared blocks for inserting into target tables.
     BlocksToInsert toBlocks(const google::protobuf::RepeatedPtrField<prometheus::MetricMetadata> & metrics_metadata,
-                            const StorageID & time_series_storage_id,
-                            const StorageInMemoryMetadata & time_series_storage_metadata)
+                            const StorageInMemoryMetadata & metrics_table_metadata)
     {
         size_t num_rows = metrics_metadata.size();
 
         if (!num_rows)
             return {}; /// Nothing to insert into target tables.
 
-        /// Column types must be extracted from the target tables' metadata.
-        const auto & columns_description = time_series_storage_metadata.columns;
+        DataTypePtr metric_family_name_type = castToStringType(metrics_table_metadata.columns.get(TimeSeriesColumnNames::MetricFamilyName).type);
+        DataTypePtr type_type = castToStringType(metrics_table_metadata.columns.get(TimeSeriesColumnNames::Type).type);
+        DataTypePtr unit_type = castToStringType(metrics_table_metadata.columns.get(TimeSeriesColumnNames::Unit).type);
+        DataTypePtr help_type = castToStringType(metrics_table_metadata.columns.get(TimeSeriesColumnNames::Help).type);
 
-        auto get_column_description = [&](const String & column_name) -> const ColumnDescription &
-        {
-            return getInsertableColumnDescription(columns_description, column_name, time_series_storage_id);
-        };
+        auto metric_family_name_column = metric_family_name_type->createColumn();
+        auto type_column = type_type->createColumn();
+        auto unit_column = unit_type->createColumn();
+        auto help_column = help_type->createColumn();
 
-        /// We're going to prepare one blocks for the "metrics" table.
-        Block block;
+        metric_family_name_column->reserve(num_rows);
+        type_column->reserve(num_rows);
+        unit_column->reserve(num_rows);
+        help_column->reserve(num_rows);
 
-        auto make_column = [&](const ColumnDescription & column_description) -> IColumn &
-        {
-            auto column = column_description.type->createColumn();
-            column->reserve(num_rows);
-            auto * column_ptr = column.get();
-            block.insert(ColumnWithTypeAndName{std::move(column), column_description.type, column_description.name});
-            return *column_ptr;
-        };
-
-        /// Create columns.
-
-        /// Column "metric_family_name".
-        const auto & metric_family_name_description = get_column_description(TimeSeriesColumnNames::MetricFamilyName);
-        validateColumnForTagValue(metric_family_name_description);
-        auto & metric_family_name_column = make_column(metric_family_name_description);
-
-        /// Column "type".
-        const auto & type_description = get_column_description(TimeSeriesColumnNames::Type);
-        validateColumnForTagValue(type_description);
-        auto & type_column = make_column(type_description);
-
-        /// Column "unit".
-        const auto & unit_description = get_column_description(TimeSeriesColumnNames::Unit);
-        validateColumnForTagValue(unit_description);
-        auto & unit_column = make_column(unit_description);
-
-        /// Column "help".
-        const auto & help_description = get_column_description(TimeSeriesColumnNames::Help);
-        validateColumnForTagValue(help_description);
-        auto & help_column = make_column(help_description);
-
-        /// Fill those columns.
         for (const auto & element : metrics_metadata)
         {
             const auto & metric_family_name = element.metric_family_name();
-            const auto & type_str = metricTypeToString(element.type());
-            const auto & help = element.help();
+            const auto type_str = metricTypeToString(element.type());
             const auto & unit = element.unit();
+            const auto & help = element.help();
 
-            metric_family_name_column.insertData(metric_family_name.data(), metric_family_name.length());
-            type_column.insertData(type_str.data(), type_str.length());
-            unit_column.insertData(unit.data(), unit.length());
-            help_column.insertData(help.data(), help.length());
+            metric_family_name_column->insertData(metric_family_name.data(), metric_family_name.size());
+            type_column->insertData(type_str.data(), type_str.size());
+            unit_column->insertData(unit.data(), unit.size());
+            help_column->insertData(help.data(), help.size());
         }
 
         /// Prepare a result.
+        Block block;
+        block.insert(ColumnWithTypeAndName{std::move(metric_family_name_column), metric_family_name_type, TimeSeriesColumnNames::MetricFamilyName});
+        block.insert(ColumnWithTypeAndName{std::move(type_column), type_type, TimeSeriesColumnNames::Type});
+        block.insert(ColumnWithTypeAndName{std::move(unit_column), unit_type, TimeSeriesColumnNames::Unit});
+        block.insert(ColumnWithTypeAndName{std::move(help_column), help_type, TimeSeriesColumnNames::Help});
+
         BlocksToInsert res;
         res.blocks.emplace_back(ViewTarget::Metrics, std::move(block));
         return res;
@@ -606,6 +546,18 @@ namespace
                 PushingPipelineExecutor executor(io.pipeline);
 
                 executor.start();
+
+                // Convert block columns to match what the pipeline expect.
+                const Block & expected_header = executor.getHeader();
+                auto converting_dag = ActionsDAG::makeConvertingActions(
+                    block.getColumnsWithTypeAndName(),
+                    expected_header.getColumnsWithTypeAndName(),
+                    ActionsDAG::MatchColumnsMode::Name,
+                    insert_context);
+                auto converting_actions = std::make_shared<ExpressionActions>(
+                    std::move(converting_dag), ExpressionActionsSettings(insert_context));
+                converting_actions->execute(block);
+
                 executor.push(std::move(block));
                 executor.finish();
             }
@@ -649,9 +601,8 @@ void PrometheusRemoteWriteProtocol::writeMetricsMetadata(const google::protobuf:
     LOG_TRACE(log, "{}: Writing {} metrics metadata",
               time_series_storage_id.getNameForLogs(), metrics_metadata.size());
 
-    auto time_series_storage_metadata = time_series_storage->getInMemoryMetadataPtr();
-
-    auto blocks = toBlocks(metrics_metadata, time_series_storage_id, *time_series_storage_metadata);
+    const auto & metrics_table_metadata = *time_series_storage->getTargetTable(ViewTarget::Metrics, getContext())->getInMemoryMetadataPtr();
+    auto blocks = toBlocks(metrics_metadata, metrics_table_metadata);
     insertToTargetTables(std::move(blocks), *time_series_storage, getContext(), log.get());
 
     LOG_TRACE(log, "{}: {} metrics metadata written",
