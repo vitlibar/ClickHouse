@@ -36,6 +36,9 @@ namespace ErrorCodes
 
 namespace TimeSeriesSetting
 {
+    extern const TimeSeriesSettingsDataType id_type;
+    extern const TimeSeriesSettingsDataType timestamp_type;
+    extern const TimeSeriesSettingsDataType scalar_type;
     extern const TimeSeriesSettingsMap tags_to_columns;
     extern const TimeSeriesSettingsBool filter_by_min_time_and_max_time;
 }
@@ -104,10 +107,10 @@ StorageTimeSeriesSelector::Configuration StorageTimeSeriesSelector::getConfigura
     time_series_storage_id = context->resolveStorageID(time_series_storage_id);
 
     auto time_series_storage = storagePtrToTimeSeries(DatabaseCatalog::instance().getTable(time_series_storage_id, context));
-    auto samples_table_metadata = time_series_storage->getTargetTable(ViewTarget::Samples, context)->getInMemoryMetadataPtr();
-    auto id_data_type = samples_table_metadata->columns.get(TimeSeriesColumnNames::ID).type;
-    auto timestamp_data_type = samples_table_metadata->columns.get(TimeSeriesColumnNames::Timestamp).type;
-    auto scalar_data_type = samples_table_metadata->columns.get(TimeSeriesColumnNames::Value).type;
+    const auto & time_series_settings = time_series_storage->getStorageSettings();
+    DataTypePtr id_data_type = time_series_settings[TimeSeriesSetting::id_type];
+    DataTypePtr timestamp_data_type = time_series_settings[TimeSeriesSetting::timestamp_type];
+    DataTypePtr scalar_data_type = time_series_settings[TimeSeriesSetting::scalar_type];
 
     UInt32 timestamp_scale = tryGetDecimalScale(*timestamp_data_type).value_or(0);
 
