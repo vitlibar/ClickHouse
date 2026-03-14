@@ -91,8 +91,7 @@ The _tags_ table must have columns:
 | `id` | [x] | `UUID` | any (must match the type of `id` in the [samples](#samples-table) table) | An `id` identifies a combination of a metric name and tags. The DEFAULT expression specifies how to calculate such an identifier |
 | `metric_name` | [x] | `LowCardinality(String)` | `String` or `LowCardinality(String)` | The name of a metric |
 | `<tag_value_column>` | [ ] | `String` | `String` or `LowCardinality(String)` or `LowCardinality(Nullable(String))` | The value of a specific tag, the tag's name and the name of a corresponding column are specified in the [tags_to_columns](#settings) setting |
-| `tags` | [x] | `Map(LowCardinality(String), String)` | `Map(String, String)` or `Map(LowCardinality(String), String)` or `Map(LowCardinality(String), LowCardinality(String))` | Map of tags excluding the tag `__name__` containing the name of a metric and excluding tags with names enumerated in the [tags_to_columns](#settings) setting |
-| `all_tags` | [ ] | `Map(String, String)` | `Map(String, String)` or `Map(LowCardinality(String), String)` or `Map(LowCardinality(String), LowCardinality(String))` | Ephemeral column, each row is a map of all the tags excluding only the tag `__name__` containing the name of a metric. The only purpose of that column is to be used while calculating `id` |
+| `tags` | [x] | `Map(LowCardinality(String), String)` | `Map(String, String)` or `Map(LowCardinality(String), String)` or `Map(LowCardinality(String), LowCardinality(String))` | Map of all tags associated with the time series, including the tag `__name__` containing the name of a metric and including tags with names enumerated in the [tags_to_columns](#settings) setting |
 | `min_time` | [ ] | `Nullable(DateTime64(3))` | `DateTime64(X)` or `Nullable(DateTime64(X))` | Minimum timestamp of time series with that `id`. The column is created if [store_min_time_and_max_time](#settings) is `true` |
 | `max_time` | [ ] | `Nullable(DateTime64(3))` | `DateTime64(X)` or `Nullable(DateTime64(X))` | Maximum timestamp of time series with that `id`. The column is created if [store_min_time_and_max_time](#settings) is `true` |
 
@@ -126,12 +125,11 @@ will actually create the following table (you can see that by executing `SHOW CR
 ```sql
 CREATE TABLE my_table
 (
-    `id` UUID DEFAULT reinterpretAsUUID(sipHash128(metric_name, all_tags)),
+    `id` UUID DEFAULT reinterpretAsUUID(sipHash128(tags)),
     `timestamp` DateTime64(3),
     `value` Float64,
     `metric_name` LowCardinality(String),
     `tags` Map(LowCardinality(String), String),
-    `all_tags` Map(String, String),
     `min_time` Nullable(DateTime64(3)),
     `max_time` Nullable(DateTime64(3)),
     `metric_family_name` String,
@@ -172,10 +170,9 @@ ORDER BY (id, timestamp)
 ```sql
 CREATE TABLE default.`.inner_id.tags.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`
 (
-    `id` UUID DEFAULT reinterpretAsUUID(sipHash128(metric_name, all_tags)),
+    `id` UUID DEFAULT reinterpretAsUUID(sipHash128(tags)),
     `metric_name` LowCardinality(String),
     `tags` Map(LowCardinality(String), String),
-    `all_tags` Map(String, String) EPHEMERAL,
     `min_time` SimpleAggregateFunction(min, Nullable(DateTime64(3))),
     `max_time` SimpleAggregateFunction(max, Nullable(DateTime64(3)))
 )
@@ -230,20 +227,19 @@ Both the type of the `id` column and that expression can be adjusted by specifyi
 ```sql
 CREATE TABLE my_table
 (
-  id UInt64 DEFAULT sipHash64(metric_name, all_tags)
+  id UInt64 DEFAULT sipHash64(tags)
 )
 ENGINE=TimeSeries
 ```
 
-## The `tags` and `all_tags` columns {#tags-and-all-tags}
+## The `tags` column {#tags}
 
-There are two columns containing maps of tags - `tags` and `all_tags`. In this example they mean the same, however they can be different
-if setting `tags_to_columns` is used. This setting allows to specify that a specific tag should be stored in a separate column instead of storing
-in a map inside the `tags` column:
+The `tags` column contains a map of all tags associated with a time series, including the `__name__` tag containing the metric name.
+Setting `tags_to_columns` allows specifying that specific tags should also be stored in dedicated columns:
 
 ```sql
 CREATE TABLE my_table
-ENGINE = TimeSeries 
+ENGINE = TimeSeries
 SETTINGS tags_to_columns = {'instance': 'instance', 'job': 'job'}
 ```
 
@@ -254,9 +250,8 @@ This statement will add columns:
 `job` String
 ```
 
-to the definition of both `my_table` and its inner [tags](#tags-table) target table. In this case the `tags` column will not contain tags `instance` and `job`,
-but the `all_tags` column will contain them. The `all_tags` column is ephemeral and its only purpose to be used in the DEFAULT expression
-for the `id` column.
+to the definition of both `my_table` and its inner [tags](#tags-table) target table. The tags `instance` and `job` will be stored
+both in their dedicated columns and in the `tags` map.
 
 The types of columns can be adjusted by specifying them explicitly:
 
@@ -317,9 +312,8 @@ Here is a list of settings which can be specified while defining a `TimeSeries` 
 | `timestamp_type` | DataType | `DateTime64(3)` | Data type used to represent timestamps. Supported types: `DateTime64(X)`, `DateTime`, `UInt32`. Can also be set by specifying the type of the `timestamp` column explicitly |
 | `scalar_type` | DataType | `Float64` | Data type used to represent scalar values. Supported types: `Float32` or `Float64`. Can also be set by specifying the type of the `value` column explicitly |
 | `id_type` | DataType | `UUID` | Data type used to represent identifiers (fingerprints) of time series. Supported types: `UUID`, `UInt64`, `UInt128`, `FixedString(16)`. Can also be set by specifying the type of the `id` column explicitly |
-| `id_generator` | Expression | depends on `id_type` | Expression used to generate identifiers of time series from their tags. For the default `id_type = UUID` the default expression is `reinterpretAsUUID(sipHash128(metric_name, all_tags))`. Can also be set by specifying the `DEFAULT` expression of the `id` column explicitly |
+| `id_generator` | Expression | depends on `id_type` | Expression used to generate identifiers of time series from their tags. For the default `id_type = UUID` the default expression is `reinterpretAsUUID(sipHash128(tags))`. Can also be set by specifying the `DEFAULT` expression of the `id` column explicitly |
 | `tags_to_columns` | Map | {} | Map specifying which tags should be put to separate columns in the [tags](#tags-table) table. Syntax: `{'tag1': 'column1', 'tag2' : column2, ...}` |
-| `use_all_tags_column_to_generate_id` | Bool | true | When generating an expression to calculate an identifier of a time series, this flag enables using the `all_tags` column in that calculation |
 | `store_min_time_and_max_time` | Bool | true | If set to true then the table will store `min_time` and `max_time` for each time series |
 | `aggregate_min_time_and_max_time` | Bool | true | When creating an inner target `tags` table, this flag enables using `SimpleAggregateFunction(min, Nullable(DateTime64(3)))` instead of just `Nullable(DateTime64(3))` as the type of the `min_time` column, and the same for the `max_time` column |
 | `filter_by_min_time_and_max_time` | Bool | true | If set to true then the table will use the `min_time` and `max_time` columns for filtering time series |
