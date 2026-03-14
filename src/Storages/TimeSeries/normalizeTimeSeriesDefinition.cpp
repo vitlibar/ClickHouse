@@ -18,9 +18,11 @@
 #include <Parsers/ASTDataType.h>
 #include <Parsers/ASTFunction.h>
 #include <Parsers/ASTIdentifier.h>
+#include <Parsers/IAST_fwd.h>
 #include <Parsers/ASTLiteral.h>
 #include <Storages/TimeSeries/TimeSeriesColumnNames.h>
 #include <Storages/TimeSeries/TimeSeriesSettings.h>
+#include <functional>
 #include <unordered_set>
 
 
@@ -36,7 +38,6 @@ namespace TimeSeriesSetting
     extern const TimeSeriesSettingsBool store_min_time_and_max_time;
     extern const TimeSeriesSettingsMap tags_to_columns;
     extern const TimeSeriesSettingsDataType timestamp_type;
-    extern const TimeSeriesSettingsBool use_all_tags_column_to_generate_id;
 }
 
 namespace ErrorCodes
@@ -167,39 +168,115 @@ namespace
             settings[TimeSeriesSetting::id_type] = DataTypeFactory::instance().get(makeASTDataType("UUID"));
     }
 
+    /// Recursively process the arguments of the `id_generator` function and the arguments
+    /// of all functions it calls, replacing sequences of tag-related identifiers
+    /// with a single `tags` identifier.
+    ///
+    /// An argument is "tag-related" if it's an ASTIdentifier named `tags`, `all_tags`,
+    /// or any column name from the `tags_to_columns` setting, or `metric_name`.
+    ///
+    /// A maximal contiguous sequence of tag-related identifiers is replaced with a single `tags` if:
+    ///   1. The sequence contains `all_tags` and zero or more other tag-related identifiers.
+    ///   2. The sequence contains `tags` and at least one other tag-related identifier.
+    void updateIDGenerator(ASTFunction & id_generator, const TimeSeriesSettings & settings)
+    {
+        std::unordered_set<std::string_view> tag_column_names;
+        const Map & tags_to_columns_map = settings[TimeSeriesSetting::tags_to_columns];
+        for (const auto & entry : tags_to_columns_map)
+        {
+            const auto & tuple = entry.safeGet<Tuple>();
+            tag_column_names.insert(tuple.at(1).safeGet<String>());
+        }
+
+        auto is_groupable = [&](const ASTPtr & ast) -> bool
+        {
+            const auto * ident = ast->as<ASTIdentifier>();
+            if (!ident)
+                return false;
+            const auto & name = ident->name();
+            return name == TimeSeriesColumnNames::Tags
+                || name == TimeSeriesColumnNames::AllTags
+                || name == TimeSeriesColumnNames::MetricName
+                || tag_column_names.contains(name);
+        };
+
+        /// Scans the maximal contiguous sequence of groupable identifiers starting at `start`
+        /// and returns its length if the sequence qualifies for replacement with a single `tags`,
+        /// or 0 if no replacement is needed.
+        auto count_groupable = [&](const ASTs & args, size_t start) -> size_t
+        {
+            bool has_all_tags = false;
+            bool has_tags = false;
+            size_t end = start;
+            while (end < args.size() && is_groupable(args[end]))
+            {
+                if (const auto * ident = args[end]->as<ASTIdentifier>())
+                {
+                    if (ident->name() == TimeSeriesColumnNames::AllTags)
+                        has_all_tags = true;
+                    else if (ident->name() == TimeSeriesColumnNames::Tags)
+                        has_tags = true;
+                }
+                ++end;
+            }
+            if (has_all_tags || (has_tags && (end - start) > 1))
+                return end - start;
+            return 0;
+        };
+
+        std::function<void(ASTs &)> update_args = [&](ASTs & args)
+        {
+            ASTs new_args;
+            new_args.reserve(args.size());
+            for (size_t i = 0; i < args.size();)
+            {
+                if (size_t n = count_groupable(args, i))
+                {
+                    new_args.push_back(make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Tags));
+                    i += n;
+                }
+                else
+                {
+                    new_args.push_back(args[i]);
+                    ++i;
+                }
+            }
+            args = std::move(new_args);
+
+            for (auto & arg : args)
+                if (auto * func = arg->as<ASTFunction>(); func && func->arguments)
+                    update_args(func->arguments->children);
+        };
+
+        if (id_generator.arguments)
+            update_args(id_generator.arguments->children);
+    }
+
+    /// Updates the `id_generator` stored in the settings because of the `tags` column now contains all tags,
+    /// and the `all_tags` isn't used anymore.
+    /// For example this function transforms "sipHash64(metric_name, all_ags)" to "sipHash64(tags)".
+    void updateIDGenerator(TimeSeriesSettings & settings)
+    {
+        if (!settings[TimeSeriesSetting::id_generator])
+            return;
+
+        boost::intrusive_ptr<ASTFunction> new_id_generator = boost::static_pointer_cast<ASTFunction>(settings[TimeSeriesSetting::id_generator].value->clone());
+        updateIDGenerator(*new_id_generator, settings);
+        settings[TimeSeriesSetting::id_generator] = new_id_generator;
+    }
+
     /// Generates a formulae for calculating the identifier of a time series from the metric name and all the tags.
     void setIDGeneratorByDefault(TimeSeriesSettings & settings, const ASTCreateQuery & create_query)
     {
         if (settings[TimeSeriesSetting::id_generator])
             return;
 
-        /// Build a list of arguments for a hash function.
-        /// All hash functions below allow multiple arguments, so we use two arguments: metric_name, all_tags.
-        ASTs arguments_for_hash_function;
-        arguments_for_hash_function.push_back(make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::MetricName));
-
-        if (settings[TimeSeriesSetting::use_all_tags_column_to_generate_id])
-        {
-            arguments_for_hash_function.push_back(make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::AllTags));
-        }
-        else
-        {
-            const Map & tags_to_columns = settings[TimeSeriesSetting::tags_to_columns];
-            for (const auto & tag_name_and_column_name : tags_to_columns)
-            {
-                const auto & tuple = tag_name_and_column_name.safeGet<Tuple>();
-                const auto & column_name = tuple.at(1).safeGet<String>();
-                arguments_for_hash_function.push_back(make_intrusive<ASTIdentifier>(column_name));
-            }
-            arguments_for_hash_function.push_back(make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Tags));
-        }
-
         auto make_hash_function = [&](const String & function_name) -> boost::intrusive_ptr<ASTFunction>
         {
             auto function = make_intrusive<ASTFunction>();
             function->name = function_name;
             auto arguments_list = make_intrusive<ASTExpressionList>();
-            arguments_list->children = std::move(arguments_for_hash_function);
+            arguments_list->children.push_back(make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Tags));
             function->arguments = arguments_list;
             return function;
         };
@@ -345,6 +422,8 @@ TimeSeriesSettings getNormalizedTimeSeriesSettings(const ASTCreateQuery & create
     if (create_query.storage)
         settings.loadFromQuery(*create_query.storage);
 
+    bool id_generator_is_explicit = static_cast<bool>(settings[TimeSeriesSetting::id_generator]);
+
     if (!settings[TimeSeriesSetting::timestamp_type] || !settings[TimeSeriesSetting::scalar_type] || !settings[TimeSeriesSetting::id_type]
         || !settings[TimeSeriesSetting::id_generator])
     {
@@ -368,6 +447,12 @@ TimeSeriesSettings getNormalizedTimeSeriesSettings(const ASTCreateQuery & create
         extractSettingsFromTargetTable(settings, create_query, ViewTarget::Samples, context);
         extractSettingsFromTargetTable(settings, create_query, ViewTarget::Tags, context);
         setTypesByDefault(settings);
+    }
+
+    if (settings[TimeSeriesSetting::id_generator] && !id_generator_is_explicit)
+    {
+        /// If id_generator wan't set, then we can be updating from an older version.
+        updateIDGenerator(settings);
     }
 
     if (!settings[TimeSeriesSetting::id_generator])
@@ -410,6 +495,10 @@ void normalizeTimeSeriesColumns(ColumnsDescription & columns, const TimeSeriesSe
         return true;
     };
 
+    /// Lambda to remove a column from the original list without adding it to the destination list.
+    /// Used to silently drop legacy columns that are no longer part of the schema.
+    auto skip_column = [&](const String & name) { original_column_names.erase(name); };
+
     /// We recreate the "id" column if its type doesn't match the settings.
     if (!move_original_column_if_type(TimeSeriesColumnNames::ID, settings[TimeSeriesSetting::id_type]))
         new_columns.add({TimeSeriesColumnNames::ID, settings[TimeSeriesSetting::id_type]});
@@ -443,11 +532,8 @@ void normalizeTimeSeriesColumns(ColumnsDescription & columns, const TimeSeriesSe
         new_columns.add({TimeSeriesColumnNames::Tags,
             std::make_shared<DataTypeMap>(std::make_shared<DataTypeLowCardinality>(std::make_shared<DataTypeString>()), std::make_shared<DataTypeString>())});
 
-    /// The `all_tags` column is virtual (it's calculated on the fly and never stored anywhere)
-    /// so here we don't need to use the LowCardinality optimization as for the `tags` column.
-    if (!move_original_column(TimeSeriesColumnNames::AllTags))
-        new_columns.add({TimeSeriesColumnNames::AllTags,
-            std::make_shared<DataTypeMap>(std::make_shared<DataTypeString>(), std::make_shared<DataTypeString>())});
+    /// Earlier we had the `all_tags` column, but we don't need it anymore.
+    skip_column(TimeSeriesColumnNames::AllTags);
 
     if (settings[TimeSeriesSetting::store_min_time_and_max_time])
     {

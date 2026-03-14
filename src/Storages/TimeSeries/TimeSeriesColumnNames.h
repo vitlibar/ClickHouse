@@ -17,11 +17,10 @@ struct TimeSeriesColumnNames
     //static constexpr const char * kID = "id";
     static constexpr const char * MetricName = "metric_name";
 
-    /// Contains tags which have no corresponding columns specified in the "tags_to_columns" setting.
+    /// Contains all tags associated with the time series, including the `__name__` tag and tags with columns specified in the "tags_to_columns" setting.
     static constexpr const char * Tags = "tags";
 
-    /// Contains all tags, including those ones which have corresponding columns specified in the "tags_to_columns" setting.
-    /// This is a generated column, it's not stored anywhere, it's generated on the fly.
+    /// [OBSOLETE] Previously contained all tags except `__name__`, now superseded by the `tags` column.
     static constexpr const char * AllTags = "all_tags";
 
     /// Contains the time range of a time series.
