@@ -183,7 +183,7 @@ def test_64bit_id():
 # Both `id_type` and `id_generator` can be specified via settings or derived from a column definition.
 def test_custom_id_algorithm():
     node.query(
-        "CREATE TABLE prometheus ENGINE=TimeSeries SETTINGS id_type = 'FixedString(16)', id_generator = 'murmurHash3_128(metric_name, all_tags)'"
+        "CREATE TABLE prometheus ENGINE=TimeSeries SETTINGS id_type = 'FixedString(16)', id_generator = 'murmurHash3_128(tags)'"
     )
     check()
     assert node.query("SELECT type FROM system.columns WHERE database = currentDatabase() AND table = 'prometheus' AND name = 'id'") == TSV([["FixedString(16)"]])
@@ -192,12 +192,26 @@ def test_custom_id_algorithm():
     drop_prometheus_table()
 
     node.query(
+        "CREATE TABLE prometheus (id FixedString(16) DEFAULT murmurHash3_128(tags)) ENGINE=TimeSeries"
+    )
+    check()
+    create_table = node.query("SHOW CREATE TABLE prometheus")
+    assert re.search(r"(?s)SETTINGS.*\bid_type\s*=\s*\\'FixedString\(16\)\\'", create_table)
+    assert re.search(r"(?s)SETTINGS.*\bid_generator\s*=\s*\\'murmurHash3_128\(tags\)\\'", create_table)
+    assert re.search(r"\bid\s+FixedString\(16\)", node.query("DESCRIBE timeSeriesTags(prometheus)"))
+
+
+# Checks that tables created with the old `murmurHash3_128(metric_name, all_tags)` ID generator
+# (which referenced the now-obsolete `all_tags` column) are automatically migrated on startup
+# to the new `murmurHash3_128(tags)` generator.
+def test_update_old_id_algorithm():
+    node.query(
         "CREATE TABLE prometheus (id FixedString(16) DEFAULT murmurHash3_128(metric_name, all_tags)) ENGINE=TimeSeries"
     )
     check()
     create_table = node.query("SHOW CREATE TABLE prometheus")
     assert re.search(r"(?s)SETTINGS.*\bid_type\s*=\s*\\'FixedString\(16\)\\'", create_table)
-    assert re.search(r"(?s)SETTINGS.*\bid_generator\s*=\s*\\'murmurHash3_128\(metric_name, all_tags\)\\'", create_table)
+    assert re.search(r"(?s)SETTINGS.*\bid_generator\s*=\s*\\'murmurHash3_128\(tags\)\\'", create_table)
     assert re.search(r"\bid\s+FixedString\(16\)", node.query("DESCRIBE timeSeriesTags(prometheus)"))
 
 

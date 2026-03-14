@@ -119,20 +119,6 @@ namespace
                             std::make_shared<DataTypeLowCardinality>(std::make_shared<DataTypeString>()),
                             std::make_shared<DataTypeString>())});
 
-                /// Column "all_tags".
-                if (time_series_settings[TimeSeriesSetting::use_all_tags_column_to_generate_id])
-                {
-                    if (!copy_column(TimeSeriesColumnNames::AllTags))
-                        columns.add({TimeSeriesColumnNames::AllTags,
-                            std::make_shared<DataTypeMap>(std::make_shared<DataTypeString>(), std::make_shared<DataTypeString>())});
-                    /// Column "all_tags" is here only to calculate the identifier of a time series for the "id" column, so it can be ephemeral.
-                    columns.modify(TimeSeriesColumnNames::AllTags, [](ColumnDescription & col)
-                    {
-                        col.default_desc.kind = ColumnDefaultKind::Ephemeral;
-                        col.default_desc.ephemeral_default = true;
-                    });
-                }
-
                 /// Columns "min_time" and "max_time".
                 if (time_series_settings[TimeSeriesSetting::store_min_time_and_max_time])
                 {
