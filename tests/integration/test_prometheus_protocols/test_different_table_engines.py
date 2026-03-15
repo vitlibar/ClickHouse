@@ -1,7 +1,8 @@
 import pytest
+import re
 
 from helpers.cluster import ClickHouseCluster
-from helpers.test_tools import TSV
+from helpers.test_tools import TSV, tsv_close_to
 from .prometheus_test_utils import *
 
 
@@ -98,9 +99,11 @@ def check_queries_in_prometheus_reader():
 # Executes the test queries in ClickHouse and test the results.
 def check_queries_in_clickhouse():
     for query, _, chresult in test_queries:
-        assert node.query(
-            f"SELECT * FROM prometheusQuery(prometheus, '{query}', {timestamp})"
-        ) == TSV(chresult)
+        assert tsv_close_to(
+            node.query(f"SELECT * FROM prometheusQuery(prometheus, '{query}', {timestamp})"),
+            chresult,
+            eps=1e-9,
+        )
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -119,6 +122,10 @@ def check():
     send_preset_to_clickhouse()
     check_queries_in_prometheus_reader()
     check_queries_in_clickhouse()
+
+# Drops TimeSeries table
+def drop_prometheus_table():
+    node.query("DROP TABLE prometheus SYNC")
 
 
 @pytest.fixture(autouse=True)
@@ -143,19 +150,66 @@ def test_tags_to_columns():
     node.query(
         "CREATE TABLE prometheus ENGINE=TimeSeries SETTINGS tags_to_columns = {'job': 'job', 'instance': 'instance'}"
     )
+
     check()
+
+    describe = node.query("DESCRIBE timeSeriesTags(prometheus)")
+    assert re.search(r"\bjob\s+String", describe)
+    assert re.search(r"\binstance\s+String", describe)
+
+    assert node.query("SELECT job, instance FROM timeSeriesTags(prometheus) WHERE metric_name = 'up' AND instance = 'demo-service-0:10000'") == TSV([["demo", "demo-service-0:10000"]])
 
 
 def test_64bit_id():
+    node.query("CREATE TABLE prometheus ENGINE=TimeSeries SETTINGS id_type='UInt64'")
+    check()
+    assert re.search(r"\bid\s+UInt64", node.query("DESCRIBE timeSeriesTags(prometheus)"))
+
+    drop_prometheus_table()
+
     node.query("CREATE TABLE prometheus (id UInt64) ENGINE=TimeSeries")
     check()
+    assert re.search(r"\bid\s+UInt64", node.query("DESCRIBE timeSeriesTags(prometheus)"))
 
 
 def test_custom_id_algorithm():
     node.query(
+        "CREATE TABLE prometheus ENGINE=TimeSeries SETTINGS id_type = 'FixedString(16)', id_generator = 'murmurHash3_128(metric_name, all_tags)'"
+    )
+    check()
+    assert re.search(r"\bid\s+FixedString\(16\)", node.query("DESCRIBE timeSeriesTags(prometheus)"))
+
+    drop_prometheus_table()
+
+    node.query(
         "CREATE TABLE prometheus (id FixedString(16) DEFAULT murmurHash3_128(metric_name, all_tags)) ENGINE=TimeSeries"
     )
     check()
+    assert re.search(r"\bid\s+FixedString\(16\)", node.query("DESCRIBE timeSeriesTags(prometheus)"))
+
+
+def test_microsecond_precision():
+    node.query("CREATE TABLE prometheus ENGINE=TimeSeries SETTINGS timestamp_type='DateTime64(6)'")
+    check()
+    assert re.search(r"\btimestamp\s+DateTime64\(6\)", node.query("DESCRIBE timeSeriesSamples(prometheus)"))
+
+    drop_prometheus_table()
+
+    node.query("CREATE TABLE prometheus (timestamp DateTime64(6)) ENGINE=TimeSeries")
+    check()
+    assert re.search(r"\btimestamp\s+DateTime64\(6\)", node.query("DESCRIBE timeSeriesSamples(prometheus)"))
+
+
+def test_float32_scalar():
+    node.query("CREATE TABLE prometheus ENGINE=TimeSeries SETTINGS scalar_type='Float32'")
+    check()
+    assert re.search(r"\bvalue\s+Float32", node.query("DESCRIBE timeSeriesSamples(prometheus)"))
+
+    drop_prometheus_table()
+
+    node.query("CREATE TABLE prometheus (value Float32) ENGINE=TimeSeries")
+    check()
+    assert re.search(r"\bvalue\s+Float32", node.query("DESCRIBE timeSeriesSamples(prometheus)"))
 
 
 def test_create_as_table():
@@ -214,7 +268,7 @@ def test_data_keyword():
     )
     check()
 
-    node.query("DROP TABLE prometheus")
+    drop_prometheus_table()
 
     node.query(
         "CREATE TABLE mysamples (id UUID, timestamp DateTime64(3), value Float64) "
