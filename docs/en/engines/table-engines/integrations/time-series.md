@@ -105,8 +105,8 @@ The _metrics_ table must have columns:
 | Name | Mandatory? | Default type | Possible types | Description |
 |---|---|---|---|---|
 | `metric_family_name` | [x] | `String` | `String` or `LowCardinality(String)` | The name of a metric family |
-| `type` | [x] | `String` | `String` or `LowCardinality(String)` | The type of a metric family, one of "counter", "gauge", "summary", "stateset", "histogram", "gaugehistogram" |
-| `unit` | [x] | `String` | `String` or `LowCardinality(String)` | The unit used in a metric |
+| `type` | [x] | `LowCardinality(String)` | `String` or `LowCardinality(String)` | The type of a metric family, one of "counter", "gauge", "summary", "stateset", "histogram", "gaugehistogram" |
+| `unit` | [x] | `LowCardinality(String)` | `String` or `LowCardinality(String)` | The unit used in a metric |
 | `help` | [x] | `String` | `String` or `LowCardinality(String)` | The description of a metric |
 
 Any row inserted into a `TimeSeries` table will be in fact stored in those three target tables.
@@ -135,8 +135,8 @@ CREATE TABLE my_table
     `min_time` Nullable(DateTime64(3)),
     `max_time` Nullable(DateTime64(3)),
     `metric_family_name` String,
-    `type` String,
-    `unit` String,
+    `type` LowCardinality(String),
+    `unit` LowCardinality(String),
     `help` String
 )
 ENGINE = TimeSeries
@@ -188,8 +188,8 @@ ORDER BY (metric_name, id)
 CREATE TABLE default.`.inner_id.metrics.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`
 (
     `metric_family_name` String,
-    `type` String,
-    `unit` String,
+    `type` LowCardinality(String),
+    `unit` LowCardinality(String),
     `help` String
 )
 ENGINE = ReplacingMergeTree
