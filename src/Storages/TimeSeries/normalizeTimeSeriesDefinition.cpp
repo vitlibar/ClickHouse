@@ -464,9 +464,9 @@ void normalizeTimeSeriesColumns(ColumnsDescription & columns, const TimeSeriesSe
     if (!move_original_column(TimeSeriesColumnNames::MetricFamilyName))
         new_columns.add({TimeSeriesColumnNames::MetricFamilyName, std::make_shared<DataTypeString>()});
     if (!move_original_column(TimeSeriesColumnNames::Type))
-        new_columns.add({TimeSeriesColumnNames::Type, std::make_shared<DataTypeString>()});
+        new_columns.add({TimeSeriesColumnNames::Type, std::make_shared<DataTypeLowCardinality>(std::make_shared<DataTypeString>())});
     if (!move_original_column(TimeSeriesColumnNames::Unit))
-        new_columns.add({TimeSeriesColumnNames::Unit, std::make_shared<DataTypeString>()});
+        new_columns.add({TimeSeriesColumnNames::Unit, std::make_shared<DataTypeLowCardinality>(std::make_shared<DataTypeString>())});
     if (!move_original_column(TimeSeriesColumnNames::Help))
         new_columns.add({TimeSeriesColumnNames::Help, std::make_shared<DataTypeString>()});
 
