@@ -481,8 +481,8 @@ namespace
             case ViewTarget::Metrics:
             {
                 add_column_if_missing(TimeSeriesColumnNames::MetricFamilyName, makeASTDataType("String"));
-                add_column_if_missing(TimeSeriesColumnNames::Type, makeASTDataType("String"));
-                add_column_if_missing(TimeSeriesColumnNames::Unit, makeASTDataType("String"));
+                add_column_if_missing(TimeSeriesColumnNames::Type, std::make_shared<DataTypeLowCardinality>(std::make_shared<DataTypeString>()));
+                add_column_if_missing(TimeSeriesColumnNames::Unit, std::make_shared<DataTypeLowCardinality>(std::make_shared<DataTypeString>()));
                 add_column_if_missing(TimeSeriesColumnNames::Help, makeASTDataType("String"));
                 break;
             }
