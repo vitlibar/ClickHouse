@@ -27,11 +27,14 @@ namespace DB
 namespace TimeSeriesSetting
 {
     extern const TimeSeriesSettingsBool aggregate_min_time_and_max_time;
+    extern const TimeSeriesSettingsASTFunction id_codec;
     extern const TimeSeriesSettingsASTFunction id_generator;
     extern const TimeSeriesSettingsDataType id_type;
+    extern const TimeSeriesSettingsASTFunction scalar_codec;
     extern const TimeSeriesSettingsDataType scalar_type;
     extern const TimeSeriesSettingsBool store_min_time_and_max_time;
     extern const TimeSeriesSettingsMap tags_to_columns;
+    extern const TimeSeriesSettingsASTFunction timestamp_codec;
     extern const TimeSeriesSettingsDataType timestamp_type;
     extern const TimeSeriesSettingsBool use_all_tags_column_to_generate_id;
 }
@@ -60,20 +63,44 @@ namespace
         {
             case ViewTarget::Samples:
             {
-                /// Column "id" - without default expression.
-                /// The expression for calculating the identifier of a time series can be transferred only to the "tags" inner table
-                /// (because it usually depends on columns like "metric_name" or "all_tags").
+                /// Column "id".
                 if (!copy_column(TimeSeriesColumnNames::ID))
                     columns.add({TimeSeriesColumnNames::ID, time_series_settings[TimeSeriesSetting::id_type]});
-                columns.modify(TimeSeriesColumnNames::ID, [](ColumnDescription & col) { col.default_desc = {}; });
+
+                columns.modify(TimeSeriesColumnNames::ID, [&](ColumnDescription & id_column)
+                {
+                    /// We don't initialize the codec in the main TimeSeries table, so it couldn't be copied from it and
+                    /// we need to explicitly initialize it here.
+                    id_column.codec = time_series_settings[TimeSeriesSetting::id_codec].value;
+
+                    /// Reset the default expression for the column "id".
+                    /// This is needed in case we copied it from the main TimeSeries table.
+                    /// The expression for calculating the identifier of a time series can be transferred only to the "tags" inner table
+                    /// (because it usually depends on columns like "metric_name" or "all_tags").
+                    id_column.default_desc = {};
+                });
 
                 /// Column "timestamp".
                 if (!copy_column(TimeSeriesColumnNames::Timestamp))
                     columns.add({TimeSeriesColumnNames::Timestamp, time_series_settings[TimeSeriesSetting::timestamp_type]});
 
+                columns.modify(TimeSeriesColumnNames::Timestamp, [&](ColumnDescription & timestamp_column)
+                {
+                    /// We don't initialize the codec in the main TimeSeries table, so it couldn't be copied from it and
+                    /// we need to explicitly initialize it here.
+                    timestamp_column.codec = time_series_settings[TimeSeriesSetting::timestamp_codec].value;
+                });
+
                 /// Column "value".
                 if (!copy_column(TimeSeriesColumnNames::Value))
                     columns.add({TimeSeriesColumnNames::Value, time_series_settings[TimeSeriesSetting::scalar_type]});
+
+                columns.modify(TimeSeriesColumnNames::Value, [&](ColumnDescription & scalar_column)
+                {
+                    /// We don't initialize the codec in the main TimeSeries table, so it couldn't be copied from it and
+                    /// we need to explicitly initialize it here.
+                    scalar_column.codec = time_series_settings[TimeSeriesSetting::scalar_codec].value;
+                });
 
                 break;
             }
@@ -86,8 +113,12 @@ namespace
 
                 columns.modify(TimeSeriesColumnNames::ID, [&](ColumnDescription & id_column)
                 {
-                    id_column.default_desc.kind = ColumnDefaultKind::Default;
+                    /// We don't initialize the codecs in the main TimeSeries table, so we need to explicitly initialize it here.
+                    id_column.codec = time_series_settings[TimeSeriesSetting::id_codec].value;
+
+                    /// Assign to the expression for calculating the identifier of a time series from "metric_names" and "tags".
                     id_column.default_desc.expression = time_series_settings[TimeSeriesSetting::id_generator].value;
+                    id_column.default_desc.kind = ColumnDefaultKind::Default;
                 });
 
                 /// Column "metric_name".

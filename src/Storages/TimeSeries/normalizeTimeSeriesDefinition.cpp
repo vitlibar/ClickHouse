@@ -30,11 +30,14 @@ namespace DB
 namespace TimeSeriesSetting
 {
     extern const TimeSeriesSettingsBool aggregate_min_time_and_max_time;
+    extern const TimeSeriesSettingsASTFunction id_codec;
     extern const TimeSeriesSettingsASTFunction id_generator;
     extern const TimeSeriesSettingsDataType id_type;
+    extern const TimeSeriesSettingsASTFunction scalar_codec;
     extern const TimeSeriesSettingsDataType scalar_type;
     extern const TimeSeriesSettingsBool store_min_time_and_max_time;
     extern const TimeSeriesSettingsMap tags_to_columns;
+    extern const TimeSeriesSettingsASTFunction timestamp_codec;
     extern const TimeSeriesSettingsDataType timestamp_type;
     extern const TimeSeriesSettingsBool use_all_tags_column_to_generate_id;
 }
@@ -69,15 +72,11 @@ namespace
         return boost::static_pointer_cast<ASTFunction>(default_expression->clone());
     }
 
-    /// Gets types of timestamps, scalars and identifiers from the columns if they are not specified in the settings.
-    void extractTypesFromColumns(TimeSeriesSettings & settings, const ASTCreateQuery & create_query)
+    /// Extracts types, codecs, and generators from the columns if they are not specified in the settings.
+    void extractSettingsFromColumns(TimeSeriesSettings & settings, const ASTCreateQuery & create_query)
     {
-        if (settings[TimeSeriesSetting::timestamp_type] && settings[TimeSeriesSetting::scalar_type] && settings[TimeSeriesSetting::id_type]
-            && settings[TimeSeriesSetting::id_generator])
-            return; /// Already got all these types
-
         if (!create_query.columns_list || !create_query.columns_list->columns)
-            return; /// Can't get these types
+            return; /// Can't get these settings
 
         for (const auto & column : create_query.columns_list->columns->children)
         {
@@ -86,11 +85,17 @@ namespace
             {
                 if (!settings[TimeSeriesSetting::timestamp_type] && column_declaration->getType())
                     settings[TimeSeriesSetting::timestamp_type] = DataTypeFactory::instance().get(column_declaration->getType());
+
+                if (!settings[TimeSeriesSetting::timestamp_codec] && column_declaration->getCodec())
+                    settings[TimeSeriesSetting::timestamp_codec] = boost::dynamic_pointer_cast<ASTFunction>(column_declaration->getCodec());
             }
             else if (column_declaration->name == TimeSeriesColumnNames::Value)
             {
                 if (!settings[TimeSeriesSetting::scalar_type] && column_declaration->getType())
                     settings[TimeSeriesSetting::scalar_type] = DataTypeFactory::instance().get(column_declaration->getType());
+
+                if (!settings[TimeSeriesSetting::scalar_codec] && column_declaration->getCodec())
+                    settings[TimeSeriesSetting::scalar_codec] = boost::dynamic_pointer_cast<ASTFunction>(column_declaration->getCodec());
             }
             else if (column_declaration->name == TimeSeriesColumnNames::ID)
             {
@@ -100,18 +105,16 @@ namespace
                 if (!settings[TimeSeriesSetting::id_generator] && column_declaration->getDefaultExpression())
                     settings[TimeSeriesSetting::id_generator] = extractIDGeneratorFromDefaultExpression(
                         column_declaration->getDefaultExpression(), StorageID{create_query.getDatabase(), create_query.getTable()});
+
+                if (!settings[TimeSeriesSetting::id_codec] && column_declaration->getCodec())
+                    settings[TimeSeriesSetting::id_codec] = boost::dynamic_pointer_cast<ASTFunction>(column_declaration->getCodec());
             }
         }
     }
 
-    /// Gets types of timestamps, scalars and identifiers from an external target table if they are not specified in the settings.
-    void extractTypesFromTargetTable(TimeSeriesSettings & settings, const ASTCreateQuery & create_query, ViewTarget::Kind kind, const ContextPtr & context)
+    /// Extracts types, codecs, and generators from an external target table if they are not specified in the settings.
+    void extractSettingsFromTargetTable(TimeSeriesSettings & settings, const ASTCreateQuery & create_query, ViewTarget::Kind kind, const ContextPtr & context)
     {
-        if ((kind == ViewTarget::Samples) && settings[TimeSeriesSetting::timestamp_type] && settings[TimeSeriesSetting::scalar_type])
-            return; /// Already got these types
-        if ((kind == ViewTarget::Tags) && settings[TimeSeriesSetting::id_type] && settings[TimeSeriesSetting::id_generator])
-            return; /// Already got these types
-
         if (!create_query.targets)
             return; /// No external target table
 
@@ -134,17 +137,28 @@ namespace
             {
                 if (!settings[TimeSeriesSetting::timestamp_type])
                     settings[TimeSeriesSetting::timestamp_type] = column.type;
+
+                /// We use codecs only to create inner tables, we don't need codecs if the target tables are
+                /// external and so already exist.
             }
             else if (column.name == TimeSeriesColumnNames::Value)
             {
                 if (!settings[TimeSeriesSetting::scalar_type])
                     settings[TimeSeriesSetting::scalar_type] = column.type;
+
+                /// We use codecs only to create inner tables, we don't need codecs if the target tables are
+                /// external and so already exist.
             }
             else if (column.name == TimeSeriesColumnNames::ID)
             {
                 if (!settings[TimeSeriesSetting::id_type])
                     settings[TimeSeriesSetting::id_type] = column.type;
 
+                /// We use codecs only to create inner tables, we don't need codecs if the target tables are
+                /// external and so already exist.
+
+                /// The default expression for the "id" column is used to calculate it on insertion new time series,
+                /// so we need it.
                 if (!settings[TimeSeriesSetting::id_generator] && column.default_desc.expression)
                     settings[TimeSeriesSetting::id_generator]
                         = extractIDGeneratorFromDefaultExpression(column.default_desc.expression, target_table_id);
@@ -354,17 +368,17 @@ TimeSeriesSettings getNormalizedTimeSeriesSettings(const ASTCreateQuery & create
                 DatabaseCatalog::instance().getDatabase(other_database)->getCreateTableQuery(create_query.as_table, context));
             if (other_create_query->storage)
                 settings.loadFromQuery(*other_create_query->storage);
-            extractTypesFromColumns(settings, *other_create_query);
+            extractSettingsFromColumns(settings, *other_create_query);
         }
         else
         {
             if (create_query.storage)
                 settings.loadFromQuery(*create_query.storage);
-            extractTypesFromColumns(settings, create_query);
+            extractSettingsFromColumns(settings, create_query);
         }
 
-        extractTypesFromTargetTable(settings, create_query, ViewTarget::Samples, context);
-        extractTypesFromTargetTable(settings, create_query, ViewTarget::Tags, context);
+        extractSettingsFromTargetTable(settings, create_query, ViewTarget::Samples, context);
+        extractSettingsFromTargetTable(settings, create_query, ViewTarget::Tags, context);
         setTypesByDefault(settings);
     }
 
@@ -408,23 +422,21 @@ void normalizeTimeSeriesColumns(ColumnsDescription & columns, const TimeSeriesSe
         return true;
     };
 
+    /// We recreate the "id" column if its type doesn't match the settings.
     if (!move_original_column_if_type(TimeSeriesColumnNames::ID, settings[TimeSeriesSetting::id_type]))
         new_columns.add({TimeSeriesColumnNames::ID, settings[TimeSeriesSetting::id_type]});
-    
-    new_columns.modify(TimeSeriesColumnNames::ID, [&](ColumnDescription & id_column)
-    {
-        id_column.default_desc.expression = settings[TimeSeriesSetting::id_generator].value;
-        id_column.default_desc.kind = ColumnDefaultKind::Default;
-    });
 
     auto timestamp_type = settings[TimeSeriesSetting::timestamp_type];
 
+    /// We recreate the "timestamp" column if its type doesn't match the settings.
     if (!move_original_column_if_type(TimeSeriesColumnNames::Timestamp, timestamp_type))
         new_columns.add({TimeSeriesColumnNames::Timestamp, timestamp_type});
 
+    /// We recreate the "value" column if its type doesn't match the settings.
     if (!move_original_column_if_type(TimeSeriesColumnNames::Value, settings[TimeSeriesSetting::scalar_type]))
         new_columns.add({TimeSeriesColumnNames::Value, settings[TimeSeriesSetting::scalar_type]});
 
+    /// We try to keep other columns, and create them only if they're missing.
     if (!move_original_column(TimeSeriesColumnNames::MetricName))
         new_columns.add({TimeSeriesColumnNames::MetricName, std::make_shared<DataTypeLowCardinality>(std::make_shared<DataTypeString>())});
 
