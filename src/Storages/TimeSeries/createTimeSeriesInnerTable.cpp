@@ -172,9 +172,9 @@ namespace
                 if (!copy_column(TimeSeriesColumnNames::MetricFamilyName))
                     columns.add({TimeSeriesColumnNames::MetricFamilyName, std::make_shared<DataTypeString>()});
                 if (!copy_column(TimeSeriesColumnNames::Type))
-                    columns.add({TimeSeriesColumnNames::Type, std::make_shared<DataTypeString>()});
+                    columns.add({TimeSeriesColumnNames::Type, std::make_shared<DataTypeLowCardinality>(std::make_shared<DataTypeString>())});
                 if (!copy_column(TimeSeriesColumnNames::Unit))
-                    columns.add({TimeSeriesColumnNames::Unit, std::make_shared<DataTypeString>()});
+                    columns.add({TimeSeriesColumnNames::Unit, std::make_shared<DataTypeLowCardinality>(std::make_shared<DataTypeString>())});
                 if (!copy_column(TimeSeriesColumnNames::Help))
                     columns.add({TimeSeriesColumnNames::Help, std::make_shared<DataTypeString>()});
                 break;
