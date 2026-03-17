@@ -64,7 +64,17 @@ StorageTimeSeries::StorageTimeSeries(
     storage_metadata.setColumns(normalized_columns);
     if (!comment.empty())
         storage_metadata.setComment(comment);
+
+    /// Initialize settings_changes from the fully resolved settings so that
+    /// ALTER TABLE MODIFY/RESET SETTINGS can update and remove individual settings.
+    if (query.storage && query.storage->settings)
+        storage_metadata.settings_changes = query.storage->settings->clone();
+
     setInMemoryMetadata(storage_metadata);
+
+    /// Store a clone of the CREATE TABLE query so ALTER TABLE MODIFY/RESET SETTINGS
+    /// can pass it to getNormalizedTimeSeriesSettings to re-derive dependent defaults.
+    create_query = query.clone();
 
     for (auto target_kind : {ViewTarget::Samples, ViewTarget::Tags, ViewTarget::Metrics})
     {
@@ -301,14 +311,43 @@ void StorageTimeSeries::checkAlterIsPossible(const AlterCommands & commands, Con
 {
     for (const auto & command : commands)
     {
-        if (!command.isCommentAlter() && command.type != AlterCommand::MODIFY_SQL_SECURITY)
+        if (!command.isCommentAlter() && command.type != AlterCommand::MODIFY_SQL_SECURITY
+            && !command.isSettingsAlter())
             throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Alter of type '{}' is not supported by storage {}", command.type, getName());
     }
 }
 
-void StorageTimeSeries::alter(const AlterCommands & params, ContextPtr local_context, AlterLockHolder & table_lock_holder)
+void StorageTimeSeries::alter(const AlterCommands & params, ContextPtr local_context, AlterLockHolder &)
 {
-    IStorage::alter(params, local_context, table_lock_holder);
+    StorageInMemoryMetadata new_metadata = getInMemoryMetadata();
+    params.apply(new_metadata, local_context);
+
+    bool has_settings_changes = std::any_of(
+        params.begin(), params.end(), [](const AlterCommand & c) { return c.isSettingsAlter(); });
+
+    if (has_settings_changes)
+    {
+        /// Clone the stored CREATE TABLE query, replace its settings, and use getNormalizedTimeSeriesSettings()
+        /// to re-derive all dependent defaults (e.g. id_generator depends on id_type).
+        auto new_create_query = boost::static_pointer_cast<ASTCreateQuery>(create_query->clone());
+        chassert(new_create_query->storage);
+        new_create_query->storage->set(new_create_query->storage->settings, new_metadata.settings_changes->clone());
+
+        auto new_settings = std::make_shared<TimeSeriesSettings>(
+            getNormalizedTimeSeriesSettings(*new_create_query, local_context));
+
+        ColumnsDescription new_columns = new_metadata.getColumns();
+        normalizeTimeSeriesColumns(new_columns, *new_settings);
+        new_metadata.setColumns(new_columns);
+
+        storage_settings = std::move(new_settings);
+        create_query = std::move(new_create_query);
+    }
+
+    auto time_series_table_id = getStorageID();
+    DatabaseCatalog::instance().getDatabase(time_series_table_id.database_name)->alterTable(
+        local_context, time_series_table_id, new_metadata, /*validate_new_create_query=*/true);
+    setInMemoryMetadata(new_metadata);
 }
 
 
