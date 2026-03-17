@@ -60,6 +60,9 @@ StorageTimeSeries::StorageTimeSeries(
     auto normalized_columns = columns;
     normalizeTimeSeriesColumns(normalized_columns, *storage_settings);
 
+    /// Store if we need startup() to persist the normalized columns in the database.
+    columns_changed_in_constructor = (normalized_columns != columns);
+
     StorageInMemoryMetadata storage_metadata;
     storage_metadata.setColumns(normalized_columns);
     if (!comment.empty())
@@ -127,6 +130,17 @@ StorageTimeSeries::~StorageTimeSeries() = default;
 const TimeSeriesSettings & StorageTimeSeries::getStorageSettings() const
 {
     return *storage_settings;
+}
+
+void StorageTimeSeries::startup()
+{
+    if (columns_changed_in_constructor)
+    {
+        auto time_series_table_id = getStorageID();
+        StorageInMemoryMetadata current_metadata = getInMemoryMetadata();
+        DatabaseCatalog::instance().getDatabase(time_series_table_id.database_name)->alterTable(
+            getContext(), time_series_table_id, current_metadata, /*validate_new_create_query=*/false);
+    }
 }
 
 void StorageTimeSeries::drop()

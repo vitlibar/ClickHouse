@@ -44,6 +44,8 @@ public:
     StoragePtr getTargetTable(ViewTarget::Kind target_kind, const ContextPtr & local_context) const;
     StoragePtr tryGetTargetTable(ViewTarget::Kind target_kind, const ContextPtr & local_context) const;
 
+    void startup() override;
+
     void read(
         QueryPlan & query_plan,
         const Names & column_names,
@@ -86,6 +88,10 @@ public:
 
 private:
     TimeSeriesSettingsPtr storage_settings;
+
+    /// Set to `true` if the column list was modified during construction because of normalization.
+    /// In that case `startup()` will store the updated metadata by calling `alterTable()`.
+    bool columns_changed_in_constructor = false;
 
     /// CREATE TABLE query stored for use in ALTER TABLE MODIFY/RESET SETTINGS.
     ASTPtr create_query;
