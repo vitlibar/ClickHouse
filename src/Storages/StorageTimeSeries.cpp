@@ -15,6 +15,8 @@
 #include <Storages/TimeSeries/createTimeSeriesInnerTable.h>
 #include <Storages/TimeSeries/normalizeTimeSeriesDefinition.h>
 
+#include <Common/logger_useful.h>
+#include <Parsers/ASTSetQuery.h>
 #include <base/insertAtEnd.h>
 #include <filesystem>
 
@@ -55,14 +57,20 @@ StorageTimeSeries::StorageTimeSeries(
                         "is not enabled (the setting 'allow_experimental_time_series_table')");
     }
 
+    /// Store a clone of the CREATE TABLE query so ALTER TABLE MODIFY/RESET SETTINGS
+    /// can pass it to getNormalizedTimeSeriesSettings to re-derive dependent defaults.
+    create_query = boost::static_pointer_cast<ASTCreateQuery>(query.clone());
+
     auto normalized_settings = std::make_shared<TimeSeriesSettings>();
-    if (query.storage)
-        normalized_settings->loadFromQuery(*query.storage);
-    normalizeTimeSeriesSettings(*normalized_settings, query, local_context);
+    if (create_query->storage)
+        normalized_settings->loadFromQuery(*create_query->storage);
+    if (normalizeTimeSeriesSettings(*normalized_settings, *create_query, local_context))
+        definition_changed_in_constructor = true;
     storage_settings = normalized_settings;
 
     auto normalized_columns = columns;
-    normalizeTimeSeriesColumns(normalized_columns, *storage_settings);
+    if (normalizeTimeSeriesColumns(normalized_columns, *storage_settings))
+        definition_changed_in_constructor = true;
 
     StorageInMemoryMetadata storage_metadata;
     storage_metadata.setColumns(normalized_columns);
@@ -121,6 +129,29 @@ StorageTimeSeries::~StorageTimeSeries() = default;
 const TimeSeriesSettings & StorageTimeSeries::getStorageSettings() const
 {
     return *storage_settings;
+}
+
+void StorageTimeSeries::startup()
+{
+    if (definition_changed_in_constructor)
+    {
+        auto time_series_table_id = getStorageID();
+        StorageInMemoryMetadata new_metadata = getInMemoryMetadata();
+        auto settings_ast = make_intrusive<ASTSetQuery>();
+        settings_ast->is_standalone = false;
+        settings_ast->changes = storage_settings->changes();
+        new_metadata.settings_changes = settings_ast;
+        try
+        {
+            DatabaseCatalog::instance().getDatabase(time_series_table_id.database_name)->alterTable(
+                getContext(), time_series_table_id, new_metadata, /*validate_new_create_query=*/false);
+        }
+        catch (...)
+        {
+            /// We couldn't update the table definition in the database, but we can still use it.
+            tryLogCurrentException(getLogger("TimeSeries"), __PRETTY_FUNCTION__);
+        }
+    }
 }
 
 void StorageTimeSeries::drop()
@@ -305,14 +336,45 @@ void StorageTimeSeries::checkAlterIsPossible(const AlterCommands & commands, Con
 {
     for (const auto & command : commands)
     {
-        if (!command.isCommentAlter() && command.type != AlterCommand::MODIFY_SQL_SECURITY)
+        if (!command.isCommentAlter() && command.type != AlterCommand::MODIFY_SQL_SECURITY
+            && !command.isSettingsAlter())
             throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Alter of type '{}' is not supported by storage {}", command.type, getName());
     }
 }
 
-void StorageTimeSeries::alter(const AlterCommands & params, ContextPtr local_context, AlterLockHolder & table_lock_holder)
+void StorageTimeSeries::alter(const AlterCommands & params, ContextPtr local_context, AlterLockHolder &)
 {
-    IStorage::alter(params, local_context, table_lock_holder);
+    StorageInMemoryMetadata new_metadata = getInMemoryMetadata();
+    params.apply(new_metadata, local_context);
+
+    bool has_settings_changes = std::any_of(
+        params.begin(), params.end(), [](const AlterCommand & c) { return c.isSettingsAlter(); });
+
+    auto new_settings = storage_settings;
+
+    if (has_settings_changes)
+    {
+        auto normalized_settings = std::make_shared<TimeSeriesSettings>(*new_settings);
+        normalized_settings->applyChanges(new_metadata.settings_changes->as<const ASTSetQuery &>().changes);
+        normalizeTimeSeriesSettings(*normalized_settings, *create_query, getContext());
+        new_settings = normalized_settings;
+
+        auto settings_ast = make_intrusive<ASTSetQuery>();
+        settings_ast->is_standalone = false;
+        settings_ast->changes = normalized_settings->changes();
+        new_metadata.settings_changes = settings_ast;
+
+        ColumnsDescription new_columns = new_metadata.getColumns();
+        normalizeTimeSeriesColumns(new_columns, *normalized_settings);
+        new_metadata.setColumns(new_columns);
+    }
+
+    auto time_series_table_id = getStorageID();
+    DatabaseCatalog::instance().getDatabase(time_series_table_id.database_name)->alterTable(
+        local_context, time_series_table_id, new_metadata, /*validate_new_create_query=*/true);
+    setInMemoryMetadata(new_metadata);
+
+    storage_settings = new_settings;
 }
 
 

@@ -44,6 +44,8 @@ public:
     StoragePtr getTargetTable(ViewTarget::Kind target_kind, const ContextPtr & local_context) const;
     StoragePtr tryGetTargetTable(ViewTarget::Kind target_kind, const ContextPtr & local_context) const;
 
+    void startup() override;
+
     void read(
         QueryPlan & query_plan,
         const Names & column_names,
@@ -85,7 +87,12 @@ public:
     Strings getDataPaths() const override;
 
 private:
+    /// Initial CREATE TABLE query stored for use in ALTER TABLE MODIFY/RESET SETTINGS.
+    boost::intrusive_ptr<ASTCreateQuery> create_query;
+
     TimeSeriesSettingsPtr storage_settings;
+
+    bool definition_changed_in_constructor = false;
 
     struct Target
     {
