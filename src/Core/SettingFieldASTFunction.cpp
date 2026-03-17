@@ -24,7 +24,7 @@ boost::intrusive_ptr<ASTFunction> parseASTFunction(const String & str)
 {
     if (str.empty())
         return nullptr;
-    ParserFunction parser;
+    ParserExpressionWithOptionalArguments parser;
     ASTPtr ast = parseQuery(parser, str, /*max_query_size=*/0, /*max_parser_depth=*/DBMS_DEFAULT_MAX_PARSER_DEPTH, /*max_parser_backtracks=*/DBMS_DEFAULT_MAX_PARSER_BACKTRACKS);
     auto func = typeid_cast<ASTFunction *>(ast.get());
     if (!func)
