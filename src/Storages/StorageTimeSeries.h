@@ -38,7 +38,7 @@ public:
 
     std::string getName() const override { return "TimeSeries"; }
 
-    const TimeSeriesSettings & getStorageSettings() const;
+    std::shared_ptr<const TimeSeriesSettings> getStorageSettings() const { return storage_settings.get(); }
 
     StorageID getTargetTableId(ViewTarget::Kind target_kind) const;
     StoragePtr getTargetTable(ViewTarget::Kind target_kind, const ContextPtr & local_context) const;
@@ -85,7 +85,12 @@ public:
     Strings getDataPaths() const override;
 
 private:
-    TimeSeriesSettingsPtr storage_settings;
+    void initTargets(const StorageID & table_id, const ColumnsDescription & columns, const ContextPtr & local_context, LoadingStrictnessLevel mode);
+
+    /// Initial CREATE TABLE query stored for use in ALTER TABLE MODIFY/RESET SETTINGS.
+    boost::intrusive_ptr<ASTCreateQuery> create_query;
+
+    MultiVersion<TimeSeriesSettings> storage_settings;
 
     struct Target
     {

@@ -94,9 +94,9 @@ StoragePrometheusQuery::Configuration StoragePrometheusQuery::getConfiguration(A
     time_series_storage_id = context->resolveStorageID(time_series_storage_id);
 
     auto time_series_storage = storagePtrToTimeSeries(DatabaseCatalog::instance().getTable(time_series_storage_id, context));
-    const auto & time_series_settings = time_series_storage->getStorageSettings();
-    DataTypePtr timestamp_data_type = time_series_settings[TimeSeriesSetting::timestamp_type];
-    DataTypePtr scalar_data_type = time_series_settings[TimeSeriesSetting::scalar_type];
+    auto time_series_settings = time_series_storage->getStorageSettings();
+    DataTypePtr timestamp_data_type = (*time_series_settings)[TimeSeriesSetting::timestamp_type];
+    DataTypePtr scalar_data_type = (*time_series_settings)[TimeSeriesSetting::scalar_type];
 
     UInt32 timestamp_scale = tryGetDecimalScale(*timestamp_data_type).value_or(0);
 

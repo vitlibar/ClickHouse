@@ -583,11 +583,11 @@ void PrometheusRemoteWriteProtocol::writeTimeSeries(const google::protobuf::Repe
     LOG_TRACE(log, "{}: Writing {} time series",
               time_series_storage_id.getNameForLogs(), time_series.size());
 
-    const auto & time_series_settings = time_series_storage->getStorageSettings();
+    auto time_series_settings = time_series_storage->getStorageSettings();
 
     const auto & tags_metadata = *time_series_storage->getTargetTable(ViewTarget::Tags, getContext())->getInMemoryMetadataPtr();
     const auto & samples_metadata = *time_series_storage->getTargetTable(ViewTarget::Samples, getContext())->getInMemoryMetadataPtr();
-    auto blocks = toBlocks(time_series, getContext(), time_series_settings, tags_metadata, samples_metadata);
+    auto blocks = toBlocks(time_series, getContext(), *time_series_settings, tags_metadata, samples_metadata);
     insertToTargetTables(std::move(blocks), *time_series_storage, getContext(), log.get());
 
     LOG_TRACE(log, "{}: {} time series written",

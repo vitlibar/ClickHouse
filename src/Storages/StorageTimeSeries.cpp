@@ -6,6 +6,7 @@
 #include <Interpreters/InterpreterDropQuery.h>
 #include <Parsers/ASTDropQuery.h>
 #include <Parsers/ASTCreateQuery.h>
+#include <Parsers/ASTSetQuery.h>
 #include <Parsers/ASTViewTargets.h>
 #include <Storages/AlterCommands.h>
 #include <Storages/StorageFactory.h>
@@ -14,7 +15,6 @@
 #include <Storages/TimeSeries/checkTimeSeriesTargetTable.h>
 #include <Storages/TimeSeries/createTimeSeriesInnerTable.h>
 #include <Storages/TimeSeries/normalizeTimeSeriesDefinition.h>
-
 #include <base/insertAtEnd.h>
 #include <filesystem>
 
@@ -55,14 +55,19 @@ StorageTimeSeries::StorageTimeSeries(
                         "is not enabled (the setting 'allow_experimental_time_series_table')");
     }
 
-    auto normalized_settings = std::make_shared<TimeSeriesSettings>();
-    if (query.storage)
-        normalized_settings->loadFromQuery(*query.storage);
-    normalizeTimeSeriesSettings(*normalized_settings, query, local_context);
-    storage_settings = normalized_settings;
+    /// Store a clone of the CREATE TABLE query so ALTER TABLE MODIFY/RESET SETTINGS
+    /// can pass it to getNormalizedTimeSeriesSettings to re-derive dependent defaults.
+    create_query = boost::static_pointer_cast<ASTCreateQuery>(query.clone());
+
+    auto normalized_settings = std::make_unique<TimeSeriesSettings>();
+    if (create_query->storage)
+        normalized_settings->loadFromQuery(*create_query->storage);
+    normalizeTimeSeriesSettings(*normalized_settings, *create_query, local_context);
 
     auto normalized_columns = columns;
-    normalizeTimeSeriesColumns(normalized_columns, *storage_settings);
+    normalizeTimeSeriesColumns(normalized_columns, *normalized_settings);
+
+    storage_settings.set(std::move(normalized_settings));
 
     StorageInMemoryMetadata storage_metadata;
     storage_metadata.setColumns(normalized_columns);
@@ -70,12 +75,19 @@ StorageTimeSeries::StorageTimeSeries(
         storage_metadata.setComment(comment);
     setInMemoryMetadata(storage_metadata);
 
+    initTargets(table_id, normalized_columns, local_context, mode);
+}
+
+void StorageTimeSeries::initTargets(const StorageID & table_id, const ColumnsDescription & columns, const ContextPtr & local_context, LoadingStrictnessLevel mode)
+{
+    auto time_series_settings = getStorageSettings();
+
     for (auto target_kind : {ViewTarget::Samples, ViewTarget::Tags, ViewTarget::Metrics})
     {
         Target target;
         target.kind = target_kind;
 
-        if (auto target_table_id = query.getTargetTableID(target_kind))
+        if (auto target_table_id = create_query->getTargetTableID(target_kind))
         {
             /// A target table is specified.
             target.table_id = target_table_id;
@@ -87,7 +99,7 @@ StorageTimeSeries::StorageTimeSeries(
                 auto target_table = DatabaseCatalog::instance().getTable(target_table_id, local_context);
                 auto target_metadata = target_table->getInMemoryMetadataPtr();
                 const auto & target_columns = target_metadata->columns;
-                checkTimeSeriesTargetTable(target_table_id, target_columns, target_kind, *storage_settings);
+                checkTimeSeriesTargetTable(target_table_id, target_columns, target_kind, *time_series_settings);
             }
         }
         else
@@ -95,7 +107,7 @@ StorageTimeSeries::StorageTimeSeries(
             /// An inner target table should be used.
             target.is_inner_table = true;
             has_inner_tables = true;
-            auto inner_uuid = query.getTargetInnerUUID(target_kind);
+            auto inner_uuid = create_query->getTargetInnerUUID(target_kind);
 
             if (mode >= LoadingStrictnessLevel::ATTACH)
             {
@@ -105,8 +117,8 @@ StorageTimeSeries::StorageTimeSeries(
             else
             {
                 /// Create the inner target table.
-                auto inner_engine = getTimeSeriesInnerEngine(target_kind, query, *storage_settings, local_context);
-                target.table_id = createTimeSeriesInnerTable(target_kind, inner_uuid, inner_engine, table_id, normalized_columns, *storage_settings, local_context);
+                auto inner_engine = getTimeSeriesInnerEngine(target_kind, *create_query, *time_series_settings, local_context);
+                target.table_id = createTimeSeriesInnerTable(target_kind, inner_uuid, inner_engine, table_id, columns, *time_series_settings, local_context);
             }
         }
 
@@ -117,11 +129,6 @@ StorageTimeSeries::StorageTimeSeries(
 
 StorageTimeSeries::~StorageTimeSeries() = default;
 
-
-const TimeSeriesSettings & StorageTimeSeries::getStorageSettings() const
-{
-    return *storage_settings;
-}
 
 void StorageTimeSeries::drop()
 {
@@ -305,14 +312,46 @@ void StorageTimeSeries::checkAlterIsPossible(const AlterCommands & commands, Con
 {
     for (const auto & command : commands)
     {
-        if (!command.isCommentAlter() && command.type != AlterCommand::MODIFY_SQL_SECURITY)
+        if (!command.isCommentAlter() && command.type != AlterCommand::MODIFY_SQL_SECURITY
+            && !command.isSettingsAlter())
             throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Alter of type '{}' is not supported by storage {}", command.type, getName());
     }
 }
 
-void StorageTimeSeries::alter(const AlterCommands & params, ContextPtr local_context, AlterLockHolder & table_lock_holder)
+void StorageTimeSeries::alter(const AlterCommands & params, ContextPtr local_context, AlterLockHolder &)
 {
-    IStorage::alter(params, local_context, table_lock_holder);
+    StorageInMemoryMetadata new_metadata = getInMemoryMetadata();
+    params.apply(new_metadata, local_context);
+
+    auto current_settings = getStorageSettings();
+    std::unique_ptr<TimeSeriesSettings> new_settings;
+
+    bool has_settings_changes = std::any_of(
+        params.begin(), params.end(), [](const AlterCommand & c) { return c.isSettingsAlter(); });
+
+    if (has_settings_changes)
+    {
+        new_settings = std::make_unique<TimeSeriesSettings>(*current_settings);
+        new_settings->applyChanges(new_metadata.settings_changes->as<const ASTSetQuery &>().changes);
+        normalizeTimeSeriesSettings(*new_settings, *create_query, getContext());
+
+        auto settings_ast = make_intrusive<ASTSetQuery>();
+        settings_ast->is_standalone = false;
+        settings_ast->changes = new_settings->changes();
+        new_metadata.settings_changes = settings_ast;
+
+        ColumnsDescription new_columns = new_metadata.getColumns();
+        normalizeTimeSeriesColumns(new_columns, *new_settings);
+        new_metadata.setColumns(new_columns);
+    }
+
+    auto time_series_table_id = getStorageID();
+    DatabaseCatalog::instance().getDatabase(time_series_table_id.database_name)->alterTable(
+        local_context, time_series_table_id, new_metadata, /*validate_new_create_query=*/true);
+    setInMemoryMetadata(new_metadata);
+
+    if (new_settings)
+        storage_settings.set(std::move(new_settings));
 }
 
 
