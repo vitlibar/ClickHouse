@@ -416,12 +416,8 @@ namespace
 }
 
 
-TimeSeriesSettings getNormalizedTimeSeriesSettings(const ASTCreateQuery & create_query, const ContextPtr & context)
+void normalizeTimeSeriesSettings(TimeSeriesSettings & settings, const ASTCreateQuery & create_query, const ContextPtr & context)
 {
-    TimeSeriesSettings settings;
-    if (create_query.storage)
-        settings.loadFromQuery(*create_query.storage);
-
     bool id_generator_is_explicit = static_cast<bool>(settings[TimeSeriesSetting::id_generator]);
 
     if (!settings[TimeSeriesSetting::timestamp_type] || !settings[TimeSeriesSetting::scalar_type] || !settings[TimeSeriesSetting::id_type]
@@ -459,7 +455,6 @@ TimeSeriesSettings getNormalizedTimeSeriesSettings(const ASTCreateQuery & create
         setIDGeneratorByDefault(settings, create_query);
 
     validateSettings(settings, create_query);
-    return settings;
 }
 
 
@@ -502,6 +497,11 @@ void normalizeTimeSeriesColumns(ColumnsDescription & columns, const TimeSeriesSe
     /// We recreate the "id" column if its type doesn't match the settings.
     if (!move_original_column_if_type(TimeSeriesColumnNames::ID, settings[TimeSeriesSetting::id_type]))
         new_columns.add({TimeSeriesColumnNames::ID, settings[TimeSeriesSetting::id_type]});
+
+    /// The DEFAULT expression of the "id" column (if any) has already been moved to the `id_generator` setting.
+    /// Remove it from the column description to avoid validation errors (it may reference columns like `all_tags`
+    /// that no longer exist).
+    new_columns.modify(TimeSeriesColumnNames::ID, [](ColumnDescription & col) { col.default_desc = {}; });
 
     auto timestamp_type = settings[TimeSeriesSetting::timestamp_type];
 
@@ -604,10 +604,12 @@ boost::intrusive_ptr<ASTStorage> getTimeSeriesInnerEngine(ViewTarget::Kind targe
 
 void normalizeTimeSeriesDefinition(ASTCreateQuery & create_query, const ContextPtr & context)
 {
-    TimeSeriesSettings settings = getNormalizedTimeSeriesSettings(create_query, context);
-
     if (!create_query.storage)
         create_query.set(create_query.storage, make_intrusive<ASTStorage>());
+
+    TimeSeriesSettings settings;
+    settings.loadFromQuery(*create_query.storage);
+    normalizeTimeSeriesSettings(settings, create_query, context);
     settings.copyToQuery(*create_query.storage);
 
     /// Use SECONDARY_CREATE mode to skip validation of default expressions during the intermediate

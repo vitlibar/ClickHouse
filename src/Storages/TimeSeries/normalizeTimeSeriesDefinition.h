@@ -15,9 +15,9 @@ struct TimeSeriesSettings;
 /// Also adds engines of inner tables to the definition if they aren't specified yet.
 void normalizeTimeSeriesDefinition(ASTCreateQuery & create_query, const ContextPtr & context);
 
-/// Extracts and normalizes TimeSeries settings from a `CREATE TABLE` query,
+/// Normalizes TimeSeries settings from a `CREATE TABLE` query,
 /// filling in defaults for any settings not explicitly specified.
-TimeSeriesSettings getNormalizedTimeSeriesSettings(const ASTCreateQuery & create_query, const ContextPtr & context);
+void normalizeTimeSeriesSettings(TimeSeriesSettings & settings, const ASTCreateQuery & create_query, const ContextPtr & context);
 
 /// Builds the canonical column list for a TimeSeries table from the given columns and settings.
 /// Reorders and fills in missing columns; also applies the default expression from settings to the `id` column.
