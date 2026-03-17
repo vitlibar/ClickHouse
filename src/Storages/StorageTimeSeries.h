@@ -87,6 +87,9 @@ public:
 private:
     TimeSeriesSettingsPtr storage_settings;
 
+    /// CREATE TABLE query stored for use in ALTER TABLE MODIFY/RESET SETTINGS.
+    ASTPtr create_query;
+
     struct Target
     {
         ViewTarget::Kind kind;
