@@ -57,9 +57,9 @@ void PrometheusHTTPProtocolAPI::executePromQLQuery(
 {
     PrometheusQueryEvaluationSettings evaluation_settings;
     evaluation_settings.time_series_storage_id = time_series_storage->getStorageID();
-    const auto & time_series_settings = time_series_storage->getStorageSettings();
-    evaluation_settings.timestamp_data_type = time_series_settings[TimeSeriesSetting::timestamp_type];
-    evaluation_settings.scalar_data_type = time_series_settings[TimeSeriesSetting::scalar_type];
+    auto time_series_settings = time_series_storage->getStorageSettings();
+    evaluation_settings.timestamp_data_type = (*time_series_settings)[TimeSeriesSetting::timestamp_type];
+    evaluation_settings.scalar_data_type = (*time_series_settings)[TimeSeriesSetting::scalar_type];
     UInt32 timestamp_scale = tryGetDecimalScale(*evaluation_settings.timestamp_data_type).value_or(0);
 
     auto query_tree = std::make_shared<PrometheusQueryTree>();

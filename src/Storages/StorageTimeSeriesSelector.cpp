@@ -107,10 +107,10 @@ StorageTimeSeriesSelector::Configuration StorageTimeSeriesSelector::getConfigura
     time_series_storage_id = context->resolveStorageID(time_series_storage_id);
 
     auto time_series_storage = storagePtrToTimeSeries(DatabaseCatalog::instance().getTable(time_series_storage_id, context));
-    const auto & time_series_settings = time_series_storage->getStorageSettings();
-    DataTypePtr id_data_type = time_series_settings[TimeSeriesSetting::id_type];
-    DataTypePtr timestamp_data_type = time_series_settings[TimeSeriesSetting::timestamp_type];
-    DataTypePtr scalar_data_type = time_series_settings[TimeSeriesSetting::scalar_type];
+    auto time_series_settings = time_series_storage->getStorageSettings();
+    DataTypePtr id_data_type = (*time_series_settings)[TimeSeriesSetting::id_type];
+    DataTypePtr timestamp_data_type = (*time_series_settings)[TimeSeriesSetting::timestamp_type];
+    DataTypePtr scalar_data_type = (*time_series_settings)[TimeSeriesSetting::scalar_type];
 
     UInt32 timestamp_scale = tryGetDecimalScale(*timestamp_data_type).value_or(0);
 
@@ -418,18 +418,20 @@ void StorageTimeSeriesSelector::read(
     size_t /* num_streams */)
 {
     auto time_series_storage = storagePtrToTimeSeries(DatabaseCatalog::instance().getTable(config.time_series_storage_id, context));
-    const auto & time_series_settings = time_series_storage->getStorageSettings();
+    auto time_series_settings = time_series_storage->getStorageSettings();
 
     const auto & matchers = typeid_cast<const PrometheusQueryTree::InstantSelector &>(*config.selector.getRoot()).matchers;
 
-    auto samples_table_id = time_series_storage->getTargetTableId(ViewTarget::Samples);
-    auto tags_table_id = time_series_storage->getTargetTableId(ViewTarget::Tags);
+    /// We can't just use getTargetTableID() here because
+    /// we want a full StorageID here, not just UUID.
+    auto samples_table_id = time_series_storage->getTargetTableID(ViewTarget::Samples, context);
+    auto tags_table_id = time_series_storage->getTargetTableID(ViewTarget::Tags, context);
 
-    auto column_name_by_tag_name = makeColumnNameByTagNameMap(time_series_settings);
+    auto column_name_by_tag_name = makeColumnNameByTagNameMap(*time_series_settings);
 
     std::optional<DateTime64> min_time_to_filter_ids;
     std::optional<DateTime64> max_time_to_filter_ids;
-    if (time_series_settings[TimeSeriesSetting::filter_by_min_time_and_max_time])
+    if ((*time_series_settings)[TimeSeriesSetting::filter_by_min_time_and_max_time])
     {
         min_time_to_filter_ids = config.min_time;
         max_time_to_filter_ids = config.max_time;

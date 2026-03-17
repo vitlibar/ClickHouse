@@ -29,6 +29,7 @@ struct TimeSeriesSettings
     TimeSeriesSettings();
     TimeSeriesSettings(const TimeSeriesSettings & settings);
     TimeSeriesSettings(TimeSeriesSettings && settings) noexcept;
+    TimeSeriesSettings & operator=(TimeSeriesSettings && settings) noexcept;
     ~TimeSeriesSettings();
 
     TIMESERIES_SETTINGS_SUPPORTED_TYPES(TimeSeriesSettings, DECLARE_SETTING_SUBSCRIPT_OPERATOR)

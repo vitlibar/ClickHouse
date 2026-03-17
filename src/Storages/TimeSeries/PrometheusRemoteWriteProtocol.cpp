@@ -576,7 +576,7 @@ namespace
         {
             if (!block.empty())
             {
-                const auto & target_table_id = time_series_storage.getTargetTableId(table_kind);
+                const auto & target_table_id = time_series_storage.getTargetTableID(table_kind, context);
 
                 LOG_INFO(log, "{}: Inserting {} rows to the {} table",
                          time_series_storage_id.getNameForLogs(), block.rows(), toString(table_kind));
@@ -631,10 +631,11 @@ void PrometheusRemoteWriteProtocol::writeTimeSeries(const google::protobuf::Repe
     LOG_TRACE(log, "{}: Writing {} time series",
               time_series_storage_id.getNameForLogs(), time_series.size());
 
-    auto time_series_storage_metadata = time_series_storage->getInMemoryMetadataPtr();
-    const auto & time_series_settings = time_series_storage->getStorageSettings();
+    auto time_series_settings = time_series_storage->getStorageSettings();
 
-    auto blocks = toBlocks(time_series, getContext(), time_series_storage_id, *time_series_storage_metadata, time_series_settings);
+    const auto & tags_metadata = *time_series_storage->getTargetTable(ViewTarget::Tags, getContext())->getInMemoryMetadataPtr();
+    const auto & samples_metadata = *time_series_storage->getTargetTable(ViewTarget::Samples, getContext())->getInMemoryMetadataPtr();
+    auto blocks = toBlocks(time_series, getContext(), *time_series_settings, tags_metadata, samples_metadata);
     insertToTargetTables(std::move(blocks), *time_series_storage, getContext(), log.get());
 
     LOG_TRACE(log, "{}: {} time series written",
