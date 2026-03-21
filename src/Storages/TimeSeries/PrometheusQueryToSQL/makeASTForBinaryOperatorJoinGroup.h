@@ -6,11 +6,13 @@
 namespace DB::PrometheusQueryToSQL
 {
 
-/// Makes an expression to evaluate the `join_group` column to join the sides of a binary operator on instant vectors.
+/// Builds an AST expression for the `join_group` column, which is the matching key used to pair up series
+/// from both sides of a binary operator. The expression is derived from `group` by applying the `on(tags)`
+/// or `ignoring(tags)` matching rules — removing tags that should not participate in matching.
 ASTPtr makeASTForBinaryOperatorJoinGroup(
     const PQT::BinaryOperator * operator_node,
     ASTPtr && group,
-    bool metric_name_dropped_from_group,
-    bool * metric_name_dropped_from_join_group = nullptr);
+    bool drop_metric_name,
+    bool & metric_name_dropped);
 
 }
