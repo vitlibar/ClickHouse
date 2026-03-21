@@ -48,8 +48,7 @@ namespace
         SQLQueryPiece && right_argument,
         ConverterContext & context,
         std::function<ASTPtr(ASTPtr, ASTPtr)> apply_function_to_ast,
-        bool drop_metric_name,
-        BinaryOperatorNoGroupingTagsSource no_grouping_tags_source)
+        bool drop_metric_name)
     {
         /// If one of the arguments is empty then the result is also empty.
         if ((left_argument.store_method == StoreMethod::EMPTY) || (right_argument.store_method == StoreMethod::EMPTY))
@@ -184,16 +183,16 @@ namespace
             if (!group_left && !group_right)
             {
                 /// Neither group_left nor group_right is specified.
-                if (no_grouping_tags_source == BinaryOperatorNoGroupingTagsSource::Left)
+
+                if (operator_node->on || operator_node->ignoring || drop_metric_name)
                 {
-                    new_group = make_intrusive<ASTIdentifier>(Strings{left, ColumnNames::OriginalGroup});
-                    metric_name_dropped_from_result = left_argument.metric_name_dropped;
+                    new_group = make_intrusive<ASTIdentifier>(ColumnNames::JoinGroup);
+                    metric_name_dropped_from_result = metric_name_dropped_from_join_group;
                 }
                 else
                 {
-                    chassert(no_grouping_tags_source == BinaryOperatorNoGroupingTagsSource::On);
-                    new_group = make_intrusive<ASTIdentifier>(ColumnNames::JoinGroup);
-                    metric_name_dropped_from_result = metric_name_dropped_from_join_group;
+                    new_group = make_intrusive<ASTIdentifier>(Strings{left, ColumnNames::OriginalGroup});
+                    metric_name_dropped_from_result = left_argument.metric_name_dropped;
                 }
 
                 if (drop_metric_name && !metric_name_dropped_from_result)
@@ -342,8 +341,7 @@ SQLQueryPiece applySimpleBinaryOperator(
     SQLQueryPiece && right_argument,
     ConverterContext & context,
     std::function<ASTPtr(ASTPtr, ASTPtr)> apply_function_to_ast,
-    bool drop_metric_name,
-    BinaryOperatorNoGroupingTagsSource no_grouping_tags_source)
+    bool drop_metric_name)
 {
      if ((left_argument.type == ResultType::SCALAR) || (right_argument.type == ResultType::SCALAR))
     {
@@ -361,7 +359,6 @@ SQLQueryPiece applySimpleBinaryOperator(
         std::move(right_argument),
         context,
         apply_function_to_ast,
-        drop_metric_name,
-        no_grouping_tags_source);
+        drop_metric_name);
 }
 }

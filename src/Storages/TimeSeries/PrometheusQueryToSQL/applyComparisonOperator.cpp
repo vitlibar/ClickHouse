@@ -115,8 +115,7 @@ SQLQueryPiece applyComparisonOperator(
         };
 
         return applySimpleBinaryOperator(operator_node, std::move(left_argument), std::move(right_argument), context, apply_function_to_ast,
-            /* drop_metric_name = */ true,
-            BinaryOperatorNoGroupingTagsSource::On);
+            /* drop_metric_name = */ true);
     }
     else
     {
@@ -154,8 +153,7 @@ SQLQueryPiece applyComparisonOperator(
             std::move(right_argument),
             context,
             apply_function_to_ast,
-            /* drop_metric_name = */ false,
-            BinaryOperatorNoGroupingTagsSource::Left);
+            /* drop_metric_name = */ false);
     }
 }
 

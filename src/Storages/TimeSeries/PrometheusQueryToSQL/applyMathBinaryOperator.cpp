@@ -113,8 +113,7 @@ SQLQueryPiece applyMathBinaryOperator(
         std::move(right_argument),
         context,
         apply_function_to_ast,
-        /* drop_metric_name = */ true,
-        BinaryOperatorNoGroupingTagsSource::On);
+        /* drop_metric_name = */ true);
 }
 
 }
