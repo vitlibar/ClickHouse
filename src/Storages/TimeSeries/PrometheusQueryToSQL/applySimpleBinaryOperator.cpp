@@ -95,13 +95,16 @@ namespace
             SelectQueryBuilder builder;
 
             bool metric_name_dropped_from_group = (side == left) ? left_argument.metric_name_dropped : right_argument.metric_name_dropped;
-            bool metric_name_dropped_from_join_group_on_side = false;
+            bool metric_name_dropped_from_join_group_on_side = metric_name_dropped_from_group;
 
+            /// The join_group is always computed with `drop_metric_name=true` because the two sides typically
+            /// have different metric names (e.g., `foo` and `bar`), so keeping `__name__` in the join key
+            /// would prevent any matches. The exception is `on(__name__, ...)`, handled inside makeASTForBinaryOperatorJoinGroup.
             ASTPtr join_group = makeASTForBinaryOperatorJoinGroup(
                 operator_node,
                 make_intrusive<ASTIdentifier>(ColumnNames::Group),
-                metric_name_dropped_from_group,
-                &metric_name_dropped_from_join_group_on_side);
+                /* drop_metric_name = */ true,
+                metric_name_dropped_from_join_group_on_side);
 
             /// If the metric name has dropped from the `join_group` either on left or on right then it's dropped.
             metric_name_dropped_from_join_group |= metric_name_dropped_from_join_group_on_side;
@@ -184,13 +187,29 @@ namespace
             {
                 /// Neither group_left nor group_right is specified.
 
-                if (operator_node->on || operator_node->ignoring || drop_metric_name)
+                if (operator_node->on || drop_metric_name)
                 {
+                    /// With on(tags), the join_group already contains exactly the tags to use as the result group.
+                    /// With `drop_metric_name == true` (arithmetic operators), we also want to use the join_group since it has
+                    /// the metric name removed.
                     new_group = make_intrusive<ASTIdentifier>(ColumnNames::JoinGroup);
                     metric_name_dropped_from_result = metric_name_dropped_from_join_group;
                 }
+                else if (operator_node->ignoring && !operator_node->labels.empty())
+                {
+                    /// With ignoring(tags), the join_group has both the ignored tags and the metric name removed,
+                    /// but the result should keep the metric name. We recompute from original_group, removing
+                    /// only the ignored tags (drop_metric_name=false keeps __name__).
+                    metric_name_dropped_from_result = left_argument.metric_name_dropped;
+                    new_group = makeASTForBinaryOperatorJoinGroup(
+                        operator_node,
+                        make_intrusive<ASTIdentifier>(Strings{left, ColumnNames::OriginalGroup}),
+                        /* drop_metric_name = */ false,
+                        metric_name_dropped_from_result);
+                }
                 else
                 {
+                    /// No on/ignoring: use the original left-side group as-is, preserving all labels.
                     new_group = make_intrusive<ASTIdentifier>(Strings{left, ColumnNames::OriginalGroup});
                     metric_name_dropped_from_result = left_argument.metric_name_dropped;
                 }

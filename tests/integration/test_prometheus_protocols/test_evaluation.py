@@ -1949,7 +1949,6 @@ def test_comparison_operator_with_bool_modifier():
     )
 
     # Compare two instant vectors.
-    # bar{triangle,xl} does not match foo{triangle,m} by default (different size label).
     do_query_test(
         "(foo == bool bar)[50:10]",
         150,
@@ -1982,7 +1981,6 @@ def test_comparison_operator_with_bool_modifier():
         ],
     )
 
-    # Compare two instant vectors.
     do_query_test(
         "(foo > bool bar)[50:10]",
         150,
@@ -2070,6 +2068,17 @@ def test_comparison_operator_with_bool_modifier():
         ],
     )
 
+    do_query_test(
+        "(foo > bool ignoring(size) bar)[50:10]",
+        150,
+        '{"resultType": "matrix", "result": [{"metric": {"shape": "circle"}, "values": [[110, "1"], [120, "0"], [130, "0"], [140, "0"], [150, "0"]]}, {"metric": {"shape": "square"}, "values": [[110, "1"], [120, "0"], [130, "0"], [140, "0"], [150, "0"]]}, {"metric": {"shape": "triangle"}, "values": [[110, "0"], [120, "1"], [130, "1"], [140, "1"], [150, "1"]]}]}',
+        [
+            ["[('shape','circle')]", "[('1970-01-01 00:01:50.000',1),('1970-01-01 00:02:00.000',0),('1970-01-01 00:02:10.000',0),('1970-01-01 00:02:20.000',0),('1970-01-01 00:02:30.000',0)]"],
+            ["[('shape','square')]", "[('1970-01-01 00:01:50.000',1),('1970-01-01 00:02:00.000',0),('1970-01-01 00:02:10.000',0),('1970-01-01 00:02:20.000',0),('1970-01-01 00:02:30.000',0)]"],
+            ["[('shape','triangle')]", "[('1970-01-01 00:01:50.000',0),('1970-01-01 00:02:00.000',1),('1970-01-01 00:02:10.000',1),('1970-01-01 00:02:20.000',1),('1970-01-01 00:02:30.000',1)]"],
+        ],
+    )
+
     # Use on(size) group_right to allow 1:many matching: size="l" has one foo (circle) but two bars
     # (circle and rectangle), which requires group_right.
     do_query_test(
@@ -2136,7 +2145,6 @@ def test_comparison_operator():
     )
 
     # Compare two instant vectors.
-    # foo{triangle,m} doesn't match bar{triangle,xl}
     do_query_test(
         "(foo == bar)[50:10]",
         150,
@@ -2169,7 +2177,6 @@ def test_comparison_operator():
         ],
     )
 
-    # Compare two instant vectors.
     do_query_test(
         "(foo > bar)[50:10]",
         150,
@@ -2245,6 +2252,17 @@ def test_comparison_operator():
             ["[('shape','circle')]", "[('1970-01-01 00:01:50.000',16)]"],
             ["[('shape','square')]", "[('1970-01-01 00:01:50.000',4)]"],
             ["[('shape','triangle')]", "[('1970-01-01 00:02:00.000',80),('1970-01-01 00:02:10.000',80),('1970-01-01 00:02:20.000',80),('1970-01-01 00:02:30.000',80)]"],
+        ],
+    )
+
+    do_query_test(
+        "(foo > ignoring(size) bar)[50:10]",
+        150,
+        '{"resultType": "matrix", "result": [{"metric": {"__name__": "foo", "shape": "circle"}, "values": [[110, "16"]]}, {"metric": {"__name__": "foo", "shape": "square"}, "values": [[110, "4"]]}, {"metric": {"__name__": "foo", "shape": "triangle"}, "values": [[120, "80"], [130, "80"], [140, "80"], [150, "80"]]}]}',
+        [
+            ["[('__name__','foo'),('shape','circle')]", "[('1970-01-01 00:01:50.000',16)]"],
+            ["[('__name__','foo'),('shape','square')]", "[('1970-01-01 00:01:50.000',4)]"],
+            ["[('__name__','foo'),('shape','triangle')]", "[('1970-01-01 00:02:00.000',80),('1970-01-01 00:02:10.000',80),('1970-01-01 00:02:20.000',80),('1970-01-01 00:02:30.000',80)]"],
         ],
     )
 
