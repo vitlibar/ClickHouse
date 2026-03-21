@@ -240,6 +240,22 @@ def send_test_data():
                 {"__name__": "bar", "shape": "rectangle", "size": "l"},
                 {110: 9, 120: 90, 150: 900},
             ),
+            (
+                {"__name__": "baz", "shape": "circle", "size": "l"},
+                {110: 10, 120: 16, 130: 50, 150: 1000},
+            ),
+            (
+                {"__name__": "baz", "shape": "square", "size": "s"},
+                {110: 3, 120: 40, 140: 700},
+            ),
+            (
+                {"__name__": "baz", "shape": "triangle", "size": "xl"},
+                {110: 8, 150: 30},
+            ),
+            (
+                {"__name__": "baz", "shape": "rectangle", "size": "l"},
+                {110: 9, 130: 90},
+            ),
         ]
     )
 
@@ -1948,51 +1964,48 @@ def test_comparison_operator_with_bool_modifier():
     )
 
     # Compare two instant vectors.
-    # We add 11 to bar to make the result of comparison different at different times.
+    # baz{triangle,xl} does not match foo{triangle,m} by default (different size label).
     do_query_test(
-        "(foo == bool bar + 11)[50:10]",
+        "(foo == bool baz)[50:10]",
         150,
-        '{"resultType": "matrix", "result": [{"metric": {"shape": "circle", "size": "l"}, "values": [[110, "1"], [120, "1"], [130, "0"], [140, "0"], [150, "0"]]}, {"metric": {"shape": "square", "size": "s"}, "values": [[110, "0"], [120, "0"], [130, "0"], [140, "0"], [150, "0"]]}]}',
+        '{"resultType": "matrix", "result": [{"metric": {"shape": "circle", "size": "l"}, "values": [[110, "0"], [120, "1"], [130, "0"], [140, "0"], [150, "0"]]}, {"metric": {"shape": "square", "size": "s"}, "values": [[110, "0"], [120, "0"], [130, "1"], [140, "0"], [150, "0"]]}]}',
         [
             [
                 "[('shape','circle'),('size','l')]",
-                "[('1970-01-01 00:01:50.000',1),('1970-01-01 00:02:00.000',1),('1970-01-01 00:02:10.000',0),('1970-01-01 00:02:20.000',0),('1970-01-01 00:02:30.000',0)]",
+                "[('1970-01-01 00:01:50.000',0),('1970-01-01 00:02:00.000',1),('1970-01-01 00:02:10.000',0),('1970-01-01 00:02:20.000',0),('1970-01-01 00:02:30.000',0)]",
             ],
             [
                 "[('shape','square'),('size','s')]",
-                "[('1970-01-01 00:01:50.000',0),('1970-01-01 00:02:00.000',0),('1970-01-01 00:02:10.000',0),('1970-01-01 00:02:20.000',0),('1970-01-01 00:02:30.000',0)]",
+                "[('1970-01-01 00:01:50.000',0),('1970-01-01 00:02:00.000',0),('1970-01-01 00:02:10.000',1),('1970-01-01 00:02:20.000',0),('1970-01-01 00:02:30.000',0)]",
             ],
         ],
     )
 
     do_query_test(
-        "(foo != bool bar + 11)[50:10]",
+        "(foo != bool baz)[50:10]",
         150,
-        '{"resultType": "matrix", "result": [{"metric": {"shape": "circle", "size": "l"}, "values": [[110, "0"], [120, "0"], [130, "1"], [140, "1"], [150, "1"]]}, {"metric": {"shape": "square", "size": "s"}, "values": [[110, "1"], [120, "1"], [130, "1"], [140, "1"], [150, "1"]]}]}',
+        '{"resultType": "matrix", "result": [{"metric": {"shape": "circle", "size": "l"}, "values": [[110, "1"], [120, "0"], [130, "1"], [140, "1"], [150, "1"]]}, {"metric": {"shape": "square", "size": "s"}, "values": [[110, "1"], [120, "1"], [130, "0"], [140, "1"], [150, "1"]]}]}',
         [
             [
                 "[('shape','circle'),('size','l')]",
-                "[('1970-01-01 00:01:50.000',0),('1970-01-01 00:02:00.000',0),('1970-01-01 00:02:10.000',1),('1970-01-01 00:02:20.000',1),('1970-01-01 00:02:30.000',1)]",
+                "[('1970-01-01 00:01:50.000',1),('1970-01-01 00:02:00.000',0),('1970-01-01 00:02:10.000',1),('1970-01-01 00:02:20.000',1),('1970-01-01 00:02:30.000',1)]",
             ],
             [
                 "[('shape','square'),('size','s')]",
-                "[('1970-01-01 00:01:50.000',1),('1970-01-01 00:02:00.000',1),('1970-01-01 00:02:10.000',1),('1970-01-01 00:02:20.000',1),('1970-01-01 00:02:30.000',1)]",
+                "[('1970-01-01 00:01:50.000',1),('1970-01-01 00:02:00.000',1),('1970-01-01 00:02:10.000',0),('1970-01-01 00:02:20.000',1),('1970-01-01 00:02:30.000',1)]",
             ],
         ],
     )
 
     # Compare two instant vectors.
-    # We subtract 30 from bar to make the result of comparison different at different times.
-    # The boundary is at foo{shape="square"}=40 vs bar{shape="square"}-30=70-30=40 at t=130,
-    # which makes > and >= (and < and <=) give different results.
     do_query_test(
-        "(foo > bool bar - 30)[50:10]",
+        "(foo > bool baz)[50:10]",
         150,
-        '{"resultType": "matrix", "result": [{"metric": {"shape": "circle", "size": "l"}, "values": [[110, "1"], [120, "1"], [130, "0"], [140, "0"], [150, "0"]]}, {"metric": {"shape": "square", "size": "s"}, "values": [[110, "1"], [120, "0"], [130, "0"], [140, "0"], [150, "0"]]}]}',
+        '{"resultType": "matrix", "result": [{"metric": {"shape": "circle", "size": "l"}, "values": [[110, "1"], [120, "0"], [130, "0"], [140, "0"], [150, "0"]]}, {"metric": {"shape": "square", "size": "s"}, "values": [[110, "1"], [120, "0"], [130, "0"], [140, "0"], [150, "0"]]}]}',
         [
             [
                 "[('shape','circle'),('size','l')]",
-                "[('1970-01-01 00:01:50.000',1),('1970-01-01 00:02:00.000',1),('1970-01-01 00:02:10.000',0),('1970-01-01 00:02:20.000',0),('1970-01-01 00:02:30.000',0)]",
+                "[('1970-01-01 00:01:50.000',1),('1970-01-01 00:02:00.000',0),('1970-01-01 00:02:10.000',0),('1970-01-01 00:02:20.000',0),('1970-01-01 00:02:30.000',0)]",
             ],
             [
                 "[('shape','square'),('size','s')]",
@@ -2002,7 +2015,7 @@ def test_comparison_operator_with_bool_modifier():
     )
 
     do_query_test(
-        "(foo >= bool bar - 30)[50:10]",
+        "(foo >= bool baz)[50:10]",
         150,
         '{"resultType": "matrix", "result": [{"metric": {"shape": "circle", "size": "l"}, "values": [[110, "1"], [120, "1"], [130, "0"], [140, "0"], [150, "0"]]}, {"metric": {"shape": "square", "size": "s"}, "values": [[110, "1"], [120, "0"], [130, "1"], [140, "0"], [150, "0"]]}]}',
         [
@@ -2018,7 +2031,7 @@ def test_comparison_operator_with_bool_modifier():
     )
 
     do_query_test(
-        "(foo < bool bar - 30)[50:10]",
+        "(foo < bool baz)[50:10]",
         150,
         '{"resultType": "matrix", "result": [{"metric": {"shape": "circle", "size": "l"}, "values": [[110, "0"], [120, "0"], [130, "1"], [140, "1"], [150, "1"]]}, {"metric": {"shape": "square", "size": "s"}, "values": [[110, "0"], [120, "1"], [130, "0"], [140, "1"], [150, "1"]]}]}',
         [
@@ -2034,13 +2047,13 @@ def test_comparison_operator_with_bool_modifier():
     )
 
     do_query_test(
-        "(foo <= bool bar - 30)[50:10]",
+        "(foo <= bool baz)[50:10]",
         150,
-        '{"resultType": "matrix", "result": [{"metric": {"shape": "circle", "size": "l"}, "values": [[110, "0"], [120, "0"], [130, "1"], [140, "1"], [150, "1"]]}, {"metric": {"shape": "square", "size": "s"}, "values": [[110, "0"], [120, "1"], [130, "1"], [140, "1"], [150, "1"]]}]}',
+        '{"resultType": "matrix", "result": [{"metric": {"shape": "circle", "size": "l"}, "values": [[110, "0"], [120, "1"], [130, "1"], [140, "1"], [150, "1"]]}, {"metric": {"shape": "square", "size": "s"}, "values": [[110, "0"], [120, "1"], [130, "1"], [140, "1"], [150, "1"]]}]}',
         [
             [
                 "[('shape','circle'),('size','l')]",
-                "[('1970-01-01 00:01:50.000',0),('1970-01-01 00:02:00.000',0),('1970-01-01 00:02:10.000',1),('1970-01-01 00:02:20.000',1),('1970-01-01 00:02:30.000',1)]",
+                "[('1970-01-01 00:01:50.000',0),('1970-01-01 00:02:00.000',1),('1970-01-01 00:02:10.000',1),('1970-01-01 00:02:20.000',1),('1970-01-01 00:02:30.000',1)]",
             ],
             [
                 "[('shape','square'),('size','s')]",
@@ -2049,17 +2062,17 @@ def test_comparison_operator_with_bool_modifier():
         ],
     )
 
-    # Use on(shape) to match foo and bar by shape only, ignoring size.
-    # This lets foo{shape="triangle",size="m"} match bar{shape="triangle",size="xl"},
+    # Use on(shape) to match foo and baz by shape only, ignoring size.
+    # This lets foo{shape="triangle",size="m"} match baz{shape="triangle",size="xl"},
     # which don't match by default (different size).
     do_query_test(
-        "(foo > bool on(shape) bar - 30)[50:10]",
+        "(foo > bool on(shape) baz)[50:10]",
         150,
-        '{"resultType": "matrix", "result": [{"metric": {"shape": "circle"}, "values": [[110, "1"], [120, "1"], [130, "0"], [140, "0"], [150, "0"]]}, {"metric": {"shape": "square"}, "values": [[110, "1"], [120, "0"], [130, "0"], [140, "0"], [150, "0"]]}, {"metric": {"shape": "triangle"}, "values": [[110, "1"], [120, "1"], [130, "1"], [140, "1"], [150, "1"]]}]}',
+        '{"resultType": "matrix", "result": [{"metric": {"shape": "circle"}, "values": [[110, "1"], [120, "0"], [130, "0"], [140, "0"], [150, "0"]]}, {"metric": {"shape": "square"}, "values": [[110, "1"], [120, "0"], [130, "0"], [140, "0"], [150, "0"]]}, {"metric": {"shape": "triangle"}, "values": [[110, "0"], [120, "1"], [130, "1"], [140, "1"], [150, "1"]]}]}',
         [
             [
                 "[('shape','circle')]",
-                "[('1970-01-01 00:01:50.000',1),('1970-01-01 00:02:00.000',1),('1970-01-01 00:02:10.000',0),('1970-01-01 00:02:20.000',0),('1970-01-01 00:02:30.000',0)]",
+                "[('1970-01-01 00:01:50.000',1),('1970-01-01 00:02:00.000',0),('1970-01-01 00:02:10.000',0),('1970-01-01 00:02:20.000',0),('1970-01-01 00:02:30.000',0)]",
             ],
             [
                 "[('shape','square')]",
@@ -2067,17 +2080,17 @@ def test_comparison_operator_with_bool_modifier():
             ],
             [
                 "[('shape','triangle')]",
-                "[('1970-01-01 00:01:50.000',1),('1970-01-01 00:02:00.000',1),('1970-01-01 00:02:10.000',1),('1970-01-01 00:02:20.000',1),('1970-01-01 00:02:30.000',1)]",
+                "[('1970-01-01 00:01:50.000',0),('1970-01-01 00:02:00.000',1),('1970-01-01 00:02:10.000',1),('1970-01-01 00:02:20.000',1),('1970-01-01 00:02:30.000',1)]",
             ],
         ],
     )
 
-    # Use on(size) group_right to allow 1:many matching: size="l" has one foo (circle) but two bars
+    # Use on(size) group_right to allow 1:many matching: size="l" has one foo (circle) but two bazs
     # (circle and rectangle), which requires group_right.
     do_query_test(
-        "(foo >= bool on(size) group_right bar - 30)[50:10]",
+        "(foo >= bool on(size) group_right baz)[50:10]",
         150,
-        '{"resultType": "matrix", "result": [{"metric": {"shape": "circle", "size": "l"}, "values": [[110, "1"], [120, "1"], [130, "0"], [140, "0"], [150, "0"]]}, {"metric": {"shape": "rectangle", "size": "l"}, "values": [[110, "1"], [120, "0"], [130, "0"], [140, "0"], [150, "0"]]}, {"metric": {"shape": "square", "size": "s"}, "values": [[110, "1"], [120, "0"], [130, "1"], [140, "0"], [150, "0"]]}]}',
+        '{"resultType": "matrix", "result": [{"metric": {"shape": "circle", "size": "l"}, "values": [[110, "1"], [120, "1"], [130, "0"], [140, "0"], [150, "0"]]}, {"metric": {"shape": "rectangle", "size": "l"}, "values": [[110, "1"], [120, "1"], [130, "0"], [140, "0"], [150, "0"]]}, {"metric": {"shape": "square", "size": "s"}, "values": [[110, "1"], [120, "0"], [130, "1"], [140, "0"], [150, "0"]]}]}',
         [
             [
                 "[('shape','circle'),('size','l')]",
@@ -2085,7 +2098,7 @@ def test_comparison_operator_with_bool_modifier():
             ],
             [
                 "[('shape','rectangle'),('size','l')]",
-                "[('1970-01-01 00:01:50.000',1),('1970-01-01 00:02:00.000',0),('1970-01-01 00:02:10.000',0),('1970-01-01 00:02:20.000',0),('1970-01-01 00:02:30.000',0)]",
+                "[('1970-01-01 00:01:50.000',1),('1970-01-01 00:02:00.000',1),('1970-01-01 00:02:10.000',0),('1970-01-01 00:02:20.000',0),('1970-01-01 00:02:30.000',0)]",
             ],
             [
                 "[('shape','square'),('size','s')]",
@@ -2146,41 +2159,48 @@ def test_comparison_operator():
     )
 
     # Compare two instant vectors.
-    # We add 11 to bar to make the result of comparison different at different times.
+    # foo{triangle,m} doesn't match baz{triangle,xl}
     do_query_test(
-        "(foo == bar + 11)[50:10]",
+        "(foo == baz)[50:10]",
         150,
-        '{"resultType": "matrix", "result": [{"metric": {"__name__": "foo", "shape": "circle", "size": "l"}, "values": [[110, "16"], [120, "16"]]}]}',
-        [["[('__name__','foo'),('shape','circle'),('size','l')]", "[('1970-01-01 00:01:50.000',16),('1970-01-01 00:02:00.000',16)]"]],
-    )
-
-    do_query_test(
-        "(foo != bar + 11)[50:10]",
-        150,
-        '{"resultType": "matrix", "result": [{"metric": {"__name__": "foo", "shape": "circle", "size": "l"}, "values": [[130, "16"], [140, "16"], [150, "16"]]}, {"metric": {"__name__": "foo", "shape": "square", "size": "s"}, "values": [[110, "4"], [120, "4"], [130, "40"], [140, "40"], [150, "40"]]}]}',
+        '{"resultType": "matrix", "result": [{"metric": {"__name__": "foo", "shape": "circle", "size": "l"}, "values": [[120, "16"]]}, {"metric": {"__name__": "foo", "shape": "square", "size": "s"}, "values": [[130, "40"]]}]}',
         [
             [
                 "[('__name__','foo'),('shape','circle'),('size','l')]",
-                "[('1970-01-01 00:02:10.000',16),('1970-01-01 00:02:20.000',16),('1970-01-01 00:02:30.000',16)]",
+                "[('1970-01-01 00:02:00.000',16)]",
             ],
             [
                 "[('__name__','foo'),('shape','square'),('size','s')]",
-                "[('1970-01-01 00:01:50.000',4),('1970-01-01 00:02:00.000',4),('1970-01-01 00:02:10.000',40),('1970-01-01 00:02:20.000',40),('1970-01-01 00:02:30.000',40)]",
+                "[('1970-01-01 00:02:10.000',40)]",
+            ],
+        ],
+    )
+
+    do_query_test(
+        "(foo != baz)[50:10]",
+        150,
+        '{"resultType": "matrix", "result": [{"metric": {"__name__": "foo", "shape": "circle", "size": "l"}, "values": [[110, "16"], [130, "16"], [140, "16"], [150, "16"]]}, {"metric": {"__name__": "foo", "shape": "square", "size": "s"}, "values": [[110, "4"], [120, "4"], [140, "40"], [150, "40"]]}]}',
+        [
+            [
+                "[('__name__','foo'),('shape','circle'),('size','l')]",
+                "[('1970-01-01 00:01:50.000',16),('1970-01-01 00:02:10.000',16),('1970-01-01 00:02:20.000',16),('1970-01-01 00:02:30.000',16)]",
+            ],
+            [
+                "[('__name__','foo'),('shape','square'),('size','s')]",
+                "[('1970-01-01 00:01:50.000',4),('1970-01-01 00:02:00.000',4),('1970-01-01 00:02:20.000',40),('1970-01-01 00:02:30.000',40)]",
             ],
         ],
     )
 
     # Compare two instant vectors.
-    # We subtract 30 from bar to make the result of comparison different at different times.
-    # The boundary is at foo{shape="square"}=40 vs bar{shape="square"}-30=70-30=40 at t=130.
     do_query_test(
-        "(foo > bar - 30)[50:10]",
+        "(foo > baz)[50:10]",
         150,
-        '{"resultType": "matrix", "result": [{"metric": {"__name__": "foo", "shape": "circle", "size": "l"}, "values": [[110, "16"], [120, "16"]]}, {"metric": {"__name__": "foo", "shape": "square", "size": "s"}, "values": [[110, "4"]]}]}',
+        '{"resultType": "matrix", "result": [{"metric": {"__name__": "foo", "shape": "circle", "size": "l"}, "values": [[110, "16"]]}, {"metric": {"__name__": "foo", "shape": "square", "size": "s"}, "values": [[110, "4"]]}]}',
         [
             [
                 "[('__name__','foo'),('shape','circle'),('size','l')]",
-                "[('1970-01-01 00:01:50.000',16),('1970-01-01 00:02:00.000',16)]",
+                "[('1970-01-01 00:01:50.000',16)]",
             ],
             [
                 "[('__name__','foo'),('shape','square'),('size','s')]",
@@ -2190,7 +2210,7 @@ def test_comparison_operator():
     )
 
     do_query_test(
-        "(foo >= bar - 30)[50:10]",
+        "(foo >= baz)[50:10]",
         150,
         '{"resultType": "matrix", "result": [{"metric": {"__name__": "foo", "shape": "circle", "size": "l"}, "values": [[110, "16"], [120, "16"]]}, {"metric": {"__name__": "foo", "shape": "square", "size": "s"}, "values": [[110, "4"], [130, "40"]]}]}',
         [
@@ -2206,7 +2226,7 @@ def test_comparison_operator():
     )
 
     do_query_test(
-        "(foo < bar - 30)[50:10]",
+        "(foo < baz)[50:10]",
         150,
         '{"resultType": "matrix", "result": [{"metric": {"__name__": "foo", "shape": "circle", "size": "l"}, "values": [[130, "16"], [140, "16"], [150, "16"]]}, {"metric": {"__name__": "foo", "shape": "square", "size": "s"}, "values": [[120, "4"], [140, "40"], [150, "40"]]}]}',
         [
@@ -2222,13 +2242,13 @@ def test_comparison_operator():
     )
 
     do_query_test(
-        "(foo <= bar - 30)[50:10]",
+        "(foo <= baz)[50:10]",
         150,
-        '{"resultType": "matrix", "result": [{"metric": {"__name__": "foo", "shape": "circle", "size": "l"}, "values": [[130, "16"], [140, "16"], [150, "16"]]}, {"metric": {"__name__": "foo", "shape": "square", "size": "s"}, "values": [[120, "4"], [130, "40"], [140, "40"], [150, "40"]]}]}',
+        '{"resultType": "matrix", "result": [{"metric": {"__name__": "foo", "shape": "circle", "size": "l"}, "values": [[120, "16"], [130, "16"], [140, "16"], [150, "16"]]}, {"metric": {"__name__": "foo", "shape": "square", "size": "s"}, "values": [[120, "4"], [130, "40"], [140, "40"], [150, "40"]]}]}',
         [
             [
                 "[('__name__','foo'),('shape','circle'),('size','l')]",
-                "[('1970-01-01 00:02:10.000',16),('1970-01-01 00:02:20.000',16),('1970-01-01 00:02:30.000',16)]",
+                "[('1970-01-01 00:02:00.000',16),('1970-01-01 00:02:10.000',16),('1970-01-01 00:02:20.000',16),('1970-01-01 00:02:30.000',16)]",
             ],
             [
                 "[('__name__','foo'),('shape','square'),('size','s')]",
@@ -2237,45 +2257,36 @@ def test_comparison_operator():
         ],
     )
 
-    # Use on(shape) to match by shape only: foo{shape="triangle",size="m"} now matches
-    # bar{shape="triangle",size="xl"}, which don't match by default (different size).
-    # When on() is used, result keeps only the on-labels (just shape here, no __name__ or size).
+    # Use on(shape) to match foo and baz by shape only, ignoring size.
+    # This lets foo{shape="triangle",size="m"} match baz{shape="triangle",size="xl"},
+    # which don't match by default.
     do_query_test(
-        "(foo > on(shape) bar - 30)[50:10]",
+        "(foo > on(shape) baz)[50:10]",
         150,
-        '{"resultType": "matrix", "result": [{"metric": {"shape": "circle"}, "values": [[110, "16"], [120, "16"]]}, {"metric": {"shape": "square"}, "values": [[110, "4"]]}, {"metric": {"shape": "triangle"}, "values": [[110, "8"], [120, "80"], [130, "80"], [140, "80"], [150, "80"]]}]}',
+        '{"resultType": "matrix", "result": [{"metric": {"shape": "circle"}, "values": [[110, "16"]]}, {"metric": {"shape": "square"}, "values": [[110, "4"]]}, {"metric": {"shape": "triangle"}, "values": [[120, "80"], [130, "80"], [140, "80"], [150, "80"]]}]}',
         [
-            [
-                "[('shape','circle')]",
-                "[('1970-01-01 00:01:50.000',16),('1970-01-01 00:02:00.000',16)]",
-            ],
-            [
-                "[('shape','square')]",
-                "[('1970-01-01 00:01:50.000',4)]",
-            ],
-            [
-                "[('shape','triangle')]",
-                "[('1970-01-01 00:01:50.000',8),('1970-01-01 00:02:00.000',80),('1970-01-01 00:02:10.000',80),('1970-01-01 00:02:20.000',80),('1970-01-01 00:02:30.000',80)]",
-            ],
+            ["[('shape','circle')]", "[('1970-01-01 00:01:50.000',16)]"],
+            ["[('shape','square')]", "[('1970-01-01 00:01:50.000',4)]"],
+            ["[('shape','triangle')]", "[('1970-01-01 00:02:00.000',80),('1970-01-01 00:02:10.000',80),('1970-01-01 00:02:20.000',80),('1970-01-01 00:02:30.000',80)]"],
         ],
     )
 
-    # Use on(size) group_right: size="l" has one foo (circle) but two bars (circle and rectangle).
+    # Use on(size) group_right: size="l" has one foo (circle) but two bazs (circle and rectangle).
     do_query_test(
-        "(foo >= on(size) group_right bar - 30)[50:10]",
+        "(foo >= on(size) group_right baz)[50:10]",
         150,
-        '{"resultType": "matrix", "result": [{"metric": {"shape": "circle", "size": "l"}, "values": [[110, "16"], [120, "16"]]}, {"metric": {"shape": "rectangle", "size": "l"}, "values": [[110, "16"]]}, {"metric": {"shape": "square", "size": "s"}, "values": [[110, "4"], [130, "40"]]}]}',
+        '{"resultType": "matrix", "result": [{"metric": {"__name__": "baz", "shape": "circle", "size": "l"}, "values": [[110, "16"], [120, "16"]]}, {"metric": {"__name__": "baz", "shape": "rectangle", "size": "l"}, "values": [[110, "16"], [120, "16"]]}, {"metric": {"__name__": "baz", "shape": "square", "size": "s"}, "values": [[110, "4"], [130, "40"]]}]}',
         [
             [
-                "[('shape','circle'),('size','l')]",
+                "[('__name__','baz'),('shape','circle'),('size','l')]",
                 "[('1970-01-01 00:01:50.000',16),('1970-01-01 00:02:00.000',16)]",
             ],
             [
-                "[('shape','rectangle'),('size','l')]",
-                "[('1970-01-01 00:01:50.000',16)]",
+                "[('__name__','baz'),('shape','rectangle'),('size','l')]",
+                "[('1970-01-01 00:01:50.000',16),('1970-01-01 00:02:00.000',16)]",
             ],
             [
-                "[('shape','square'),('size','s')]",
+                "[('__name__','baz'),('shape','square'),('size','s')]",
                 "[('1970-01-01 00:01:50.000',4),('1970-01-01 00:02:10.000',40)]",
             ],
         ],
