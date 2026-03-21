@@ -2239,21 +2239,22 @@ def test_comparison_operator():
 
     # Use on(shape) to match by shape only: foo{shape="triangle",size="m"} now matches
     # bar{shape="triangle",size="xl"}, which don't match by default (different size).
+    # When on() is used, result keeps only the on-labels (just shape here, no __name__ or size).
     do_query_test(
         "(foo > on(shape) bar - 30)[50:10]",
         150,
-        '{"resultType": "matrix", "result": [{"metric": {"__name__": "foo", "shape": "circle", "size": "l"}, "values": [[110, "16"], [120, "16"]]}, {"metric": {"__name__": "foo", "shape": "square", "size": "s"}, "values": [[110, "4"]]}, {"metric": {"__name__": "foo", "shape": "triangle", "size": "m"}, "values": [[110, "8"], [120, "80"], [130, "80"], [140, "80"], [150, "80"]]}]}',
+        '{"resultType": "matrix", "result": [{"metric": {"shape": "circle"}, "values": [[110, "16"], [120, "16"]]}, {"metric": {"shape": "square"}, "values": [[110, "4"]]}, {"metric": {"shape": "triangle"}, "values": [[110, "8"], [120, "80"], [130, "80"], [140, "80"], [150, "80"]]}]}',
         [
             [
-                "[('__name__','foo'),('shape','circle'),('size','l')]",
+                "[('shape','circle')]",
                 "[('1970-01-01 00:01:50.000',16),('1970-01-01 00:02:00.000',16)]",
             ],
             [
-                "[('__name__','foo'),('shape','square'),('size','s')]",
+                "[('shape','square')]",
                 "[('1970-01-01 00:01:50.000',4)]",
             ],
             [
-                "[('__name__','foo'),('shape','triangle'),('size','m')]",
+                "[('shape','triangle')]",
                 "[('1970-01-01 00:01:50.000',8),('1970-01-01 00:02:00.000',80),('1970-01-01 00:02:10.000',80),('1970-01-01 00:02:20.000',80),('1970-01-01 00:02:30.000',80)]",
             ],
         ],
@@ -2263,18 +2264,18 @@ def test_comparison_operator():
     do_query_test(
         "(foo >= on(size) group_right bar - 30)[50:10]",
         150,
-        '{"resultType": "matrix", "result": [{"metric": {"__name__": "bar", "shape": "circle", "size": "l"}, "values": [[110, "16"], [120, "16"]]}, {"metric": {"__name__": "bar", "shape": "rectangle", "size": "l"}, "values": [[110, "16"]]}, {"metric": {"__name__": "bar", "shape": "square", "size": "s"}, "values": [[110, "4"], [130, "40"]]}]}',
+        '{"resultType": "matrix", "result": [{"metric": {"shape": "circle", "size": "l"}, "values": [[110, "16"], [120, "16"]]}, {"metric": {"shape": "rectangle", "size": "l"}, "values": [[110, "16"]]}, {"metric": {"shape": "square", "size": "s"}, "values": [[110, "4"], [130, "40"]]}]}',
         [
             [
-                "[('__name__','bar'),('shape','circle'),('size','l')]",
+                "[('shape','circle'),('size','l')]",
                 "[('1970-01-01 00:01:50.000',16),('1970-01-01 00:02:00.000',16)]",
             ],
             [
-                "[('__name__','bar'),('shape','rectangle'),('size','l')]",
+                "[('shape','rectangle'),('size','l')]",
                 "[('1970-01-01 00:01:50.000',16)]",
             ],
             [
-                "[('__name__','bar'),('shape','square'),('size','s')]",
+                "[('shape','square'),('size','s')]",
                 "[('1970-01-01 00:01:50.000',4),('1970-01-01 00:02:10.000',40)]",
             ],
         ],
