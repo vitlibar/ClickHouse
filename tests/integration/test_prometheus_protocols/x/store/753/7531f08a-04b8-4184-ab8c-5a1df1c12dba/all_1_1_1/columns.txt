@@ -1,0 +1,7 @@
+columns format version: 1
+5 columns:
+`id` UUID
+`metric_name` LowCardinality(String)
+`tags` Map(LowCardinality(String), String)
+`min_time` SimpleAggregateFunction(min, Nullable(DateTime64(3)))
+`max_time` SimpleAggregateFunction(max, Nullable(DateTime64(3)))

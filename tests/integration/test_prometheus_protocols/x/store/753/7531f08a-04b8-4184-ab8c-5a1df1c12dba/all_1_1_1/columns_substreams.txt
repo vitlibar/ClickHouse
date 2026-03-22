@@ -1,0 +1,21 @@
+columns substreams version: 1
+5 columns:
+1 substreams for column `id`:
+	id
+3 substreams for column `metric_name`:
+	metric_name.dict_prefix
+	metric_name.dict
+	metric_name
+6 substreams for column `tags`:
+	tags%2Ekeys.dict_prefix
+	tags.size0
+	tags%2Ekeys.dict
+	tags%2Ekeys
+	tags%2Evalues.size
+	tags%2Evalues
+2 substreams for column `min_time`:
+	min_time.null
+	min_time
+2 substreams for column `max_time`:
+	max_time.null
+	max_time

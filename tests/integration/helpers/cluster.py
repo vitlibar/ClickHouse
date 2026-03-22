@@ -5717,7 +5717,7 @@ class ClickHouseInstance:
         logging.debug(f"Setup database dir {db_dir}")
         if self.clickhouse_path_dir is not None:
             logging.debug(f"Database files taken from {self.clickhouse_path_dir}")
-            shutil.copytree(self.clickhouse_path_dir, db_dir)
+            shutil.copytree(self.clickhouse_path_dir, db_dir, symlinks=True)
             logging.debug(
                 f"Database copied from {self.clickhouse_path_dir} to {db_dir}"
             )

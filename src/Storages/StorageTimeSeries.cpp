@@ -35,6 +35,7 @@ namespace ErrorCodes
     extern const int NOT_IMPLEMENTED;
     extern const int SUPPORT_IS_DISABLED;
     extern const int UNEXPECTED_TABLE_ENGINE;
+    extern const int UNKNOWN_TABLE;
 }
 
 namespace fs = std::filesystem;
@@ -133,6 +134,7 @@ const TimeSeriesSettings & StorageTimeSeries::getStorageSettings() const
 
 void StorageTimeSeries::startup()
 {
+#if 0    
     if (definition_changed_in_constructor)
     {
         auto time_series_table_id = getStorageID();
@@ -152,6 +154,7 @@ void StorageTimeSeries::startup()
             tryLogCurrentException(getLogger("TimeSeries"), __PRETTY_FUNCTION__);
         }
     }
+#endif
 }
 
 void StorageTimeSeries::drop()
@@ -194,13 +197,39 @@ void StorageTimeSeries::truncate(const ASTPtr &, const StorageMetadataPtr &, Con
 }
 
 
-StorageID StorageTimeSeries::getTargetTableId(ViewTarget::Kind target_kind) const
+StorageID StorageTimeSeries::getTargetTableId(ViewTarget::Kind target_kind, ContextPtr local_context) const
 {
     for (const auto & target : targets)
     {
         if (target.kind == target_kind)
-            return target.table_id;
+        {
+            const auto & uuid = target.table_id.uuid;
+            if (uuid != UUIDHelpers::Nil)
+            {
+                auto [target_database, target_storage] = DatabaseCatalog::instance().tryGetByUUID(uuid);
+                if (!target_storage)
+                {
+                    throw Exception(ErrorCodes::UNKNOWN_TABLE, "{}: Target table with uuid {} doesn't exist", getStorageID().getNameForLogs(), uuid);
+                }
+                return target_storage->getStorageID();
+            }
+
+            auto resolved_id = local_context->tryResolveStorageID(target.table_id);
+
+            if (!DatabaseCatalog::instance().isTableExist(resolved_id, local_context) && target.is_inner_table
+                && target.kind == ViewTarget::Samples)
+            {
+                auto table_id = getStorageID();
+                StorageID old_target_table_id{table_id.database_name, ".inner.data." + table_id.table_name};
+                old_target_table_id = local_context->tryResolveStorageID(old_target_table_id);
+                if (DatabaseCatalog::instance().isTableExist(old_target_table_id, local_context))
+                    resolved_id = old_target_table_id;
+            }
+
+            return resolved_id;
+        }
     }
+
     throw Exception(ErrorCodes::LOGICAL_ERROR, "Unexpected target kind {}", toString(target_kind));
 }
 
@@ -391,8 +420,9 @@ void StorageTimeSeries::backupData(BackupEntriesCollector & backup_entries_colle
         /// We backup the target table's data only if it's inner.
         if (target.is_inner_table)
         {
-            auto table = DatabaseCatalog::instance().getTable(target.table_id, getContext());
-            table->backupData(backup_entries_collector, fs::path{data_path_in_backup} / toString(target.kind), {});
+            auto inner_table = getTargetTable(target.kind, backup_entries_collector.getContext());
+            String dir = boost::algorithm::to_lower(toString(target.kind));
+            inner_table->backupData(backup_entries_collector, fs::path{data_path_in_backup} / dir, {});
         }
     }
 }
@@ -404,8 +434,15 @@ void StorageTimeSeries::restoreDataFromBackup(RestorerFromBackup & restorer, con
         /// We backup the target table's data only if it's inner.
         if (target.is_inner_table)
         {
-            auto table = DatabaseCatalog::instance().getTable(target.table_id, getContext());
-            table->restoreDataFromBackup(restorer, fs::path{data_path_in_backup} / toString(target.kind), {});
+            auto inner_table = getTargetTable(target.kind, restorer.getContext());
+            String dir = boost::algorithm::to_lower(toString(target.kind));
+            auto backup = restorer.getBackup();
+            if ((target.kind == ViewTarget::Samples) && !backup->directoryExists(fs::path{data_path_in_backup} / dir)
+                && backup->directoryExists(fs::path{data_path_in_backup} / "data"))
+            {
+                dir = "data";
+            }
+            inner_table->restoreDataFromBackup(restorer, fs::path{data_path_in_backup} / dir, {});
         }
     }
 }

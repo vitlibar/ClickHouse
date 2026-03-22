@@ -233,10 +233,11 @@ StorageID getTimeSeriesInnerTableID(
     const StorageID & time_series_storage_id)
 {
     StorageID res = time_series_storage_id;
+    String inner_kind_str = boost::algorithm::to_lower(toString(inner_table_kind));
     if (time_series_storage_id.hasUUID())
-        res.table_name = fmt::format(".inner_id.{}.{}", toString(inner_table_kind), time_series_storage_id.uuid);
+        res.table_name = fmt::format(".inner_id.{}.{}", inner_kind_str, time_series_storage_id.uuid);
     else
-        res.table_name = fmt::format(".inner.{}.{}", toString(inner_table_kind), time_series_storage_id.table_name);
+        res.table_name = fmt::format(".inner.{}.{}", inner_kind_str, time_series_storage_id.table_name);
     res.uuid = inner_table_uuid;
     return res;
 }
