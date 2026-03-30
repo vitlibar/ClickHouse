@@ -27,7 +27,7 @@ ASTPtr transformGroupASTWithOnIgnoring(
         {
             /// on() means we ignore all tags.
             metric_name_dropped = true;
-            return make_intrusive<ASTLiteral>(0u);
+            return makeASTFunction("CAST", make_intrusive<ASTLiteral>(0u), make_intrusive<ASTLiteral>("UInt64"));
         }
         else
         {
