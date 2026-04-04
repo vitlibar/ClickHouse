@@ -19,6 +19,7 @@
 #include <Storages/IStorage.h>
 #include <Storages/TimeSeries/TimeSeriesColumnNames.h>
 #include <Storages/TimeSeries/TimeSeriesSettings.h>
+#include <boost/algorithm/string.hpp>
 
 
 namespace DB
@@ -198,11 +199,10 @@ namespace
     {
         auto manual_create_query = make_intrusive<ASTCreateQuery>();
 
-        auto inner_table_id = getTimeSeriesInnerTableID(inner_table_kind, inner_table_uuid, time_series_storage_id);
-        manual_create_query->setDatabase(inner_table_id.database_name);
-        manual_create_query->setTable(inner_table_id.table_name);
-        manual_create_query->uuid = inner_table_id.uuid;
-        manual_create_query->has_uuid = inner_table_id.uuid != UUIDHelpers::Nil;
+        manual_create_query->setDatabase(time_series_storage_id.getDatabaseName());
+        manual_create_query->setTable(getTimeSeriesInnerTableName(inner_table_kind, time_series_storage_id));
+        manual_create_query->uuid = inner_table_uuid;
+        manual_create_query->has_uuid = inner_table_uuid != UUIDHelpers::Nil;
 
         auto new_columns_list = make_intrusive<ASTColumns>();
         new_columns_list->set(
@@ -218,7 +218,7 @@ namespace
 }
 
 
-StorageID createTimeSeriesInnerTable(
+void createTimeSeriesInnerTable(
     ViewTarget::Kind inner_table_kind,
     const UUID & inner_table_uuid,
     boost::intrusive_ptr<ASTStorage> inner_storage_def,
@@ -236,23 +236,21 @@ StorageID createTimeSeriesInnerTable(
     InterpreterCreateQuery create_interpreter(manual_create_query, create_context);
     create_interpreter.setInternal(true);
     create_interpreter.execute();
-
-    return DatabaseCatalog::instance().getTable({manual_create_query->getDatabase(), manual_create_query->getTable()}, context)->getStorageID();
 }
 
 
-StorageID getTimeSeriesInnerTableID(
-    ViewTarget::Kind inner_table_kind,
-    const UUID & inner_table_uuid,
-    const StorageID & time_series_storage_id)
+String getTimeSeriesInnerTableName(ViewTarget::Kind inner_table_kind, const StorageID & time_series_storage_id)
 {
-    StorageID res = time_series_storage_id;
-    if (time_series_storage_id.hasUUID())
-        res.table_name = fmt::format(".inner_id.{}.{}", toString(inner_table_kind), time_series_storage_id.uuid);
-    else
-        res.table_name = fmt::format(".inner.{}.{}", toString(inner_table_kind), time_series_storage_id.table_name);
-    res.uuid = inner_table_uuid;
-    return res;
+    String kind_str{magic_enum::enum_name(inner_table_kind)};
+    boost::algorithm::to_lower(kind_str);
+    return getTimeSeriesInnerTableName(kind_str, time_series_storage_id);
 }
 
+String getTimeSeriesInnerTableName(std::string_view inner_table_kind, const StorageID & time_series_storage_id)
+{
+    if (time_series_storage_id.hasUUID())
+        return fmt::format(".inner_id.{}.{}", inner_table_kind, time_series_storage_id.uuid);
+    else
+        return fmt::format(".inner.{}.{}", inner_table_kind, time_series_storage_id.table_name);
+}
 }

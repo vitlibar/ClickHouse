@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <Parsers/ASTViewTargets.h>
 #include <Parsers/IAST_fwd.h>
 #include <Storages/IStorage_fwd.h>
@@ -40,9 +41,20 @@ public:
 
     std::shared_ptr<const TimeSeriesSettings> getStorageSettings() const { return storage_settings.get(); }
 
-    StorageID getTargetTableId(ViewTarget::Kind target_kind) const;
+    /// Returns the target table (works for both inner and external targets).
     StoragePtr getTargetTable(ViewTarget::Kind target_kind, const ContextPtr & local_context) const;
     StoragePtr tryGetTargetTable(ViewTarget::Kind target_kind, const ContextPtr & local_context) const;
+    StorageID getTargetTableID(ViewTarget::Kind target_kind, const ContextPtr & local_context) const;
+    StorageID tryGetTargetTableID(ViewTarget::Kind target_kind, const ContextPtr & local_context) const;
+
+    bool isInnerTable(ViewTarget::Kind target_kind) const;
+    bool hasInnerTables() const { return has_inner_tables; }
+
+    /// Returns the three target kinds: Samples, Tags, Metrics.
+    static constexpr std::array<ViewTarget::Kind, 3> getTargetKinds()
+    {
+        return {ViewTarget::Kind::Samples, ViewTarget::Kind::Tags, ViewTarget::Kind::Metrics};
+    }
 
     void read(
         QueryPlan & query_plan,
@@ -85,13 +97,8 @@ public:
     Strings getDataPaths() const override;
 
 private:
-    void initTargets(const StorageID & table_id, const ColumnsDescription & columns, const ContextPtr & local_context, LoadingStrictnessLevel mode);
-
-    /// Initial CREATE TABLE query stored for use in ALTER TABLE MODIFY/RESET SETTINGS.
-    boost::intrusive_ptr<ASTCreateQuery> create_query;
-
-    MultiVersion<TimeSeriesSettings> storage_settings;
-
+    /// Represents one of the three target tables (Samples, Tags, Metrics).
+    /// `is_inner_table` is true when the table was auto-created by TimeSeries and is owned by it.
     struct Target
     {
         ViewTarget::Kind kind;
@@ -99,8 +106,25 @@ private:
         bool is_inner_table = false;
     };
 
-    std::vector<Target> targets;
-    bool has_inner_tables = false;
+    /// Loads and normalizes storage settings from the CREATE TABLE query.
+    static std::unique_ptr<const TimeSeriesSettings> buildStorageSettings(
+        const ASTCreateQuery & create_query, const ContextPtr & local_context);
+
+    /// Initializes information about three target tables (Samples, Tags, Metrics).
+    /// The function also creates inner tables (unless this is an ATTACH query).
+    static std::vector<Target> buildTargets(
+        const ASTCreateQuery & create_query, const TimeSeriesSettings & settings,
+        const StorageID & table_id, const ColumnsDescription & columns,
+        const ContextPtr & local_context, LoadingStrictnessLevel mode);
+
+private:
+    /// Stored for use in ALTER TABLE MODIFY/RESET SETTINGS to re-derive dependent defaults.
+    const boost::intrusive_ptr<const ASTCreateQuery> initial_create_query;
+
+    MultiVersion<TimeSeriesSettings> storage_settings;
+
+    const std::vector<Target> targets;
+    const bool has_inner_tables;
 };
 
 std::shared_ptr<StorageTimeSeries> storagePtrToTimeSeries(StoragePtr storage);
