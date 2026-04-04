@@ -422,8 +422,10 @@ void StorageTimeSeriesSelector::read(
 
     const auto & matchers = typeid_cast<const PrometheusQueryTree::InstantSelector &>(*config.selector.getRoot()).matchers;
 
-    auto samples_table_id = time_series_storage->getTargetTableId(ViewTarget::Samples);
-    auto tags_table_id = time_series_storage->getTargetTableId(ViewTarget::Tags);
+    /// We can't just use getTargetTableID() here because
+    /// we want a full StorageID here, not just UUID.
+    auto samples_table_id = time_series_storage->getTargetTableID(ViewTarget::Samples, context);
+    auto tags_table_id = time_series_storage->getTargetTableID(ViewTarget::Tags, context);
 
     auto column_name_by_tag_name = makeColumnNameByTagNameMap(*time_series_settings);
 

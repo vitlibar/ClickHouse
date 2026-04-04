@@ -516,7 +516,7 @@ namespace
         {
             if (!block.empty())
             {
-                const auto & target_table_id = time_series_storage.getTargetTableId(table_kind);
+                const auto & target_table_id = time_series_storage.getTargetTableID(table_kind, context);
 
                 LOG_INFO(log, "{}: Inserting {} rows to the {} table",
                          time_series_storage_id.getNameForLogs(), block.rows(), toString(table_kind));

@@ -8,6 +8,9 @@
 #include <Parsers/ASTCreateQuery.h>
 #include <Parsers/ASTSetQuery.h>
 #include <Parsers/ASTViewTargets.h>
+#include <Backups/BackupEntriesCollector.h>
+#include <Backups/IBackup.h>
+#include <Backups/RestorerFromBackup.h>
 #include <Storages/AlterCommands.h>
 #include <Storages/StorageFactory.h>
 #include <Storages/TimeSeries/TimeSeriesColumnNames.h>
@@ -17,6 +20,7 @@
 #include <Storages/TimeSeries/normalizeTimeSeriesDefinition.h>
 #include <base/insertAtEnd.h>
 #include <filesystem>
+#include <boost/algorithm/string.hpp>
 
 
 namespace DB
@@ -33,20 +37,27 @@ namespace ErrorCodes
     extern const int NOT_IMPLEMENTED;
     extern const int SUPPORT_IS_DISABLED;
     extern const int UNEXPECTED_TABLE_ENGINE;
+    extern const int UNKNOWN_TABLE;
 }
 
 namespace fs = std::filesystem;
 
 
-StorageTimeSeries::StorageTimeSeries(
-    const StorageID & table_id,
-    const ContextPtr & local_context,
-    LoadingStrictnessLevel mode,
-    const ASTCreateQuery & query,
-    const ColumnsDescription & columns,
-    const String & comment)
-    : IStorage(table_id)
-    , WithContext(local_context->getGlobalContext())
+
+std::unique_ptr<const TimeSeriesSettings> StorageTimeSeries::buildStorageSettings(
+    const ASTCreateQuery & create_query, const ContextPtr & local_context)
+{
+    auto settings = std::make_unique<TimeSeriesSettings>();
+    if (create_query.storage)
+        settings->loadFromQuery(*create_query.storage);
+    normalizeTimeSeriesSettings(*settings, create_query, local_context);
+    return settings;
+}
+
+std::vector<StorageTimeSeries::Target> StorageTimeSeries::buildTargets(
+    const ASTCreateQuery & create_query, const TimeSeriesSettings & settings,
+    const StorageID & table_id, const ColumnsDescription & columns,
+    const ContextPtr & local_context, LoadingStrictnessLevel mode)
 {
     if (mode <= LoadingStrictnessLevel::CREATE && !local_context->getSettingsRef()[Setting::allow_experimental_time_series_table])
     {
@@ -55,39 +66,16 @@ StorageTimeSeries::StorageTimeSeries(
                         "is not enabled (the setting 'allow_experimental_time_series_table')");
     }
 
-    /// Store a clone of the CREATE TABLE query so ALTER TABLE MODIFY/RESET SETTINGS
-    /// can pass it to getNormalizedTimeSeriesSettings to re-derive dependent defaults.
-    create_query = boost::static_pointer_cast<ASTCreateQuery>(query.clone());
-
-    auto normalized_settings = std::make_unique<TimeSeriesSettings>();
-    if (create_query->storage)
-        normalized_settings->loadFromQuery(*create_query->storage);
-    normalizeTimeSeriesSettings(*normalized_settings, *create_query, local_context);
-
     auto normalized_columns = columns;
-    normalizeTimeSeriesColumns(normalized_columns, *normalized_settings);
+    normalizeTimeSeriesColumns(normalized_columns, settings);
 
-    storage_settings.set(std::move(normalized_settings));
-
-    StorageInMemoryMetadata storage_metadata;
-    storage_metadata.setColumns(normalized_columns);
-    if (!comment.empty())
-        storage_metadata.setComment(comment);
-    setInMemoryMetadata(storage_metadata);
-
-    initTargets(table_id, normalized_columns, local_context, mode);
-}
-
-void StorageTimeSeries::initTargets(const StorageID & table_id, const ColumnsDescription & columns, const ContextPtr & local_context, LoadingStrictnessLevel mode)
-{
-    auto time_series_settings = getStorageSettings();
-
-    for (auto target_kind : {ViewTarget::Samples, ViewTarget::Tags, ViewTarget::Metrics})
+    std::vector<Target> targets;
+    for (auto target_kind : getTargetKinds())
     {
         Target target;
         target.kind = target_kind;
 
-        if (auto target_table_id = create_query->getTargetTableID(target_kind))
+        if (auto target_table_id = create_query.getTargetTableID(target_kind))
         {
             /// A target table is specified.
             target.table_id = target_table_id;
@@ -99,35 +87,124 @@ void StorageTimeSeries::initTargets(const StorageID & table_id, const ColumnsDes
                 auto target_table = DatabaseCatalog::instance().getTable(target_table_id, local_context);
                 auto target_metadata = target_table->getInMemoryMetadataPtr();
                 const auto & target_columns = target_metadata->columns;
-                checkTimeSeriesTargetTable(target_table_id, target_columns, target_kind, *time_series_settings);
+                checkTimeSeriesTargetTable(target_table_id, target_columns, target_kind, settings);
             }
         }
         else
         {
             /// An inner target table should be used.
-            target.is_inner_table = true;
-            has_inner_tables = true;
-            auto inner_uuid = create_query->getTargetInnerUUID(target_kind);
+            auto inner_table_uuid = create_query.getTargetInnerUUID(target_kind);
 
-            if (mode >= LoadingStrictnessLevel::ATTACH)
-            {
-                /// If it's an ATTACH request, then the inner target table must be already created.
-                target.table_id = getTimeSeriesInnerTableID(target_kind, inner_uuid, table_id);
-            }
-            else
+            target.table_id.uuid = inner_table_uuid;
+            target.is_inner_table = true;
+
+            if (mode < LoadingStrictnessLevel::ATTACH)
             {
                 /// Create the inner target table.
-                auto inner_engine = getTimeSeriesInnerEngine(target_kind, *create_query, *time_series_settings, local_context);
-                target.table_id = createTimeSeriesInnerTable(target_kind, inner_uuid, inner_engine, table_id, columns, *time_series_settings, local_context);
+                auto inner_engine = getTimeSeriesInnerEngine(target_kind, create_query, settings, local_context);
+                createTimeSeriesInnerTable(target_kind, inner_table_uuid, inner_engine, table_id, normalized_columns, settings, local_context);
             }
         }
 
         targets.emplace_back(std::move(target));
     }
+    return targets;
+}
+
+StorageTimeSeries::StorageTimeSeries(
+    const StorageID & table_id,
+    const ContextPtr & local_context,
+    LoadingStrictnessLevel mode,
+    const ASTCreateQuery & query,
+    const ColumnsDescription & columns,
+    const String & comment)
+    : IStorage(table_id)
+    , WithContext(local_context->getGlobalContext())
+    , initial_create_query(boost::static_pointer_cast<ASTCreateQuery>(query.clone()))
+    , storage_settings(buildStorageSettings(*initial_create_query, local_context))
+    , targets(buildTargets(*initial_create_query, *storage_settings.get(), table_id, columns, local_context, mode))
+    , has_inner_tables(std::ranges::any_of(targets, &Target::is_inner_table))
+{
+    auto normalized_columns = columns;
+    normalizeTimeSeriesColumns(normalized_columns, *storage_settings.get());
+
+    StorageInMemoryMetadata storage_metadata;
+    storage_metadata.setColumns(normalized_columns);
+    if (!comment.empty())
+        storage_metadata.setComment(comment);
+    setInMemoryMetadata(storage_metadata);
 }
 
 
 StorageTimeSeries::~StorageTimeSeries() = default;
+
+
+StoragePtr StorageTimeSeries::getTargetTable(ViewTarget::Kind target_kind, const ContextPtr & local_context) const
+{
+    StoragePtr res = tryGetTargetTable(target_kind, local_context);
+    if (res)
+        return res;
+    throw Exception(ErrorCodes::UNKNOWN_TABLE, "The {} target table for TimeSeries table {} doesn't exist",
+                    target_kind, getStorageID().getNameForLogs());
+}
+
+StoragePtr StorageTimeSeries::tryGetTargetTable(ViewTarget::Kind target_kind, const ContextPtr & local_context) const
+{
+    auto index = static_cast<size_t>(target_kind - ViewTarget::Kind::Samples);
+    if (index >= targets.size() || targets[index].kind != target_kind)
+        throw Exception(ErrorCodes::LOGICAL_ERROR, "Unexpected target kind {} (index={})", target_kind, index);
+    const auto & target = targets[index];
+
+    auto lookup = [&](const StorageID & id) -> StoragePtr
+    {
+        return DatabaseCatalog::instance()
+            .tryGetDatabaseAndTable(local_context->tryResolveStorageID(id), local_context)
+            .second;
+    };
+
+    /// `target.table_id` is set for external targets and for inner targets in Atomic databases (where a UUID was assigned).
+    if (!target.table_id.empty())
+        return lookup(target.table_id);
+
+    /// For inner targets in non-Atomic databases, `target.table_id` is empty and we look up the inner table by its constructed name.
+    StorageID time_series_table_id = getStorageID();
+    StorageID inner_table_id{time_series_table_id.getDatabaseName(), getTimeSeriesInnerTableName(target_kind, time_series_table_id)};
+
+    if (auto table = lookup(inner_table_id))
+        return table;
+
+    /// Fallback for legacy tables created before the samples inner table was renamed
+    /// from `.inner.data.*` to `.inner.samples.*`
+    if (target_kind == ViewTarget::Kind::Samples)
+    {
+        inner_table_id.table_name = getTimeSeriesInnerTableName("data", time_series_table_id);
+        if (auto table = lookup(inner_table_id))
+            return table;
+    }
+
+    return nullptr;
+}
+
+
+StorageID StorageTimeSeries::getTargetTableID(ViewTarget::Kind target_kind, const ContextPtr & local_context) const
+{
+    return getTargetTable(target_kind, local_context)->getStorageID();
+}
+
+StorageID StorageTimeSeries::tryGetTargetTableID(ViewTarget::Kind target_kind, const ContextPtr & local_context) const
+{
+    if (auto target_table = tryGetTargetTable(target_kind, local_context))
+        return target_table->getStorageID();
+    return StorageID::createEmpty();
+}
+
+bool StorageTimeSeries::isInnerTable(ViewTarget::Kind target_kind) const
+{
+    auto index = static_cast<size_t>(target_kind - ViewTarget::Kind::Samples);
+    if (index >= targets.size() || targets[index].kind != target_kind)
+        throw Exception(ErrorCodes::LOGICAL_ERROR, "Unexpected target kind {} (index={})", target_kind, index);
+    return targets[index].is_inner_table;
+}
 
 
 void StorageTimeSeries::drop()
@@ -140,76 +217,64 @@ void StorageTimeSeries::drop()
 
 void StorageTimeSeries::dropInnerTableIfAny(bool sync, ContextPtr local_context)
 {
-    if (!has_inner_tables)
+    if (!hasInnerTables())
         return;
 
-    for (const auto & target : targets)
+    for (auto target_kind : getTargetKinds())
     {
-        if (target.is_inner_table && DatabaseCatalog::instance().tryGetTable(target.table_id, getContext()))
+        if (isInnerTable(target_kind))
         {
-            /// Best-effort to make them work: the inner table name is almost always less than the TimeSeries name (so it's safe to lock DDLGuard).
-            /// (See the comment in StorageMaterializedView::dropInnerTableIfAny.)
-            bool may_lock_ddl_guard = getStorageID().getQualifiedName() < target.table_id.getQualifiedName();
-            InterpreterDropQuery::executeDropQuery(ASTDropQuery::Kind::Drop, getContext(), local_context, target.table_id,
-                                                sync, /* ignore_sync_setting= */ true, may_lock_ddl_guard);
+            if (auto inner_table_id = tryGetTargetTableID(target_kind, local_context))
+            {
+                /// Best-effort to make them work: the inner table name is almost always less than the TimeSeries name (so it's safe to lock DDLGuard).
+                /// (See the comment in StorageMaterializedView::dropInnerTableIfAny.)
+                bool may_lock_ddl_guard = getStorageID().getQualifiedName() < inner_table_id.getQualifiedName();
+                InterpreterDropQuery::executeDropQuery(ASTDropQuery::Kind::Drop, getContext(), local_context, inner_table_id,
+                                                    sync, /* ignore_sync_setting= */ true, may_lock_ddl_guard);
+            }
         }
     }
 }
 
 void StorageTimeSeries::truncate(const ASTPtr &, const StorageMetadataPtr &, ContextPtr local_context, TableExclusiveLockHolder &)
 {
-    if (!has_inner_tables)
-        return;
+    if (!hasInnerTables())
+    {
+        throw Exception(ErrorCodes::INCORRECT_QUERY, "TimeSeries table {} targets only existing tables. Execute the statement directly on it.",
+                        getStorageID().getNameForLogs());
+    }
 
-    for (const auto & target : targets)
+    for (auto target_kind : getTargetKinds())
     {
         /// We truncate only inner tables here.
-        if (target.is_inner_table)
-            InterpreterDropQuery::executeDropQuery(ASTDropQuery::Kind::Truncate, getContext(), local_context, target.table_id, /* sync= */ true);
+        if (isInnerTable(target_kind))
+        {
+            auto inner_table_id = getTargetTableID(target_kind, local_context);
+            InterpreterDropQuery::executeDropQuery(
+                ASTDropQuery::Kind::Truncate, getContext(), local_context, inner_table_id, /* sync= */ true);
+        }
     }
-}
-
-
-StorageID StorageTimeSeries::getTargetTableId(ViewTarget::Kind target_kind) const
-{
-    for (const auto & target : targets)
-    {
-        if (target.kind == target_kind)
-            return target.table_id;
-    }
-    throw Exception(ErrorCodes::LOGICAL_ERROR, "Unexpected target kind {}", toString(target_kind));
-}
-
-StoragePtr StorageTimeSeries::getTargetTable(ViewTarget::Kind target_kind, const ContextPtr & local_context) const
-{
-    return DatabaseCatalog::instance().getTable(getTargetTableId(target_kind), local_context);
-}
-
-StoragePtr StorageTimeSeries::tryGetTargetTable(ViewTarget::Kind target_kind, const ContextPtr & local_context) const
-{
-    return DatabaseCatalog::instance().tryGetTable(getTargetTableId(target_kind), local_context);
 }
 
 
 std::optional<UInt64> StorageTimeSeries::totalRows(ContextPtr query_context) const
 {
+    if (!hasInnerTables())
+        return 0;
     UInt64 total_rows = 0;
-    if (has_inner_tables)
+    for (auto target_kind : getTargetKinds())
     {
-        for (const auto & target : targets)
+        if (isInnerTable(target_kind))
         {
-            if (target.is_inner_table)
-            {
-                auto inner_table = DatabaseCatalog::instance().tryGetTable(target.table_id, getContext());
-                if (!inner_table)
-                    return std::nullopt;
+            auto inner_table = tryGetTargetTable(target_kind, query_context);
+            if (!inner_table)
+                return std::nullopt;
 
-                auto total_rows_in_inner_table = inner_table->totalRows(query_context);
-                if (!total_rows_in_inner_table)
-                    return std::nullopt;
+            auto total_rows_in_inner_table = inner_table->totalRows(query_context);
+            if (!total_rows_in_inner_table)
+                return std::nullopt;
 
-                total_rows += *total_rows_in_inner_table;
-            }
+            total_rows += *total_rows_in_inner_table;
         }
     }
     return total_rows;
@@ -217,23 +282,22 @@ std::optional<UInt64> StorageTimeSeries::totalRows(ContextPtr query_context) con
 
 std::optional<UInt64> StorageTimeSeries::totalBytes(ContextPtr query_context) const
 {
+    if (!hasInnerTables())
+        return 0;
     UInt64 total_bytes = 0;
-    if (has_inner_tables)
+    for (auto target_kind : getTargetKinds())
     {
-        for (const auto & target : targets)
+        if (isInnerTable(target_kind))
         {
-            if (target.is_inner_table)
-            {
-                auto inner_table = DatabaseCatalog::instance().tryGetTable(target.table_id, getContext());
-                if (!inner_table)
-                    return std::nullopt;
+            auto inner_table = tryGetTargetTable(target_kind, query_context);
+            if (!inner_table)
+                return std::nullopt;
 
-                auto total_bytes_in_inner_table = inner_table->totalBytes(query_context);
-                if (!total_bytes_in_inner_table)
-                    return std::nullopt;
+            auto total_bytes_in_inner_table = inner_table->totalBytes(query_context);
+            if (!total_bytes_in_inner_table)
+                return std::nullopt;
 
-                total_bytes += *total_bytes_in_inner_table;
-            }
+            total_bytes += *total_bytes_in_inner_table;
         }
     }
     return total_bytes;
@@ -241,23 +305,22 @@ std::optional<UInt64> StorageTimeSeries::totalBytes(ContextPtr query_context) co
 
 std::optional<UInt64> StorageTimeSeries::totalBytesUncompressed(const Settings & settings) const
 {
+    if (!hasInnerTables())
+        return 0;
     UInt64 total_bytes = 0;
-    if (has_inner_tables)
+    for (auto target_kind : getTargetKinds())
     {
-        for (const auto & target : targets)
+        if (isInnerTable(target_kind))
         {
-            if (target.is_inner_table)
-            {
-                auto inner_table = DatabaseCatalog::instance().tryGetTable(target.table_id, getContext());
-                if (!inner_table)
-                    return std::nullopt;
+            auto inner_table = tryGetTargetTable(target_kind, getContext());
+            if (!inner_table)
+                return std::nullopt;
 
-                auto total_bytes_in_inner_table = inner_table->totalBytesUncompressed(settings);
-                if (!total_bytes_in_inner_table)
-                    return std::nullopt;
+            auto total_bytes_in_inner_table = inner_table->totalBytesUncompressed(settings);
+            if (!total_bytes_in_inner_table)
+                return std::nullopt;
 
-                total_bytes += *total_bytes_in_inner_table;
-            }
+            total_bytes += *total_bytes_in_inner_table;
         }
     }
     return total_bytes;
@@ -266,9 +329,9 @@ std::optional<UInt64> StorageTimeSeries::totalBytesUncompressed(const Settings &
 Strings StorageTimeSeries::getDataPaths() const
 {
     Strings data_paths;
-    for (const auto & target : targets)
+    for (auto target_kind : getTargetKinds())
     {
-        auto table = DatabaseCatalog::instance().tryGetTable(target.table_id, getContext());
+        auto table = tryGetTargetTable(target_kind, getContext());
         if (!table)
             continue;
 
@@ -288,18 +351,18 @@ bool StorageTimeSeries::optimize(
     bool cleanup,
     ContextPtr local_context)
 {
-    if (!has_inner_tables)
+    if (!hasInnerTables())
     {
         throw Exception(ErrorCodes::INCORRECT_QUERY, "TimeSeries table {} targets only existing tables. Execute the statement directly on it.",
                         getStorageID().getNameForLogs());
     }
 
     bool optimized = false;
-    for (const auto & target : targets)
+    for (auto target_kind : getTargetKinds())
     {
-        if (target.is_inner_table)
+        if (isInnerTable(target_kind))
         {
-            auto inner_table = DatabaseCatalog::instance().getTable(target.table_id, local_context);
+            auto inner_table = getTargetTable(target_kind, local_context);
             optimized |= inner_table->optimize(query, inner_table->getInMemoryMetadataPtr(), partition, final, deduplicate, deduplicate_by_columns, cleanup, local_context);
         }
     }
@@ -333,7 +396,7 @@ void StorageTimeSeries::alter(const AlterCommands & params, ContextPtr local_con
     {
         new_settings = std::make_unique<TimeSeriesSettings>(*current_settings);
         new_settings->applyChanges(new_metadata.settings_changes->as<const ASTSetQuery &>().changes);
-        normalizeTimeSeriesSettings(*new_settings, *create_query, getContext());
+        normalizeTimeSeriesSettings(*new_settings, *initial_create_query, getContext());
 
         auto settings_ast = make_intrusive<ASTSetQuery>();
         settings_ast->is_standalone = false;
@@ -363,26 +426,40 @@ void StorageTimeSeries::renameInMemory(const StorageID & /* new_table_id */)
 
 void StorageTimeSeries::backupData(BackupEntriesCollector & backup_entries_collector, const String & data_path_in_backup, const std::optional<ASTs> &)
 {
-    for (const auto & target : targets)
+    if (!hasInnerTables())
+        return;
+
+    for (auto target_kind : getTargetKinds())
     {
         /// We backup the target table's data only if it's inner.
-        if (target.is_inner_table)
+        if (isInnerTable(target_kind))
         {
-            auto table = DatabaseCatalog::instance().getTable(target.table_id, getContext());
-            table->backupData(backup_entries_collector, fs::path{data_path_in_backup} / toString(target.kind), {});
+            auto table = getTargetTable(target_kind, backup_entries_collector.getContext());
+            String kind_str{magic_enum::enum_name(target_kind)};
+            boost::algorithm::to_lower(kind_str);
+            table->backupData(backup_entries_collector, fs::path{data_path_in_backup} / kind_str, {});
         }
     }
 }
 
 void StorageTimeSeries::restoreDataFromBackup(RestorerFromBackup & restorer, const String & data_path_in_backup, const std::optional<ASTs> &)
 {
-    for (const auto & target : targets)
+    if (!hasInnerTables())
+        return;
+
+    for (auto target_kind : getTargetKinds())
     {
-        /// We backup the target table's data only if it's inner.
-        if (target.is_inner_table)
+        /// We restore the target table's data only if it's inner.
+        if (isInnerTable(target_kind))
         {
-            auto table = DatabaseCatalog::instance().getTable(target.table_id, getContext());
-            table->restoreDataFromBackup(restorer, fs::path{data_path_in_backup} / toString(target.kind), {});
+            auto table = getTargetTable(target_kind, restorer.getContext());
+            String kind_str{magic_enum::enum_name(target_kind)};
+            boost::algorithm::to_lower(kind_str);
+            String target_data_path = fs::path{data_path_in_backup} / kind_str;
+            /// Support legacy backups where the samples folder was named "data" instead of "samples".
+            if (target_kind == ViewTarget::Samples && !restorer.getBackup()->hasFiles(target_data_path))
+                target_data_path = fs::path{data_path_in_backup} / "data";
+            table->restoreDataFromBackup(restorer, target_data_path, {});
         }
     }
 }

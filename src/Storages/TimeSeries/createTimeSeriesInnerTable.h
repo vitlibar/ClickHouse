@@ -14,7 +14,7 @@ class ColumnsDescription;
 struct TimeSeriesSettings;
 
 /// Creates an inner table and returns its StorageID.
-StorageID createTimeSeriesInnerTable(
+void createTimeSeriesInnerTable(
     ViewTarget::Kind inner_table_kind,
     const UUID & inner_table_uuid,
     boost::intrusive_ptr<ASTStorage> inner_storage_def,
@@ -24,9 +24,7 @@ StorageID createTimeSeriesInnerTable(
     ContextPtr context);
 
 /// Returns a StorageID of an inner table.
-StorageID getTimeSeriesInnerTableID(
-    ViewTarget::Kind inner_table_kind,
-    const UUID & inner_table_uuid,
-    const StorageID & time_series_storage_id);
+String getTimeSeriesInnerTableName(ViewTarget::Kind inner_table_kind, const StorageID & time_series_storage_id);
+String getTimeSeriesInnerTableName(std::string_view inner_table_kind, const StorageID & time_series_storage_id);
 
 }
