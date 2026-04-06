@@ -6,6 +6,7 @@
 
 namespace DB
 {
+class ASTColumns;
 class ASTStorage;
 
 /// Information about target tables (external or inner) of a materialized view or a window view or a TimeSeries table.
@@ -56,6 +57,10 @@ struct ViewTarget
     /// That engine can be seen for example after "ENGINE" in a statement like CREATE MATERIALIZED VIEW ... ENGINE ...
     ASTPtr inner_engine;
 
+    /// Column list for the inner table (only for inner targets, not external ones).
+    /// Stored as "SAMPLES INNER COLUMNS (...)" in a CREATE TABLE query.
+    ASTPtr inner_columns; /// points to ASTColumns
+
     /// Table's AST with query parameters
     ASTPtr table_ast;
 };
@@ -104,6 +109,11 @@ public:
     void setInnerEngine(ViewTarget::Kind kind, ASTPtr storage_def);
     ASTStorage * getInnerEngine(ViewTarget::Kind kind) const;
     std::vector<ASTStorage *> getInnerEngines() const;
+
+    /// Sets the column list for the inner target table.
+    /// Stored as "SAMPLES INNER COLUMNS (...)" in a CREATE TABLE query.
+    void setInnerColumns(ViewTarget::Kind kind, ASTPtr columns_ast);
+    ASTColumns * getInnerColumns(ViewTarget::Kind kind) const;
 
     /// Returns a list of all kinds of views in this ASTViewTargets.
     std::vector<ViewTarget::Kind> getKinds() const;

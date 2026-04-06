@@ -1,5 +1,6 @@
 #include <Parsers/ParserViewTargets.h>
 
+#include <Parsers/ASTCreateQuery.h>
 #include <Parsers/ASTIdentifier.h>
 #include <Parsers/ASTViewTargets.h>
 #include <Parsers/ExpressionElementParsers.h>
@@ -42,8 +43,30 @@ namespace
             }
         }
 
+        if (!res || !res->getInnerColumns(kind))
+        {
+            if (ParserKeyword{Keyword::INNER_COLUMNS}.ignore(pos, expected))
+            {
+                ASTPtr col_list;
+                if (ParserToken(TokenType::OpeningRoundBracket).ignore(pos, expected)
+                    && ParserColumnDeclarationList{}.parse(pos, col_list, expected)
+                    && ParserToken(TokenType::ClosingRoundBracket).ignore(pos, expected))
+                {
+                    auto inner_columns = make_intrusive<ASTColumns>();
+                    inner_columns->set(inner_columns->columns, col_list);
+                    if (!res)
+                        res = make_intrusive<ASTViewTargets>();
+                    res->setInnerColumns(kind, inner_columns);
+                    return true;
+                }
+                pos = current;
+                return false;
+            }
+        }
+
         if (!res || !res->getInnerEngine(kind))
         {
+            ParserKeyword{Keyword::INNER}.ignore(pos, expected); /// optional INNER before ENGINE (for new-format queries)
             if (ParserStorage{ParserStorage::TABLE_ENGINE}.parse(pos, ast, expected))
             {
                 if (!res)
