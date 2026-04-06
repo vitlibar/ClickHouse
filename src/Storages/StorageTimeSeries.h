@@ -32,7 +32,8 @@ using TimeSeriesSettingsPtr = std::shared_ptr<const TimeSeriesSettings>;
 class StorageTimeSeries final : public IStorage, WithContext
 {
 public:
-    StorageTimeSeries(const StorageID & table_id, const ContextPtr & local_context, LoadingStrictnessLevel mode,
+    StorageTimeSeries(const StorageID & table_id, const ContextPtr & local_context,
+                      LoadingStrictnessLevel mode,
                       const ASTCreateQuery & query, const ColumnsDescription & columns, const String & comment);
 
     ~StorageTimeSeries() override;
@@ -106,15 +107,11 @@ private:
         bool is_inner_table = false;
     };
 
-    /// Loads and normalizes storage settings from the CREATE TABLE query.
-    static std::unique_ptr<const TimeSeriesSettings> buildStorageSettings(
-        const ASTCreateQuery & create_query, const ContextPtr & local_context);
-
     /// Initializes information about three target tables (Samples, Tags, Metrics).
     /// The function also creates inner tables (unless this is an ATTACH query).
     static std::vector<Target> buildTargets(
-        const ASTCreateQuery & create_query, const TimeSeriesSettings & settings,
-        const StorageID & table_id, const ColumnsDescription & columns,
+        const ASTCreateQuery & create_query,
+        const StorageID & table_id,
         const ContextPtr & local_context, LoadingStrictnessLevel mode);
 
 private:

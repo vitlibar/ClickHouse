@@ -11,11 +11,10 @@
 #include <Backups/BackupEntriesCollector.h>
 #include <Backups/IBackup.h>
 #include <Backups/RestorerFromBackup.h>
+#include <Interpreters/InterpreterCreateQuery.h>
 #include <Storages/AlterCommands.h>
 #include <Storages/StorageFactory.h>
-#include <Storages/TimeSeries/TimeSeriesColumnNames.h>
 #include <Storages/TimeSeries/TimeSeriesSettings.h>
-#include <Storages/TimeSeries/checkTimeSeriesTargetTable.h>
 #include <Storages/TimeSeries/createTimeSeriesInnerTable.h>
 #include <Storages/TimeSeries/normalizeTimeSeriesDefinition.h>
 #include <base/insertAtEnd.h>
@@ -43,21 +42,11 @@ namespace ErrorCodes
 namespace fs = std::filesystem;
 
 
-
-std::unique_ptr<const TimeSeriesSettings> StorageTimeSeries::buildStorageSettings(
-    const ASTCreateQuery & create_query, const ContextPtr & local_context)
-{
-    auto settings = std::make_unique<TimeSeriesSettings>();
-    if (create_query.storage)
-        settings->loadFromQuery(*create_query.storage);
-    normalizeTimeSeriesSettings(*settings, create_query, local_context);
-    return settings;
-}
-
 std::vector<StorageTimeSeries::Target> StorageTimeSeries::buildTargets(
-    const ASTCreateQuery & create_query, const TimeSeriesSettings & settings,
-    const StorageID & table_id, const ColumnsDescription & columns,
-    const ContextPtr & local_context, LoadingStrictnessLevel mode)
+    const ASTCreateQuery & create_query,
+    const StorageID & table_id,
+    const ContextPtr & local_context,
+    LoadingStrictnessLevel mode)
 {
     if (mode <= LoadingStrictnessLevel::CREATE && !local_context->getSettingsRef()[Setting::allow_experimental_time_series_table])
     {
@@ -65,9 +54,6 @@ std::vector<StorageTimeSeries::Target> StorageTimeSeries::buildTargets(
                         "Experimental TimeSeries table engine "
                         "is not enabled (the setting 'allow_experimental_time_series_table')");
     }
-
-    auto normalized_columns = columns;
-    normalizeTimeSeriesColumns(normalized_columns, settings);
 
     std::vector<Target> targets;
     for (auto target_kind : getTargetKinds())
@@ -79,16 +65,6 @@ std::vector<StorageTimeSeries::Target> StorageTimeSeries::buildTargets(
         {
             /// A target table is specified.
             target.table_id = target_table_id;
-
-            if (mode < LoadingStrictnessLevel::ATTACH)
-            {
-                /// If it's not an ATTACH request then
-                /// check that the specified target table has all the required columns.
-                auto target_table = DatabaseCatalog::instance().getTable(target_table_id, local_context);
-                auto target_metadata = target_table->getInMemoryMetadataPtr();
-                const auto & target_columns = target_metadata->columns;
-                checkTimeSeriesTargetTable(target_table_id, target_columns, target_kind, settings);
-            }
         }
         else
         {
@@ -98,11 +74,16 @@ std::vector<StorageTimeSeries::Target> StorageTimeSeries::buildTargets(
             target.table_id.uuid = inner_table_uuid;
             target.is_inner_table = true;
 
-            if (mode < LoadingStrictnessLevel::ATTACH)
+            if (mode <= LoadingStrictnessLevel::SECONDARY_CREATE)
             {
-                /// Create the inner target table.
-                auto inner_engine = getTimeSeriesInnerEngine(target_kind, create_query, settings, local_context);
-                createTimeSeriesInnerTable(target_kind, inner_table_uuid, inner_engine, table_id, normalized_columns, settings, local_context);
+                /// Create the inner target table using the pre-computed inner columns from the create query.
+                auto * inner_columns = create_query.getTargetInnerColumns(target_kind);
+                chassert(inner_columns != nullptr);
+                auto inner_engine = boost::static_pointer_cast<ASTStorage>(
+                    create_query.getTargetInnerEngine(target_kind)
+                        ? create_query.getTargetInnerEngine(target_kind)->ptr()
+                        : ASTPtr{});
+                createTimeSeriesInnerTable(target_kind, inner_table_uuid, *inner_columns, inner_engine, table_id, local_context);
             }
         }
 
@@ -116,20 +97,17 @@ StorageTimeSeries::StorageTimeSeries(
     const ContextPtr & local_context,
     LoadingStrictnessLevel mode,
     const ASTCreateQuery & query,
-    const ColumnsDescription & columns,
+    const ColumnsDescription & /*columns*/,
     const String & comment)
     : IStorage(table_id)
     , WithContext(local_context->getGlobalContext())
-    , initial_create_query(boost::static_pointer_cast<ASTCreateQuery>(query.clone()))
-    , storage_settings(buildStorageSettings(*initial_create_query, local_context))
-    , targets(buildTargets(*initial_create_query, *storage_settings.get(), table_id, columns, local_context, mode))
+    , initial_create_query(boost::static_pointer_cast<const ASTCreateQuery>(query.clone()))
+    , storage_settings(std::make_unique<const TimeSeriesSettings>(getNormalizedTimeSeriesSettings(*initial_create_query, local_context)))
+    , targets(buildTargets(*initial_create_query, table_id, local_context, mode))
     , has_inner_tables(std::ranges::any_of(targets, &Target::is_inner_table))
 {
-    auto normalized_columns = columns;
-    normalizeTimeSeriesColumns(normalized_columns, *storage_settings.get());
-
     StorageInMemoryMetadata storage_metadata;
-    storage_metadata.setColumns(normalized_columns);
+    storage_metadata.setColumns(generateTimeSeriesColumns(*storage_settings.get()));
     if (!comment.empty())
         storage_metadata.setComment(comment);
     setInMemoryMetadata(storage_metadata);
@@ -386,7 +364,6 @@ void StorageTimeSeries::alter(const AlterCommands & params, ContextPtr local_con
     StorageInMemoryMetadata new_metadata = getInMemoryMetadata();
     params.apply(new_metadata, local_context);
 
-    auto current_settings = getStorageSettings();
     std::unique_ptr<TimeSeriesSettings> new_settings;
 
     bool has_settings_changes = std::any_of(
@@ -394,18 +371,15 @@ void StorageTimeSeries::alter(const AlterCommands & params, ContextPtr local_con
 
     if (has_settings_changes)
     {
-        new_settings = std::make_unique<TimeSeriesSettings>(*current_settings);
-        new_settings->applyChanges(new_metadata.settings_changes->as<const ASTSetQuery &>().changes);
-        normalizeTimeSeriesSettings(*new_settings, *initial_create_query, getContext());
+        new_settings = std::make_unique<TimeSeriesSettings>(getNormalizedTimeSeriesSettings(
+            *initial_create_query, local_context, new_metadata.settings_changes->as<const ASTSetQuery &>().changes));
 
         auto settings_ast = make_intrusive<ASTSetQuery>();
         settings_ast->is_standalone = false;
         settings_ast->changes = new_settings->changes();
         new_metadata.settings_changes = settings_ast;
 
-        ColumnsDescription new_columns = new_metadata.getColumns();
-        normalizeTimeSeriesColumns(new_columns, *new_settings);
-        new_metadata.setColumns(new_columns);
+        new_metadata.setColumns(generateTimeSeriesColumns(*new_settings));
     }
 
     auto time_series_table_id = getStorageID();
@@ -515,7 +489,8 @@ void registerStorageTimeSeries(StorageFactory & factory)
     {
         /// Pass local_context here to convey setting to inner tables.
         return std::make_shared<StorageTimeSeries>(
-            args.table_id, args.getLocalContext(), args.mode, args.query, args.columns, args.comment);
+            args.table_id, args.getLocalContext(), args.mode,
+            args.query, args.columns, args.comment);
     }
     ,
     {

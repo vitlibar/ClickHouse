@@ -56,6 +56,12 @@ TimeSeriesSettings::TimeSeriesSettings(TimeSeriesSettings && settings) noexcept
 {
 }
 
+TimeSeriesSettings & TimeSeriesSettings::operator=(TimeSeriesSettings && settings) noexcept
+{
+    *impl = std::move(*settings.impl);
+    return *this;
+}
+
 TimeSeriesSettings::~TimeSeriesSettings() = default;
 
 TIMESERIES_SETTINGS_SUPPORTED_TYPES(TimeSeriesSettings, IMPLEMENT_SETTING_SUBSCRIPT_OPERATOR)
