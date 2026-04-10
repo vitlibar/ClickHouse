@@ -48,6 +48,8 @@ std::vector<StorageTimeSeries::Target> StorageTimeSeries::buildTargets(
     const ContextPtr & local_context,
     LoadingStrictnessLevel mode)
 {
+    LOG_INFO(getLogger("!!!"), "StorageTimeSeries::buildTargets: create_query = {}", create_query.formatForLogging());
+
     if (mode <= LoadingStrictnessLevel::CREATE && !local_context->getSettingsRef()[Setting::allow_experimental_time_series_table])
     {
         throw Exception(ErrorCodes::SUPPORT_IS_DISABLED,

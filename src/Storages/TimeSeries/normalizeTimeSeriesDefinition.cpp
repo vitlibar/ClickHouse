@@ -378,7 +378,7 @@ namespace
             case ViewTarget::Samples:
             {
                 /// Column "id" - no default expression in the samples table.
-                /// Reset any default expression if the column was copied from the outer time series columns -
+                /// Reset any default expression if the column was copied from the time series columns -
                 /// the identifier of the samples table is computed in the "tags" inner table,
                 /// because it depends on columns like "metric_name" or "all_tags" which don't exist in the samples table.
                 if (add_column_if_missing(TimeSeriesColumnNames::ID, dataTypeToAST(time_series_settings[TimeSeriesSetting::id_type])))
@@ -390,7 +390,7 @@ namespace
                         column = column->clone();
                         auto & new_decl = column->as<ASTColumnDeclaration &>();
                         new_decl.default_specifier = ColumnDefaultSpecifier::Empty;
-                        new_decl.setDefaultExpression(nullptr);
+                        new_decl.resetDefaultExpression();
                         new_decl.ephemeral_default = false;
                         changed = true;
                     }
@@ -509,14 +509,14 @@ namespace
         return true;
     }
 
-    /// Generates the column list for an inner table from scratch, used for upgrading from version 1 format
-    /// (where inner columns weren't stored in the query). Outer time series columns are copied when available.
+    /// Generates the column list for an inner table from scratch, used for upgrading from old format
+    /// where inner columns weren't stored in the query. Time series columns are copied when available.
     boost::intrusive_ptr<ASTColumns> generateInnerColumnsForOldVersion(
         ViewTarget::Kind inner_table_kind,
         const ASTColumns * time_series_columns,
         const TimeSeriesSettings & time_series_settings)
     {
-        /// Build a lookup map for the outer time series columns.
+        /// Build a lookup map for the time series columns.
         std::map<String, ASTPtr> time_series_columns_map;
         if (time_series_columns && time_series_columns->columns)
             for (const auto & child : time_series_columns->columns->children)
@@ -543,7 +543,7 @@ namespace
             case ViewTarget::Samples:
             {
                 /// Column "id" - no default expression in the samples table.
-                /// Reset any default expression if the column was copied from the outer time series columns -
+                /// Reset any default expression if the column was copied from the time series columns -
                 /// the identifier of the samples table is computed in the "tags" inner table,
                 /// because it depends on columns like "metric_name" or "all_tags" which don't exist in the samples table.
                 add_column(TimeSeriesColumnNames::ID, dataTypeToAST(time_series_settings[TimeSeriesSetting::id_type]));
@@ -551,7 +551,7 @@ namespace
                 {
                     auto & new_decl = new_list->children.back()->as<ASTColumnDeclaration &>();
                     new_decl.default_specifier = ColumnDefaultSpecifier::Empty;
-                    new_decl.setDefaultExpression(nullptr);
+                    new_decl.resetDefaultExpression();
                     new_decl.ephemeral_default = false;
                 }
 
@@ -594,7 +594,7 @@ namespace
                     add_column(TimeSeriesColumnNames::AllTags,
                         makeASTDataType("Map", makeASTDataType("String"), makeASTDataType("String")));
 
-                        {
+                    {
                         auto & new_decl = new_list->children.back()->as<ASTColumnDeclaration &>();
                         new_decl.default_specifier = ColumnDefaultSpecifier::Ephemeral;
                         new_decl.ephemeral_default = true;
