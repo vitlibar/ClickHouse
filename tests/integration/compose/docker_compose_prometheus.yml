@@ -24,8 +24,6 @@ services:
       EOF
       exec /bin/prometheus --config.file="/etc/prometheus/prometheus.yml" --storage.tsdb.path="/prometheus" --web.listen-address="0.0.0.0:${PROMETHEUS_WRITER_PORT}" --enable-feature=promql-experimental-functions &> /var/log/prometheus/prometheus.log
       '
-    expose:
-      - ${PROMETHEUS_WRITER_PORT}
     healthcheck:
       test: |
         /bin/sh -c '
@@ -62,8 +60,6 @@ services:
       EOF
       exec /bin/prometheus --config.file="/etc/prometheus/prometheus.yml" --storage.tsdb.path="/prometheus" --web.listen-address="0.0.0.0:${PROMETHEUS_READER_PORT}" --enable-feature=promql-experimental-functions &> /var/log/prometheus/prometheus.log
       '
-    expose:
-      - ${PROMETHEUS_READER_PORT}
     healthcheck:
       test: |
         /bin/sh -c '
@@ -98,8 +94,6 @@ services:
       EOF
       exec /bin/prometheus --config.file="/etc/prometheus/prometheus.yml" --storage.tsdb.path="/prometheus" --web.listen-address="0.0.0.0:${PROMETHEUS_RECEIVER_PORT}" --storage.tsdb.retention.time=100y --enable-feature=remote-write-receiver --web.enable-remote-write-receiver --enable-feature=promql-experimental-functions &> /var/log/prometheus/prometheus.log
       '
-    expose:
-      - ${PROMETHEUS_RECEIVER_PORT}
     healthcheck:
       test: |
         /bin/sh -c '
