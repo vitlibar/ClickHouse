@@ -175,6 +175,37 @@ std::vector<ASTStorage *> ASTViewTargets::getInnerEngines() const
     return res;
 }
 
+void ASTViewTargets::setInnerColumns(ViewTarget::Kind kind, ASTPtr columns_ast)
+{
+    for (auto & target : targets)
+    {
+        if (target.kind == kind)
+        {
+            if (target.inner_columns == columns_ast)
+                return;
+            if (columns_ast)
+                children.push_back(columns_ast);
+            if (target.inner_columns)
+                std::erase(children, target.inner_columns);
+            target.inner_columns = columns_ast;
+            return;
+        }
+    }
+
+    if (columns_ast)
+    {
+        targets.emplace_back(kind).inner_columns = columns_ast;
+        children.push_back(columns_ast);
+    }
+}
+
+ASTColumns * ASTViewTargets::getInnerColumns(ViewTarget::Kind kind) const
+{
+    if (const auto * target = tryGetTarget(kind); target && target->inner_columns)
+        return target->inner_columns->as<ASTColumns>();
+    return nullptr;
+}
+
 const ViewTarget * ASTViewTargets::tryGetTarget(ViewTarget::Kind kind) const
 {
     for (const auto & target : targets)
@@ -195,6 +226,11 @@ ASTPtr ASTViewTargets::clone() const
         {
             target.inner_engine = boost::static_pointer_cast<ASTStorage>(target.inner_engine->clone());
             res->children.push_back(target.inner_engine);
+        }
+        if (target.inner_columns)
+        {
+            target.inner_columns = target.inner_columns->clone();
+            res->children.push_back(target.inner_columns);
         }
     }
     return res;
@@ -229,9 +265,19 @@ void ASTViewTargets::formatTarget(const ViewTarget & target, WriteBuffer & ostr,
         ostr << s.nl_or_ws << toStringView(getKeyword(target.kind)) << " INNER UUID " << quoteString(toString(target.inner_uuid));
     }
 
+    if (target.inner_columns)
+    {
+        ostr << s.nl_or_ws << toStringView(getKeyword(target.kind)) << " INNER COLUMNS";
+        ostr << (s.one_line ? " (" : "\n(");
+        auto inner_frame = frame;
+        inner_frame.expression_list_always_start_on_new_line = true;
+        target.inner_columns->format(ostr, s, state, inner_frame);
+        ostr << (s.one_line ? ")" : "\n)");
+    }
+
     if (target.inner_engine)
     {
-        ostr << s.nl_or_ws << toStringView(getKeyword(target.kind));
+        ostr << s.nl_or_ws << toStringView(getKeyword(target.kind)) << " INNER";
         target.inner_engine->format(ostr, s, state, frame);
     }
 }
@@ -242,6 +288,7 @@ void ASTViewTargets::forEachPointerToChild(std::function<void(IAST **, boost::in
     {
         f(nullptr, &target.table_ast);
         f(nullptr, &target.inner_engine);
+        f(nullptr, &target.inner_columns);
     }
 }
 
