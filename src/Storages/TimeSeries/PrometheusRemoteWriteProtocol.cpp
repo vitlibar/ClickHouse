@@ -206,13 +206,13 @@ namespace
                             const StorageInMemoryMetadata & tags_metadata,
                             const StorageInMemoryMetadata & samples_metadata)
     {
-        size_t num_tags_rows = time_series.size();
+        size_t num_time_series = time_series.size();
 
-        size_t num_data_rows = 0;
+        size_t num_samples = 0;
         for (const auto & element : time_series)
-            num_data_rows += element.samples_size();
+            num_samples += element.samples_size();
 
-        if (!num_data_rows)
+        if (!num_samples)
             return {}; /// Nothing to insert into target tables.
 
         /// Prepare a block for inserting to the "tags" table.
@@ -406,7 +406,7 @@ namespace
         auto value_column = scalar_type->createColumn();
         value_column->reserve(num_samples);
 
-        /// Prepare a block for inserting to the "data" table.
+        /// Prepare a block for inserting to the "samples" table.
         current_row_in_tags = 0;
         for (size_t i = 0; i != static_cast<size_t>(time_series.size()); ++i)
         {
@@ -433,9 +433,9 @@ namespace
         BlocksToInsert res;
 
         /// A block to the "tags" table should be inserted first.
-        /// (Because any INSERT can fail and we don't want to have rows in the data table with no corresponding "id" written to the "tags" table.)
+        /// (Because any INSERT can fail and we don't want to have rows in the samples table with no corresponding "id" written to the "tags" table.)
         res.blocks.emplace_back(ViewTarget::Tags, std::move(tags_block));
-        res.blocks.emplace_back(ViewTarget::Data, std::move(data_block));
+        res.blocks.emplace_back(ViewTarget::Samples, std::move(samples_block));
 
         return res;
     }
