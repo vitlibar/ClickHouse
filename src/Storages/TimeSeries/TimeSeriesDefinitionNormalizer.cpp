@@ -86,7 +86,7 @@ void TimeSeriesDefinitionNormalizer::reorderColumns(ASTCreateQuery & create) con
         }
     };
 
-    /// Reorder columns for the "data" table.
+    /// Reorder columns for the "samples" table.
     add_column_in_correct_order(TimeSeriesColumnNames::ID);
     add_column_in_correct_order(TimeSeriesColumnNames::Timestamp);
     add_column_in_correct_order(TimeSeriesColumnNames::Value);
@@ -186,7 +186,7 @@ void TimeSeriesDefinitionNormalizer::addMissingColumns(ASTCreateQuery & create) 
         return makeASTDataType("Nullable", type);
     };
 
-    /// Add missing columns for the "data" table.
+    /// Add missing columns for the "samples" table.
     if (!is_next_column_named(TimeSeriesColumnNames::ID))
         make_new_column(TimeSeriesColumnNames::ID, get_uuid_type());
 
@@ -234,7 +234,7 @@ void TimeSeriesDefinitionNormalizer::addMissingColumns(ASTCreateQuery & create) 
     {
         /// We use Nullable(DateTime64(3)) as the default type of the `min_time` and `max_time` columns.
         /// It's nullable because it allows the aggregation (see aggregate_min_time_and_max_time) work correctly even
-        /// for rows in the "tags" table which doesn't have `min_time` and `max_time` (because they have no matching rows in the "data" table).
+        /// for rows in the "tags" table which doesn't have `min_time` and `max_time` (because they have no matching rows in the "samples" table).
 
         if (!is_next_column_named(TimeSeriesColumnNames::MinTime))
             make_new_column(TimeSeriesColumnNames::MinTime, make_nullable(timestamp_type));
@@ -360,7 +360,7 @@ void TimeSeriesDefinitionNormalizer::addMissingInnerEnginesFromAsTable(ASTCreate
     if (!as_create_query)
         return;
 
-    for (auto target_kind : {ViewTarget::Data, ViewTarget::Tags, ViewTarget::Metrics})
+    for (auto target_kind : {ViewTarget::Samples, ViewTarget::Tags, ViewTarget::Metrics})
     {
         if (as_create_query->hasTargetTableID(target_kind))
         {
@@ -389,7 +389,7 @@ void TimeSeriesDefinitionNormalizer::addMissingInnerEnginesFromAsTable(ASTCreate
 
 void TimeSeriesDefinitionNormalizer::addMissingInnerEngines(ASTCreateQuery & create) const
 {
-    for (auto target_kind : {ViewTarget::Data, ViewTarget::Tags, ViewTarget::Metrics})
+    for (auto target_kind : {ViewTarget::Samples, ViewTarget::Tags, ViewTarget::Metrics})
     {
         if (create.hasTargetTableID(target_kind))
             continue; /// External target is set, inner engine is not needed.
@@ -416,7 +416,7 @@ void TimeSeriesDefinitionNormalizer::setInnerEngineByDefault(ViewTarget::Kind in
 {
     switch (inner_table_kind)
     {
-        case ViewTarget::Data:
+        case ViewTarget::Samples:
         {
             inner_storage_def.set(inner_storage_def.engine, makeASTFunction("MergeTree"));
             inner_storage_def.engine->setNoEmptyArgs(true);

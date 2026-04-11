@@ -202,13 +202,13 @@ namespace
                             const StorageInMemoryMetadata & time_series_storage_metadata,
                             const TimeSeriesSettings & time_series_settings)
     {
-        size_t num_tags_rows = time_series.size();
+        size_t num_time_series = time_series.size();
 
-        size_t num_data_rows = 0;
+        size_t num_samples = 0;
         for (const auto & element : time_series)
-            num_data_rows += element.samples_size();
+            num_samples += element.samples_size();
 
-        if (!num_data_rows)
+        if (!num_samples)
             return {}; /// Nothing to insert into target tables.
 
         /// Column types must be extracted from the target tables' metadata.
@@ -219,23 +219,23 @@ namespace
             return getInsertableColumnDescription(columns_description, column_name, time_series_storage_id);
         };
 
-        /// We're going to prepare two blocks - one for the "data" table, and one for the "tags" table.
-        Block data_block;
+        /// We're going to prepare two blocks - one for the "samples" table, and one for the "tags" table.
+        Block samples_block;
         Block tags_block;
 
-        auto make_column_for_data_block = [&](const ColumnDescription & column_description) -> IColumn &
+        auto make_column_for_samples_block = [&](const ColumnDescription & column_description) -> IColumn &
         {
             auto column = column_description.type->createColumn();
-            column->reserve(num_data_rows);
+            column->reserve(num_samples);
             auto * column_ptr = column.get();
-            data_block.insert(ColumnWithTypeAndName{std::move(column), column_description.type, column_description.name});
+            samples_block.insert(ColumnWithTypeAndName{std::move(column), column_description.type, column_description.name});
             return *column_ptr;
         };
 
         auto make_column_for_tags_block = [&](const ColumnDescription & column_description) -> IColumn &
         {
             auto column = column_description.type->createColumn();
-            column->reserve(num_tags_rows);
+            column->reserve(num_time_series);
             auto * column_ptr = column.get();
             tags_block.insert(ColumnWithTypeAndName{std::move(column), column_description.type, column_description.name});
             return *column_ptr;
@@ -247,18 +247,18 @@ namespace
         const auto & id_description = get_column_description(TimeSeriesColumnNames::ID);
         TimeSeriesColumnsValidator validator{time_series_storage_id, time_series_settings};
         validator.validateColumnForID(id_description);
-        auto & id_column_in_data_table = make_column_for_data_block(id_description);
+        auto & id_column_in_data_table = make_column_for_samples_block(id_description);
 
         /// Column "timestamp".
         const auto & timestamp_description = get_column_description(TimeSeriesColumnNames::Timestamp);
         UInt32 timestamp_scale;
         validator.validateColumnForTimestamp(timestamp_description, timestamp_scale);
-        auto & timestamp_column = make_column_for_data_block(timestamp_description);
+        auto & timestamp_column = make_column_for_samples_block(timestamp_description);
 
         /// Column "value".
         const auto & value_description = get_column_description(TimeSeriesColumnNames::Value);
         validator.validateColumnForValue(value_description);
-        auto & value_column = make_column_for_data_block(value_description);
+        auto & value_column = make_column_for_samples_block(value_description);
 
         /// Column "metric_name".
         const auto & metric_name_description = get_column_description(TimeSeriesColumnNames::MetricName);
@@ -390,7 +390,7 @@ namespace
         /// Calculate an identifier for each time series, make a new column from those identifiers, and add it to "tags_block".
         auto & id_column_in_tags_table = calculateId(context, columns_description.get(TimeSeriesColumnNames::ID), tags_block);
 
-        /// Prepare a block for inserting to the "data" table.
+        /// Prepare a block for inserting to the "samples" table.
         current_row_in_tags = 0;
         for (size_t i = 0; i != static_cast<size_t>(time_series.size()); ++i)
         {
@@ -416,9 +416,9 @@ namespace
         BlocksToInsert res;
 
         /// A block to the "tags" table should be inserted first.
-        /// (Because any INSERT can fail and we don't want to have rows in the data table with no corresponding "id" written to the "tags" table.)
+        /// (Because any INSERT can fail and we don't want to have rows in the samples table with no corresponding "id" written to the "tags" table.)
         res.blocks.emplace_back(ViewTarget::Tags, std::move(tags_block));
-        res.blocks.emplace_back(ViewTarget::Data, std::move(data_block));
+        res.blocks.emplace_back(ViewTarget::Samples, std::move(samples_block));
 
         return res;
     }

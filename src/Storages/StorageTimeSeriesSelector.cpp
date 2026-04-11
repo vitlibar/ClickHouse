@@ -104,10 +104,10 @@ StorageTimeSeriesSelector::Configuration StorageTimeSeriesSelector::getConfigura
     time_series_storage_id = context->resolveStorageID(time_series_storage_id);
 
     auto time_series_storage = storagePtrToTimeSeries(DatabaseCatalog::instance().getTable(time_series_storage_id, context));
-    auto data_table_metadata = time_series_storage->getTargetTable(ViewTarget::Data, context)->getInMemoryMetadataPtr();
-    auto id_data_type = data_table_metadata->columns.get(TimeSeriesColumnNames::ID).type;
-    auto timestamp_data_type = data_table_metadata->columns.get(TimeSeriesColumnNames::Timestamp).type;
-    auto scalar_data_type = data_table_metadata->columns.get(TimeSeriesColumnNames::Value).type;
+    auto samples_table_metadata = time_series_storage->getTargetTable(ViewTarget::Samples, context)->getInMemoryMetadataPtr();
+    auto id_data_type = samples_table_metadata->columns.get(TimeSeriesColumnNames::ID).type;
+    auto timestamp_data_type = samples_table_metadata->columns.get(TimeSeriesColumnNames::Timestamp).type;
+    auto scalar_data_type = samples_table_metadata->columns.get(TimeSeriesColumnNames::Value).type;
 
     UInt32 timestamp_scale = tryGetDecimalScale(*timestamp_data_type).value_or(0);
 
@@ -419,7 +419,7 @@ void StorageTimeSeriesSelector::read(
 
     const auto & matchers = typeid_cast<const PrometheusQueryTree::InstantSelector &>(*config.selector.getRoot()).matchers;
 
-    auto data_table_id = time_series_storage->getTargetTableId(ViewTarget::Data);
+    auto samples_table_id = time_series_storage->getTargetTableId(ViewTarget::Samples);
     auto tags_table_id = time_series_storage->getTargetTableId(ViewTarget::Tags);
 
     auto column_name_by_tag_name = makeColumnNameByTagNameMap(time_series_settings);
@@ -436,7 +436,7 @@ void StorageTimeSeriesSelector::read(
         tags_table_id, matchers, column_name_by_tag_name, min_time_to_filter_ids, max_time_to_filter_ids, config.timestamp_data_type);
 
     ASTPtr select_query_from_data_table = makeSelectQueryFromDataTable(
-        data_table_id,
+        samples_table_id,
         select_query_from_tags_table,
         config.min_time,
         config.max_time,

@@ -50,7 +50,7 @@ ColumnsDescription TimeSeriesInnerTablesCreator::getInnerTableColumnsDescription
 
     switch (inner_table_kind)
     {
-        case ViewTarget::Data:
+        case ViewTarget::Samples:
         {
             /// Column "id".
             {
