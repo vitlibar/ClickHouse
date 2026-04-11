@@ -1,7 +1,8 @@
 import pytest
+import re
 
 from helpers.cluster import ClickHouseCluster
-from helpers.test_tools import TSV
+from helpers.test_tools import TSV, tsv_close_to
 from .prometheus_test_utils import *
 
 
@@ -98,9 +99,11 @@ def check_queries_in_prometheus_reader():
 # Executes the test queries in ClickHouse and test the results.
 def check_queries_in_clickhouse():
     for query, _, chresult in test_queries:
-        assert node.query(
-            f"SELECT * FROM prometheusQuery(prometheus, '{query}', {timestamp})"
-        ) == TSV(chresult)
+        assert tsv_close_to(
+            node.query(f"SELECT * FROM prometheusQuery(prometheus, '{query}', {timestamp})"),
+            chresult,
+            eps=1e-9,
+        )
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -120,6 +123,10 @@ def check():
     check_queries_in_prometheus_reader()
     check_queries_in_clickhouse()
 
+# Drops TimeSeries table
+def drop_prometheus_table():
+    node.query("DROP TABLE prometheus SYNC")
+
 
 @pytest.fixture(autouse=True)
 def cleanup_after_test():
@@ -128,61 +135,151 @@ def cleanup_after_test():
     finally:
         node.query("DROP TABLE IF EXISTS prometheus SYNC")
         node.query("DROP TABLE IF EXISTS original SYNC")
-        node.query("DROP TABLE IF EXISTS mydata SYNC")
         node.query("DROP TABLE IF EXISTS mytable SYNC")
+        node.query("DROP TABLE IF EXISTS mysamples SYNC")
+        node.query("DROP TABLE IF EXISTS mytags SYNC")
         node.query("DROP TABLE IF EXISTS mymetrics SYNC")
 
 
+# Checks that a TimeSeries table works with all default settings.
 def test_default():
     node.query("CREATE TABLE prometheus ENGINE=TimeSeries")
     check()
 
 
+# Checks that specific tag labels can be extracted into dedicated columns
+# instead of being stored in the generic `tags` map.
 def test_tags_to_columns():
     node.query(
         "CREATE TABLE prometheus ENGINE=TimeSeries SETTINGS tags_to_columns = {'job': 'job', 'instance': 'instance'}"
     )
+
     check()
 
+    describe = node.query("DESCRIBE timeSeriesTags(prometheus)")
+    assert re.search(r"\bjob\s+String", describe)
+    assert re.search(r"\binstance\s+String", describe)
 
+    assert node.query("SELECT job, instance FROM timeSeriesTags(prometheus) WHERE metric_name = 'up' AND instance = 'demo-service-0:10000'") == TSV([["demo", "demo-service-0:10000"]])
+
+
+# Checks that the `id` column type can be changed to `UInt64`.
+# The type can be specified either via the `id_type` setting or at the column level.
 def test_64bit_id():
+    node.query("CREATE TABLE prometheus ENGINE=TimeSeries SETTINGS id_type='UInt64'")
+    check()
+    assert node.query("SELECT type FROM system.columns WHERE database = currentDatabase() AND table = 'prometheus' AND name = 'id'") == TSV([["UInt64"]])
+    assert re.search(r"\bid\s+UInt64", node.query("DESCRIBE timeSeriesTags(prometheus)"))
+
+    drop_prometheus_table()
+
     node.query("CREATE TABLE prometheus (id UInt64) ENGINE=TimeSeries")
     check()
+    assert re.search(r"(?s)SETTINGS.*\bid_type\s*=\s*\\'UInt64\\'", node.query("SHOW CREATE TABLE prometheus"))
+    assert re.search(r"\bid\s+UInt64", node.query("DESCRIBE timeSeriesTags(prometheus)"))
 
 
+# Checks that a custom hash function can be used to generate time series identifiers.
+# Both `id_type` and `id_generator` can be specified via settings or derived from a column definition.
 def test_custom_id_algorithm():
+    node.query(
+        "CREATE TABLE prometheus ENGINE=TimeSeries SETTINGS id_type = 'FixedString(16)', id_generator = 'murmurHash3_128(metric_name, all_tags)'"
+    )
+    check()
+    assert node.query("SELECT type FROM system.columns WHERE database = currentDatabase() AND table = 'prometheus' AND name = 'id'") == TSV([["FixedString(16)"]])
+    assert re.search(r"\bid\s+FixedString\(16\)", node.query("DESCRIBE timeSeriesTags(prometheus)"))
+
+    drop_prometheus_table()
+
     node.query(
         "CREATE TABLE prometheus (id FixedString(16) DEFAULT murmurHash3_128(metric_name, all_tags)) ENGINE=TimeSeries"
     )
     check()
+    create_table = node.query("SHOW CREATE TABLE prometheus")
+    assert re.search(r"(?s)SETTINGS.*\bid_type\s*=\s*\\'FixedString\(16\)\\'", create_table)
+    assert re.search(r"(?s)SETTINGS.*\bid_generator\s*=\s*\\'murmurHash3_128\(metric_name, all_tags\)\\'", create_table)
+    assert re.search(r"\bid\s+FixedString\(16\)", node.query("DESCRIBE timeSeriesTags(prometheus)"))
 
 
+# Checks that timestamps can be stored with microsecond precision (`DateTime64(6)`).
+# The type can be specified either via the `timestamp_type` setting or at the column level.
+def test_microsecond_precision():
+    node.query("CREATE TABLE prometheus ENGINE=TimeSeries SETTINGS timestamp_type='DateTime64(6)'")
+    check()
+    assert node.query("SELECT type FROM system.columns WHERE database = currentDatabase() AND table = 'prometheus' AND name = 'timestamp'") == TSV([["DateTime64(6)"]])
+    assert re.search(r"\btimestamp\s+DateTime64\(6\)", node.query("DESCRIBE timeSeriesSamples(prometheus)"))
+
+    drop_prometheus_table()
+
+    node.query("CREATE TABLE prometheus (timestamp DateTime64(6)) ENGINE=TimeSeries")
+    check()
+    assert re.search(r"(?s)SETTINGS.*\btimestamp_type\s*=\s*\\'DateTime64\(6\)\\'", node.query("SHOW CREATE TABLE prometheus"))
+    assert re.search(r"\btimestamp\s+DateTime64\(6\)", node.query("DESCRIBE timeSeriesSamples(prometheus)"))
+
+
+# Checks that scalar values can be stored as `Float32` instead of the default `Float64`.
+# The type can be specified either via the `scalar_type` setting or at the column level.
+def test_float32_scalar():
+    node.query("CREATE TABLE prometheus ENGINE=TimeSeries SETTINGS scalar_type='Float32'")
+    check()
+    assert node.query("SELECT type FROM system.columns WHERE database = currentDatabase() AND table = 'prometheus' AND name = 'value'") == TSV([["Float32"]])
+    assert re.search(r"\bvalue\s+Float32", node.query("DESCRIBE timeSeriesSamples(prometheus)"))
+
+    drop_prometheus_table()
+
+    node.query("CREATE TABLE prometheus (value Float32) ENGINE=TimeSeries")
+    check()
+    assert re.search(r"(?s)SETTINGS.*\bscalar_type\s*=\s*\\'Float32\\'", node.query("SHOW CREATE TABLE prometheus"))
+    assert re.search(r"\bvalue\s+Float32", node.query("DESCRIBE timeSeriesSamples(prometheus)"))
+
+
+# Checks that custom compression codecs can be applied to the `id`, `timestamp`, and `value` columns.
+def test_custom_codecs():
+    node.query(
+        "CREATE TABLE prometheus ("
+        "id UUID CODEC(ZSTD), "
+        "timestamp DateTime64(3) CODEC(DoubleDelta), "
+        "value Float64 CODEC(Gorilla)) "
+        "ENGINE=TimeSeries"
+    )
+    check()
+
+    # FIXME: This doesn't work yet because DESCRIBE doesn't show codecs,
+    # and it's tricky to use system.columns because we can't get the names if inner tables easily.
+    # samples_desc = node.query("DESCRIBE timeSeriesSamples(prometheus)")
+    # assert re.search(r"\btimestamp\s+DateTime64\(3\)\s+DoubleDelta\b", samples_desc)
+    # assert re.search(r"\bvalue\s+Float64\s+Gorilla\b", samples_desc)
+    # tags_desc = node.query("DESCRIBE timeSeriesTags(prometheus)")
+    # assert re.search(r"\bid\s+UUID\s+ZSTD\b", tags_desc)
+
+
+# Checks that a TimeSeries table can be created as a copy of another TimeSeries table,
+# inheriting its settings and structure.
 def test_create_as_table():
     node.query("CREATE TABLE original ENGINE=TimeSeries")
     node.query("CREATE TABLE prometheus AS original")
     check()
 
 
+# Checks that the storage engines of the inner tables can be customized.
 def test_inner_engines():
     node.query(
         "CREATE TABLE prometheus ENGINE=TimeSeries "
-        "DATA ENGINE=MergeTree ORDER BY (id, timestamp) "
+        "SAMPLES ENGINE=MergeTree ORDER BY (id, timestamp) "
         "TAGS ENGINE=AggregatingMergeTree ORDER BY (metric_name, id) "
         "METRICS ENGINE=ReplacingMergeTree ORDER BY metric_family_name"
     )
     check()
 
 
+# Checks that a TimeSeries table can be backed by pre-existing external tables
+# instead of auto-created inner tables.
 def test_external_tables():
-    node.query("DROP TABLE IF EXISTS mydata")
-    node.query("DROP TABLE IF EXISTS mytags")
-    node.query("DROP TABLE IF EXISTS mymetrics")
-    node.query("DROP TABLE IF EXISTS prometheus")
-
     node.query(
-        "CREATE TABLE mydata (id UUID, timestamp DateTime64(3), value Float64) "
+        "CREATE TABLE mysamples (id UUID, timestamp DateTime64(3), value Float64) "
         "ENGINE=MergeTree ORDER BY (id, timestamp)"
     )
+
     node.query(
         "CREATE TABLE mytags ("
         "id UUID, "
@@ -202,6 +299,43 @@ def test_external_tables():
     )
     node.query(
         "CREATE TABLE prometheus ENGINE=TimeSeries "
-        "DATA mydata TAGS mytags METRICS mymetrics"
+        "SAMPLES mysamples TAGS mytags METRICS mymetrics"
+    )
+    check()
+
+
+# Checks that the `DATA` keyword works as an alias for `SAMPLES`
+# both with inline engine definitions and with external tables.
+def test_data_keyword():
+    node.query(
+        "CREATE TABLE prometheus ENGINE=TimeSeries "
+        "DATA ENGINE=MergeTree ORDER BY (id, timestamp) "
+        "TAGS ENGINE=AggregatingMergeTree ORDER BY (metric_name, id) "
+        "METRICS ENGINE=ReplacingMergeTree ORDER BY metric_family_name"
+    )
+    check()
+
+    drop_prometheus_table()
+
+    node.query(
+        "CREATE TABLE mysamples (id UUID, timestamp DateTime64(3), value Float64) "
+        "ENGINE=MergeTree ORDER BY (id, timestamp)"
+    )
+    node.query(
+        "CREATE TABLE mytags ("
+        "id UUID, "
+        "metric_name LowCardinality(String), "
+        "tags Map(LowCardinality(String), String), "
+        "min_time SimpleAggregateFunction(min, Nullable(DateTime64(3))), "
+        "max_time SimpleAggregateFunction(max, Nullable(DateTime64(3)))) "
+        "ENGINE=AggregatingMergeTree ORDER BY (metric_name, id)"
+    )
+    node.query(
+        "CREATE TABLE mymetrics (metric_family_name String, type String, unit String, help String) "
+        "ENGINE=ReplacingMergeTree ORDER BY metric_family_name"
+    )
+    node.query(
+        "CREATE TABLE prometheus ENGINE=TimeSeries "
+        "DATA mysamples TAGS mytags METRICS mymetrics"
     )
     check()
