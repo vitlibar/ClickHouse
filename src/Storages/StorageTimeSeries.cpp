@@ -9,6 +9,7 @@
 #include <Parsers/ASTDropQuery.h>
 #include <Parsers/ASTCreateQuery.h>
 #include <Backups/BackupEntriesCollector.h>
+#include <Backups/IBackup.h>
 #include <Backups/RestorerFromBackup.h>
 #include <Storages/AlterCommands.h>
 #include <Storages/StorageFactory.h>
@@ -127,7 +128,7 @@ StoragePtr StorageTimeSeries::getTargetTable(ViewTarget::Kind target_kind, const
 
 StoragePtr StorageTimeSeries::tryGetTargetTable(ViewTarget::Kind target_kind, const ContextPtr & local_context) const
 {
-    auto index = static_cast<size_t>(target_kind - ViewTarget::Kind::Data);
+    auto index = static_cast<size_t>(target_kind - ViewTarget::Kind::Samples);
     if (index >= targets.size() || targets[index].kind != target_kind)
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Unexpected target kind {} (index={})", target_kind, index);
     const auto & target = targets[index];
@@ -147,7 +148,19 @@ StoragePtr StorageTimeSeries::tryGetTargetTable(ViewTarget::Kind target_kind, co
     StorageID time_series_table_id = getStorageID();
     StorageID inner_table_id{time_series_table_id.getDatabaseName(), getTimeSeriesInnerTableName(target_kind, time_series_table_id)};
 
-    return lookup(inner_table_id);
+    if (auto table = lookup(inner_table_id))
+        return table;
+
+    /// Fallback for legacy tables created before the samples inner table was renamed
+    /// from `.inner.data.*` to `.inner.samples.*`
+    if (target_kind == ViewTarget::Kind::Samples)
+    {
+        inner_table_id.table_name = getTimeSeriesInnerTableName("data", time_series_table_id);
+        if (auto table = lookup(inner_table_id))
+            return table;
+    }
+
+    return nullptr;
 }
 
 
@@ -165,7 +178,7 @@ StorageID StorageTimeSeries::tryGetTargetTableID(ViewTarget::Kind target_kind, c
 
 bool StorageTimeSeries::isInnerTable(ViewTarget::Kind target_kind) const
 {
-    auto index = static_cast<size_t>(target_kind - ViewTarget::Kind::Data);
+    auto index = static_cast<size_t>(target_kind - ViewTarget::Kind::Samples);
     if (index >= targets.size() || targets[index].kind != target_kind)
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Unexpected target kind {} (index={})", target_kind, index);
     return targets[index].is_inner_table;
@@ -417,6 +430,9 @@ void StorageTimeSeries::restoreDataFromBackup(RestorerFromBackup & restorer, con
             String kind_str{magic_enum::enum_name(target_kind)};
             boost::algorithm::to_lower(kind_str);
             String target_data_path = fs::path{data_path_in_backup} / kind_str;
+            /// Support legacy backups where the samples folder was named "data" instead of "samples".
+            if (target_kind == ViewTarget::Samples && !restorer.getBackup()->hasFiles(target_data_path))
+                target_data_path = fs::path{data_path_in_backup} / "data";
             table->restoreDataFromBackup(restorer, target_data_path, {});
         }
     }

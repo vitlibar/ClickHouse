@@ -443,7 +443,7 @@ void StorageTimeSeriesSelector::readImpl(
 
     /// We can't just use getTargetTableID() here because
     /// we want a full StorageID here, not just UUID.
-    auto data_table_id = time_series_storage->getTargetTableID(ViewTarget::Data, context);
+    auto samples_table_id = time_series_storage->getTargetTableID(ViewTarget::Samples, context);
     auto tags_table_id = time_series_storage->getTargetTableID(ViewTarget::Tags, context);
 
     auto column_name_by_tag_name = makeColumnNameByTagNameMap(*time_series_settings);
@@ -460,7 +460,7 @@ void StorageTimeSeriesSelector::readImpl(
         tags_table_id, matchers, column_name_by_tag_name, min_time_to_filter_ids, max_time_to_filter_ids, config.timestamp_data_type);
 
     ASTPtr select_query_from_data_table = makeSelectQueryFromDataTable(
-        data_table_id,
+        samples_table_id,
         select_query_from_tags_table,
         config.min_time,
         config.max_time,
