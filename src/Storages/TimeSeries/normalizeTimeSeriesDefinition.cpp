@@ -875,7 +875,7 @@ ColumnsDescription generateTimeSeriesColumns(const TimeSeriesSettings & normaliz
     add_column(TimeSeriesColumnNames::Tags,
                std::make_shared<DataTypeMap>(std::make_shared<DataTypeString>(), std::make_shared<DataTypeString>()));
 
-    add_column(TimeSeriesColumnNames::MetricFamilyName, std::make_shared<DataTypeString>());
+    add_column(TimeSeriesColumnNames::MetricFamily, std::make_shared<DataTypeString>());
     add_column(TimeSeriesColumnNames::Type, std::make_shared<DataTypeString>());
     add_column(TimeSeriesColumnNames::Unit, std::make_shared<DataTypeString>());
     add_column(TimeSeriesColumnNames::Help, std::make_shared<DataTypeString>());
