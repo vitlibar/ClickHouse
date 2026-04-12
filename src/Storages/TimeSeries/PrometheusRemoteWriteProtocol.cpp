@@ -23,6 +23,7 @@
 #include <Storages/TimeSeries/TimeSeriesTagNames.h>
 #include <Storages/TimeSeries/TimeSeriesSettings.h>
 #include <Interpreters/Context.h>
+#include <Interpreters/ExpressionActions.h>
 #include <Interpreters/InterpreterInsertQuery.h>
 #include <Interpreters/addMissingDefaults.h>
 #include <Parsers/ASTExpressionList.h>
@@ -31,6 +32,7 @@
 #include <Processors/Executors/PullingPipelineExecutor.h>
 #include <Processors/Executors/PushingPipelineExecutor.h>
 #include <Processors/Sources/BlocksSource.h>
+#include <Processors/Transforms/ExpressionTransform.h>
 #include <QueryPipeline/Pipe.h>
 
 
@@ -544,6 +546,18 @@ namespace
                 PushingPipelineExecutor executor(io.pipeline);
 
                 executor.start();
+
+                // Convert block columns to match what the pipeline expect.
+                const Block & expected_header = executor.getHeader();
+                auto converting_dag = ActionsDAG::makeConvertingActions(
+                    block.getColumnsWithTypeAndName(),
+                    expected_header.getColumnsWithTypeAndName(),
+                    ActionsDAG::MatchColumnsMode::Name,
+                    insert_context);
+                auto converting_actions = std::make_shared<ExpressionActions>(
+                    std::move(converting_dag), ExpressionActionsSettings(insert_context));
+                converting_actions->execute(block);
+
                 executor.push(std::move(block));
                 executor.finish();
             }
