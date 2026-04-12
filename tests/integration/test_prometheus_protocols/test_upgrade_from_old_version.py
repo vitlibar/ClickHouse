@@ -27,7 +27,7 @@ bar = [({"__name__": "bar", "job": "prometheus"}, {2000.0: 20.0})]
 
 # DDL for old-schema inner tables (as they existed before this branch).
 # Note: `type` and `unit` columns are plain `String`, not `LowCardinality(String)`.
-OLD_DATA_DDL = (
+OLD_SAMPLES_DDL = (
     "(id UUID, timestamp DateTime64(3), value Float64)"
     " ENGINE=MergeTree ORDER BY (id, timestamp)"
 )
@@ -80,11 +80,11 @@ def cleanup_after_test():
         node.query("DROP TABLE IF EXISTS default.prometheus SYNC")
 
 
-def insert_foo_into_inner_tables(data_table, tags_table, metrics_table):
+def insert_foo_into_inner_tables(samples_table, tags_table, metrics_table):
     foo_id = node.query(
         "SELECT reinterpretAsUUID(sipHash128('foo', mapSort(map('__name__', 'foo', 'job', 'prometheus'))))"
     ).strip()
-    node.query(f"INSERT INTO `{data_table}` VALUES ('{foo_id}', toDateTime64(1000, 3), 10.0)")
+    node.query(f"INSERT INTO `{samples_table}` VALUES ('{foo_id}', toDateTime64(1000, 3), 10.0)")
     node.query(
         f"INSERT INTO `{tags_table}` (id, metric_name, tags, all_tags)"
         f" VALUES ('{foo_id}', 'foo', {{'job': 'prometheus'}}, mapSort(map('__name__', 'foo', 'job', 'prometheus')))"
@@ -112,7 +112,7 @@ def check_foo_and_bar():
 
 # Version 1: Without INNER COLUMNS
 def create_and_fill_table_version_1(time_series_columns=OLD_COLUMNS, time_series_settings="",
-                                    data_def=OLD_DATA_DDL, tags_def=OLD_TAGS_DDL,
+                                    samples_def=OLD_SAMPLES_DDL, tags_def=OLD_TAGS_DDL,
                                     metrics_def=OLD_METRICS_DDL):
     """Creates a TimeSeries table that looks like one created by an old ClickHouse version.
 
@@ -132,23 +132,24 @@ def create_and_fill_table_version_1(time_series_columns=OLD_COLUMNS, time_series
     ).strip()
 
     # Inner table names depend on whether we're in an Atomic database (UUID != nil) or Ordinary.
+    # The old version used the `data` kind string for the samples inner table (before `Samples`).
     if ts_uuid != NIL_UUID:
-        data_table_name = f".inner_id.data.{ts_uuid}"
+        samples_table_name = f".inner_id.data.{ts_uuid}"
         tags_table_name    = f".inner_id.tags.{ts_uuid}"
         metrics_table_name = f".inner_id.metrics.{ts_uuid}"
     else:
-        data_table_name = ".inner.data.prometheus"
+        samples_table_name = ".inner.data.prometheus"
         tags_table_name    = ".inner.tags.prometheus"
         metrics_table_name = ".inner.metrics.prometheus"
 
-    node.query(f"CREATE TABLE `{data_table_name}`    {data_def}")
+    node.query(f"CREATE TABLE `{samples_table_name}` {samples_def}")
     node.query(f"CREATE TABLE `{tags_table_name}`    {tags_def}")
     node.query(f"CREATE TABLE `{metrics_table_name}` {metrics_def}")
 
-    insert_foo_into_inner_tables(data_table_name, tags_table_name, metrics_table_name)
+    insert_foo_into_inner_tables(samples_table_name, tags_table_name, metrics_table_name)
 
-    data_uuid = node.query(
-        f"SELECT uuid FROM system.tables WHERE database='default' AND name='{data_table_name}'"
+    samples_uuid = node.query(
+        f"SELECT uuid FROM system.tables WHERE database='default' AND name='{samples_table_name}'"
     ).strip()
     tags_uuid = node.query(
         f"SELECT uuid FROM system.tables WHERE database='default' AND name='{tags_table_name}'"
@@ -161,8 +162,8 @@ def create_and_fill_table_version_1(time_series_columns=OLD_COLUMNS, time_series
 
     uuid_clause = f"UUID '{ts_uuid}'" if ts_uuid != NIL_UUID else ""
     inner_uuid_clause = ""
-    if data_uuid != NIL_UUID:
-        inner_uuid_clause += f"DATA INNER UUID '{data_uuid}'\n"
+    if samples_uuid != NIL_UUID:
+        inner_uuid_clause += f"SAMPLES INNER UUID '{samples_uuid}'\n"
     if tags_uuid != NIL_UUID:
         inner_uuid_clause += f"TAGS INNER UUID '{tags_uuid}'\n"
     if metrics_uuid != NIL_UUID:
@@ -182,7 +183,8 @@ def create_and_fill_table_version_1(time_series_columns=OLD_COLUMNS, time_series
 
 
 # Checks that a TimeSeries table created by an old version of ClickHouse (Atomic database)
-# can be used by the current version.
+# can be used by the current version. The inner tables have old schema and old names
+# (`.inner_id.data.*` for samples instead of `.inner_id.Samples.*`).
 def test_upgrade_from_version_1():
     create_and_fill_table_version_1()
     send_bar_via_remote_write()
@@ -190,7 +192,8 @@ def test_upgrade_from_version_1():
 
 
 # Checks that a TimeSeries table created by an old version of ClickHouse (Ordinary database)
-# can be used by the current version.
+# can be used by the current version. The inner tables have no UUIDs and old names
+# (`.inner.data.*` for samples instead of `.inner.Samples.*`).
 def test_upgrade_from_version_1_ordinary_db():
     node.query("DROP DATABASE default SYNC")
     node.query(
@@ -208,7 +211,8 @@ def test_upgrade_from_version_1_ordinary_db():
 
 
 # Checks that a TimeSeries table backed up by an old version of ClickHouse can be restored
-# and used by the current version.
+# and used by the current version. The backup uses the old `DATA` keyword for the samples
+# inner table and the old inner table data path `data/` instead of `samples/`.
 def test_restore_from_version_1():
     backup_file = os.path.join(os.path.dirname(__file__), "backups", "time_series_version_1.zip")
     node.copy_file_to_container(backup_file, "/backups/time_series_version_1.zip")
