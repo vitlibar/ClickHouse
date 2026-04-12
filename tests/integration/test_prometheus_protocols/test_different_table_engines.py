@@ -207,7 +207,7 @@ def test_microsecond_precision():
     node.query("CREATE TABLE prometheus ENGINE=TimeSeries SETTINGS timestamp_type='DateTime64(6)'")
     check(eps=1e-9) # Here eps > 0 because otherwise the check will fail because of different precisions.
     assert node.query("SELECT type FROM system.columns WHERE database = currentDatabase() AND table = 'prometheus' AND name = 'timestamp'") == TSV([["DateTime64(6)"]])
-    assert re.search(r"\btimestamp\s+DateTime64\(6\)", node.query("DESCRIBE timeSeriesData(prometheus)"))
+    assert re.search(r"\btimestamp\s+DateTime64\(6\)", node.query("DESCRIBE timeSeriesSamples(prometheus)"))
 
     drop_prometheus_table()
 
@@ -215,7 +215,7 @@ def test_microsecond_precision():
     check(eps=1e-9)
     create_query = node.query("SHOW CREATE TABLE prometheus")
     assert re.search(r"(?s)SETTINGS.*\btimestamp_type\s*=\s*\\'DateTime64\(6\)\\'", create_query)
-    assert re.search(r"\btimestamp\s+DateTime64\(6\)", node.query("DESCRIBE timeSeriesData(prometheus)"))
+    assert re.search(r"\btimestamp\s+DateTime64\(6\)", node.query("DESCRIBE timeSeriesSamples(prometheus)"))
 
 
 # Checks that scalar values can be stored as `Float32` instead of the default `Float64`.
@@ -223,7 +223,7 @@ def test_float32_scalar():
     node.query("CREATE TABLE prometheus ENGINE=TimeSeries SETTINGS scalar_type='Float32'")
     check()
     assert node.query("SELECT type FROM system.columns WHERE database = currentDatabase() AND table = 'prometheus' AND name = 'value'") == TSV([["Float32"]])
-    assert re.search(r"\bvalue\s+Float32", node.query("DESCRIBE timeSeriesData(prometheus)"))
+    assert re.search(r"\bvalue\s+Float32", node.query("DESCRIBE timeSeriesSamples(prometheus)"))
 
     drop_prometheus_table()
 
@@ -231,7 +231,7 @@ def test_float32_scalar():
     check()
     create_query = node.query("SHOW CREATE TABLE prometheus")
     assert re.search(r"(?s)SETTINGS.*\bscalar_type\s*=\s*\\'Float32\\'", create_query)
-    assert re.search(r"\bvalue\s+Float32", node.query("DESCRIBE timeSeriesData(prometheus)"))
+    assert re.search(r"\bvalue\s+Float32", node.query("DESCRIBE timeSeriesSamples(prometheus)"))
 
 
 # Checks that custom compression codecs can be applied to the `id`, `timestamp`, and `value` columns.
@@ -263,7 +263,7 @@ def test_create_as_table():
 def test_inner_engines():
     node.query(
         "CREATE TABLE prometheus ENGINE=TimeSeries "
-        "DATA ENGINE=MergeTree ORDER BY (id, timestamp) "
+        "SAMPLES ENGINE=MergeTree ORDER BY (id, timestamp) "
         "TAGS ENGINE=AggregatingMergeTree ORDER BY (metric_name, id) "
         "METRICS ENGINE=ReplacingMergeTree ORDER BY metric_family_name"
     )
@@ -294,6 +294,45 @@ def test_external_tables():
     )
     node.query(
         "CREATE TABLE prometheus ENGINE=TimeSeries "
-        "DATA mydata TAGS mytags METRICS mymetrics"
+        "SAMPLES mydata TAGS mytags METRICS mymetrics"
     )
     check()
+
+
+# Checks that the `DATA` keyword works as an alias for `SAMPLES`
+# both with inline engine definitions and with external tables.
+def test_data_keyword():
+    node.query(
+        "CREATE TABLE prometheus ENGINE=TimeSeries "
+        "DATA ENGINE=MergeTree ORDER BY (id, timestamp) "
+        "TAGS ENGINE=AggregatingMergeTree ORDER BY (metric_name, id) "
+        "METRICS ENGINE=ReplacingMergeTree ORDER BY metric_family_name"
+    )
+    check()
+
+    drop_prometheus_table()
+
+    node.query(
+        "CREATE TABLE mysamples (id UUID, timestamp DateTime64(3), value Float64) "
+        "ENGINE=MergeTree ORDER BY (id, timestamp)"
+    )
+    node.query(
+        "CREATE TABLE mytags ("
+        "id UUID, "
+        "metric_name LowCardinality(String), "
+        "tags Map(LowCardinality(String), String), "
+        "min_time SimpleAggregateFunction(min, Nullable(DateTime64(3))), "
+        "max_time SimpleAggregateFunction(max, Nullable(DateTime64(3)))) "
+        "ENGINE=AggregatingMergeTree ORDER BY (metric_name, id)"
+    )
+    node.query(
+        "CREATE TABLE mymetrics (metric_family_name String, type String, unit String, help String) "
+        "ENGINE=ReplacingMergeTree ORDER BY metric_family_name"
+    )
+    node.query(
+        "CREATE TABLE prometheus ENGINE=TimeSeries "
+        "DATA mysamples TAGS mytags METRICS mymetrics"
+    )
+    check()
+
+    assert node.query("DESCRIBE timeSeriesData(prometheus)") == node.query("DESCRIBE timeSeriesSamples(prometheus)")
