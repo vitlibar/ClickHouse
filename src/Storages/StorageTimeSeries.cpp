@@ -11,6 +11,7 @@
 #include <Backups/RestorerFromBackup.h>
 #include <Storages/AlterCommands.h>
 #include <Storages/StorageFactory.h>
+#include <Storages/TimeSeries/TimeSeriesSink.h>
 #include <Storages/TimeSeries/TimeSeriesSettings.h>
 #include <Storages/TimeSeries/createTimeSeriesInnerTable.h>
 #include <Storages/TimeSeries/normalizeTimeSeriesDefinition.h>
@@ -451,9 +452,9 @@ void StorageTimeSeries::read(
 
 
 SinkToStoragePtr StorageTimeSeries::write(
-    const ASTPtr & /* query */, const StorageMetadataPtr & /* metadata_snapshot */, ContextPtr /* local_context */, bool /* async_insert */)
+    const ASTPtr & /* query */, const StorageMetadataPtr & metadata_snapshot, ContextPtr local_context, bool /* async_insert */)
 {
-    throw Exception(ErrorCodes::NOT_IMPLEMENTED, "INSERT is not supported by storage {} yet", getName());
+    return std::make_shared<TimeSeriesSink>(*this, metadata_snapshot, local_context);
 }
 
 
