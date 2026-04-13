@@ -6,6 +6,7 @@
 #include <Interpreters/InterpreterDropQuery.h>
 #include <Parsers/ASTDropQuery.h>
 #include <Parsers/ASTCreateQuery.h>
+#include <Parsers/ASTInsertQuery.h>
 #include <Backups/BackupEntriesCollector.h>
 #include <Backups/IBackup.h>
 #include <Backups/RestorerFromBackup.h>
@@ -452,9 +453,16 @@ void StorageTimeSeries::read(
 
 
 SinkToStoragePtr StorageTimeSeries::write(
-    const ASTPtr & /* query */, const StorageMetadataPtr & metadata_snapshot, ContextPtr local_context, bool /* async_insert */)
+    const ASTPtr & query, const StorageMetadataPtr & metadata_snapshot, ContextPtr local_context, bool async_insert)
 {
-    return std::make_shared<TimeSeriesSink>(*this, metadata_snapshot, local_context);
+    Names insert_columns;
+    if (const auto * insert_query = query->as<ASTInsertQuery>())
+    {
+        if (insert_query->columns)
+            for (const auto & col : insert_query->columns->children)
+                insert_columns.push_back(col->getColumnName());
+    }
+    return std::make_shared<TimeSeriesSink>(*this, metadata_snapshot, local_context, std::move(insert_columns), async_insert);
 }
 
 
