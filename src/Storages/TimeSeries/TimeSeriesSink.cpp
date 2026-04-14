@@ -94,6 +94,25 @@ namespace
             throw Exception(ErrorCodes::ILLEGAL_TIME_SERIES_TAGS, "Metric name (tag {}) not found", TimeSeriesTagNames::MetricName);
     }
 
+    /// Finds the minimum and maximum values in a column slice [start, end).
+    std::pair<Field, Field> findMinTimeAndMaxTime(const IColumn & column, size_t start, size_t end)
+    {
+        chassert(start < end);
+        Field min_val, max_val;
+        column.get(start, min_val);
+        max_val = min_val;
+        for (size_t i = start + 1; i < end; ++i)
+        {
+            Field val;
+            column.get(i, val);
+            if (val < min_val)
+                min_val = val;
+            if (val > max_val)
+                max_val = val;
+        }
+        return {min_val, max_val};
+    }
+
     /// Returns the type unchanged if it is String or LowCardinality(String), otherwise returns DataTypeString.
     DataTypePtr castToStringType(const DataTypePtr & type)
     {
@@ -135,7 +154,7 @@ std::unique_ptr<TimeSeriesSink::TargetPipeline> TimeSeriesSink::createTargetPipe
     insert_query->columns = columns_ast;
 
     pipeline->context = Context::createCopy(getContext());
-    pipeline->context->setCurrentQueryId(getContext()->getCurrentQueryId() + ":" + String{toString(kind)});
+    pipeline->context->setCurrentQueryId(fmt::format("{}:{}", getContext()->getCurrentQueryId(), kind));
 
     InterpreterInsertQuery interpreter(
         insert_query,
@@ -508,18 +527,7 @@ void TimeSeriesSink::consumeTagsAndSamples(const Block & block)
 
         if (store_min_max_time)
         {
-            Field min_ts, max_ts;
-            ts_timestamps.get(ts_start, min_ts);
-            max_ts = min_ts;
-            for (size_t j = ts_start + 1; j < ts_end; ++j)
-            {
-                Field ts;
-                ts_timestamps.get(j, ts);
-                if (ts < min_ts)
-                    min_ts = ts;
-                if (ts > max_ts)
-                    max_ts = ts;
-            }
+            auto [min_ts, max_ts] = findMinTimeAndMaxTime(ts_timestamps, ts_start, ts_end);
             min_time_column->insert(min_ts);
             max_time_column->insert(max_ts);
         }
@@ -553,7 +561,7 @@ void TimeSeriesSink::consumeTagsAndSamples(const Block & block)
         tags_block.insert(ColumnWithTypeAndName{std::move(column), column_type, column_name});
     }
 
-    MutableColumns tags_tuple_cols;
+    Columns tags_tuple_cols;
     tags_tuple_cols.push_back(std::move(other_tags_names));
     tags_tuple_cols.push_back(std::move(other_tags_values));
     auto other_tags_column = ColumnMap::create(
@@ -562,7 +570,7 @@ void TimeSeriesSink::consumeTagsAndSamples(const Block & block)
 
     if (all_tags_names)
     {
-        MutableColumns all_tags_tuple_cols;
+        Columns all_tags_tuple_cols;
         all_tags_tuple_cols.push_back(std::move(all_tags_names));
         all_tags_tuple_cols.push_back(std::move(all_tags_values));
         auto all_tags_column = ColumnMap::create(

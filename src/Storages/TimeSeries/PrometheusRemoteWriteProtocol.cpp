@@ -79,6 +79,25 @@ namespace
         return std::make_shared<DataTypeMap>(std::make_shared<DataTypeString>(), std::make_shared<DataTypeString>());
     }
 
+    /// Returns the type unchanged if it is DateTime64, otherwise returns DateTime64(3).
+    /// We use DecimalUtils::convertTo<DateTime64>() to fill timestamp columns,
+    /// and the block will be converted to the target type before insertion anyway.
+    DataTypePtr castToDateTime64Type(const DataTypePtr & type)
+    {
+        if (isDateTime64(type))
+            return type;
+        return std::make_shared<DataTypeDateTime64>(3);
+    }
+
+    /// Same as castToDateTime64Type but returns Nullable(DateTime64(3)) as the fallback.
+    /// Also matches SimpleAggregateFunction(min/max, Nullable(DateTime64(N))) because its storage type is Nullable(DateTime64(N)).
+    DataTypePtr castToNullableDateTime64Type(const DataTypePtr & type)
+    {
+        if (isDateTime64(removeNullable(type)))
+            return type;
+        return makeNullable(std::make_shared<DataTypeDateTime64>(3));
+    }
+
     /// Sorts labels by name, removes exact duplicates and labels with empty values.
     /// Throws if any label name is empty, if two labels have the same name but different values,
     /// or if there is no label with name "__name__".
@@ -222,7 +241,7 @@ namespace
             return {}; /// Nothing to insert into target tables.
 
         /// Prepare a block for inserting to the "tags" table.
-        DataTypePtr timestamp_type = samples_metadata.columns.get(TimeSeriesColumnNames::Timestamp).type;
+        DataTypePtr timestamp_type = castToDateTime64Type(samples_metadata.columns.get(TimeSeriesColumnNames::Timestamp).type);
         UInt32 timestamp_scale = tryGetDecimalScale(*timestamp_type).value_or(0);
 
         /// Column "metric_name".
@@ -283,10 +302,14 @@ namespace
         MutableColumnPtr max_time_column;
         DataTypePtr min_time_type;
         DataTypePtr max_time_type;
+        UInt32 min_time_scale = 0;
+        UInt32 max_time_scale = 0;
         if (time_series_settings[TimeSeriesSetting::store_min_time_and_max_time])
         {
-            min_time_type = tags_metadata.columns.get(TimeSeriesColumnNames::MinTime).type;
-            max_time_type = tags_metadata.columns.get(TimeSeriesColumnNames::MaxTime).type;
+            min_time_type = castToNullableDateTime64Type(tags_metadata.columns.get(TimeSeriesColumnNames::MinTime).type);
+            max_time_type = castToNullableDateTime64Type(tags_metadata.columns.get(TimeSeriesColumnNames::MaxTime).type);
+            min_time_scale = tryGetDecimalScale(*removeNullable(min_time_type)).value_or(0);
+            max_time_scale = tryGetDecimalScale(*removeNullable(max_time_type)).value_or(0);
             min_time_column = min_time_type->createColumn();
             max_time_column = max_time_type->createColumn();
             min_time_column->reserve(num_time_series);
@@ -344,8 +367,8 @@ namespace
             if (time_series_settings[TimeSeriesSetting::store_min_time_and_max_time])
             {
                 auto [min_time, max_time] = findMinTimeAndMaxTime(element.samples());
-                min_time_column->insert(DecimalUtils::convertTo<DateTime64>(timestamp_scale, DateTime64{min_time}, 3));
-                max_time_column->insert(DecimalUtils::convertTo<DateTime64>(timestamp_scale, DateTime64{max_time}, 3));
+                min_time_column->insert(DecimalUtils::convertTo<DateTime64>(min_time_scale, DateTime64{min_time}, 3));
+                max_time_column->insert(DecimalUtils::convertTo<DateTime64>(max_time_scale, DateTime64{max_time}, 3));
             }
 
             for (auto * column : columns_to_fill_in_tags_table)
@@ -368,14 +391,14 @@ namespace
             auto & [column, column_type] = columns_by_tag_name.at(tag_name);
             tags_block.insert(ColumnWithTypeAndName{std::move(column), column_type, column_name});
         }
-        MutableColumns tags_tuple_cols;
+        Columns tags_tuple_cols;
         tags_tuple_cols.push_back(std::move(tags_names));
         tags_tuple_cols.push_back(std::move(tags_values));
         auto tags_column = ColumnMap::create(ColumnArray::create(ColumnTuple::create(std::move(tags_tuple_cols)), std::move(tags_offsets)));
         tags_block.insert(ColumnWithTypeAndName{std::move(tags_column), tags_map_type, TimeSeriesColumnNames::Tags});
         if (all_tags_names)
         {
-            MutableColumns all_tags_tuple_cols;
+            Columns all_tags_tuple_cols;
             all_tags_tuple_cols.push_back(std::move(all_tags_names));
             all_tags_tuple_cols.push_back(std::move(all_tags_values));
             auto all_tags_column = ColumnMap::create(ColumnArray::create(
@@ -537,7 +560,7 @@ namespace
                 insert_query->columns = columns_ast;
 
                 ContextMutablePtr insert_context = Context::createCopy(context);
-                insert_context->setCurrentQueryId(context->getCurrentQueryId() + ":" + String{toString(table_kind)});
+                insert_context->setCurrentQueryId(fmt::format("{}:{}", context->getCurrentQueryId(), table_kind));
 
                 LOG_TEST(log, "{}: Executing query: {}", time_series_storage_id.getNameForLogs(), insert_query->formatForLogging());
 
