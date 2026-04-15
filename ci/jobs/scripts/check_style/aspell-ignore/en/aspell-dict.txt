@@ -313,6 +313,7 @@ DataPacket
 DataPartStorage
 DataPup
 DataStoria
+DataType
 DataTypes
 DataTypesMatching
 DatabaseBackup
@@ -3738,6 +3739,7 @@ timeSeriesRange
 timeSeriesRateToGrid
 timeSeriesResampleToGridWithStaleness
 timeSeriesResetsToGrid
+timeSeriesSamples
 timeSeriesSelector
 timeSeriesTags
 timeSlot
