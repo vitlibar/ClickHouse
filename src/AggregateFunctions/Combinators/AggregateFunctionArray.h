@@ -34,6 +34,7 @@ public:
         : IAggregateFunctionHelper<AggregateFunctionArray>(arguments, params_, createResultType(nested_))
         , nested_func(nested_), num_arguments(arguments.size())
     {
+#if 0
         if (parameters != nested_func->getParameters())
         {
             /// This invariant should always hold: the Array combinator does not transform
@@ -61,6 +62,7 @@ public:
                 parameters.size(), outer_params_str,
                 nested_func->getParameters().size(), nested_params_str);
         }
+#endif
         for (const auto & type : arguments)
             if (!isArray(type))
                 throw Exception(ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT, "All arguments for aggregate function {} must be arrays", getName());

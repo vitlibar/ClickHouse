@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstring>
+#include <optional>
 
 
 #include <DataTypes/DataTypesDecimal.h>
@@ -76,10 +77,15 @@ public:
 
     using Bucket = typename Base::Bucket;
 
+    /// Constructor for is_predict==true.
+    /// Non-predict instances reach the 6-arg base constructor via `using Base::Base` above.
     explicit AggregateFunctionTimeseriesLinearRegression(const DataTypes & argument_types_,
-        TimestampType start_timestamp_, TimestampType end_timestamp_, IntervalType step_, IntervalType window_, UInt32 timestamp_scale_, Float64 predict_offset_ = 0)
-        : Base(argument_types_, start_timestamp_, end_timestamp_, step_, window_, timestamp_scale_)
-        , predict_offset(predict_offset_)
+        TimestampType start_timestamp_, TimestampType end_timestamp_, IntervalType step_, IntervalType window_, UInt32 timestamp_scale_,
+        Float64 predict_offset_seconds_)
+        : Base(argument_types_, start_timestamp_, end_timestamp_, step_, window_, timestamp_scale_,
+            std::optional<Float64>{predict_offset_seconds_})
+        /// `predict_offset` is expressed in timestamp units to match the units of `slope` in the prediction math below.
+        , predict_offset(predict_offset_seconds_ * static_cast<Float64>(DecimalUtils::scaleMultiplier<Int64>(timestamp_scale_)))
     {
     }
 

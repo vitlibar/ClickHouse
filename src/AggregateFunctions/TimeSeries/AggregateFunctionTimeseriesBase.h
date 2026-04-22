@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <type_traits>
 
 
@@ -60,16 +61,11 @@ public:
     };
 
     explicit AggregateFunctionTimeseriesBase(const DataTypes & argument_types_,
-        TimestampType start_timestamp_, TimestampType end_timestamp_, IntervalType step_, IntervalType window_, UInt32 timestamp_scale_)
+        TimestampType start_timestamp_, TimestampType end_timestamp_, IntervalType step_, IntervalType window_, UInt32 timestamp_scale_,
+        std::optional<Float64> predict_offset_seconds_ = std::nullopt)
         : Base(
             argument_types_,
-            {
-                /// Normalize all parameters to decimals with the same scale as the scale of timestamp argument
-                DecimalField<Decimal64>(start_timestamp_, timestamp_scale_),
-                DecimalField<Decimal64>(end_timestamp_, timestamp_scale_),
-                DecimalField<Decimal64>(step_, timestamp_scale_),
-                DecimalField<Decimal64>(window_, timestamp_scale_)
-            },
+            buildParamList(start_timestamp_, end_timestamp_, step_, window_, timestamp_scale_, predict_offset_seconds_),
             createResultType())
         , bucket_count(bucketCount(start_timestamp_, end_timestamp_, step_))
         , start_timestamp(start_timestamp_)
@@ -466,6 +462,24 @@ public:
 
             throw;
         }
+    }
+
+private:
+    /// Canonical parameter list stored in the base `IAggregateFunction`. We keep it after parsing
+    /// because decodeDataType() rebuilds the function from it; and also because
+    /// DataTypeAggregateFunction::strictEquals() compares it to decide column compatibility.
+    static Array buildParamList(TimestampType start_timestamp_, TimestampType end_timestamp_, IntervalType step_, IntervalType window_,
+        UInt32 timestamp_scale_, std::optional<Float64> predict_offset_seconds_)
+    {
+        Array params;
+        params.reserve(predict_offset_seconds_.has_value() ? 5 : 4);
+        params.emplace_back(DecimalField<Decimal64>(start_timestamp_, timestamp_scale_));
+        params.emplace_back(DecimalField<Decimal64>(end_timestamp_, timestamp_scale_));
+        params.emplace_back(DecimalField<Decimal64>(step_, timestamp_scale_));
+        params.emplace_back(DecimalField<Decimal64>(window_, timestamp_scale_));
+        if (predict_offset_seconds_.has_value())
+            params.emplace_back(*predict_offset_seconds_);
+        return params;
     }
 
 protected:
