@@ -1,0 +1,25 @@
+-- baseline: fusion triggers CANNOT_PARSE_DATETIME --
+-- noMergeFilter(cte) --
+1	2025-05-16 09:20:20.000
+-- noMergeFilter(SELECT ...) --
+1	2025-05-16 09:20:20.000
+-- noMergeFilter sees outer CTE --
+0
+1
+2
+-- noMergeFilter(tableFunction) --
+0
+1
+2
+3
+4
+-- noMergeFilter(plain_table) --
+one	1
+-- baseline JOIN: filter merged into ON triggers parse error --
+-- noMergeFilter on JOIN right side --
+1	2025-05-16 09:20:20.000
+-- noMergeFilter on JOIN left side --
+1	2025-05-16 09:20:20.000
+-- noMergeFilter(SELECT FROM cte) inside JOIN --
+1	2025-05-16 09:20:20.000
+-- errors --

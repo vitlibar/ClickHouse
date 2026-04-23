@@ -191,6 +191,12 @@ public:
         return original_ast != nullptr;
     }
 
+    /// When true, this table expression was wrapped in `noMergeFilter(...)` in the FROM clause.
+    /// The planner inserts an `OptimizationBarrierStep` on top of the plan built for it,
+    /// so outer filters/expressions are not fused or pushed across the boundary.
+    bool isNoMergeFilter() const { return no_merge_filter; }
+    void setNoMergeFilter(bool value) { no_merge_filter = value; }
+
     /// Get query tree node original AST
     const ASTPtr & getOriginalAST() const
     {
@@ -298,6 +304,7 @@ private:
     /// but we need to keep the original one to support additional_table_filters.
     String original_alias;
     ASTPtr original_ast;
+    bool no_merge_filter = false;
 };
 
 }

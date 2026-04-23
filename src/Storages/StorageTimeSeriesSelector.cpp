@@ -10,6 +10,8 @@
 #include <Interpreters/InterpreterSelectQueryAnalyzer.h>
 #include <Interpreters/SelectQueryOptions.h>
 #include <Interpreters/evaluateConstantExpression.h>
+#include <Parsers/ASTAsterisk.h>
+#include <Parsers/ASTExpressionList.h>
 #include <Parsers/ASTFunction.h>
 #include <Parsers/ASTIdentifier.h>
 #include <Parsers/ASTLiteral.h>
@@ -19,7 +21,6 @@
 #include <Parsers/ASTTablesInSelectQuery.h>
 #include <Parsers/Prometheus/parseTimeSeriesTypes.h>
 #include <Parsers/makeASTForLogicalFunction.h>
-#include <Processors/QueryPlan/OptimizationBarrierStep.h>
 #include <Storages/SelectQueryInfo.h>
 #include <Storages/StorageTimeSeries.h>
 #include <Storages/TimeSeries/TimeSeriesColumnNames.h>
@@ -404,6 +405,44 @@ namespace
         return select_with_union_query;
     }
 
+    /// Wraps a SELECT query into `SELECT * FROM noMergeFilter(<inner>)`.
+    /// `noMergeFilter` is a pragma-style table function that inserts an
+    /// `OptimizationBarrierStep` between the inner plan and everything above it,
+    /// preventing outer filters/expressions from being fused with the inner ones
+    /// (e.g. via `tryMergeExpressions`, `tryMergeFilterIntoJoinCondition`).
+    ASTPtr wrapSelectInNoMergeFilter(ASTPtr inner_select_with_union_query)
+    {
+        auto outer_select = make_intrusive<ASTSelectQuery>();
+
+        /// SELECT *
+        {
+            auto select_list_exp = make_intrusive<ASTExpressionList>();
+            select_list_exp->children.push_back(make_intrusive<ASTAsterisk>());
+            outer_select->setExpression(ASTSelectQuery::Expression::SELECT, select_list_exp);
+        }
+
+        /// FROM noMergeFilter(<inner>)
+        {
+            auto tables = make_intrusive<ASTTablesInSelectQuery>();
+            auto table_element = make_intrusive<ASTTablesInSelectQueryElement>();
+            auto table_exp = make_intrusive<ASTTableExpression>();
+            table_exp->table_function = makeASTFunction("noMergeFilter", std::move(inner_select_with_union_query));
+            table_exp->children.push_back(table_exp->table_function);
+            table_element->table_expression = table_exp;
+            table_element->children.push_back(table_exp);
+            tables->children.push_back(table_element);
+            outer_select->setExpression(ASTSelectQuery::Expression::TABLES, tables);
+        }
+
+        auto select_with_union_query = make_intrusive<ASTSelectWithUnionQuery>();
+        select_with_union_query->union_mode = SelectUnionMode::UNION_DEFAULT;
+        auto list_of_selects = make_intrusive<ASTExpressionList>();
+        list_of_selects->children.push_back(std::move(outer_select));
+        select_with_union_query->children.push_back(std::move(list_of_selects));
+        select_with_union_query->list_of_selects = select_with_union_query->children.back();
+        return select_with_union_query;
+    }
+
     /// Makes a mapping from a tag name to a column name.
     std::unordered_map<String, String> makeColumnNameByTagNameMap(const TimeSeriesSettings & storage_settings)
     {
@@ -461,36 +500,28 @@ void StorageTimeSeriesSelector::readImpl(
         config.timestamp_data_type,
         config.scalar_data_type);
 
-    LOG_DEBUG(log, "Building SQL for selector: {}", config.selector.toString());
-    LOG_DEBUG(log, "Will execute query:\n{}", select_query_from_data_table->formatForLogging());
-
-    auto options = SelectQueryOptions(QueryProcessingStage::Complete, 0, false, query_info.settings_limit_offset_done);
-
-    InterpreterSelectQueryAnalyzer interpreter(select_query_from_data_table, context, options, column_names);
-    interpreter.addStorageLimits(*query_info.storage_limits);
-    query_plan = std::move(interpreter).extractQueryPlan();
-
-    /// Seal the inner plan behind an optimization barrier.
+    /// Seal the inner plan behind an optimization barrier by wrapping the inner query
+    /// in `noMergeFilter(...)`. The inner `WHERE id IN (SELECT timeSeriesStoreTags(...) FROM tags_table ...)`
+    /// has a side effect: `timeSeriesStoreTags` populates `ContextTimeSeriesTagsCollector` for every id
+    /// it returns. Downstream functions such as `timeSeriesIdToGroup(id)` read from that collector.
     ///
-    /// The inner `WHERE id IN (SELECT timeSeriesStoreTags(...) FROM tags_table ...)` has a side
-    /// effect: `timeSeriesStoreTags` populates `ContextTimeSeriesTagsCollector` for every id it
-    /// returns. Downstream functions such as `timeSeriesIdToGroup(id)` read from that collector.
-    ///
-    /// Without this barrier the outer expression can be fused with the inner filter (via
+    /// Without the barrier the outer expression can be fused with the inner filter (via
     /// `tryMergeExpressions`). Then `timeSeriesIdToGroup(id)` may be evaluated before the
     /// `id IN (SELECT timeSeriesStoreTags(...) FROM tags_table ...)` filter is applied, so it runs
     /// on ids for which `timeSeriesStoreTags` has not populated the collector yet, causing
     /// exception "Unknown identifier".
     ///
     /// See also https://github.com/ClickHouse/ClickHouse/issues/83611, https://github.com/ClickHouse/ClickHouse/issues/100827.
-    OptimizationBarrierStep::AllowedOptimizations allowed_optimizations;
-    allowed_optimizations.push_down_limit = true;
-    allowed_optimizations.remove_unused_columns = true;
-    allowed_optimizations.read_in_order = true;
-    auto barrier_step = std::make_unique<OptimizationBarrierStep>(query_plan.getCurrentHeader(), allowed_optimizations);
-    barrier_step->setStepDescription(
-        "timeSeriesStoreTags must populate the per-query tag collector before downstream functions read it");
-    query_plan.addStep(std::move(barrier_step));
+    ASTPtr wrapped_select = wrapSelectInNoMergeFilter(std::move(select_query_from_data_table));
+
+    LOG_DEBUG(log, "Building SQL for selector: {}", config.selector.toString());
+    LOG_DEBUG(log, "Will execute query:\n{}", wrapped_select->formatForLogging());
+
+    auto options = SelectQueryOptions(QueryProcessingStage::Complete, 0, false, query_info.settings_limit_offset_done);
+
+    InterpreterSelectQueryAnalyzer interpreter(wrapped_select, context, options, column_names);
+    interpreter.addStorageLimits(*query_info.storage_limits);
+    query_plan = std::move(interpreter).extractQueryPlan();
 }
 
 }

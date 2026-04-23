@@ -88,6 +88,12 @@ public:
 
     std::shared_ptr<TableFunctionNode> buildTableFunction(const ASTPtr & table_function, const ContextPtr & context) const;
 
+    /// Build a table-expression node from the single argument of `noMergeFilter(X)` in FROM.
+    /// The argument is resolved in the surrounding scope (unlike `view(X)`), so CTEs,
+    /// aliases, and WITH parameters are visible inside. Returns `nullptr` if the call
+    /// is not `noMergeFilter(...)` — caller should fall back to the regular table-function path.
+    QueryTreeNodePtr tryBuildNoMergeFilterTableExpression(const ASTPtr & table_function, const ContextPtr & context, const ASTPtr & aliases) const;
+
 private:
 
     struct CommonTableExpressionData
@@ -922,6 +928,50 @@ std::shared_ptr<TableFunctionNode> QueryTreeBuilder::buildTableFunction(const AS
     return node;
 }
 
+QueryTreeNodePtr QueryTreeBuilder::tryBuildNoMergeFilterTableExpression(const ASTPtr & table_function, const ContextPtr & context, const ASTPtr & aliases) const
+{
+    const auto & function_ast = table_function->as<ASTFunction &>();
+    if (function_ast.name != "noMergeFilter")
+        return nullptr;
+
+    if (!function_ast.arguments || function_ast.arguments->children.size() != 1)
+        throw Exception(ErrorCodes::BAD_ARGUMENTS,
+            "Table function '{}' requires exactly one argument (a subquery, a CTE name, a table name, or a table function)",
+            function_ast.name);
+
+    const auto & argument = function_ast.arguments->children.front();
+
+    QueryTreeNodePtr result;
+
+    if (argument->as<ASTSelectQuery>() || argument->as<ASTSelectWithUnionQuery>() || argument->as<ASTSelectIntersectExceptQuery>())
+    {
+        /// noMergeFilter(SELECT ...): behaves like FROM (SELECT ...).
+        result = buildSelectOrUnionExpression(argument, true /*is_subquery*/, {} /*cte_data*/, aliases, context);
+    }
+    else if (const auto * ast_identifier = argument->as<ASTIdentifier>())
+    {
+        /// noMergeFilter(cte) or noMergeFilter(db.table): behaves like FROM cte / FROM db.table.
+        /// The IdentifierNode is later resolved to a CTE/table/view in initializeQueryJoinTreeNode.
+        auto identifier = Identifier(ast_identifier->name_parts);
+        result = std::make_shared<IdentifierNode>(std::move(identifier));
+    }
+    else if (argument->as<ASTFunction>())
+    {
+        /// noMergeFilter(tableFunc(...)): behaves like FROM tableFunc(...).
+        result = buildTableFunction(argument, context);
+    }
+    else
+    {
+        throw Exception(ErrorCodes::BAD_ARGUMENTS,
+            "Argument of '{}' must be a subquery, a CTE name, a table name, or a table function, got: {}",
+            function_ast.name,
+            argument->formatForErrorMessage());
+    }
+
+    result->setNoMergeFilter(true);
+    return result;
+}
+
 QueryTreeNodePtr QueryTreeBuilder::buildJoinTree(bool is_subquery, const ASTSelectQuery & select_query, const ContextPtr & context) const
 {
     const auto & tables_in_select_query = select_query.tables();
@@ -1059,14 +1109,28 @@ QueryTreeNodePtr QueryTreeBuilder::buildJoinTree(bool is_subquery, const ASTSele
             }
             else if (table_expression.table_function)
             {
-                auto node = buildTableFunction(table_expression.table_function, context);
+                if (auto node = tryBuildNoMergeFilterTableExpression(table_expression.table_function, context, select_query.aliases()))
+                {
+                    if (table_expression_modifiers)
+                        throw Exception(ErrorCodes::UNSUPPORTED_METHOD,
+                            "Table expression modifiers {} are not supported for noMergeFilter(...)",
+                            table_expression_modifiers->formatForErrorMessage());
+                    node->setAlias(table_expression.table_function->tryGetAlias());
+                    node->setOriginalAST(table_expression.table_function);
 
-                if (table_expression_modifiers)
-                    node->setTableExpressionModifiers(*table_expression_modifiers);
-                node->setAlias(table_expression.table_function->tryGetAlias());
-                node->setOriginalAST(table_expression.table_function);
+                    table_expressions.push_back(std::move(node));
+                }
+                else
+                {
+                    auto node = buildTableFunction(table_expression.table_function, context);
 
-                table_expressions.push_back(std::move(node));
+                    if (table_expression_modifiers)
+                        node->setTableExpressionModifiers(*table_expression_modifiers);
+                    node->setAlias(table_expression.table_function->tryGetAlias());
+                    node->setOriginalAST(table_expression.table_function);
+
+                    table_expressions.push_back(std::move(node));
+                }
             }
             else
             {

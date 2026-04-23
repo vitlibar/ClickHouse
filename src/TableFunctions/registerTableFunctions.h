@@ -51,6 +51,7 @@ void registerTableFunctionJDBC(TableFunctionFactory & factory);
 
 void registerTableFunctionView(TableFunctionFactory & factory);
 void registerTableFunctionViewIfPermitted(TableFunctionFactory & factory);
+void registerTableFunctionNoMergeFilter(TableFunctionFactory & factory);
 
 #if USE_MYSQL
 void registerTableFunctionMySQL(TableFunctionFactory & factory);

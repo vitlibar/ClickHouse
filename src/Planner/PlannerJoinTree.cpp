@@ -56,6 +56,7 @@
 #include <Processors/QueryPlan/ReadFromPreparedSource.h>
 #include <Processors/QueryPlan/ExpressionStep.h>
 #include <Processors/QueryPlan/FilterStep.h>
+#include <Processors/QueryPlan/OptimizationBarrierStep.h>
 #include <Processors/QueryPlan/JoinStep.h>
 #include <Processors/QueryPlan/JoinStepLogical.h>
 #include <Processors/QueryPlan/ArrayJoinStep.h>
@@ -1525,6 +1526,20 @@ JoinTreeQueryPlan buildQueryPlanForTableExpression(QueryTreeNodePtr table_expres
                 rename_step->setStepDescription("Change column names");
             query_plan.addStep(std::move(rename_step));
         }
+    }
+
+    /// `noMergeFilter(...)` wrapping: seal the subplan so outer filters/expressions
+    /// cannot be fused with it (see `tryMergeExpressions`, filter push-down).
+    /// Read-in-order, column pruning and limit push-down are still allowed.
+    if (table_expression->isNoMergeFilter())
+    {
+        OptimizationBarrierStep::AllowedOptimizations allowed_optimizations;
+        allowed_optimizations.push_down_limit = true;
+        allowed_optimizations.remove_unused_columns = true;
+        allowed_optimizations.read_in_order = true;
+        auto barrier_step = std::make_unique<OptimizationBarrierStep>(query_plan.getCurrentHeader(), allowed_optimizations);
+        barrier_step->setStepDescription("noMergeFilter: prevent fusion of outer and inner filters");
+        query_plan.addStep(std::move(barrier_step));
     }
 
     return JoinTreeQueryPlan{

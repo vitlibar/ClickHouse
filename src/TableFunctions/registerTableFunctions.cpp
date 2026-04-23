@@ -50,6 +50,7 @@ void registerTableFunctions()
 
     registerTableFunctionView(factory);
     registerTableFunctionViewIfPermitted(factory);
+    registerTableFunctionNoMergeFilter(factory);
 
 #if USE_MYSQL
     registerTableFunctionMySQL(factory);

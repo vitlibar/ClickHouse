@@ -3673,6 +3673,12 @@ void QueryAnalyzer::initializeQueryJoinTreeNode(QueryTreeNodePtr & join_tree_nod
 
                 auto current_join_tree_node_alias = current_join_tree_node->getAlias();
                 resolved_identifier->setAlias(current_join_tree_node_alias);
+
+                /// Carry noMergeFilter(...) marker across identifier-to-table-expression replacement:
+                /// the flag was set on the IdentifierNode in QueryTreeBuilder and must reach the planner.
+                if (current_join_tree_node->isNoMergeFilter())
+                    resolved_identifier->setNoMergeFilter(true);
+
                 current_join_tree_node = resolved_identifier;
 
                 scope.table_expressions_in_resolve_process.insert(current_join_tree_node.get());
