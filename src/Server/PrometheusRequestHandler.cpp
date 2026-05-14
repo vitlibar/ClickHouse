@@ -405,7 +405,7 @@ public:
                 /// - limit=<number>: Maximum number of returned series
                 /// - lookback_delta=<number>: Override for the lookback period for this query.
 
-                PrometheusHTTPProtocolAPI::Params query_params
+                PrometheusHTTPProtocolAPI::Params params
                 {
                     .type = PrometheusHTTPProtocolAPI::Type::Range,
                     .promql_query = query,
@@ -415,7 +415,7 @@ public:
                     .step_param = step,
                 };
 
-                protocol.executePromQLQuery(getOutputStream(response), query_params);
+                protocol.executePromQLQuery(getOutputStream(response), params);
             }
             else if (uri_path.ends_with("/api/v1/query"))
             {
@@ -424,7 +424,7 @@ public:
 
                 /// TODO: Support optional parameters same as for the range query.
 
-                PrometheusHTTPProtocolAPI::Params query_params
+                PrometheusHTTPProtocolAPI::Params params
                 {
                     .type = PrometheusHTTPProtocolAPI::Type::Instant,
                     .promql_query = query,
@@ -434,7 +434,7 @@ public:
                     .step_param = "",
                 };
 
-                protocol.executePromQLQuery(getOutputStream(response), query_params);
+                protocol.executePromQLQuery(getOutputStream(response), params);
             }
             else if (uri_path.ends_with("/api/v1/format_query"))
             {
@@ -466,7 +466,15 @@ public:
             {
                 // Extract label name from URI: /api/v1/label/<name>/values
                 size_t start_pos = uri_path.find("/api/v1/label/") + 14; // length of "/api/v1/label/"
-                size_t end_pos = uri_path.find("/values");
+                size_t end_pos = uri_path.rfind("/values");
+                if (end_pos == String::npos || end_pos <= start_pos)
+                {
+                    LOG_ERROR(log(), "No matching endpoint found for URI: {}, method: {}", uri, request.getMethod());
+                    response.setStatusAndReason(Poco::Net::HTTPResponse::HTTP_NOT_FOUND);
+                    writeString(R"({"status":"error","errorType":"not_found","error":"API endpoint not found"})", getOutputStream(response));
+                    return;
+                }
+
                 String label_name = uri_path.substr(start_pos, end_pos - start_pos);
 
                 String match = params->get("match[]", "");
