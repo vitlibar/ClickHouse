@@ -100,8 +100,8 @@ SELECT * FROM (
 ) ORDER BY name;
 
 
--- Tests to validate block header compatibility for serialized query plans
-SET serialize_query_plan=1, prefer_localhost_replica = false, enable_parallel_replicas = 0;
+-- Tests to validate block header compatibility in queries with parallel replicas
+SET serialize_query_plan=1, prefer_localhost_replica = false;
 
 SELECT
     metric_id,
