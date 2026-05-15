@@ -228,8 +228,11 @@ AggregateFunctionPtr AggregateFunctionFactory::getImpl(
         /// and could fail to reattach a table because decodeDataType() would reconstruct a type different from the one
         /// recorded in the column metadata; or fail on parallel replicas under serialize_query_plan=1 because the replica's
         /// decodeDataType() would reconstruct a type different from the one the coordinator sent in the plan.)
-        /// NOTE: Check for function->getParameters().empty() is here because some aggregation functions (kolmogorovSmirnovTest, mannWhitneyUTest) drop their parameters completely.
-        chassert(function && (function->getParameters().empty() || function->getParameters() == parameters),
+        /// NOTE: `kolmogorovSmirnovTest` and `mannWhitneyUTest` are the only exceptions: they drop their parameters completely, so the check is skipped for them.
+        chassert(function
+            && (function->getName() == "kolmogorovSmirnovTest"
+                || function->getName() == "mannWhitneyUTest"
+                || function->getParameters() == parameters),
             "function->getParameters() must equal the parameters passed to the factory");
 
         return function;
