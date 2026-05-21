@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Common/Logger_fwd.h>
+#include <DataTypes/IDataType.h>
 #include <Interpreters/Context_fwd.h>
 #include <Parsers/ASTViewTargets.h>
 #include <Processors/Sinks/SinkToStorage.h>
@@ -89,6 +90,9 @@ private:
     bool insert_tags_and_samples = false;
     bool insert_metrics = false;
     bool async_insert = false;
+
+    /// Type of the `id` column in the tags target table — read once in initTagsAndSamplesPipelines and reused at consume time.
+    DataTypePtr id_type;
 
     /// Precomputed ExpressionActions for calculating the "id" column from a tags block.
     std::shared_ptr<ExpressionActions> calculate_id_actions;
