@@ -386,22 +386,14 @@ bool StorageTimeSeries::optimize(
 
 namespace
 {
-    /// Rejects any setting change whose name is not in the `ALTER ... MODIFY|RESET SETTING` whitelist.
-    ///
-    /// Whitelist: `filter_by_min_time_and_max_time` is a pure query-time decision and `id_generator` only
-    /// affects INSERT-time id computation (for external tags tables — for inner tags the inner table's
-    /// `DEFAULT` is authoritative at insert time so the setting becomes cosmetic). Both can be altered
-    /// after CREATE. The other TimeSeries settings (`tags_to_columns`, `use_all_tags_column_to_generate_id`,
-    /// `store_min_time_and_max_time`, `aggregate_min_time_and_max_time`) are baked into the inner tables'
-    /// column lists or types at CREATE time and cannot be retroactively changed.
-    void checkSettingsCanBeAltered(const SettingsChanges & changes, std::string_view storage_name)
+    /// We allow altering only two settings: `id_generator` and `filter_by_min_time_and_max_time`.
+    /// The other TimeSeries settings are baked into the inner tables' column lists or types
+    /// at CREATE time and cannot be retroactively changed.
+    void checkSettingCanBeAltered(std::string_view setting_name, std::string_view storage_name)
     {
-        for (const auto & change : changes)
-        {
-            if (change.name != "filter_by_min_time_and_max_time" && change.name != "id_generator")
-                throw Exception(ErrorCodes::NOT_IMPLEMENTED,
-                    "Setting '{}' of storage {} cannot be changed after the table is created", change.name, storage_name);
-        }
+        if ((setting_name != "id_generator") && (setting_name != "filter_by_min_time_and_max_time"))
+            throw Exception(ErrorCodes::NOT_IMPLEMENTED,
+                "Setting '{}' of storage {} cannot be changed after the table is created", setting_name, storage_name);
     }
 }
 
@@ -413,17 +405,14 @@ void StorageTimeSeries::checkAlterIsPossible(const AlterCommands & commands, Con
             continue;
         if (command.type == AlterCommand::MODIFY_SETTING)
         {
-            checkSettingsCanBeAltered(command.settings_changes, getName());
+            for (const auto & change : command.settings_changes)
+                checkSettingCanBeAltered(change.name, getName());
             continue;
         }
         if (command.type == AlterCommand::RESET_SETTING)
         {
-            /// `RESET SETTING` reverts to the default, which on a schema-bound setting would silently
-            /// drift the inner-table schema. Rejected the same way as `MODIFY SETTING` for non-whitelisted names.
-            SettingsChanges resets_as_changes;
             for (const auto & name : command.settings_resets)
-                resets_as_changes.push_back({name, Field{}});
-            checkSettingsCanBeAltered(resets_as_changes, getName());
+                checkSettingCanBeAltered(name, getName());
             continue;
         }
         throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Alter of type '{}' is not supported by storage {}", command.type, getName());
@@ -432,22 +421,6 @@ void StorageTimeSeries::checkAlterIsPossible(const AlterCommands & commands, Con
 
 void StorageTimeSeries::alter(const AlterCommands & params, ContextPtr local_context, AlterLockHolder &)
 {
-    /// Belt-and-suspenders: re-validate that all setting changes target settings on the alter whitelist.
-    /// Normally `checkAlterIsPossible` runs first and already enforces this, but `alter` can also be
-    /// reached through internal paths (backup/restore, replication) where that invariant might not hold.
-    for (const auto & command : params)
-    {
-        if (command.type == AlterCommand::MODIFY_SETTING)
-            checkSettingsCanBeAltered(command.settings_changes, getName());
-        else if (command.type == AlterCommand::RESET_SETTING)
-        {
-            SettingsChanges resets_as_changes;
-            for (const auto & name : command.settings_resets)
-                resets_as_changes.push_back({name, Field{}});
-            checkSettingsCanBeAltered(resets_as_changes, getName());
-        }
-    }
-
     StorageInMemoryMetadata new_metadata = *getInMemoryMetadataPtr(local_context, false);
     params.apply(new_metadata, local_context);
 
@@ -459,10 +432,6 @@ void StorageTimeSeries::alter(const AlterCommands & params, ContextPtr local_con
     if (has_settings_changes)
     {
         chassert(new_metadata.settings_changes);
-        /// Start from defaults rather than cloning the current `storage_settings`. `new_metadata.settings_changes`
-        /// holds the cumulative list of overrides AFTER this ALTER — `RESET SETTING` works by *removing* the entry
-        /// from that list, so a clone-then-apply approach would leave the old value untouched. Building fresh
-        /// from defaults and reapplying the surviving overrides gives the correct final state.
         new_settings = std::make_unique<TimeSeriesSettings>();
         new_settings->applyChanges(new_metadata.settings_changes->as<const ASTSetQuery &>().changes);
 

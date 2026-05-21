@@ -226,25 +226,6 @@ def test_custom_id_algorithm():
         f"WHERE database = currentDatabase() AND table = '{tags_table}' AND name = 'id'"
     ) == TSV([["FixedString(16)", "murmurHash3_128(metric_name, all_tags)"]])
 
-    drop_prometheus_table()
-
-    # Case 3: setting and `TAGS INNER COLUMNS ... DEFAULT` agree — no error.
-    node.query(
-        "CREATE TABLE prometheus ENGINE=TimeSeries "
-        "SETTINGS id_generator = 'murmurHash3_128(metric_name, all_tags)' "
-        "TAGS INNER COLUMNS (id FixedString(16) DEFAULT murmurHash3_128(metric_name, all_tags))"
-    )
-    check()
-
-    drop_prometheus_table()
-
-    # Case 4: setting and `TAGS INNER COLUMNS ... DEFAULT` disagree — must-agree check fails at CREATE.
-    assert "BAD_TYPE_OF_FIELD" in node.query_and_get_error(
-        "CREATE TABLE prometheus ENGINE=TimeSeries "
-        "SETTINGS id_generator = 'sipHash128(metric_name)' "
-        "TAGS INNER COLUMNS (id FixedString(16) DEFAULT murmurHash3_128(metric_name, all_tags))"
-    )
-
 
 # Checks that timestamps can be stored with microsecond precision (`DateTime64(6)`).
 def test_microsecond_precision():
@@ -399,22 +380,18 @@ def test_data_keyword():
     assert node.query("DESCRIBE timeSeriesData(prometheus)") == node.query("DESCRIBE timeSeriesSamples(prometheus)")
 
 
-# Checks that ALTER TABLE MODIFY SETTING is restricted to the only runtime-only setting
-# (`filter_by_min_time_and_max_time`) and rejected for settings that are baked into the inner-table schemas.
+# Checks that ALTER TABLE works and can modify settings
+# `id_generator` and `filter_by_min_time_and_max_time`.
 def test_alter_modify_settings():
     node.query("CREATE TABLE prometheus ENGINE=TimeSeries")
 
-    # Settings that affect inner-table schema cannot be altered after CREATE.
-    schema_bound_settings = [
-        "tags_to_columns = {'job': 'job'}",
-        "use_all_tags_column_to_generate_id = 0",
-        "store_min_time_and_max_time = 0",
-        "aggregate_min_time_and_max_time = 0",
-    ]
-    for change in schema_bound_settings:
-        assert "NOT_IMPLEMENTED" in node.query_and_get_error(
-            f"ALTER TABLE prometheus MODIFY SETTING {change}"
-        )
+    # `id_generator` only affects INSERT-time id computation, so it can be altered.
+    node.query("ALTER TABLE prometheus MODIFY SETTING id_generator = 'sipHash64(metric_name, all_tags)'")
+    assert re.search(
+        r"\bid_generator\s*=.*sipHash64\(metric_name, all_tags\)",
+        node.query("SHOW CREATE TABLE prometheus"),
+    )
+    node.query("ALTER TABLE prometheus RESET SETTING id_generator")
 
     # `filter_by_min_time_and_max_time` is a pure query-time setting.
     node.query("ALTER TABLE prometheus MODIFY SETTING filter_by_min_time_and_max_time = 0")
@@ -424,10 +401,14 @@ def test_alter_modify_settings():
     )
     node.query("ALTER TABLE prometheus RESET SETTING filter_by_min_time_and_max_time")
 
-    # `id_generator` only affects INSERT-time id computation (for external tags tables), so it can be altered.
-    node.query("ALTER TABLE prometheus MODIFY SETTING id_generator = 'sipHash64(metric_name, all_tags)'")
-    assert re.search(
-        r"\bid_generator\s*=.*sipHash64\(metric_name, all_tags\)",
-        node.query("SHOW CREATE TABLE prometheus"),
-    )
-    node.query("ALTER TABLE prometheus RESET SETTING id_generator")
+    # Settings which can't be altered because they affect inner-table schemas.
+    bound_settings = [
+        "tags_to_columns = {'job': 'job'}",
+        "use_all_tags_column_to_generate_id = 0",
+        "store_min_time_and_max_time = 0",
+        "aggregate_min_time_and_max_time = 0",
+    ]
+    for change in bound_settings:
+        assert "NOT_IMPLEMENTED" in node.query_and_get_error(
+            f"ALTER TABLE prometheus MODIFY SETTING {change}"
+        )

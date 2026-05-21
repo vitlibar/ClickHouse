@@ -23,6 +23,6 @@ bool normalizeTimeSeriesDefinition(
 /// Builds the default id-generator expression for a given `id_type`
 /// (e.g. `reinterpretAsUUID(sipHash128(...))` for `UUID`).
 ASTPtr makeASTForTimeSeriesIDGenerator(
-    const DataTypePtr & id_type, const TimeSeriesSettings & settings, const StorageID & for_error);
+    const DataTypePtr & id_type, const TimeSeriesSettings & settings, const StorageID & table_id);
 
 }

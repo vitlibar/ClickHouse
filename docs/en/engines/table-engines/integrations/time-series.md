@@ -261,6 +261,16 @@ ENGINE = ReplacingMergeTree
 ORDER BY metric_family_name
 ```
 
+## Creating a table AS another table {#create-as}
+
+`CREATE TABLE new_table AS other_table ENGINE = TimeSeries` inherits from `other_table`'s CREATE query:
+
+- `SETTINGS` (the new query's own `SETTINGS` clause overrides);
+- `INNER COLUMNS` for each kind (only where the new query doesn't have its own);
+- inner engine for each kind (only where the new query doesn't have its own).
+
+The outer column list is regenerated, not inherited — so user modifiers (`CODEC`, `COMMENT`, etc.) on outer columns of `other_table` don't transfer; write them in the corresponding `INNER COLUMNS` clause to preserve them. External `TO` targets are also not inherited — and if `other_table` uses external targets, the `CREATE ... AS` is rejected (the new table can't target the same external tables).
+
 ## Adjusting types of columns {#adjusting-column-types}
 
 You can adjust the types of columns in the inner target tables using the `INNER COLUMNS` clause. For example, to store timestamps in microseconds and values as `Float32`:
@@ -296,7 +306,7 @@ CREATE TABLE my_table ENGINE=TimeSeries
 SETTINGS id_generator = 'sipHash64(metric_name, all_tags)'
 ```
 
-For an inner tags table the setting must agree with the `DEFAULT` declared in `TAGS INNER COLUMNS (id ... DEFAULT ...)` (if both are specified). For an external tags table the setting overrides the external table's own `DEFAULT` on its `id` column — this is the only way to customize the id-generator at the `TimeSeries` level when the tags target is an external table.
+At INSERT time precedence is: `id_generator` setting, then column `DEFAULT`, then the default expression for the `id` type. If the setting is set, it's used to generate `id` even if the column's `DEFAULT` contains a different expression.
 
 ## The `tags` and `all_tags` columns {#tags-and-all-tags}
 
@@ -363,7 +373,7 @@ The id-generator expression for an external tags target is resolved at INSERT ti
 Two settings can be changed after `CREATE`:
 
 - `filter_by_min_time_and_max_time` — a pure query-time decision that doesn't touch the inner-table schema.
-- `id_generator` — affects only INSERT-time id computation for external tags tables (for an inner tags table the inner table's `DEFAULT` is authoritative at insert time, so the setting becomes cosmetic after the original `CREATE`).
+- `id_generator` — overrides the expression used at INSERT time to compute `id`.
 
 ```sql
 ALTER TABLE my_table MODIFY SETTING filter_by_min_time_and_max_time = 0;
@@ -382,7 +392,7 @@ Here is a list of settings which can be specified while defining a `TimeSeries` 
 
 | Name | Type | Default | Description |
 |---|---|---|---|
-| `id_generator` | Expression | depends on `id` type | Expression that computes the identifier (fingerprint) of a time series from its tags. For an inner tags table it must agree with the `DEFAULT` declared in `TAGS INNER COLUMNS (id ... DEFAULT ...)`. For an external tags table it overrides the `DEFAULT` declared on that table. If unset, the canonical generator for the chosen `id` type is used (`reinterpretAsUUID(sipHash128(metric_name, all_tags))` for `UUID`, `sipHash64(metric_name, all_tags)` for `UInt64`, etc.) |
+| `id_generator` | Expression | depends on `id` type | Expression that computes the identifier (fingerprint) of a time series from its tags. At INSERT time it takes precedence over the `DEFAULT` expression of the `id` column. If unset, the default expression for the chosen `id` type is used (`reinterpretAsUUID(sipHash128(metric_name, all_tags))` for `UUID`, `sipHash64(metric_name, all_tags)` for `UInt64`, etc.) |
 | `tags_to_columns` | Map | {} | Map specifying which tags should be put to separate columns in the [tags](#tags-table) table. Syntax: `{'tag1': 'column1', 'tag2' : column2, ...}` |
 | `use_all_tags_column_to_generate_id` | Bool | true | When generating an expression to calculate an identifier of a time series, this flag enables using the `all_tags` column in that calculation |
 | `store_min_time_and_max_time` | Bool | true | If set to true then the table will store `min_time` and `max_time` for each time series |
