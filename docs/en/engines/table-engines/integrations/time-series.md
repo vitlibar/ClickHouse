@@ -64,7 +64,7 @@ Columns of a TimeSeries table are generated automatically. These are outer colum
 |---|---|---|
 | `metric_name` | `String` | The name of the metric |
 | `tags` | `Map(String, String)` | Map of tags (labels) for the time series |
-| `time_series` | `Array(Tuple(timestamp_type, scalar_type))` | Array of (timestamp, value) pairs for a time series |
+| `time_series` | `Array(Tuple(DateTime64(3), Float64))` by default | Array of (timestamp, value) pairs for a time series. The tuple's timestamp and scalar element types are derived from the samples `INNER COLUMNS` declaration (see [Specifying outer columns](#specifying-outer-columns)) |
 | `metric_family` | `String` | The name of the metric family (for metrics metadata) |
 | `type` | `String` | The type of the metric (e.g. "counter", "gauge") |
 | `unit` | `String` | The unit of the metric |
@@ -96,17 +96,20 @@ INSERT INTO my_table (metric_name, tags, time_series, metric_family, type, unit,
 
 ### Specifying outer columns {#specifying-outer-columns}
 
-Outer columns can be listed explicitly in a `CREATE TABLE` statement. They are not stored verbatim: ClickHouse uses their types to fill in any [settings](#settings) that were not explicitly provided, and then regenerates the outer columns from the resolved settings. For example, declaring `timestamp DateTime64(6)` in the column list is equivalent to setting `timestamp_type = 'DateTime64(6)'`, so the following two statements produce identical tables:
+The outer `time_series` column can be listed explicitly in a `CREATE TABLE` statement to override its default `Array(Tuple(DateTime64(3), Float64))` type. ClickHouse extracts the timestamp and scalar types from the tuple and propagates them to the inner samples table:
 
 ```sql
-CREATE TABLE my_table (timestamp DateTime64(6)) ENGINE=TimeSeries
+CREATE TABLE my_table (time_series Array(Tuple(UInt32, Float32))) ENGINE=TimeSeries
 ```
+
+This is equivalent to declaring the timestamp and value column types in the samples `INNER COLUMNS` clause directly:
 
 ```sql
-CREATE TABLE my_table ENGINE=TimeSeries SETTINGS timestamp_type='DateTime64(6)'
+CREATE TABLE my_table ENGINE=TimeSeries
+SAMPLES INNER COLUMNS (timestamp UInt32, value Float32)
 ```
 
-Similarly, `value Float32` sets `scalar_type = 'Float32'`, and `id UInt64` sets `id_type = 'UInt64'`. Specifying a `DEFAULT` expression on the `id` column sets `id_generator`.
+If both forms are used in the same `CREATE TABLE` statement, the declared types must match — otherwise normalization fails with `BAD_TYPE_OF_FIELD`.
 
 ## Target tables {#target-tables}
 
@@ -260,33 +263,40 @@ ORDER BY metric_family_name
 
 ## Adjusting types of columns {#adjusting-column-types}
 
-You can adjust the types of columns in the inner target tables using settings:
+You can adjust the types of columns in the inner target tables using the `INNER COLUMNS` clause. For example, to store timestamps in microseconds and values as `Float32`:
 
 ```sql
 CREATE TABLE my_table ENGINE=TimeSeries
-SETTINGS timestamp_type='DateTime64(6)', scalar_type='Float32'
+SAMPLES INNER COLUMNS (timestamp DateTime64(6), value Float32)
 ```
 
-This will make the inner [samples](#samples-table) table store timestamps in microseconds and values as `Float32`.
-
-To customize columns of inner tables more, for example to specify codecs, use the `INNER COLUMNS` clause:
+The same clause can be used to specify codecs, defaults, or other column attributes:
 
 ```sql
 CREATE TABLE my_table ENGINE=TimeSeries
-SETTINGS timestamp_type = 'DateTime64(3)'
 SAMPLES INNER COLUMNS (timestamp DateTime64(3) CODEC(DoubleDelta))
-
 ```
 
 ## The `id` column {#id-column}
 
 The `id` column contains identifiers, every identifier is calculated for a combination of a metric name and tags.
-The type and the expression used to generate identifiers can be customized using the `id_type` and `id_generator` settings:
+The type and the `DEFAULT` expression used to generate identifiers can be customized via the tags `INNER COLUMNS` clause:
 
 ```sql
 CREATE TABLE my_table ENGINE=TimeSeries
-SETTINGS id_type='UInt64', id_generator='sipHash64(metric_name, all_tags)'
+TAGS INNER COLUMNS (id UInt64 DEFAULT sipHash64(metric_name, all_tags))
 ```
+
+The `id` column type must be one of `UUID`, `UInt64`, `UInt128`, or `FixedString(16)`. If no `DEFAULT` expression is given, normalization picks one based on the `id` type (`reinterpretAsUUID(sipHash128(...))` for `UUID`, `sipHash64(...)` for `UInt64`, etc.). The `id` types declared in the samples and tags inner tables must match.
+
+The `id_generator` setting offers the same customization without using the `INNER COLUMNS` clause:
+
+```sql
+CREATE TABLE my_table ENGINE=TimeSeries
+SETTINGS id_generator = 'sipHash64(metric_name, all_tags)'
+```
+
+For an inner tags table the setting must agree with the `DEFAULT` declared in `TAGS INNER COLUMNS (id ... DEFAULT ...)` (if both are specified). For an external tags table the setting overrides the external table's own `DEFAULT` on its `id` column — this is the only way to customize the id-generator at the `TimeSeries` level when the tags target is an external table.
 
 ## The `tags` and `all_tags` columns {#tags-and-all-tags}
 
@@ -344,18 +354,27 @@ CREATE TABLE metrics_for_my_table ...
 CREATE TABLE my_table ENGINE=TimeSeries SAMPLES samples_for_my_table TAGS tags_for_my_table METRICS metrics_for_my_table;
 ```
 
+The external tables' column types (`id`, `timestamp`, `value`, and the `<tag_value_column>`s listed in [`tags_to_columns`](#settings)) must match what the `TimeSeries` table would otherwise generate internally (see [Samples table](#samples-table), [Tags table](#tags-table), and [Metrics table](#metrics-table) for the type constraints). Type mismatches are reported at `CREATE` time.
+
+The id-generator expression for an external tags target is resolved at INSERT time in the following order: the [`id_generator`](#settings) setting (if set), then the `DEFAULT` declared on the external table's `id` column (if any), then the canonical generator derived from the `id` type. The setting therefore overrides whatever `DEFAULT` is declared on the external table — see [The `id` column](#id-column) for details.
+
 ## Altering settings {#altering-settings}
 
-Settings of a `TimeSeries` table can be changed after creation:
+Two settings can be changed after `CREATE`:
+
+- `filter_by_min_time_and_max_time` — a pure query-time decision that doesn't touch the inner-table schema.
+- `id_generator` — affects only INSERT-time id computation for external tags tables (for an inner tags table the inner table's `DEFAULT` is authoritative at insert time, so the setting becomes cosmetic after the original `CREATE`).
 
 ```sql
-ALTER TABLE my_table MODIFY SETTING id_generator='murmurHash3_128(metric_name, all_tags)';
+ALTER TABLE my_table MODIFY SETTING filter_by_min_time_and_max_time = 0;
+ALTER TABLE my_table MODIFY SETTING id_generator = 'sipHash64(metric_name, all_tags)';
 ```
 
-It's also possible to alter data types (but this won't recreate or alter inner tables):
-```sql
-ALTER TABLE my_table MODIFY SETTING scalar_type='Float32';
-```
+Note that changing `id_generator` while data is already in the tags table can produce different IDs for the same metric+tag combination going forward — old rows keep their old IDs, new rows use the new generator.
+
+The other settings (`tags_to_columns`, `use_all_tags_column_to_generate_id`, `store_min_time_and_max_time`, `aggregate_min_time_and_max_time`) are baked into the inner target tables at `CREATE` time — into their column lists or types — and changing them after the fact would silently drift out of sync with the existing schema. `ALTER ... MODIFY SETTING` for those settings is rejected.
+
+Column types (timestamp, scalar, id) are not settings either — they live in the inner column definitions and cannot be changed via `ALTER ... MODIFY SETTING`.
 
 ## Settings {#settings}
 
@@ -363,10 +382,7 @@ Here is a list of settings which can be specified while defining a `TimeSeries` 
 
 | Name | Type | Default | Description |
 |---|---|---|---|
-| `timestamp_type` | DataType | `DateTime64(3)` | Data type used to represent timestamps. Supported types: `DateTime64(X)`, `DateTime`, `UInt32`. Can also be set by specifying the type of the `timestamp` column explicitly |
-| `scalar_type` | DataType | `Float64` | Data type used to represent scalar values. Supported types: `Float32` or `Float64`. Can also be set by specifying the type of the `value` column explicitly |
-| `id_type` | DataType | `UUID` | Data type used to represent identifiers (fingerprints) of time series. Supported types: `UUID`, `UInt64`, `UInt128`, `FixedString(16)`. Can also be set by specifying the type of the `id` column explicitly |
-| `id_generator` | Expression | depends on `id_type` | Expression used to generate identifiers of time series from their tags. For the default `id_type = UUID` the default expression is `reinterpretAsUUID(sipHash128(metric_name, all_tags))`. Can also be set by specifying the `DEFAULT` expression of the `id` column explicitly |
+| `id_generator` | Expression | depends on `id` type | Expression that computes the identifier (fingerprint) of a time series from its tags. For an inner tags table it must agree with the `DEFAULT` declared in `TAGS INNER COLUMNS (id ... DEFAULT ...)`. For an external tags table it overrides the `DEFAULT` declared on that table. If unset, the canonical generator for the chosen `id` type is used (`reinterpretAsUUID(sipHash128(metric_name, all_tags))` for `UUID`, `sipHash64(metric_name, all_tags)` for `UInt64`, etc.) |
 | `tags_to_columns` | Map | {} | Map specifying which tags should be put to separate columns in the [tags](#tags-table) table. Syntax: `{'tag1': 'column1', 'tag2' : column2, ...}` |
 | `use_all_tags_column_to_generate_id` | Bool | true | When generating an expression to calculate an identifier of a time series, this flag enables using the `all_tags` column in that calculation |
 | `store_min_time_and_max_time` | Bool | true | If set to true then the table will store `min_time` and `max_time` for each time series |

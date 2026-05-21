@@ -98,17 +98,23 @@ StorageTimeSeries::StorageTimeSeries(
     const ContextPtr & local_context,
     LoadingStrictnessLevel mode,
     const ASTCreateQuery & query,
-    const ColumnsDescription & /*columns*/,
+    const ColumnsDescription & columns,
     const String & comment)
     : StorageWithCommonVirtualColumns(table_id)
     , WithContext(local_context->getGlobalContext())
-    , initial_create_query(boost::static_pointer_cast<const ASTCreateQuery>(query.clone()))
-    , storage_settings(std::make_unique<const TimeSeriesSettings>(getNormalizedTimeSeriesSettings(*initial_create_query, local_context)))
-    , targets(buildTargets(*initial_create_query, table_id, local_context, mode))
+    , targets(buildTargets(query, table_id, local_context, mode))
     , has_inner_tables(std::ranges::any_of(targets, &Target::is_inner_table))
 {
+    /// Load TimeSeries settings from the `SETTINGS` clause.
+    auto settings = std::make_unique<TimeSeriesSettings>();
+    if (query.storage)
+        settings->loadFromQuery(*query.storage);
+    storage_settings.set(std::move(settings));
+
     StorageInMemoryMetadata storage_metadata;
-    storage_metadata.setColumns(generateTimeSeriesColumns(*storage_settings.get()));
+    /// `columns` was already brought to canonical form by `normalizeTimeSeriesDefinition` running in the interpreter
+    /// before the storage factory built it, so we trust it here.
+    storage_metadata.setColumns(columns);
     if (!comment.empty())
         storage_metadata.setComment(comment);
     storage_metadata.setVirtuals(createVirtuals());
@@ -378,18 +384,70 @@ bool StorageTimeSeries::optimize(
 }
 
 
+namespace
+{
+    /// Rejects any setting change whose name is not in the `ALTER ... MODIFY|RESET SETTING` whitelist.
+    ///
+    /// Whitelist: `filter_by_min_time_and_max_time` is a pure query-time decision and `id_generator` only
+    /// affects INSERT-time id computation (for external tags tables — for inner tags the inner table's
+    /// `DEFAULT` is authoritative at insert time so the setting becomes cosmetic). Both can be altered
+    /// after CREATE. The other TimeSeries settings (`tags_to_columns`, `use_all_tags_column_to_generate_id`,
+    /// `store_min_time_and_max_time`, `aggregate_min_time_and_max_time`) are baked into the inner tables'
+    /// column lists or types at CREATE time and cannot be retroactively changed.
+    void checkSettingsCanBeAltered(const SettingsChanges & changes, std::string_view storage_name)
+    {
+        for (const auto & change : changes)
+        {
+            if (change.name != "filter_by_min_time_and_max_time" && change.name != "id_generator")
+                throw Exception(ErrorCodes::NOT_IMPLEMENTED,
+                    "Setting '{}' of storage {} cannot be changed after the table is created", change.name, storage_name);
+        }
+    }
+}
+
 void StorageTimeSeries::checkAlterIsPossible(const AlterCommands & commands, ContextPtr) const
 {
     for (const auto & command : commands)
     {
-        if (!command.isCommentAlter() && command.type != AlterCommand::MODIFY_SQL_SECURITY
-            && !command.isSettingsAlter())
-            throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Alter of type '{}' is not supported by storage {}", command.type, getName());
+        if (command.isCommentAlter() || command.type == AlterCommand::MODIFY_SQL_SECURITY)
+            continue;
+        if (command.type == AlterCommand::MODIFY_SETTING)
+        {
+            checkSettingsCanBeAltered(command.settings_changes, getName());
+            continue;
+        }
+        if (command.type == AlterCommand::RESET_SETTING)
+        {
+            /// `RESET SETTING` reverts to the default, which on a schema-bound setting would silently
+            /// drift the inner-table schema. Rejected the same way as `MODIFY SETTING` for non-whitelisted names.
+            SettingsChanges resets_as_changes;
+            for (const auto & name : command.settings_resets)
+                resets_as_changes.push_back({name, Field{}});
+            checkSettingsCanBeAltered(resets_as_changes, getName());
+            continue;
+        }
+        throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Alter of type '{}' is not supported by storage {}", command.type, getName());
     }
 }
 
 void StorageTimeSeries::alter(const AlterCommands & params, ContextPtr local_context, AlterLockHolder &)
 {
+    /// Belt-and-suspenders: re-validate that all setting changes target settings on the alter whitelist.
+    /// Normally `checkAlterIsPossible` runs first and already enforces this, but `alter` can also be
+    /// reached through internal paths (backup/restore, replication) where that invariant might not hold.
+    for (const auto & command : params)
+    {
+        if (command.type == AlterCommand::MODIFY_SETTING)
+            checkSettingsCanBeAltered(command.settings_changes, getName());
+        else if (command.type == AlterCommand::RESET_SETTING)
+        {
+            SettingsChanges resets_as_changes;
+            for (const auto & name : command.settings_resets)
+                resets_as_changes.push_back({name, Field{}});
+            checkSettingsCanBeAltered(resets_as_changes, getName());
+        }
+    }
+
     StorageInMemoryMetadata new_metadata = *getInMemoryMetadataPtr(local_context, false);
     params.apply(new_metadata, local_context);
 
@@ -401,15 +459,17 @@ void StorageTimeSeries::alter(const AlterCommands & params, ContextPtr local_con
     if (has_settings_changes)
     {
         chassert(new_metadata.settings_changes);
-        new_settings = std::make_unique<TimeSeriesSettings>(getNormalizedTimeSeriesSettings(
-            *initial_create_query, local_context, new_metadata.settings_changes->as<const ASTSetQuery &>().changes));
+        /// Start from defaults rather than cloning the current `storage_settings`. `new_metadata.settings_changes`
+        /// holds the cumulative list of overrides AFTER this ALTER — `RESET SETTING` works by *removing* the entry
+        /// from that list, so a clone-then-apply approach would leave the old value untouched. Building fresh
+        /// from defaults and reapplying the surviving overrides gives the correct final state.
+        new_settings = std::make_unique<TimeSeriesSettings>();
+        new_settings->applyChanges(new_metadata.settings_changes->as<const ASTSetQuery &>().changes);
 
         auto settings_ast = make_intrusive<ASTSetQuery>();
         settings_ast->is_standalone = false;
         settings_ast->changes = new_settings->changes();
         new_metadata.settings_changes = settings_ast;
-
-        new_metadata.setColumns(generateTimeSeriesColumns(*new_settings));
     }
 
     auto time_series_table_id = getStorageID();

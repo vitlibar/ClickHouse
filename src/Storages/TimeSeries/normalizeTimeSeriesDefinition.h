@@ -1,9 +1,10 @@
 #pragma once
 
-#include <Common/SettingsChanges.h>
+#include <DataTypes/IDataType.h>
 #include <Databases/LoadingStrictnessLevel.h>
 #include <Interpreters/Context_fwd.h>
-#include <Storages/ColumnsDescription.h>
+#include <Interpreters/StorageID.h>
+#include <Parsers/IAST_fwd.h>
 
 
 namespace DB
@@ -19,14 +20,9 @@ struct TimeSeriesSettings;
 bool normalizeTimeSeriesDefinition(
     ASTCreateQuery & create_query, const ContextPtr & context, LoadingStrictnessLevel mode, bool is_restore_from_backup);
 
-/// Computes and returns fully normalized TimeSeries settings for a table being created.
-/// Loads settings from the `AS <other_table>` source (if any) and then from `create_query`,
-/// fills in missing types and generators from columns or external target tables,
-/// applies defaults, and validates the result.
-TimeSeriesSettings getNormalizedTimeSeriesSettings(
-    const ASTCreateQuery & create_query, const ContextPtr & context, const SettingsChanges & settings_changes = {});
-
-/// Generates the canonical column list for the TimeSeries table from the given normalized settings.
-ColumnsDescription generateTimeSeriesColumns(const TimeSeriesSettings & normalized_settings);
+/// Builds the default id-generator expression for a given `id_type`
+/// (e.g. `reinterpretAsUUID(sipHash128(...))` for `UUID`).
+ASTPtr makeASTForTimeSeriesIDGenerator(
+    const DataTypePtr & id_type, const TimeSeriesSettings & settings, const StorageID & for_error);
 
 }

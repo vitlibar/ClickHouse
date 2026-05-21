@@ -25,6 +25,8 @@
 #include <Storages/StorageTimeSeries.h>
 #include <Storages/TimeSeries/TimeSeriesColumnNames.h>
 #include <Storages/TimeSeries/TimeSeriesSettings.h>
+#include <Storages/TimeSeries/normalizeTimeSeriesDefinition.h>
+#include <Storages/TimeSeries/splitTimeSeriesType.h>
 #include <Storages/TimeSeries/TimeSeriesTagNames.h>
 #include <base/EnumReflection.h>
 
@@ -38,7 +40,6 @@ namespace DB
 namespace TimeSeriesSetting
 {
     extern const TimeSeriesSettingsASTFunction id_generator;
-    extern const TimeSeriesSettingsDataType id_type;
     extern const TimeSeriesSettingsBool store_min_time_and_max_time;
     extern const TimeSeriesSettingsMap tags_to_columns;
     extern const TimeSeriesSettingsBool use_all_tags_column_to_generate_id;
@@ -275,17 +276,6 @@ namespace
         return false;
     }
 
-    /// Splits a time series type Array(Tuple(timestamp, value)) into its timestamp and scalar component types.
-    std::pair<DataTypePtr, DataTypePtr> splitTimeSeriesType(const DataTypePtr & time_series_type)
-    {
-        const auto * array_type = typeid_cast<const DataTypeArray *>(time_series_type.get());
-        if (!array_type)
-            throw Exception(ErrorCodes::ILLEGAL_COLUMN, "Expected DataTypeArray for the time_series column type, got {}", time_series_type->getName());
-        const auto * tuple_type = typeid_cast<const DataTypeTuple *>(array_type->getNestedType().get());
-        if (!tuple_type)
-            throw Exception(ErrorCodes::ILLEGAL_COLUMN, "Expected DataTypeTuple as the element type of the time_series column, got {}", array_type->getNestedType()->getName());
-        return {tuple_type->getElement(0), tuple_type->getElement(1)};
-    }
 }
 
 
@@ -530,10 +520,23 @@ void TimeSeriesSink::initTagsAndSamplesPipelines()
     }
 
     /// Precompute ExpressionActions for calculating the "id" column.
-    DataTypePtr id_type = settings[TimeSeriesSetting::id_type];
+    /// Precedence for the DEFAULT expression used to compute IDs at INSERT time:
+    /// 1. The `id_generator` setting (if set) — overrides everything; the only way to customize for an external tags table.
+    /// 2. The tags target table's own `DEFAULT` on `id` (always present when the tags table is inner; may be present on external).
+    /// 3. The canonical id-generator derived from `id_type` (`reinterpretAsUUID(sipHash128(metric_name, all_tags))` for `UUID`, etc.).
+    auto tags_target = time_series_storage.getTargetTable(ViewTarget::Tags, getContext());
+    auto tags_target_metadata = tags_target->getInMemoryMetadataPtr(getContext(), false);
+    const auto & tags_id_col = tags_target_metadata->columns.get(TimeSeriesColumnNames::ID);
+    id_type = tags_id_col.type;
     ColumnDescription id_column_description{TimeSeriesColumnNames::ID, id_type};
     id_column_description.default_desc.kind = ColumnDefaultKind::Default;
-    id_column_description.default_desc.expression = settings[TimeSeriesSetting::id_generator].value;
+    if (ASTPtr id_generator_setting = settings[TimeSeriesSetting::id_generator].value)
+        id_column_description.default_desc.expression = id_generator_setting;
+    else if (tags_id_col.default_desc.expression)
+        id_column_description.default_desc.expression = tags_id_col.default_desc.expression;
+    else
+        id_column_description.default_desc.expression
+            = makeASTForTimeSeriesIDGenerator(id_type, settings, time_series_storage.getStorageID());
 
     /// A single-column header containing just the "id" column, used to build the ExpressionActions for ID calculation.
     Block id_header;
@@ -728,7 +731,6 @@ void TimeSeriesSink::consumeTagsAndSamples(const Block & block)
     }
 
     /// Calculate IDs using precomputed ExpressionActions.
-    DataTypePtr id_type = settings[TimeSeriesSetting::id_type];
     auto id_column = calculateId(tags_block);
     tags_block.insert(0, ColumnWithTypeAndName{id_column, id_type, TimeSeriesColumnNames::ID});
 

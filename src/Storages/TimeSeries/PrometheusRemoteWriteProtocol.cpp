@@ -23,6 +23,7 @@
 #include <Storages/TimeSeries/TimeSeriesColumnNames.h>
 #include <Storages/TimeSeries/TimeSeriesTagNames.h>
 #include <Storages/TimeSeries/TimeSeriesSettings.h>
+#include <Storages/TimeSeries/normalizeTimeSeriesDefinition.h>
 #include <Storages/TimeSeries/TimeSeriesSink.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/ExpressionActions.h>
@@ -48,9 +49,6 @@ namespace DB
 namespace TimeSeriesSetting
 {
     extern const TimeSeriesSettingsASTFunction id_generator;
-    extern const TimeSeriesSettingsDataType id_type;
-    extern const TimeSeriesSettingsDataType timestamp_type;
-    extern const TimeSeriesSettingsDataType scalar_type;
     extern const TimeSeriesSettingsBool store_min_time_and_max_time;
     extern const TimeSeriesSettingsMap tags_to_columns;
     extern const TimeSeriesSettingsBool use_all_tags_column_to_generate_id;
@@ -64,14 +62,15 @@ namespace ErrorCodes
 
 namespace
 {
-    /// Calculates the identifier of each time series in "tags_block" using the default expression for the "id" column,
-    /// and returns column "id" with the results.
-    ColumnPtr calculateId(const Block & tags_block, const ContextPtr & context, const TimeSeriesSettings & time_series_settings)
+    /// Calculates the identifier of each time series in "tags_block" using `id_default_expression` as the
+    /// DEFAULT for the "id" column, and returns column "id" with the results.
+    ColumnPtr calculateId(
+        const Block & tags_block, const ContextPtr & context,
+        const DataTypePtr & id_type, const ASTPtr & id_default_expression)
     {
-        DataTypePtr id_type = time_series_settings[TimeSeriesSetting::id_type];
         ColumnDescription id_column_description{TimeSeriesColumnNames::ID, id_type};
         id_column_description.default_desc.kind = ColumnDefaultKind::Default;
-        id_column_description.default_desc.expression = time_series_settings[TimeSeriesSetting::id_generator].value;
+        id_column_description.default_desc.expression = id_default_expression;
 
         auto blocks = std::make_shared<Blocks>();
         blocks->push_back(tags_block);
@@ -347,6 +346,7 @@ namespace
     /// Converts time series from the protobuf format to prepared blocks for inserting into target tables.
     BlocksToInsert toBlocks(const google::protobuf::RepeatedPtrField<prometheus::TimeSeries> & time_series,
                             const ContextPtr & context,
+                            const StorageTimeSeries & time_series_storage,
                             const TimeSeriesSettings & time_series_settings,
                             const StorageInMemoryMetadata & tags_metadata,
                             const StorageInMemoryMetadata & samples_metadata)
@@ -476,8 +476,18 @@ namespace
         }
 
         /// Calculate an identifier for each time series and add the result column to "tags_block".
-        DataTypePtr id_type = time_series_settings[TimeSeriesSetting::id_type];
-        auto id_column_in_tags_table = calculateId(tags_block, context, time_series_settings);
+        /// Precedence: `id_generator` setting → tags table's own `id` DEFAULT → canonical id-generator
+        /// derived from `id_type` and the surviving settings.
+        const auto & tags_id_col = tags_metadata.columns.get(TimeSeriesColumnNames::ID);
+        DataTypePtr id_type = tags_id_col.type;
+        ASTPtr id_default_expression;
+        if (ASTPtr id_generator_setting = time_series_settings[TimeSeriesSetting::id_generator].value)
+            id_default_expression = id_generator_setting;
+        else if (tags_id_col.default_desc.expression)
+            id_default_expression = tags_id_col.default_desc.expression;
+        else
+            id_default_expression = makeASTForTimeSeriesIDGenerator(id_type, time_series_settings, time_series_storage.getStorageID());
+        auto id_column_in_tags_table = calculateId(tags_block, context, id_type, id_default_expression);
         tags_block.insert(0, ColumnWithTypeAndName{id_column_in_tags_table, id_type, TimeSeriesColumnNames::ID});
 
         /// The "all_tags" column in the "tags" table is either ephemeral or doesn't exist.
@@ -643,7 +653,7 @@ void PrometheusRemoteWriteProtocol::writeTimeSeries(const google::protobuf::Repe
 
     const auto & tags_metadata = *time_series_storage->getTargetTable(ViewTarget::Tags, getContext())->getInMemoryMetadataPtr(getContext(), false);
     const auto & samples_metadata = *time_series_storage->getTargetTable(ViewTarget::Samples, getContext())->getInMemoryMetadataPtr(getContext(), false);
-    auto blocks = toBlocks(time_series, getContext(), *time_series_settings, tags_metadata, samples_metadata);
+    auto blocks = toBlocks(time_series, getContext(), *time_series_storage, *time_series_settings, tags_metadata, samples_metadata);
     insertToTargetTables(std::move(blocks), *time_series_storage, getContext(), log.get());
 
     LOG_TRACE(log, "{}: {} time series written",

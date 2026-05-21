@@ -122,9 +122,6 @@ private:
     /// Implementation for getTargetTable() and tryGetTargetTable().
     StoragePtr getTargetTableImpl(ViewTarget::Kind target_kind, const ContextPtr & local_context, bool throw_if_not_found) const;
 
-    /// Stored for use in ALTER TABLE MODIFY/RESET SETTINGS to re-derive dependent defaults.
-    const boost::intrusive_ptr<const ASTCreateQuery> initial_create_query;
-
     MultiVersion<TimeSeriesSettings> storage_settings;
 
     const std::vector<Target> targets;
