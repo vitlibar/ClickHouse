@@ -15,7 +15,8 @@ def get_database_disk_name(node):
 
 def replace_text_in_metadata(node, metadata_path: str, old_value: str, new_value: str):
     db_disk_name = get_database_disk_name(node)
-    disk_cmd_prefix = f"/usr/bin/clickhouse disks -C /etc/clickhouse-server/config.xml --disk {db_disk_name} --save-logs --query "
+    # HOME=/tmp avoids `clickhouse disks` trying to create `$HOME/.disks-file-history` under a host path that doesn't exist inside the container.
+    disk_cmd_prefix = f"HOME=/tmp /usr/bin/clickhouse disks -C /etc/clickhouse-server/config.xml --disk {db_disk_name} --save-logs --query"
 
     old_metadata = node.exec_in_container(
         ["bash", "-c", f"{disk_cmd_prefix} 'read --path-from {metadata_path}'"]
@@ -33,7 +34,7 @@ def write_metadata(node, metadata_path: str, content: str):
 def write_to_file(node, db_disk_name: str, file_path: str, content: str):
     # Escape backticks to avoid command substitution
     escaped_content = content.replace('"', r"\"").replace("`", r"\`")
-    disk_cmd_prefix = f"/usr/bin/clickhouse disks -C /etc/clickhouse-server/config.xml --save-logs --disk {db_disk_name} --query "
+    disk_cmd_prefix = f"HOME=/tmp /usr/bin/clickhouse disks -C /etc/clickhouse-server/config.xml --save-logs --disk {db_disk_name} --query "
     node.exec_in_container(
         [
             "bash",
@@ -45,7 +46,8 @@ def write_to_file(node, db_disk_name: str, file_path: str, content: str):
 
 def move_file(node, source_path: str, destination_path: str):
     db_disk_name = get_database_disk_name(node)
-    disk_cmd_prefix = f"/usr/bin/clickhouse disks -C /etc/clickhouse-server/config.xml --disk {db_disk_name} --save-logs --query "
+    # HOME=/tmp avoids `clickhouse disks` trying to create `$HOME/.disks-file-history` under a host path that doesn't exist inside the container.
+    disk_cmd_prefix = f"HOME=/tmp /usr/bin/clickhouse disks -C /etc/clickhouse-server/config.xml --disk {db_disk_name} --save-logs --query"
     node.exec_in_container(
         [
             "bash",
