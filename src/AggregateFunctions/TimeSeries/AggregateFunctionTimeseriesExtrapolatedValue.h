@@ -108,7 +108,7 @@ public:
 private:
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdouble-promotion"
-    void fillResultValue(const TimestampType current_timestamp,
+    void fillResultValue(const TimestampType grid_timestamp,
         const DequeWithMemoryTracking<std::pair<TimestampType, ValueType>> & samples_in_window,
         Float64 accumulated_resets_in_window,
         ValueType & result, UInt8 & null) const
@@ -141,14 +141,14 @@ private:
         /// https://github.com/prometheus/prometheus/blob/5e124cf4f2b9467e4ae1c679840005e727efd599/promql/functions.go#L127
         /// which is licensed under the Apache License 2.0
         // Duration between first/last samples and boundary of range. Subtract in `Int128` first to avoid
-        // both signed overflow on `current_timestamp - Base::window` and `Float64` precision loss when
+        // both signed overflow on `grid_timestamp - Base::window` and `Float64` precision loss when
         // timestamps are large (e.g. `DateTime64(9)` near present-day epoch ~1.7e18).
         Float64 duration_to_start = static_cast<Float64>(
             static_cast<Int128>(static_cast<Int64>(first_timestamp))
-            - static_cast<Int128>(static_cast<Int64>(current_timestamp))
+            - static_cast<Int128>(static_cast<Int64>(grid_timestamp))
             + static_cast<Int128>(static_cast<Int64>(Base::window)));
         Float64 duration_to_end = static_cast<Float64>(
-            static_cast<Int128>(static_cast<Int64>(current_timestamp))
+            static_cast<Int128>(static_cast<Int64>(grid_timestamp))
             - static_cast<Int128>(static_cast<Int64>(last_timestamp)));
 
         const auto sampled_interval = time_difference;
@@ -244,7 +244,7 @@ public:
             /// arithmetic. The plain expression `Base::start_timestamp + i * Base::step`
             /// signed-overflows `TimestampType` when `step` is near `INT64_MAX` and `i >= 2`
             /// (reachable from adversarial fuzzer inputs), which trips UBSAN.
-            const TimestampType current_timestamp = Base::timestampAtIndex(i);
+            const TimestampType grid_timestamp = Base::timestampAtIndex(i);
 
             auto bucket_it = buckets.find(i);
             if (bucket_it != buckets.end())
@@ -267,7 +267,7 @@ public:
 
             /// Remove samples that are out of the window
             while (!samples_in_window.empty()
-                   && Base::isSampleOutOfWindow(samples_in_window.front().first, current_timestamp))
+                   && Base::isSampleOutOfWindow(samples_in_window.front().first, grid_timestamp))
             {
                 Float64 removed_value = static_cast<Float64>(samples_in_window.front().second);
                 samples_in_window.pop_front();
@@ -277,7 +277,7 @@ public:
             }
 
             fillResultValue(
-                current_timestamp,
+                grid_timestamp,
                 samples_in_window,
                 accumulated_resets_in_window,
                 values[i],

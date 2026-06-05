@@ -177,7 +177,7 @@ public:
             /// arithmetic. The plain expression `Base::start_timestamp + i * Base::step`
             /// signed-overflows `TimestampType` when `step` is near `INT64_MAX` and `i >= 2`
             /// (reachable from adversarial fuzzer inputs), which trips UBSAN.
-            const TimestampType current_timestamp = Base::timestampAtIndex(i);
+            const TimestampType grid_timestamp = Base::timestampAtIndex(i);
 
             auto bucket_it = buckets.find(i);
             if (bucket_it != buckets.end())
@@ -195,7 +195,7 @@ public:
 
             /// Remove samples that are out of the window
             while (!samples_in_window.empty()
-                   && Base::isSampleOutOfWindow(samples_in_window.front().first, current_timestamp))
+                   && Base::isSampleOutOfWindow(samples_in_window.front().first, grid_timestamp))
             {
                 samples_in_window.pop_front();
             }

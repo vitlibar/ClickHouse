@@ -129,7 +129,7 @@ private:
         return std::make_pair(new_sum, c);
     }
 
-    void fillResultValue(const TimestampType current_timestamp,
+    void fillResultValue(const TimestampType grid_timestamp,
         const DequeWithMemoryTracking<std::pair<TimestampType, ValueType>> & samples_in_window,
         ValueType & result, UInt8 & null) const
     {
@@ -154,7 +154,7 @@ private:
 
         // The following least-square linear regression logic is copied from Prometheus:
         // https://github.com/prometheus/prometheus/blob/9a0bbb60bc3eb68d045aae7535d34f4d02b959f1/promql/functions.go#L1209
-        const TimestampType intercept_time = is_predict ? current_timestamp : first_timestamp;
+        const TimestampType intercept_time = is_predict ? grid_timestamp : first_timestamp;
         Float64 sum_x = 0;
         Float64 c_x = 0;
         Float64 sum_y = 0;
@@ -233,7 +233,7 @@ public:
             /// arithmetic. The plain expression `Base::start_timestamp + i * Base::step`
             /// signed-overflows `TimestampType` when `step` is near `INT64_MAX` and `i >= 2`
             /// (reachable from adversarial fuzzer inputs), which trips UBSAN.
-            const TimestampType current_timestamp = Base::timestampAtIndex(i);
+            const TimestampType grid_timestamp = Base::timestampAtIndex(i);
 
             auto bucket_it = buckets.find(i);
             if (bucket_it != buckets.end())
@@ -251,13 +251,13 @@ public:
 
             /// Remove samples that are out of the window
             while (!samples_in_window.empty()
-                   && Base::isSampleOutOfWindow(samples_in_window.front().first, current_timestamp))
+                   && Base::isSampleOutOfWindow(samples_in_window.front().first, grid_timestamp))
             {
                 samples_in_window.pop_front();
             }
 
             fillResultValue(
-                current_timestamp,
+                grid_timestamp,
                 samples_in_window,
                 values[i],
                 nulls[i]);

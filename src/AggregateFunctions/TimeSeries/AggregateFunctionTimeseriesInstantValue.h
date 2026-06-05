@@ -148,11 +148,11 @@ public:
         Bucket last_2_samples; /// Sliding window with last 2 samples
         for (size_t i = 0; i < Base::bucket_count; ++i)
         {
-            /// Use `Base::timestampAtIndex` instead of a loop-carried `current_timestamp += Base::step`
+            /// Use `Base::timestampAtIndex` instead of a loop-carried `grid_timestamp += Base::step`
             /// accumulator. The accumulator form performs one final, unused `+=` on the last
             /// iteration which signed-overflows `TimestampType` on adversarial extremes
             /// (`start_timestamp` near `INT64_MIN`, `step` near `INT64_MAX`) and trips UBSAN.
-            const TimestampType current_timestamp = Base::timestampAtIndex(i);
+            const TimestampType grid_timestamp = Base::timestampAtIndex(i);
 
             values[i] = ValueType{};
             nulls[i] = 1;
@@ -162,7 +162,7 @@ public:
                 last_2_samples.merge(bucket_it->second);
 
             /// If the oldest of last 2 samples is within the window, we can calculate the rate or delta
-            if (last_2_samples.filled == 2 && !Base::isSampleOutOfWindow(last_2_samples.timestamps[1], current_timestamp))
+            if (last_2_samples.filled == 2 && !Base::isSampleOutOfWindow(last_2_samples.timestamps[1], grid_timestamp))
             {
                 fillResultValue(last_2_samples.timestamps[0], last_2_samples.values[0],
                     last_2_samples.timestamps[1], last_2_samples.values[1],

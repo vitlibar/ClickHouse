@@ -135,12 +135,12 @@ public:
 
         for (size_t i = 0; i < Base::bucket_count; ++i)
         {
-            /// Compute `current_timestamp` via `Base::timestampAtIndex` rather than with a
-            /// loop-carried `current_timestamp += Base::step`. The accumulator form performed
+            /// Compute `grid_timestamp` via `Base::timestampAtIndex` rather than with a
+            /// loop-carried `grid_timestamp += Base::step`. The accumulator form performed
             /// one final, unused `+=` on the last iteration which signed-overflowed
             /// `TimestampType` (e.g. `Decimal<Int64>::operator+=`) when `start_timestamp` was
             /// near `INT64_MIN` and `step` was near `INT64_MAX`, triggering UBSAN.
-            const TimestampType current_timestamp = Base::timestampAtIndex(i);
+            const TimestampType grid_timestamp = Base::timestampAtIndex(i);
 
             /// Update the most recent sample from this bucket.
             if (!nulls[i])
@@ -151,7 +151,7 @@ public:
             }
 
             /// The most recent sample may be within the staleness window or not.
-            if (has_previous_value && !Base::isSampleOutOfWindow(previous_timestamp, current_timestamp))
+            if (has_previous_value && !Base::isSampleOutOfWindow(previous_timestamp, grid_timestamp))
             {
                 values[i] = previous_value;
                 nulls[i] = 0;
