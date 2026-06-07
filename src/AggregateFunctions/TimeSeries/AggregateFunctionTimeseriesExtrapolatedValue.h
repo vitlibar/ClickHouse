@@ -209,9 +209,9 @@ public:
         ColumnArray & arr_to = typeid_cast<ColumnArray &>(to);
         ColumnArray::Offsets & offsets_to = arr_to.getOffsets();
 
-        offsets_to.push_back(offsets_to.back() + Base::bucket_count);
+        offsets_to.push_back(offsets_to.back() + Base::grid_size);
 
-        if (!Base::bucket_count)
+        if (!Base::grid_size)
             return;
 
         ColumnNullable & result_to = typeid_cast<ColumnNullable &>(arr_to.getData());
@@ -221,8 +221,8 @@ public:
         const size_t old_size = data_to.size();
         chassert(old_size == nulls_to.size(), "Sizes of nested column and null map of Nullable column are not equal");
 
-        data_to.resize(old_size + Base::bucket_count);
-        nulls_to.resize(old_size + Base::bucket_count);
+        data_to.resize(old_size + Base::grid_size);
+        nulls_to.resize(old_size + Base::grid_size);
 
         ValueType * values = data_to.data() + old_size;
         UInt8 * nulls = nulls_to.data() + old_size;
@@ -238,7 +238,7 @@ public:
         constexpr bool adjust_to_resets = is_rate;
 
         /// Fill the data for missing buckets
-        for (UInt32 i = 0; i < Base::bucket_count; ++i)
+        for (UInt32 i = 0; i < Base::grid_size; ++i)
         {
             /// Use `Base::timestampAtIndex` to compute the grid timestamp with overflow-safe
             /// arithmetic. The plain expression `Base::start_timestamp + i * Base::step`
@@ -246,22 +246,25 @@ public:
             /// (reachable from adversarial fuzzer inputs), which trips UBSAN.
             const TimestampType grid_timestamp = Base::timestampAtIndex(i);
 
-            auto bucket_it = buckets.find(i);
-            if (bucket_it != buckets.end())
+            for (size_t bucket_index : Base::bucketRangeForGridPoint(i))
             {
-                timestamps_buffer.clear();
-                /// Sort samples from the current bucket
-                for (const auto & [timestamp, value] : bucket_it->second.samples)
-                    timestamps_buffer.emplace_back(timestamp, value);
-                std::sort(timestamps_buffer.begin(), timestamps_buffer.end());
-
-                /// Add samples from the current bucket
-                for (const auto & [timestamp, value] : timestamps_buffer)
+                auto bucket_it = buckets.find(bucket_index);
+                if (bucket_it != buckets.end())
                 {
-                    /// Check for resets in the timeseries
-                    if (adjust_to_resets && !samples_in_window.empty() && samples_in_window.back().second > value)
-                        accumulated_resets_in_window += static_cast<Float64>(samples_in_window.back().second);
-                    samples_in_window.push_back({timestamp, value});
+                    timestamps_buffer.clear();
+                    /// Sort samples from the current bucket
+                    for (const auto & [timestamp, value] : bucket_it->second.samples)
+                        timestamps_buffer.emplace_back(timestamp, value);
+                    std::sort(timestamps_buffer.begin(), timestamps_buffer.end());
+
+                    /// Add samples from the current bucket
+                    for (const auto & [timestamp, value] : timestamps_buffer)
+                    {
+                        /// Check for resets in the timeseries
+                        if (adjust_to_resets && !samples_in_window.empty() && samples_in_window.back().second > value)
+                            accumulated_resets_in_window += static_cast<Float64>(samples_in_window.back().second);
+                        samples_in_window.push_back({timestamp, value});
+                    }
                 }
             }
 

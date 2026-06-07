@@ -93,14 +93,12 @@ public:
     /// Insert the result into the column
     void doInsertResultInto(AggregateDataPtr __restrict place, IColumn & to) const
     {
-        VectorWithMemoryTracking<TimestampType> timestamps;
-
         ColumnArray & arr_to = typeid_cast<ColumnArray &>(to);
         ColumnArray::Offsets & offsets_to = arr_to.getOffsets();
 
-        offsets_to.push_back(offsets_to.empty() ? Base::bucket_count : offsets_to.back() + Base::bucket_count);
+        offsets_to.push_back(offsets_to.empty() ? Base::grid_size : offsets_to.back() + Base::grid_size);
 
-        if (!Base::bucket_count)
+        if (!Base::grid_size)
             return;
 
         ColumnNullable & result_to = typeid_cast<ColumnNullable &>(arr_to.getData());
@@ -110,30 +108,19 @@ public:
         const size_t old_size = data_to.size();
         chassert(old_size == nulls_to.size(), "Sizes of nested column and null map of Nullable column are not equal");
 
-        data_to.resize(old_size + Base::bucket_count);
-        nulls_to.resize(old_size + Base::bucket_count);
+        data_to.resize(old_size + Base::grid_size);
+        nulls_to.resize(old_size + Base::grid_size);
 
-        ValueType * values = data_to.data() + old_size;  /// use result column as a buffer for values
+        ValueType * values = data_to.data() + old_size;
         UInt8 * nulls = nulls_to.data() + old_size;
 
-        /// Fill all timestamps with zeros to indicate missing values
-        timestamps.assign(Base::bucket_count, 0);
-        std::fill(nulls, nulls + Base::bucket_count, 1);
+        const auto & buckets = Base::data(place)->buckets;
 
-        /// Fill the data for existing buckets
-        for (const auto & bucket : Base::data(place)->buckets)
-        {
-            timestamps[bucket.first] = bucket.second.first;
-            values[bucket.first] = bucket.second.second;
-            nulls[bucket.first] = 0;
-        }
-
-        /// Fill the data for missing buckets
         bool has_previous_value = false;
         ValueType previous_value = {};
         TimestampType previous_timestamp = {};
 
-        for (size_t i = 0; i < Base::bucket_count; ++i)
+        for (size_t i = 0; i < Base::grid_size; ++i)
         {
             /// Compute `grid_timestamp` via `Base::timestampAtIndex` rather than with a
             /// loop-carried `grid_timestamp += Base::step`. The accumulator form performed
@@ -142,12 +129,17 @@ public:
             /// near `INT64_MIN` and `step` was near `INT64_MAX`, triggering UBSAN.
             const TimestampType grid_timestamp = Base::timestampAtIndex(i);
 
-            /// Update the most recent sample from this bucket.
-            if (!nulls[i])
+            /// Update the most recent sample from the buckets owned by this grid point. They are in
+            /// ascending time order, so the last non-empty one holds the most recent sample.
+            for (size_t bucket_index : Base::bucketRangeForGridPoint(i))
             {
-                has_previous_value = true;
-                previous_value = values[i];
-                previous_timestamp = timestamps[i];
+                auto bucket_it = buckets.find(bucket_index);
+                if (bucket_it != buckets.end())
+                {
+                    has_previous_value = true;
+                    previous_value = bucket_it->second.second;
+                    previous_timestamp = bucket_it->second.first;
+                }
             }
 
             /// The most recent sample may be within the staleness window or not.

@@ -124,9 +124,9 @@ public:
         ColumnArray & arr_to = typeid_cast<ColumnArray &>(to);
         ColumnArray::Offsets & offsets_to = arr_to.getOffsets();
 
-        offsets_to.push_back(offsets_to.back() + Base::bucket_count);
+        offsets_to.push_back(offsets_to.back() + Base::grid_size);
 
-        if (!Base::bucket_count)
+        if (!Base::grid_size)
             return;
 
         ColumnNullable & result_to = typeid_cast<ColumnNullable &>(arr_to.getData());
@@ -136,8 +136,8 @@ public:
         const size_t old_size = data_to.size();
         chassert(old_size == nulls_to.size(), "Sizes of nested column and null map of Nullable column are not equal");
 
-        data_to.resize(old_size + Base::bucket_count);
-        nulls_to.resize(old_size + Base::bucket_count);
+        data_to.resize(old_size + Base::grid_size);
+        nulls_to.resize(old_size + Base::grid_size);
 
         ValueType * values = data_to.data() + old_size;
         UInt8 * nulls = nulls_to.data() + old_size;
@@ -146,7 +146,7 @@ public:
 
         /// Fill the data for missing buckets
         Bucket last_2_samples; /// Sliding window with last 2 samples
-        for (size_t i = 0; i < Base::bucket_count; ++i)
+        for (size_t i = 0; i < Base::grid_size; ++i)
         {
             /// Use `Base::timestampAtIndex` instead of a loop-carried `grid_timestamp += Base::step`
             /// accumulator. The accumulator form performs one final, unused `+=` on the last
@@ -157,9 +157,12 @@ public:
             values[i] = ValueType{};
             nulls[i] = 1;
 
-            auto bucket_it = buckets.find(i);
-            if (bucket_it != buckets.end())
-                last_2_samples.merge(bucket_it->second);
+            for (size_t bucket_index : Base::bucketRangeForGridPoint(i))
+            {
+                auto bucket_it = buckets.find(bucket_index);
+                if (bucket_it != buckets.end())
+                    last_2_samples.merge(bucket_it->second);
+            }
 
             /// If the oldest of last 2 samples is within the window, we can calculate the rate or delta
             if (last_2_samples.filled == 2 && !Base::isSampleOutOfWindow(last_2_samples.timestamps[1], grid_timestamp))

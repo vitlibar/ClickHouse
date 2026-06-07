@@ -13,6 +13,8 @@
 #include <DataTypes/DataTypeNullable.h>
 #include <DataTypes/DataTypesDecimal.h>
 
+#include <base/range.h>
+
 #include <AggregateFunctions/IAggregateFunction.h>
 #include <Common/UnorderedMapWithMemoryTracking.h>
 
@@ -69,9 +71,13 @@ public:
             argument_types_,
             parameters_,
             createResultType())
-        , bucket_count(bucketCount(start_timestamp_, end_timestamp_, step_))
+        , grid_size(gridSize(start_timestamp_, end_timestamp_, step_))
+        , window_remainder(windowRemainder(step_, window_))
+        , buckets_per_step(bucketsPerStep(window_remainder))
+        , buckets_per_window(bucketsPerWindow(step_, window_, window_remainder))
+        , bucket_count(bucketCount(grid_size, buckets_per_window, buckets_per_step))
         , start_timestamp(start_timestamp_)
-        , end_timestamp(static_cast<TimestampType>(start_timestamp_ + (bucket_count - 1) * step_))  /// Align end timestamp down by step
+        , end_timestamp(static_cast<TimestampType>(start_timestamp_ + (grid_size - 1) * step_))  /// Align end timestamp down by step
         , step(step_)
         , window(window_)
         , timestamp_scale_multiplier(static_cast<TimestampType>(DecimalUtils::scaleMultiplier<Int64>(timestamp_scale_)))
@@ -102,15 +108,16 @@ public:
         return sizeof(State);
     }
 
-    /// Upper bound on the number of buckets that can be allocated for a single grid.
+    /// Upper bound on the number of grid points (the output array length) for a single grid.
     /// This prevents absurdly large grids (e.g. from adversarial input that passes extreme
     /// timestamps and a tiny step) from allocating huge amounts of memory or triggering
     /// undefined behaviour in downstream arithmetic. 16M is consistent with the
     /// `MAX_ARRAY_SIZE` used by other aggregate functions (`AggregateFunctionGroupArray`,
     /// `AggregateFunctionIntervalLengthSum`, etc.).
-    static constexpr size_t MAX_BUCKET_COUNT = 0xFFFFFF;
+    static constexpr size_t MAX_GRID_SIZE = 0xFFFFFF;
 
-    static size_t bucketCount(TimestampType start_timestamp, TimestampType end_timestamp, IntervalType step)
+    /// Calculates number of grid points: (end - start) / step + 1.
+    static size_t gridSize(TimestampType start_timestamp, TimestampType end_timestamp, IntervalType step)
     {
         if (end_timestamp < start_timestamp)
             throw Exception(ErrorCodes::BAD_ARGUMENTS, "End timestamp is less than start timestamp");
@@ -121,7 +128,7 @@ public:
         if (step <= 0)
             throw Exception(ErrorCodes::BAD_ARGUMENTS, "Step should be greater than zero");
 
-        /// Compute the bucket count using unsigned 64-bit arithmetic to avoid signed overflow
+        /// Compute the grid size using unsigned 64-bit arithmetic to avoid signed overflow
         /// when `start_timestamp` is very negative (e.g. `DateTime64` near `INT64_MIN`
         /// produced by an adversarial fuzzer-generated query). Since we already verified
         /// `end_timestamp >= start_timestamp`, the unsigned difference is the correct
@@ -133,21 +140,51 @@ public:
         const UInt64 diff = end_bits - start_bits;
         const UInt64 quotient = diff / step_bits;
 
-        /// Check the cap on `quotient` rather than on `quotient + 1`. With
-        /// `start = INT64_MIN`, `end = INT64_MAX`, `step = 1`, `diff` is `UINT64_MAX`,
-        /// `quotient` is `UINT64_MAX`, and `quotient + 1` wraps to `0` — bypassing the
-        /// cap and returning `bucket_count = 0`, which later fires `chassert(index <
-        /// bucket_count)` inside `bucketIndexForTimestamp`. Since `MAX_BUCKET_COUNT`
-        /// is well below `UINT64_MAX`, checking `quotient >= MAX_BUCKET_COUNT` is
-        /// equivalent to the original `count > MAX_BUCKET_COUNT` in the safe range,
-        /// but remains correct at the `UInt64` overflow boundary.
-        if (quotient >= MAX_BUCKET_COUNT)
+        /// Since `MAX_GRID_SIZE` is well below `UINT64_MAX`, checking `quotient >=
+        /// MAX_GRID_SIZE` is equivalent to `quotient + 1 > MAX_GRID_SIZE` in the safe
+        /// range, but remains correct at the `UInt64` overflow boundary.
+        if (quotient >= MAX_GRID_SIZE)
             throw Exception(ErrorCodes::BAD_ARGUMENTS,
-                "Number of buckets in the timeseries grid exceeds maximum ({}). "
+                "Number of grid points in the timeseries grid exceeds maximum ({}). "
                 "Consider narrowing the [start, end] range or increasing the step.",
-                MAX_BUCKET_COUNT);
+                MAX_GRID_SIZE);
 
         return static_cast<size_t>(quotient + 1);
+    }
+
+    /// Calculates number of buckets: leading buckets related to the window of grid point #0
+    /// plus 1 or 2 buckets per each step.
+    static size_t bucketCount(size_t grid_size, size_t buckets_per_window, size_t buckets_per_step)
+    {
+        chassert(grid_size >= 1);
+        return buckets_per_window + (grid_size - 1) * buckets_per_step;
+    }
+
+    /// Calculates remainder `window % step` which determines a split point for window-aligned buckets.
+    /// Returns 0 if no split is needed: when `window <= step`, or when the window is a whole multiple of the step.
+    static IntervalType windowRemainder(IntervalType step, IntervalType window)
+    {
+        if (step <= 0 || window <= step)
+            return 0;
+        return static_cast<IntervalType>(window % step);
+    }
+
+    /// Calculates number of buckets that tile a window.
+    static size_t bucketsPerStep(IntervalType window_remainder)
+    {
+        return window_remainder != 0 ? 2 : 1;
+    }
+
+    /// Calculates number of buckets that tile a window.
+    static size_t bucketsPerWindow(IntervalType step, IntervalType window, IntervalType window_remainder)
+    {
+        if (step <= 0 || window <= 0)
+            return 1;
+
+        const size_t whole_steps = static_cast<size_t>(window / step);
+        if (window_remainder != 0)
+            return 2 * whole_steps + 1;
+        return whole_steps == 0 ? 1 : whole_steps;
     }
 
     static constexpr size_t NO_BUCKET = -1;
@@ -160,31 +197,64 @@ public:
         if (timestamp > end_timestamp)
             return NO_BUCKET;
 
-        size_t index = 0;
-        if (timestamp > start_timestamp)
-        {
-            /// Use unsigned arithmetic to avoid signed overflow when `start_timestamp` is very negative.
-            /// Both operands are first converted to `Int64` (the native type of every supported
-            /// `TimestampType`), then reinterpreted as `UInt64`. Since `timestamp > start_timestamp` here,
-            /// the unsigned subtraction produces the correct non-negative delta in all cases.
-            const UInt64 ts_bits = static_cast<UInt64>(static_cast<Int64>(timestamp));
-            const UInt64 start_bits = static_cast<UInt64>(static_cast<Int64>(start_timestamp));
-            const UInt64 step_bits = static_cast<UInt64>(static_cast<Int64>(step));
+        /// unclamped_grid_index = ceil((timestamp - start) / step), the grid point at the upper edge
+        /// of the sample's step.
+        /// It's unclamped: for timestamps at or before grid point #0 `unclamped_grid_index <= 0`.
+        /// Everything is computed in Int128 to stay overflow-safe when `start_timestamp` is
+        /// near INT64_MIN and `step` near INT64_MAX.
+        const Int128 offset = static_cast<Int128>(static_cast<Int64>(timestamp)) - static_cast<Int128>(static_cast<Int64>(start_timestamp));
+        const Int128 step_128 = static_cast<Int128>(static_cast<Int64>(step));
+        Int128 unclamped_grid_index = offset / step_128;
+        if (offset > 0 && (offset % step_128) != 0)
+            ++unclamped_grid_index;
 
-            const UInt64 diff = ts_bits - start_bits;
-            /// Overflow-safe ceil-division. The classic `(diff + step - 1) / step` formula can overflow
-            /// modulo `2^64` when `diff` is close to `UINT64_MAX` (reachable for extreme inputs such as
-            /// `start_timestamp` near `INT64_MIN` and a large `step`). The mathematically-equivalent form
-            /// `diff / step + (diff % step != 0)` never exceeds `diff` itself and therefore cannot overflow.
-            index = static_cast<size_t>(diff / step_bits + (diff % step_bits != 0));
-        }
+        /// The related grid point's index is always non-negative.
+        const size_t grid_index = (unclamped_grid_index > 0) ? static_cast<size_t>(unclamped_grid_index) : 0;
 
         /// Skip a sample that is already out of window.
-        if (isSampleOutOfWindow(timestamp, timestampAtIndex(index)))
+        if (isSampleOutOfWindow(timestamp, timestampAtIndex(grid_index)))
             return NO_BUCKET;
 
-        chassert(index < bucket_count);
-        return index;
+        const Int128 leading_buckets = static_cast<Int128>(buckets_per_window);
+        Int128 bucket_index;
+        if (window_remainder == 0)
+        {
+            /// One bucket per step.
+            bucket_index = unclamped_grid_index + leading_buckets - 1;
+        }
+        else
+        {
+            /// Each step is split at (grid timestamp - window_remainder).
+            const Int128 remainder = static_cast<Int128>(static_cast<Int64>(window_remainder));
+
+            /// `before_split_point` means timestamp <= grid timestamp - window_remainder,
+            /// i.e. offset + window_remainder <= unclamped_grid_index * step.
+            const bool before_split_point = (offset + remainder) <= (unclamped_grid_index * step_128);
+            bucket_index = 2 * unclamped_grid_index + leading_buckets - 1 - (before_split_point ? 1 : 0);
+        }
+
+        chassert(bucket_index >= 0 && bucket_index < static_cast<Int128>(bucket_count));
+        return static_cast<size_t>(bucket_index);
+    }
+
+    /// Returns a range of bucket indices owned by a grid point.
+    /// For grid point #0 the function returns a range of size `buckets_per_window`.
+    /// For other grid points the function returns a range of size `buckets_per_step`.
+    auto bucketRangeForGridPoint(size_t index) const
+    {
+        if (index == 0)
+            return collections::range(static_cast<size_t>(0), buckets_per_window);
+        if (window_remainder == 0)
+            return collections::range(index + buckets_per_window - 1, index + buckets_per_window);
+        return collections::range(2 * index + buckets_per_window - 2, 2 * index + buckets_per_window);
+    }
+
+    /// Returns a half-open range [first, last) of bucket indices that fall in a grid point's window.
+    /// The function always returns a range of size `buckets_per_window`.
+    std::pair<size_t, size_t> bucketRangeInWindow(size_t grid_point) const
+    {
+        const size_t window_begin = grid_point * buckets_per_step;
+        return {window_begin, window_begin + buckets_per_window};
     }
 
     /// Compute the grid timestamp for a given bucket index, i.e. `start_timestamp + index * step`.
@@ -521,8 +591,8 @@ public:
         auto & nulls_to = result_to.getNullMapData();
 
         offsets_to.reserve(offsets_to.size() + batch_size);
-        data_to.reserve(data_to.size() + batch_size * bucket_count);
-        nulls_to.reserve(nulls_to.size() + batch_size * bucket_count);
+        data_to.reserve(data_to.size() + batch_size * grid_size);
+        nulls_to.reserve(nulls_to.size() + batch_size * grid_size);
 
         try
         {
@@ -546,7 +616,11 @@ public:
 protected:
     static constexpr UInt16 FORMAT_VERSION = FunctionImpl::FORMAT_VERSION;
 
-    const size_t bucket_count{};            /// Number of buckets in the grid calculated from start_timestamp, end_timestamp and step
+    const size_t grid_size{};               /// Number of grid points: (end - start) / step + 1
+    const IntervalType window_remainder{};  /// (window % step) if (window > step)
+    const size_t buckets_per_step{};        /// 2 when window_remainder != 0 (each step is split), else 1
+    const size_t buckets_per_window{};      /// Number of buckets tiling each grid point's window
+    const size_t bucket_count{};            /// Number of buckets
     const TimestampType start_timestamp{};  /// First timestamp in the grid
     const TimestampType end_timestamp{};    /// Last timestamp in the grid. NOTE: It is aligned down by step relative to start_timestamp
     const IntervalType step{};              /// Grid step (IntervalType represent time difference between timestamps)
