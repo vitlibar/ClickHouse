@@ -1,9 +1,12 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <type_traits>
+#include <utility>
 
 
 #include <Columns/ColumnArray.h>
@@ -13,10 +16,10 @@
 #include <DataTypes/DataTypeNullable.h>
 #include <DataTypes/DataTypesDecimal.h>
 
-#include <base/range.h>
-
 #include <AggregateFunctions/IAggregateFunction.h>
+#include <AggregateFunctions/TimeSeries/AggregateFunctionTimeseriesSamples.h>
 #include <Common/UnorderedMapWithMemoryTracking.h>
+#include <Common/VectorWithMemoryTracking.h>
 
 
 namespace DB
@@ -58,6 +61,8 @@ public:
     bool shouldPrintParametersWithTypes() const override { return true; }
 
     using Bucket = typename Traits::Bucket;
+    using AggregationData = typename Traits::AggregationData;
+    using BucketAggregator = typename Traits::BucketAggregator;
 
     struct State
     {
@@ -235,18 +240,6 @@ public:
 
         chassert(bucket_index >= 0 && bucket_index < static_cast<Int128>(bucket_count));
         return static_cast<size_t>(bucket_index);
-    }
-
-    /// Returns a range of bucket indices owned by a grid point.
-    /// For grid point #0 the function returns a range of size `buckets_per_window`.
-    /// For other grid points the function returns a range of size `buckets_per_step`.
-    auto bucketRangeForGridPoint(size_t index) const
-    {
-        if (index == 0)
-            return collections::range(static_cast<size_t>(0), buckets_per_window);
-        if (window_remainder == 0)
-            return collections::range(index + buckets_per_window - 1, index + buckets_per_window);
-        return collections::range(2 * index + buckets_per_window - 2, 2 * index + buckets_per_window);
     }
 
     /// Returns a half-open range [first, last) of bucket indices that fall in a grid point's window.
@@ -564,6 +557,94 @@ public:
     const FunctionImpl & derived() const
     {
         return static_cast<const FunctionImpl &>(*this);
+    }
+
+    /// Constructs a result array.
+    /// `Traits::BucketAggregator` describes how a bucket is turned into the per-bucket `AggregationData`.
+    /// Each derived class provides function `finalizeAggregation(aggregate, grid_timestamp)`
+    /// to turn per-window `AggregationData` into a value.
+    void doInsertResultInto(AggregateDataPtr __restrict place, IColumn & to) const
+    {
+        ColumnArray & arr_to = typeid_cast<ColumnArray &>(to);
+        ColumnArray::Offsets & offsets_to = arr_to.getOffsets();
+
+        offsets_to.push_back(offsets_to.empty() ? grid_size : offsets_to.back() + grid_size);
+
+        if (!grid_size)
+            return;
+
+        ColumnNullable & result_to = typeid_cast<ColumnNullable &>(arr_to.getData());
+        auto & data_to = typeid_cast<ColVecResultType &>(result_to.getNestedColumn()).getData();
+        auto & nulls_to = result_to.getNullMapData();
+
+        const size_t old_size = data_to.size();
+        chassert(old_size == nulls_to.size(), "Sizes of nested column and null map of Nullable column are not equal");
+
+        data_to.resize(old_size + grid_size);
+        nulls_to.resize(old_size + grid_size);
+
+        ValueType * values = data_to.data() + old_size;
+        UInt8 * nulls = nulls_to.data() + old_size;
+
+        const auto & buckets = data(place)->buckets;
+
+        if constexpr (!std::is_void_v<BucketAggregator>)
+        {
+            /// Build the aggregation data for each bucket from its samples.
+            UnorderedMapWithMemoryTracking<size_t, AggregationData> aggregates;
+            aggregates.reserve(buckets.size());
+            BucketAggregator aggregator;
+            for (const auto & [bucket_index, bucket] : buckets)
+                aggregator.aggregate(bucket, aggregates[bucket_index]);
+            fillGridResults(aggregates, values, nulls);
+        }
+        else
+        {
+            /// The bucket already is the aggregation data; merge the buckets directly.
+            fillGridResults(buckets, values, nulls);
+        }
+    }
+
+    /// Slides over the grid points, merging the aggregation data of every bucket in each grid point's window.
+    template <typename AggregationDataMap>
+    void fillGridResults(const AggregationDataMap & aggregates, ValueType * values, UInt8 * nulls) const
+    {
+        using AggregationDataType = std::decay_t<decltype(aggregates.begin()->second)>;
+        VectorWithMemoryTracking<std::pair<size_t, const AggregationDataType *>> sorted_buckets;
+        sorted_buckets.reserve(aggregates.size());
+        for (const auto & [bucket_index, data] : aggregates)
+            sorted_buckets.emplace_back(bucket_index, &data);
+        std::sort(sorted_buckets.begin(), sorted_buckets.end(),
+            [](const auto & lhs, const auto & rhs) { return lhs.first < rhs.first; });
+
+        const size_t num_buckets = sorted_buckets.size();
+        size_t window_first = 0;    /// index into sorted_buckets of the first populated bucket in the window
+        size_t window_last = 0;     /// one past the last populated bucket in the window
+        for (size_t i = 0; i < grid_size; ++i)
+        {
+            const auto [window_begin, window_end] = bucketRangeInWindow(i);
+
+            /// Both window edges move forward as `i` grows, so the cursors only ever advance.
+            while (window_last < num_buckets && sorted_buckets[window_last].first < window_end)
+                ++window_last;
+            while (window_first < window_last && sorted_buckets[window_first].first < window_begin)
+                ++window_first;
+
+            AggregationData window_aggregate;
+            for (size_t b = window_first; b < window_last; ++b)
+                window_aggregate.merge(*sorted_buckets[b].second);
+
+            if (auto result = derived().finalizeAggregation(window_aggregate, timestampAtIndex(i)))
+            {
+                values[i] = *result;
+                nulls[i] = 0;
+            }
+            else
+            {
+                values[i] = ValueType{};
+                nulls[i] = 1;
+            }
+        }
     }
 
     void insertResultInto(AggregateDataPtr __restrict place, IColumn & to, Arena *) const override

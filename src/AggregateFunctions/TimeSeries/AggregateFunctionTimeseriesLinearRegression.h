@@ -1,19 +1,18 @@
 #pragma once
 
+#include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <optional>
 
 
 #include <DataTypes/DataTypesDecimal.h>
 #include <Columns/ColumnVector.h>
 #include <Columns/ColumnArray.h>
 #include <Columns/ColumnNullable.h>
-#include <Common/DequeWithMemoryTracking.h>
-#include <Common/VectorWithMemoryTracking.h>
 
 #include <AggregateFunctions/TimeSeries/AggregateFunctionTimeseriesBase.h>
-
-#include <absl/container/flat_hash_map.h>
+#include <AggregateFunctions/TimeSeries/AggregateFunctionTimeseriesSamples.h>
 
 
 namespace DB
@@ -34,27 +33,83 @@ struct AggregateFunctionTimeseriesLinearRegressionTraits
         return is_predict ? "timeSeriesPredictLinearToGrid" : "timeSeriesDerivToGrid";
     }
 
-    struct Bucket
+    using Bucket = AggregateFunctionTimeseriesSamples<TimestampType, ValueType>;
+
+    /// Per-bucket aggregation data for linear regression.
+    struct AggregationData
     {
-        absl::flat_hash_map<TimestampType, ValueType> samples;
+        Float64 sum_x = 0;      /// sum of x
+        Float64 sum_y = 0;      /// sum of y
+        Float64 sum_xy = 0;     /// sum of x*y
+        Float64 sum_xx = 0;     /// sum of x*x
+        Float64 comp_x = 0;     /// Neumaier compensation companions for the sums above
+        Float64 comp_y = 0;
+        Float64 comp_xy = 0;
+        Float64 comp_xx = 0;
+        UInt64 count = 0;       /// number of samples
+
+        /// Adds `inc` to the running `sum` keeping a Neumaier compensation term in `comp`.
+        static void kahanAdd(Float64 inc, Float64 & sum, Float64 & comp)
+        {
+            const Float64 new_sum = sum + inc;
+            /// Using Neumaier improvement, swap if next term larger than sum.
+            if (std::abs(sum) >= std::abs(inc))
+                comp += (sum - new_sum) + inc;
+            else
+                comp += (inc - new_sum) + sum;
+            sum = new_sum;
+        }
 
         void add(TimestampType timestamp, ValueType value)
         {
-            auto it = samples.find(timestamp);
-            if (it != samples.end())
-                it->second = std::max(it->second, value);
-            else
-                samples[timestamp] = value;
+            const Float64 x = static_cast<Float64>(timestamp);
+            const Float64 y = static_cast<Float64>(value);
+            kahanAdd(x, sum_x, comp_x);
+            kahanAdd(y, sum_y, comp_y);
+            kahanAdd(x * y, sum_xy, comp_xy);
+            kahanAdd(x * x, sum_xx, comp_xx);
+            ++count;
         }
 
-        void merge(const Bucket & other)
+        void merge(const AggregationData & other)
         {
-            samples.reserve(other.samples.size());
+            kahanAdd(other.sum_x + other.comp_x, sum_x, comp_x);
+            kahanAdd(other.sum_y + other.comp_y, sum_y, comp_y);
+            kahanAdd(other.sum_xy + other.comp_xy, sum_xy, comp_xy);
+            kahanAdd(other.sum_xx + other.comp_xx, sum_xx, comp_xx);
+            count += other.count;
+        }
 
-            for (const auto & [timestamp, value] : other.samples)
-                add(timestamp, value);
+        std::optional<ValueType> getResult(TimestampType grid_timestamp, Float64 predict_offset) const
+        {
+            if (count < 2)
+                return std::nullopt;
+
+            /// Fold the compensation terms into the sums.
+            const Float64 total_x = sum_x + comp_x;
+            const Float64 total_y = sum_y + comp_y;
+            const Float64 total_xy = sum_xy + comp_xy;
+            const Float64 total_xx = sum_xx + comp_xx;
+
+            const Float64 n = static_cast<Float64>(count);
+            const Float64 cov_xy = total_xy - total_x * total_y / n;
+            const Float64 var_x = total_xx - total_x * total_x / n;
+            if (var_x == 0)
+                return std::nullopt;
+
+            const Float64 slope = cov_xy / var_x;
+            if (!is_predict)
+                return static_cast<ValueType>(slope);
+
+            /// Line y = slope * x + intercept with x = Float64(timestamp); extrapolate to grid_timestamp + predict_offset.
+            const Float64 intercept = total_y / n - slope * total_x / n;
+            const Float64 predicted = slope * (static_cast<Float64>(grid_timestamp) + predict_offset) + intercept;
+            return static_cast<ValueType>(predicted);
         }
     };
+
+    /// The least-squares sums are order-independent, so the samples can be added in any order.
+    using BucketAggregator = typename Bucket::Aggregator;
 };
 
 template <typename Traits>
@@ -75,6 +130,7 @@ public:
     using Base::Base;
 
     using Bucket = typename Base::Bucket;
+    using AggregationData = typename Traits::AggregationData;
 
     /// Constructor for timeSeriesPredictLinearToGrid (is_predict = true).
     /// For timeSeriesDerivToGrid (is_predict = false) it reaches the base constructor via `using Base::Base` above.
@@ -115,156 +171,9 @@ public:
         }
     }
 
-private:
-    std::pair<Float64, Float64> kahanSumInc(Float64 inc, Float64 sum, Float64 c) const
+    std::optional<ValueType> finalizeAggregation(const AggregationData & aggregate, TimestampType grid_timestamp) const
     {
-        Float64 new_sum = sum + inc;
-
-        // Using Neumaier improvement, swap if next term larger than sum.
-        if (std::abs(sum) >= std::abs(inc))
-            c += (sum - new_sum) + inc;
-        else
-            c += (inc - new_sum) + sum;
-
-        return std::make_pair(new_sum, c);
-    }
-
-    void fillResultValue(const TimestampType grid_timestamp,
-        const DequeWithMemoryTracking<std::pair<TimestampType, ValueType>> & samples_in_window,
-        ValueType & result, UInt8 & null) const
-    {
-        size_t n = samples_in_window.size();
-        if (n < 2)
-        {
-            result = 0;
-            null = 1;
-            return;
-        }
-
-        const TimestampType first_timestamp = samples_in_window.front().first;
-        const TimestampType last_timestamp = samples_in_window.back().first;
-
-        const TimestampType time_difference = last_timestamp - first_timestamp;
-        if (time_difference == 0)
-        {
-            result = 0;
-            null = 1;
-            return;
-        }
-
-        // The following least-square linear regression logic is copied from Prometheus:
-        // https://github.com/prometheus/prometheus/blob/9a0bbb60bc3eb68d045aae7535d34f4d02b959f1/promql/functions.go#L1209
-        const TimestampType intercept_time = is_predict ? grid_timestamp : first_timestamp;
-        Float64 sum_x = 0;
-        Float64 c_x = 0;
-        Float64 sum_y = 0;
-        Float64 c_y = 0;
-        Float64 sum_xy = 0;
-        Float64 c_xy = 0;
-        Float64 sum_xx = 0;
-        Float64 c_xx = 0;
-
-        for (const auto& sample : samples_in_window)
-        {
-            Float64 x = static_cast<Float64>(sample.first) - static_cast<Float64>(intercept_time);
-            Float64 y = static_cast<Float64>(sample.second);
-            std::tie(sum_x, c_x) = kahanSumInc(x, sum_x, c_x);
-            std::tie(sum_y, c_y) = kahanSumInc(y, sum_y, c_y);
-            std::tie(sum_xy, c_xy) = kahanSumInc(x * y, sum_xy, c_xy);
-            std::tie(sum_xx, c_xx) = kahanSumInc(x * x, sum_xx, c_xx);
-        }
-        sum_x += c_x;
-        sum_y += c_y;
-        sum_xy += c_xy;
-        sum_xx += c_xx;
-
-        Float64 cov_xy = sum_xy - sum_x * sum_y / static_cast<Float64>(n);
-        Float64 var_x = sum_xx - sum_x * sum_x / static_cast<Float64>(n);
-
-        Float64 slope = cov_xy / var_x;
-        if (is_predict)
-        {
-            Float64 intercept = sum_y / static_cast<Float64>(n) - slope * sum_x / static_cast<Float64>(n);
-            Float64 predicted_value = slope * predict_offset + intercept;
-            result = static_cast<ValueType>(predicted_value);
-        }
-        else
-        {
-            result = static_cast<ValueType>(slope);
-        }
-        null = 0;
-    }
-
-public:
-    /// Insert the result into the column
-    void doInsertResultInto(AggregateDataPtr __restrict place, IColumn & to) const
-    {
-        ColumnArray & arr_to = typeid_cast<ColumnArray &>(to);
-        ColumnArray::Offsets & offsets_to = arr_to.getOffsets();
-
-        offsets_to.push_back(offsets_to.back() + Base::grid_size);
-
-        if (!Base::grid_size)
-            return;
-
-        ColumnNullable & result_to = typeid_cast<ColumnNullable &>(arr_to.getData());
-        auto & data_to = typeid_cast<typename Base::ColVecResultType &>(result_to.getNestedColumn()).getData();
-        auto & nulls_to = result_to.getNullMapData();
-
-        const size_t old_size = data_to.size();
-        chassert(old_size == nulls_to.size(), "Sizes of nested column and null map of Nullable column are not equal");
-
-        data_to.resize(old_size + Base::grid_size);
-        nulls_to.resize(old_size + Base::grid_size);
-
-        ValueType * values = data_to.data() + old_size;
-        UInt8 * nulls = nulls_to.data() + old_size;
-
-        const auto & buckets = Base::data(place)->buckets;
-
-        DequeWithMemoryTracking<std::pair<TimestampType, ValueType>> samples_in_window;
-        VectorWithMemoryTracking<std::pair<TimestampType, ValueType>> timestamps_buffer;
-
-
-        /// Fill the data for missing buckets
-        for (UInt32 i = 0; i < Base::grid_size; ++i)
-        {
-            /// Use `Base::timestampAtIndex` to compute the grid timestamp with overflow-safe
-            /// arithmetic. The plain expression `Base::start_timestamp + i * Base::step`
-            /// signed-overflows `TimestampType` when `step` is near `INT64_MAX` and `i >= 2`
-            /// (reachable from adversarial fuzzer inputs), which trips UBSAN.
-            const TimestampType grid_timestamp = Base::timestampAtIndex(i);
-
-            for (size_t bucket_index : Base::bucketRangeForGridPoint(i))
-            {
-                auto bucket_it = buckets.find(bucket_index);
-                if (bucket_it != buckets.end())
-                {
-                    timestamps_buffer.clear();
-                    /// Sort samples from the current bucket
-                    for (const auto & [timestamp, value] : bucket_it->second.samples)
-                        timestamps_buffer.emplace_back(timestamp, value);
-                    std::sort(timestamps_buffer.begin(), timestamps_buffer.end());
-
-                    /// Add samples from the current bucket
-                    for (const auto & [timestamp, value] : timestamps_buffer)
-                        samples_in_window.push_back({timestamp, value});
-                }
-            }
-
-            /// Remove samples that are out of the window
-            while (!samples_in_window.empty()
-                   && Base::isSampleOutOfWindow(samples_in_window.front().first, grid_timestamp))
-            {
-                samples_in_window.pop_front();
-            }
-
-            fillResultValue(
-                grid_timestamp,
-                samples_in_window,
-                values[i],
-                nulls[i]);
-        }
+        return aggregate.getResult(grid_timestamp, predict_offset);
     }
 
     static constexpr UInt16 FORMAT_VERSION = 1;

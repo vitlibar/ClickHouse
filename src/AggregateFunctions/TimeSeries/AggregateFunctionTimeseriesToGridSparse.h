@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstring>
+#include <optional>
 
 
 #include <DataTypes/DataTypesDecimal.h>
@@ -33,21 +34,39 @@ struct AggregateFunctionTimeseriesToGridSparseTraits
     {
         TimestampType first = 0;
         ValueType second = 0;
+        bool has_value = false;
 
         void add(TimestampType timestamp, ValueType value)
         {
-            if (timestamp > first || (timestamp == first && value > second))
+            if (!has_value || timestamp > first || (timestamp == first && value > second))
             {
                 first = timestamp;
                 second = value;
+                has_value = true;
             }
         }
 
         void merge(const Bucket & other)
         {
-            add(other.first, other.second);
+            if (other.has_value)
+                add(other.first, other.second);
         }
     };
+
+    /// Per-bucket aggregation data. The bucket already keeps the most recent sample,
+    /// so the aggregation data just inherits it and adds the result computation.
+    struct AggregationData : Bucket
+    {
+        std::optional<ValueType> getResult() const
+        {
+            if (!this->has_value)
+                return std::nullopt;
+            return this->second;
+        }
+    };
+
+    /// The bucket already keeps the latest sample, so it is merged directly (no aggregation pass).
+    using BucketAggregator = void;
 };
 
 
@@ -71,6 +90,7 @@ public:
     using Base::Base;
 
     using Bucket = typename Base::Bucket;
+    using AggregationData = typename Traits::AggregationData;
 
     static void serializeBucket(const Bucket & bucket, WriteBuffer & buf)
     {
@@ -87,73 +107,12 @@ public:
         ValueType value;
         readBinaryLittleEndian(value, buf);
 
-        bucket = {timestamp, value};
+        bucket.add(timestamp, value);
     }
 
-    /// Insert the result into the column
-    void doInsertResultInto(AggregateDataPtr __restrict place, IColumn & to) const
+    std::optional<ValueType> finalizeAggregation(const AggregationData & aggregate, TimestampType /*grid_timestamp*/) const
     {
-        ColumnArray & arr_to = typeid_cast<ColumnArray &>(to);
-        ColumnArray::Offsets & offsets_to = arr_to.getOffsets();
-
-        offsets_to.push_back(offsets_to.empty() ? Base::grid_size : offsets_to.back() + Base::grid_size);
-
-        if (!Base::grid_size)
-            return;
-
-        ColumnNullable & result_to = typeid_cast<ColumnNullable &>(arr_to.getData());
-        auto & data_to = typeid_cast<typename Base::ColVecResultType &>(result_to.getNestedColumn()).getData();
-        auto & nulls_to = result_to.getNullMapData();
-
-        const size_t old_size = data_to.size();
-        chassert(old_size == nulls_to.size(), "Sizes of nested column and null map of Nullable column are not equal");
-
-        data_to.resize(old_size + Base::grid_size);
-        nulls_to.resize(old_size + Base::grid_size);
-
-        ValueType * values = data_to.data() + old_size;
-        UInt8 * nulls = nulls_to.data() + old_size;
-
-        const auto & buckets = Base::data(place)->buckets;
-
-        bool has_previous_value = false;
-        ValueType previous_value = {};
-        TimestampType previous_timestamp = {};
-
-        for (size_t i = 0; i < Base::grid_size; ++i)
-        {
-            /// Compute `grid_timestamp` via `Base::timestampAtIndex` rather than with a
-            /// loop-carried `grid_timestamp += Base::step`. The accumulator form performed
-            /// one final, unused `+=` on the last iteration which signed-overflowed
-            /// `TimestampType` (e.g. `Decimal<Int64>::operator+=`) when `start_timestamp` was
-            /// near `INT64_MIN` and `step` was near `INT64_MAX`, triggering UBSAN.
-            const TimestampType grid_timestamp = Base::timestampAtIndex(i);
-
-            /// Update the most recent sample from the buckets owned by this grid point. They are in
-            /// ascending time order, so the last non-empty one holds the most recent sample.
-            for (size_t bucket_index : Base::bucketRangeForGridPoint(i))
-            {
-                auto bucket_it = buckets.find(bucket_index);
-                if (bucket_it != buckets.end())
-                {
-                    has_previous_value = true;
-                    previous_value = bucket_it->second.second;
-                    previous_timestamp = bucket_it->second.first;
-                }
-            }
-
-            /// The most recent sample may be within the staleness window or not.
-            if (has_previous_value && !Base::isSampleOutOfWindow(previous_timestamp, grid_timestamp))
-            {
-                values[i] = previous_value;
-                nulls[i] = 0;
-            }
-            else
-            {
-                values[i] = ValueType{};
-                nulls[i] = 1;
-            }
-        }
+        return aggregate.getResult();
     }
 
     static constexpr UInt16 FORMAT_VERSION = 2;

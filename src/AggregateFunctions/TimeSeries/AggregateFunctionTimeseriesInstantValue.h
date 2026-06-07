@@ -2,6 +2,8 @@
 
 #include <cstddef>
 #include <cstring>
+#include <optional>
+#include <type_traits>
 
 
 #include <DataTypes/DataTypesDecimal.h>
@@ -37,6 +39,39 @@ struct AggregateFunctionTimeseriesInstantValueTraits
     }
 
     using Bucket = typename AggregateFunctionLast2Samples<TimestampType, ValueType>::Data;
+
+    /// Per-bucket aggregation data. The bucket already keeps the last two samples,
+    /// so the aggregation data just inherits it and adds the result computation.
+    struct AggregationData : Bucket
+    {
+        std::optional<ValueType> getResult(TimestampType timestamp_scale_multiplier) const
+        {
+            if (this->filled < 2)
+                return std::nullopt;
+
+            const TimestampType timestamp = this->timestamps[0];
+            const ValueType value = this->values[0];
+            const TimestampType previous_timestamp = this->timestamps[1];
+            const ValueType previous_value = this->values[1];
+
+            const ValueType time_difference = static_cast<ValueType>(timestamp - previous_timestamp);
+            if (time_difference == 0)
+                return std::nullopt;
+
+            /// Resets are taken into account for `irate` (counter) but not for `idelta` (gauge).
+            ValueType value_difference = (is_rate && value < previous_value) ? value : (value - previous_value);
+            ValueType result = value_difference;
+            if constexpr (is_rate)
+            {
+                using TimestampScaleMultiplierType = std::conditional_t<std::is_floating_point_v<ValueType>, ValueType, TimestampType>;
+                result = result * static_cast<TimestampScaleMultiplierType>(timestamp_scale_multiplier) / time_difference;
+            }
+            return result;
+        }
+    };
+
+    /// The bucket already keeps the last two samples, so it is merged directly (no aggregation pass).
+    using BucketAggregator = void;
 };
 
 
@@ -57,6 +92,7 @@ public:
     using Base = AggregateFunctionTimeseriesBase<AggregateFunctionTimeseriesInstantValue<Traits>, Traits>;
 
     using Bucket = typename Base::Bucket;
+    using AggregationData = typename Traits::AggregationData;
 
     using Base::Base;
 
@@ -93,85 +129,9 @@ public:
         }
     }
 
-    void fillResultValue(TimestampType timestamp, ValueType value, TimestampType previous_timestamp, ValueType previous_value, ValueType & result, UInt8 & null) const
+    std::optional<ValueType> finalizeAggregation(const AggregationData & aggregate, TimestampType /*grid_timestamp*/) const
     {
-        ValueType time_difference = static_cast<ValueType>(timestamp - previous_timestamp);
-        if (time_difference == 0)
-        {
-            result = 0;
-            null = 1;
-            return;
-        }
-
-        /// Resets must be take into account for `irate` function because it expects counter timeseries that only increase.
-        /// But `idelta` function expects gauge timeseries that can decrease and it is not considered to be a reset.
-        constexpr bool adjust_to_resets = is_rate;
-
-        ValueType value_difference = (adjust_to_resets && value < previous_value) ? value : (value - previous_value);
-        result = value_difference;
-        if constexpr (is_rate)
-        {
-            using TimestampScaleMultiplierType = std::conditional_t<std::is_floating_point_v<ValueType>, ValueType, TimestampType>;
-            result = result * static_cast<TimestampScaleMultiplierType>(Base::timestamp_scale_multiplier) / time_difference;
-        }
-        null = 0;
-    }
-
-    /// Insert the result into the column
-    /// timestamps buffer is reused between calls to avoid unnecessary allocations/deallocations
-    void doInsertResultInto(AggregateDataPtr __restrict place, IColumn & to) const
-    {
-        ColumnArray & arr_to = typeid_cast<ColumnArray &>(to);
-        ColumnArray::Offsets & offsets_to = arr_to.getOffsets();
-
-        offsets_to.push_back(offsets_to.back() + Base::grid_size);
-
-        if (!Base::grid_size)
-            return;
-
-        ColumnNullable & result_to = typeid_cast<ColumnNullable &>(arr_to.getData());
-        auto & data_to = typeid_cast<typename Base::ColVecResultType &>(result_to.getNestedColumn()).getData();
-        auto & nulls_to = result_to.getNullMapData();
-
-        const size_t old_size = data_to.size();
-        chassert(old_size == nulls_to.size(), "Sizes of nested column and null map of Nullable column are not equal");
-
-        data_to.resize(old_size + Base::grid_size);
-        nulls_to.resize(old_size + Base::grid_size);
-
-        ValueType * values = data_to.data() + old_size;
-        UInt8 * nulls = nulls_to.data() + old_size;
-
-        const auto & buckets = Base::data(place)->buckets;
-
-        /// Fill the data for missing buckets
-        Bucket last_2_samples; /// Sliding window with last 2 samples
-        for (size_t i = 0; i < Base::grid_size; ++i)
-        {
-            /// Use `Base::timestampAtIndex` instead of a loop-carried `grid_timestamp += Base::step`
-            /// accumulator. The accumulator form performs one final, unused `+=` on the last
-            /// iteration which signed-overflows `TimestampType` on adversarial extremes
-            /// (`start_timestamp` near `INT64_MIN`, `step` near `INT64_MAX`) and trips UBSAN.
-            const TimestampType grid_timestamp = Base::timestampAtIndex(i);
-
-            values[i] = ValueType{};
-            nulls[i] = 1;
-
-            for (size_t bucket_index : Base::bucketRangeForGridPoint(i))
-            {
-                auto bucket_it = buckets.find(bucket_index);
-                if (bucket_it != buckets.end())
-                    last_2_samples.merge(bucket_it->second);
-            }
-
-            /// If the oldest of last 2 samples is within the window, we can calculate the rate or delta
-            if (last_2_samples.filled == 2 && !Base::isSampleOutOfWindow(last_2_samples.timestamps[1], grid_timestamp))
-            {
-                fillResultValue(last_2_samples.timestamps[0], last_2_samples.values[0],
-                    last_2_samples.timestamps[1], last_2_samples.values[1],
-                    values[i], nulls[i]);
-            }
-        }
+        return aggregate.getResult(Base::timestamp_scale_multiplier);
     }
 
     static constexpr UInt16 FORMAT_VERSION = 2;

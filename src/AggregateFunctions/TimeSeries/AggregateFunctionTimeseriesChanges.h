@@ -8,12 +8,11 @@
 #include <Columns/ColumnVector.h>
 #include <Columns/ColumnArray.h>
 #include <Columns/ColumnNullable.h>
-#include <Common/DequeWithMemoryTracking.h>
-#include <Common/VectorWithMemoryTracking.h>
+
+#include <optional>
 
 #include <AggregateFunctions/TimeSeries/AggregateFunctionTimeseriesBase.h>
-
-#include <absl/container/flat_hash_map.h>
+#include <AggregateFunctions/TimeSeries/AggregateFunctionTimeseriesSamples.h>
 
 
 namespace DB
@@ -34,27 +33,64 @@ struct AggregateFunctionTimeseriesChangesTraits
         return is_resets ? "timeSeriesResetsToGrid" : "timeSeriesChangesToGrid";
     }
 
-    struct Bucket
-    {
-        absl::flat_hash_map<TimestampType, ValueType> samples;
+    using Bucket = AggregateFunctionTimeseriesSamples<TimestampType, ValueType>;
 
-        void add(TimestampType timestamp, ValueType value)
+    /// Per-bucket aggregation data for changes/resets.
+    struct AggregationData
+    {
+        ValueType first_value = 0;
+        ValueType last_value = 0;
+        UInt64 count = 0;       /// number of samples
+        UInt64 changes = 0;     /// number of counted transitions between consecutive samples so far
+
+        /// Whether the transition prev -> curr is counted: a decrease for resets, any change otherwise.
+        static bool isCounted(ValueType prev, ValueType curr)
         {
-            auto it = samples.find(timestamp);
-            if (it != samples.end())
-                it->second = std::max(it->second, value);
+            if constexpr (is_resets)
+                return curr < prev;
             else
-                samples[timestamp] = value;
+                return curr != prev;
         }
 
-        void merge(const Bucket & other)
+        /// Samples are always added in ascending timestamp order.
+        void add(TimestampType /* timestamp */, ValueType value)
         {
-            samples.reserve(other.samples.size());
+            if (count == 0)
+                first_value = value;
+            else if (isCounted(last_value, value))
+                ++changes;
+            last_value = value;
+            ++count;
+        }
 
-            for (const auto & [timestamp, value] : other.samples)
-                add(timestamp, value);
+        /// `later` holds the samples that come right after this aggregate's samples in time.
+        void merge(const AggregationData & later)
+        {
+            if (later.count == 0)
+                return;
+            if (count == 0)
+            {
+                *this = later;
+                return;
+            }
+            if (isCounted(last_value, later.first_value))
+                ++changes;
+            changes += later.changes;
+            last_value = later.last_value;
+            count += later.count;
+        }
+
+        /// Number of changes/resets in the window, or nullopt when there are no samples.
+        std::optional<ValueType> getResult() const
+        {
+            if (count == 0)
+                return std::nullopt;
+            return static_cast<ValueType>(changes);
         }
     };
+
+    /// Counting transitions between consecutive samples needs them in ascending timestamp order.
+    using BucketAggregator = typename Bucket::SortedAggregator;
 };
 
 template <typename Traits>
@@ -75,6 +111,7 @@ public:
     using Base::Base;
 
     using Bucket = typename Base::Bucket;
+    using AggregationData = typename Traits::AggregationData;
 
     static void serializeBucket(const Bucket & bucket, WriteBuffer & buf)
     {
@@ -105,108 +142,9 @@ public:
         }
     }
 
-private:
-    void fillResultValue(const DequeWithMemoryTracking<std::pair<TimestampType, ValueType>> & samples_in_window,
-        ValueType & result, UInt8 & null) const
+    std::optional<ValueType> finalizeAggregation(const AggregationData & aggregate, TimestampType /*grid_timestamp*/) const
     {
-        if (samples_in_window.empty())
-        {
-            result = 0;
-            null = 1;
-            return;
-        }
-
-        UInt64 count = 0;
-        ValueType prev_sample_value = samples_in_window.front().second;
-        for (const auto& sample : samples_in_window)
-        {
-            if constexpr (is_resets)
-            {
-                bool is_reset = (sample.second < prev_sample_value);
-                if (is_reset)
-                    count++;
-            }
-            else
-            {
-                bool is_change = (sample.second != prev_sample_value);
-                if (is_change)
-                    count++;
-            }
-            prev_sample_value = sample.second;
-        }
-
-        result = static_cast<ValueType>(count);
-        null = 0;
-    }
-
-public:
-    /// Insert the result into the column
-    void doInsertResultInto(AggregateDataPtr __restrict place, IColumn & to) const
-    {
-        ColumnArray & arr_to = typeid_cast<ColumnArray &>(to);
-        ColumnArray::Offsets & offsets_to = arr_to.getOffsets();
-
-        offsets_to.push_back(offsets_to.back() + Base::grid_size);
-
-        if (!Base::grid_size)
-            return;
-
-        ColumnNullable & result_to = typeid_cast<ColumnNullable &>(arr_to.getData());
-        auto & data_to = typeid_cast<typename Base::ColVecResultType &>(result_to.getNestedColumn()).getData();
-        auto & nulls_to = result_to.getNullMapData();
-
-        const size_t old_size = data_to.size();
-        chassert(old_size == nulls_to.size(), "Sizes of nested column and null map of Nullable column are not equal");
-
-        data_to.resize(old_size + Base::grid_size);
-        nulls_to.resize(old_size + Base::grid_size);
-
-        ValueType * values = data_to.data() + old_size;
-        UInt8 * nulls = nulls_to.data() + old_size;
-
-        const auto & buckets = Base::data(place)->buckets;
-
-        DequeWithMemoryTracking<std::pair<TimestampType, ValueType>> samples_in_window;
-        VectorWithMemoryTracking<std::pair<TimestampType, ValueType>> timestamps_buffer;
-
-        /// Fill the data for missing buckets
-        for (UInt32 i = 0; i < Base::grid_size; ++i)
-        {
-            /// Use `Base::timestampAtIndex` to compute the grid timestamp with overflow-safe
-            /// arithmetic. The plain expression `Base::start_timestamp + i * Base::step`
-            /// signed-overflows `TimestampType` when `step` is near `INT64_MAX` and `i >= 2`
-            /// (reachable from adversarial fuzzer inputs), which trips UBSAN.
-            const TimestampType grid_timestamp = Base::timestampAtIndex(i);
-
-            for (size_t bucket_index : Base::bucketRangeForGridPoint(i))
-            {
-                auto bucket_it = buckets.find(bucket_index);
-                if (bucket_it != buckets.end())
-                {
-                    timestamps_buffer.clear();
-                    /// Sort samples from the current bucket
-                    for (const auto & [timestamp, value] : bucket_it->second.samples)
-                        timestamps_buffer.emplace_back(timestamp, value);
-                    std::sort(timestamps_buffer.begin(), timestamps_buffer.end());
-
-                    /// Add samples from the current bucket
-                    for (const auto & [timestamp, value] : timestamps_buffer)
-                        samples_in_window.push_back({timestamp, value});
-                }
-            }
-
-            /// Remove samples that are out of the window
-            while (!samples_in_window.empty()
-                   && Base::isSampleOutOfWindow(samples_in_window.front().first, grid_timestamp))
-            {
-                samples_in_window.pop_front();
-            }
-
-            fillResultValue(
-                samples_in_window,
-                values[i],
-                nulls[i]);
-        }
+        return aggregate.getResult();
     }
 
     static constexpr UInt16 FORMAT_VERSION = 1;
