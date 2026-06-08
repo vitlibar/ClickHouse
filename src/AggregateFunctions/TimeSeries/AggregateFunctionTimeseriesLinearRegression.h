@@ -60,9 +60,13 @@ struct AggregateFunctionTimeseriesLinearRegressionTraits
             sum = new_sum;
         }
 
-        void add(TimestampType timestamp, ValueType value)
+        /// The samples' timestamps are centered on a common base (the grid start) before accumulating,
+        /// so x stays small. The centering is necessary because otherwise a raw `DateTime64(9)` timestamp (~1.7e18)
+        /// would exceed the Float64 mantissa, so distinct timestamps collapse to the same x.
+        void add(TimestampType timestamp, ValueType value, TimestampType base)
         {
-            const Float64 x = static_cast<Float64>(timestamp);
+            const Float64 x = static_cast<Float64>(
+                static_cast<Int128>(static_cast<Int64>(timestamp)) - static_cast<Int128>(static_cast<Int64>(base)));
             const Float64 y = static_cast<Float64>(value);
             kahanAdd(x, sum_x, comp_x);
             kahanAdd(y, sum_y, comp_y);
@@ -80,7 +84,7 @@ struct AggregateFunctionTimeseriesLinearRegressionTraits
             count += other.count;
         }
 
-        std::optional<ValueType> getResult(TimestampType grid_timestamp, Float64 predict_offset) const
+        std::optional<ValueType> getResult(TimestampType grid_timestamp, TimestampType base, Float64 predict_offset) const
         {
             if (count < 2)
                 return std::nullopt;
@@ -101,15 +105,29 @@ struct AggregateFunctionTimeseriesLinearRegressionTraits
             if (!is_predict)
                 return static_cast<ValueType>(slope);
 
-            /// Line y = slope * x + intercept with x = Float64(timestamp); extrapolate to grid_timestamp + predict_offset.
+            /// Line y = slope * x + intercept with x centered on `base`; extrapolate to `grid_timestamp +
+            /// predict_offset`, expressed in the same centered coordinates (subtract `base` in `Int128`).
             const Float64 intercept = total_y / n - slope * total_x / n;
-            const Float64 predicted = slope * (static_cast<Float64>(grid_timestamp) + predict_offset) + intercept;
+            const Float64 predict_x = static_cast<Float64>(
+                static_cast<Int128>(static_cast<Int64>(grid_timestamp)) - static_cast<Int128>(static_cast<Int64>(base)))
+                + predict_offset;
+            const Float64 predicted = slope * predict_x + intercept;
             return static_cast<ValueType>(predicted);
         }
     };
 
-    /// The least-squares sums are order-independent, so the samples can be added in any order.
-    using BucketAggregator = typename Bucket::Aggregator;
+    /// Builds the regression sums for a bucket, centering each timestamp on `base`.
+    /// The sums are order-independent, so samples are added without sorting.
+    struct BucketAggregator
+    {
+        TimestampType base = 0;
+
+        void aggregate(const Bucket & bucket, AggregationData & data) const
+        {
+            for (const auto & [timestamp, value] : bucket.samples)
+                data.add(timestamp, value, base);
+        }
+    };
 };
 
 template <typename Traits>
@@ -131,6 +149,7 @@ public:
 
     using Bucket = typename Base::Bucket;
     using AggregationData = typename Traits::AggregationData;
+    using BucketAggregator = typename Base::BucketAggregator;
 
     /// Constructor for timeSeriesPredictLinearToGrid (is_predict = true).
     /// For timeSeriesDerivToGrid (is_predict = false) it reaches the base constructor via `using Base::Base` above.
@@ -171,9 +190,14 @@ public:
         }
     }
 
+    BucketAggregator createAggregator() const
+    {
+        return BucketAggregator{Base::start_timestamp};
+    }
+
     std::optional<ValueType> finalizeAggregation(const AggregationData & aggregate, TimestampType grid_timestamp) const
     {
-        return aggregate.getResult(grid_timestamp, predict_offset);
+        return aggregate.getResult(grid_timestamp, Base::start_timestamp, predict_offset);
     }
 
     static constexpr UInt16 FORMAT_VERSION = 1;

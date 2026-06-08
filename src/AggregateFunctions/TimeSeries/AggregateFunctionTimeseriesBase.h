@@ -564,6 +564,13 @@ public:
         return static_cast<const FunctionImpl &>(*this);
     }
 
+    /// Creates the per-bucket aggregator used to build the aggregation data from a bucket.
+    /// Derived classes may redefine it.
+    static BucketAggregator createAggregator()
+    {
+        return BucketAggregator{};
+    }
+
     /// Constructs a result array.
     /// `Traits::BucketAggregator` describes how a bucket is turned into the per-bucket `AggregationData`.
     /// Each derived class provides function `finalizeAggregation(aggregate, grid_timestamp)`
@@ -598,7 +605,7 @@ public:
             /// Build the aggregation data for each bucket from its samples.
             UnorderedMapWithMemoryTracking<size_t, AggregationData> aggregates;
             aggregates.reserve(buckets.size());
-            BucketAggregator aggregator;
+            auto aggregator = derived().createAggregator();
             for (const auto & [bucket_index, bucket] : buckets)
                 aggregator.aggregate(bucket, aggregates[bucket_index]);
             fillGridResults(aggregates, values, nulls);
