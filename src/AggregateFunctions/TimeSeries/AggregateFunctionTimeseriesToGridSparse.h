@@ -110,7 +110,7 @@ public:
         bucket.add(timestamp, value);
     }
 
-    static constexpr UInt16 FORMAT_VERSION = 2;
+    static constexpr UInt16 FORMAT_VERSION = 3;
 };
 
 }

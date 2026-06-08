@@ -210,7 +210,7 @@ public:
         return aggregate.getResult(grid_timestamp, Base::window, Base::timestamp_scale_multiplier);
     }
 
-    static constexpr UInt16 FORMAT_VERSION = 2;
+    static constexpr UInt16 FORMAT_VERSION = 3;
 };
 
 }

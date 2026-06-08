@@ -200,7 +200,7 @@ public:
         return aggregate.getResult(grid_timestamp, Base::start_timestamp, predict_offset);
     }
 
-    static constexpr UInt16 FORMAT_VERSION = 1;
+    static constexpr UInt16 FORMAT_VERSION = 2;
 
 protected:
     const Float64 predict_offset{};    /// Predict offset used by timeSeriesPredictLinearToGrid function, used to calculate the timestamp of the predicted value

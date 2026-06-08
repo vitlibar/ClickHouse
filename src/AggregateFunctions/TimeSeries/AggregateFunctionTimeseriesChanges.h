@@ -142,7 +142,7 @@ public:
         }
     }
 
-    static constexpr UInt16 FORMAT_VERSION = 1;
+    static constexpr UInt16 FORMAT_VERSION = 2;
 };
 
 }
