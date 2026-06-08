@@ -28,11 +28,9 @@ struct AggregateFunctionTimeseriesSamples
 
     void add(TimestampType timestamp, ValueType value)
     {
-        auto it = samples.find(timestamp);
-        if (it != samples.end())
+        auto [it, inserted] = samples.emplace(timestamp, value);
+        if (!inserted)
             it->second = std::max(it->second, value);
-        else
-            samples[timestamp] = value;
     }
 
     void merge(const AggregateFunctionTimeseriesSamples & other)

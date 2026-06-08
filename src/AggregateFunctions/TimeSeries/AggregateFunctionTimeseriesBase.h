@@ -214,9 +214,15 @@ public:
         /// near INT64_MIN and `step` near INT64_MAX.
         const Int128 offset = static_cast<Int128>(static_cast<Int64>(timestamp)) - static_cast<Int128>(static_cast<Int64>(start_timestamp));
         const Int128 step_128 = static_cast<Int128>(static_cast<Int64>(step));
-        Int128 unclamped_grid_index = offset / step_128;
-        if (offset > 0 && (offset % step_128) != 0)
-            ++unclamped_grid_index;
+
+        /// `step <= 0` is possible only when `start == end` (a single grid point).
+        Int128 unclamped_grid_index = 0;
+        if (step > 0)
+        {
+            unclamped_grid_index = offset / step_128;
+            if ((offset % step_128) > 0)
+                ++unclamped_grid_index;
+        }
 
         /// The related grid point's index is always non-negative.
         const size_t grid_index = (unclamped_grid_index > 0) ? static_cast<size_t>(unclamped_grid_index) : 0;
@@ -290,7 +296,7 @@ public:
         Int128 end_time;
         if (buckets_per_step == 1)
         {
-            start_time = grid_timestamp - static_cast<Int64>(window < step ? window : step);
+            start_time = grid_timestamp - static_cast<Int64>((step <= 0 || window < step) ? window : step);
             end_time = grid_timestamp;
         }
         else if (offset_remainder != 0)
