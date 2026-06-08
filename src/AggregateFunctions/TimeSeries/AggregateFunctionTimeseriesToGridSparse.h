@@ -66,7 +66,7 @@ struct AggregateFunctionTimeseriesToGridSparseTraits
     };
 
     /// The bucket already keeps the latest sample, so it is merged directly (no aggregation pass).
-    using BucketAggregator = void;
+    using Aggregator = void;
 };
 
 
@@ -108,11 +108,6 @@ public:
         readBinaryLittleEndian(value, buf);
 
         bucket.add(timestamp, value);
-    }
-
-    std::optional<ValueType> finalizeAggregation(const AggregationData & aggregate, TimestampType /*grid_timestamp*/) const
-    {
-        return aggregate.getResult();
     }
 
     static constexpr UInt16 FORMAT_VERSION = 2;

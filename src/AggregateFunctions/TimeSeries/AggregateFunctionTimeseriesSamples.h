@@ -35,7 +35,7 @@ struct AggregateFunctionTimeseriesSamples
             add(timestamp, value);
     }
 
-    /// `BucketAggregator` policy: builds the aggregation data from the bucket's samples, in arbitrary order
+    /// `Aggregator` policy: builds the aggregation data from the bucket's samples, in arbitrary order
     /// (for order-independent aggregates).
     struct Aggregator
     {
@@ -47,7 +47,7 @@ struct AggregateFunctionTimeseriesSamples
         }
     };
 
-    /// `BucketAggregator` policy: builds the aggregation data from the bucket's samples sorted by timestamp
+    /// `Aggregator` policy: builds the aggregation data from the bucket's samples sorted by timestamp
     /// (for order-dependent aggregates, e.g. counting transitions or rate reset accounting). The sort buffer
     /// is reused across buckets.
     struct SortedAggregator

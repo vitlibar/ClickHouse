@@ -90,7 +90,7 @@ struct AggregateFunctionTimeseriesChangesTraits
     };
 
     /// Counting transitions between consecutive samples needs them in ascending timestamp order.
-    using BucketAggregator = typename Bucket::SortedAggregator;
+    using Aggregator = typename Bucket::SortedAggregator;
 };
 
 template <typename Traits>
@@ -140,11 +140,6 @@ public:
 
             bucket.add(timestamp, value);
         }
-    }
-
-    std::optional<ValueType> finalizeAggregation(const AggregationData & aggregate, TimestampType /*grid_timestamp*/) const
-    {
-        return aggregate.getResult();
     }
 
     static constexpr UInt16 FORMAT_VERSION = 1;

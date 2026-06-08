@@ -152,7 +152,7 @@ struct AggregateFunctionTimeseriesExtrapolatedValueTraits
     };
 
     /// First/last boundary samples and reset accounting need the samples in ascending timestamp order.
-    using BucketAggregator = typename Bucket::SortedAggregator;
+    using Aggregator = typename Bucket::SortedAggregator;
 };
 
 /// Aggregate function to calculate extrapolated values (rate and delta) of timeseries on the specified grid

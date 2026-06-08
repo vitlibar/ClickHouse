@@ -71,7 +71,7 @@ struct AggregateFunctionTimeseriesInstantValueTraits
     };
 
     /// The bucket already keeps the last two samples, so it is merged directly (no aggregation pass).
-    using BucketAggregator = void;
+    using Aggregator = void;
 };
 
 

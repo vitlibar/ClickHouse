@@ -62,7 +62,7 @@ public:
 
     using Bucket = typename Traits::Bucket;
     using AggregationData = typename Traits::AggregationData;
-    using BucketAggregator = typename Traits::BucketAggregator;
+    using Aggregator = typename Traits::Aggregator;
 
     struct State
     {
@@ -566,15 +566,21 @@ public:
 
     /// Creates the per-bucket aggregator used to build the aggregation data from a bucket.
     /// Derived classes may redefine it.
-    static BucketAggregator createAggregator()
+    static Aggregator createAggregator()
     {
-        return BucketAggregator{};
+        return Aggregator{};
+    }
+
+    /// Turns a window's `AggregationData` into the result value (or nullopt for NULL).
+    /// Derived classes may redefine it.
+    std::optional<ValueType> finalizeAggregation(const AggregationData & aggregate, TimestampType /*grid_timestamp*/) const
+    {
+        return aggregate.getResult();
     }
 
     /// Constructs a result array.
-    /// `Traits::BucketAggregator` describes how a bucket is turned into the per-bucket `AggregationData`.
-    /// Each derived class provides function `finalizeAggregation(aggregate, grid_timestamp)`
-    /// to turn per-window `AggregationData` into a value.
+    /// `Traits::Aggregator` describes how a bucket is turned into the per-bucket `AggregationData`.
+    /// Each derived class turns per-window `AggregationData` into a value via `finalizeAggregation`.
     void doInsertResultInto(AggregateDataPtr __restrict place, IColumn & to) const
     {
         ColumnArray & arr_to = typeid_cast<ColumnArray &>(to);
@@ -600,7 +606,7 @@ public:
 
         const auto & buckets = data(place)->buckets;
 
-        if constexpr (!std::is_void_v<BucketAggregator>)
+        if constexpr (!std::is_void_v<Aggregator>)
         {
             /// Build the aggregation data for each bucket from its samples.
             UnorderedMapWithMemoryTracking<size_t, AggregationData> aggregates;

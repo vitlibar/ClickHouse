@@ -118,7 +118,7 @@ struct AggregateFunctionTimeseriesLinearRegressionTraits
 
     /// Builds the regression sums for a bucket, centering each timestamp on `base`.
     /// The sums are order-independent, so samples are added without sorting.
-    struct BucketAggregator
+    struct Aggregator
     {
         TimestampType base = 0;
 
@@ -149,7 +149,7 @@ public:
 
     using Bucket = typename Base::Bucket;
     using AggregationData = typename Traits::AggregationData;
-    using BucketAggregator = typename Base::BucketAggregator;
+    using Aggregator = typename Base::Aggregator;
 
     /// Constructor for timeSeriesPredictLinearToGrid (is_predict = true).
     /// For timeSeriesDerivToGrid (is_predict = false) it reaches the base constructor via `using Base::Base` above.
@@ -190,9 +190,9 @@ public:
         }
     }
 
-    BucketAggregator createAggregator() const
+    Aggregator createAggregator() const
     {
-        return BucketAggregator{Base::start_timestamp};
+        return Aggregator{Base::start_timestamp};
     }
 
     std::optional<ValueType> finalizeAggregation(const AggregationData & aggregate, TimestampType grid_timestamp) const
