@@ -18,11 +18,6 @@
 namespace DB
 {
 
-namespace ErrorCodes
-{
-    extern const int INCORRECT_DATA;
-}
-
 template <bool array_arguments_, typename TimestampType_, typename IntervalType_, typename ValueType_, bool is_rate_>
 struct AggregateFunctionTimeseriesInstantValueTraits
 {
@@ -81,53 +76,14 @@ class AggregateFunctionTimeseriesInstantValue final :
     public AggregateFunctionTimeseriesBase<AggregateFunctionTimeseriesInstantValue<Traits>, Traits>
 {
 public:
-    static constexpr bool DateTime64Supported = true;
-
     static constexpr bool is_rate = Traits::is_rate;
 
     using TimestampType = typename Traits::TimestampType;
-    using IntervalType = typename Traits::IntervalType;
     using ValueType = typename Traits::ValueType;
-
-    using Base = AggregateFunctionTimeseriesBase<AggregateFunctionTimeseriesInstantValue<Traits>, Traits>;
-
-    using Bucket = typename Base::Bucket;
     using AggregationData = typename Traits::AggregationData;
 
+    using Base = AggregateFunctionTimeseriesBase<AggregateFunctionTimeseriesInstantValue<Traits>, Traits>;
     using Base::Base;
-
-    static void serializeBucket(const Bucket & bucket, WriteBuffer & buf)
-    {
-        writeBinaryLittleEndian(bucket.filled, buf);
-        for (size_t i = 0; i < bucket.filled; ++i)
-        {
-            writeBinaryLittleEndian(bucket.timestamps[i], buf);
-        }
-        for (size_t i = 0; i < bucket.filled; ++i)
-        {
-            writeBinaryLittleEndian(bucket.values[i], buf);
-        }
-    }
-
-    void deserializeBucket(Bucket & bucket, ReadBuffer & buf, const size_t bucket_index) const
-    {
-        readBinaryLittleEndian(bucket.filled,buf);
-
-        if (bucket.filled > 2)
-            throw Exception(ErrorCodes::INCORRECT_DATA, "Cannot deserialize data with more than 2 samples in a bucket");
-
-        for (size_t j = 0; j < bucket.filled; ++j)
-        {
-            TimestampType timestamp;
-            readBinaryLittleEndian(timestamp, buf);
-            Base::checkTimestampInRange(timestamp, bucket_index);
-            bucket.timestamps[j] = timestamp;
-        }
-        for (size_t j = 0; j < bucket.filled; ++j)
-        {
-            readBinaryLittleEndian(bucket.values[j], buf);
-        }
-    }
 
     std::optional<ValueType> finalizeAggregation(const AggregationData & aggregate, TimestampType /*grid_timestamp*/) const
     {
@@ -135,6 +91,7 @@ public:
     }
 
     static constexpr UInt16 FORMAT_VERSION = 3;
+    static constexpr bool DateTime64Supported = true;
 };
 
 }

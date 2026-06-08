@@ -269,6 +269,46 @@ public:
         return static_cast<TimestampType>(static_cast<Int64>(result_bits));
     }
 
+    /// Returns the half-open timestamp range `(start, end]` of bucket `bucket_index`.
+    std::pair<TimestampType, TimestampType> bucketTimeRange(size_t bucket_index) const
+    {
+        /// Computed in `Int128` to avoid overflow.
+        const Int128 buckets_per_step_128 = static_cast<Int128>(buckets_per_step);
+        const Int128 offset = static_cast<Int128>(bucket_index) - (static_cast<Int128>(buckets_per_window) - 1);
+        const Int128 offset_remainder = offset % buckets_per_step_128;
+
+        /// Round `offset` up to the right grid point. A negative `offset` corresponding to the leading buckets is
+        /// already rounded up by truncation toward zero, so here we check only for a positive offset_remainder.
+        Int128 grid_index = offset / buckets_per_step_128;
+        if (offset_remainder > 0)
+            ++grid_index;
+
+        const Int128 grid_timestamp = static_cast<Int128>(static_cast<Int64>(start_timestamp))
+            + grid_index * static_cast<Int128>(static_cast<Int64>(step));
+
+        Int128 start_time;
+        Int128 end_time;
+        if (buckets_per_step == 1)
+        {
+            start_time = grid_timestamp - static_cast<Int64>(window < step ? window : step);
+            end_time = grid_timestamp;
+        }
+        else if (offset_remainder != 0)
+        {
+            /// before split
+            start_time = grid_timestamp - static_cast<Int64>(step);
+            end_time = grid_timestamp - static_cast<Int64>(window_remainder);
+        }
+        else
+        {
+            /// after split
+            start_time = grid_timestamp - static_cast<Int64>(window_remainder);
+            end_time = grid_timestamp;
+        }
+
+        return {static_cast<TimestampType>(static_cast<Int64>(start_time)), static_cast<TimestampType>(static_cast<Int64>(end_time))};
+    }
+
     /// Returns whether a sample at `timestamp` is past the sliding-window cutoff for grid point `grid_timestamp`.
     bool isSampleOutOfWindow(const TimestampType timestamp, const TimestampType grid_timestamp) const
     {
@@ -509,7 +549,7 @@ public:
         for (const auto & bucket : data(place)->buckets)
         {
             writeBinaryLittleEndian(bucket.first, buf);
-            FunctionImpl::serializeBucket(bucket.second, buf);
+            bucket.second.serialize(buf);
         }
     }
 
@@ -525,7 +565,7 @@ public:
         readBinaryLittleEndian(size, buf);
 
         if (size != bucket_count)
-            throw Exception(ErrorCodes::LOGICAL_ERROR, "Cannot deserialize data with different bucket count");
+            throw Exception(ErrorCodes::INCORRECT_DATA, "Cannot deserialize data with different bucket count");
 
         size_t buckets_size = 0;
         readBinaryLittleEndian(buckets_size, buf);
@@ -544,19 +584,12 @@ public:
                 throw Exception(ErrorCodes::INCORRECT_DATA, "Cannot deserialize data with index {} greater than bucket count {}", index, bucket_count);
 
             auto & bucket = data(place)->buckets[index];
+            bucket.deserialize(buf);
 
-            derived().deserializeBucket(bucket, buf, index);
+            /// Validate that each deserialized sample falls into this bucket's timestamp range.
+            const auto [bucket_start_time, bucket_end_time] = bucketTimeRange(index);
+            bucket.checkTimestamps(bucket_start_time, bucket_end_time);
         }
-    }
-
-    /// Validates that a deserialized sample at `timestamp` is stored in the bucket that `add` would place it in.
-    void checkTimestampInRange(const TimestampType timestamp, const size_t bucket_index) const
-    {
-        if (bucketIndexForTimestamp(timestamp) != bucket_index)
-            throw Exception(
-                ErrorCodes::INCORRECT_DATA,
-                "Cannot deserialize data: timestamp {} does not belong to bucket {}",
-                static_cast<Int64>(timestamp), bucket_index);
     }
 
     const FunctionImpl & derived() const

@@ -15,6 +15,11 @@
 namespace DB
 {
 
+namespace ErrorCodes
+{
+    extern const int INCORRECT_DATA;
+}
+
 template <bool array_arguments_, typename TimestampType_, typename IntervalType_, typename ValueType_, bool is_rate_>
 struct AggregateFunctionTimeseriesToGridSparseTraits
 {
@@ -51,6 +56,28 @@ struct AggregateFunctionTimeseriesToGridSparseTraits
             if (other.has_value)
                 add(other.first, other.second);
         }
+
+        void serialize(WriteBuffer & buf) const
+        {
+            writeBinary(has_value, buf);
+            writeBinaryLittleEndian(first, buf);
+            writeBinaryLittleEndian(second, buf);
+        }
+
+        void deserialize(ReadBuffer & buf)
+        {
+            readBinary(has_value, buf);
+            readBinaryLittleEndian(first, buf);
+            readBinaryLittleEndian(second, buf);
+        }
+
+        void checkTimestamps(TimestampType start_time, TimestampType end_time) const
+        {
+            if (has_value && (first <= start_time || first > end_time))
+                throw Exception(ErrorCodes::INCORRECT_DATA,
+                    "Cannot deserialize data: timestamp {} is outside its bucket's range ({}, {}]",
+                    static_cast<Int64>(first), static_cast<Int64>(start_time), static_cast<Int64>(end_time));
+        }
     };
 
     /// Per-bucket aggregation data. The bucket already keeps the most recent sample,
@@ -77,40 +104,13 @@ class AggregateFunctionTimeseriesToGridSparse final :
     public AggregateFunctionTimeseriesBase<AggregateFunctionTimeseriesToGridSparse<Traits>, Traits>
 {
 public:
-    static constexpr bool DateTime64Supported = true;
-
     static_assert(Traits::is_rate == false, "AggregateFunctionTimeseriesToGridSparse does not have rate version");
 
-    using TimestampType = typename Traits::TimestampType;
-    using IntervalType = typename Traits::IntervalType;
-    using ValueType = typename Traits::ValueType;
-
     using Base = AggregateFunctionTimeseriesBase<AggregateFunctionTimeseriesToGridSparse<Traits>, Traits>;
-
     using Base::Base;
 
-    using Bucket = typename Base::Bucket;
-    using AggregationData = typename Traits::AggregationData;
-
-    static void serializeBucket(const Bucket & bucket, WriteBuffer & buf)
-    {
-        writeBinaryLittleEndian(bucket.first, buf);
-        writeBinaryLittleEndian(bucket.second, buf);
-    }
-
-    void deserializeBucket(Bucket & bucket, ReadBuffer & buf, const size_t bucket_index) const
-    {
-        TimestampType timestamp;
-        readBinaryLittleEndian(timestamp, buf);
-        Base::checkTimestampInRange(timestamp, bucket_index);
-
-        ValueType value;
-        readBinaryLittleEndian(value, buf);
-
-        bucket.add(timestamp, value);
-    }
-
     static constexpr UInt16 FORMAT_VERSION = 3;
+    static constexpr bool DateTime64Supported = true;
 };
 
 }

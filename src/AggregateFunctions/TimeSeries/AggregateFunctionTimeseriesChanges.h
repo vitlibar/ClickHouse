@@ -93,56 +93,19 @@ struct AggregateFunctionTimeseriesChangesTraits
     using Aggregator = typename Bucket::SortedAggregator;
 };
 
+
 template <typename Traits>
 class AggregateFunctionTimeseriesChanges final :
     public AggregateFunctionTimeseriesBase<AggregateFunctionTimeseriesChanges<Traits>, Traits>
 {
 public:
-    static constexpr bool DateTime64Supported = true;
-
     static constexpr bool is_resets = Traits::is_resets;
 
-    using TimestampType = typename Traits::TimestampType;
-    using IntervalType = typename Traits::IntervalType;
-    using ValueType = typename Traits::ValueType;
-
     using Base = AggregateFunctionTimeseriesBase<AggregateFunctionTimeseriesChanges<Traits>, Traits>;
-
     using Base::Base;
 
-    using Bucket = typename Base::Bucket;
-    using AggregationData = typename Traits::AggregationData;
-
-    static void serializeBucket(const Bucket & bucket, WriteBuffer & buf)
-    {
-        writeBinaryLittleEndian(bucket.samples.size(), buf);
-        for (const auto & sample : bucket.samples)
-        {
-            writeBinaryLittleEndian(sample.first, buf);
-            writeBinaryLittleEndian(sample.second, buf);
-        }
-    }
-
-    void deserializeBucket(Bucket & bucket, ReadBuffer & buf, const size_t bucket_index) const
-    {
-        size_t sample_count = 0;
-        readBinaryLittleEndian(sample_count,buf);
-        bucket.samples.reserve(sample_count);
-
-        for (size_t s = 0; s < sample_count; ++s)
-        {
-            TimestampType timestamp;
-            readBinaryLittleEndian(timestamp, buf);
-            Base::checkTimestampInRange(timestamp, bucket_index);
-
-            ValueType value;
-            readBinaryLittleEndian(value, buf);
-
-            bucket.add(timestamp, value);
-        }
-    }
-
     static constexpr UInt16 FORMAT_VERSION = 2;
+    static constexpr bool DateTime64Supported = true;
 };
 
 }

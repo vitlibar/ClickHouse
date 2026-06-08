@@ -155,55 +155,21 @@ struct AggregateFunctionTimeseriesExtrapolatedValueTraits
     using Aggregator = typename Bucket::SortedAggregator;
 };
 
+
 /// Aggregate function to calculate extrapolated values (rate and delta) of timeseries on the specified grid
 template <typename Traits>
 class AggregateFunctionTimeseriesExtrapolatedValue final :
     public AggregateFunctionTimeseriesBase<AggregateFunctionTimeseriesExtrapolatedValue<Traits>, Traits>
 {
 public:
-    static constexpr bool DateTime64Supported = true;
-
     static constexpr bool is_rate = Traits::is_rate;
 
     using TimestampType = typename Traits::TimestampType;
-    using IntervalType = typename Traits::IntervalType;
     using ValueType = typename Traits::ValueType;
-
-    using Base = AggregateFunctionTimeseriesBase<AggregateFunctionTimeseriesExtrapolatedValue<Traits>, Traits>;
-
-    using Base::Base;
-
-    using Bucket = typename Base::Bucket;
     using AggregationData = typename Traits::AggregationData;
 
-    static void serializeBucket(const Bucket & bucket, WriteBuffer & buf)
-    {
-        writeBinaryLittleEndian(bucket.samples.size(), buf);
-        for (const auto & sample : bucket.samples)
-        {
-            writeBinaryLittleEndian(sample.first, buf);
-            writeBinaryLittleEndian(sample.second, buf);
-        }
-    }
-
-    void deserializeBucket(Bucket & bucket, ReadBuffer & buf, const size_t bucket_index) const
-    {
-        size_t sample_count = 0;
-        readBinaryLittleEndian(sample_count,buf);
-        bucket.samples.reserve(sample_count);
-
-        for (size_t s = 0; s < sample_count; ++s)
-        {
-            TimestampType timestamp;
-            readBinaryLittleEndian(timestamp, buf);
-            Base::checkTimestampInRange(timestamp, bucket_index);
-
-            ValueType value;
-            readBinaryLittleEndian(value, buf);
-
-            bucket.add(timestamp, value);
-        }
-    }
+    using Base = AggregateFunctionTimeseriesBase<AggregateFunctionTimeseriesExtrapolatedValue<Traits>, Traits>;
+    using Base::Base;
 
     std::optional<ValueType> finalizeAggregation(const AggregationData & aggregate, TimestampType grid_timestamp) const
     {
@@ -211,6 +177,7 @@ public:
     }
 
     static constexpr UInt16 FORMAT_VERSION = 3;
+    static constexpr bool DateTime64Supported = true;
 };
 
 }

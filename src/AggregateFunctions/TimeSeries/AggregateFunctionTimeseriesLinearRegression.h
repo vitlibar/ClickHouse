@@ -130,26 +130,22 @@ struct AggregateFunctionTimeseriesLinearRegressionTraits
     };
 };
 
+
 template <typename Traits>
 class AggregateFunctionTimeseriesLinearRegression final :
     public AggregateFunctionTimeseriesBase<AggregateFunctionTimeseriesLinearRegression<Traits>, Traits>
 {
 public:
-    static constexpr bool DateTime64Supported = true;
-
     static constexpr bool is_predict = Traits::is_predict;
 
     using TimestampType = typename Traits::TimestampType;
     using IntervalType = typename Traits::IntervalType;
     using ValueType = typename Traits::ValueType;
+    using Aggregator = typename Traits::Aggregator;
+    using AggregationData = typename Traits::AggregationData;
 
     using Base = AggregateFunctionTimeseriesBase<AggregateFunctionTimeseriesLinearRegression<Traits>, Traits>;
-
     using Base::Base;
-
-    using Bucket = typename Base::Bucket;
-    using AggregationData = typename Traits::AggregationData;
-    using Aggregator = typename Base::Aggregator;
 
     /// Constructor for timeSeriesPredictLinearToGrid (is_predict = true).
     /// For timeSeriesDerivToGrid (is_predict = false) it reaches the base constructor via `using Base::Base` above.
@@ -159,35 +155,6 @@ public:
         : Base(argument_types_, parameters_, start_timestamp_, end_timestamp_, step_, window_, timestamp_scale_)
         , predict_offset(predict_offset_)
     {
-    }
-
-    static void serializeBucket(const Bucket & bucket, WriteBuffer & buf)
-    {
-        writeBinaryLittleEndian(bucket.samples.size(), buf);
-        for (const auto & sample : bucket.samples)
-        {
-            writeBinaryLittleEndian(sample.first, buf);
-            writeBinaryLittleEndian(sample.second, buf);
-        }
-    }
-
-    void deserializeBucket(Bucket & bucket, ReadBuffer & buf, const size_t bucket_index) const
-    {
-        size_t sample_count = 0;
-        readBinaryLittleEndian(sample_count,buf);
-        bucket.samples.reserve(sample_count);
-
-        for (size_t s = 0; s < sample_count; ++s)
-        {
-            TimestampType timestamp;
-            readBinaryLittleEndian(timestamp, buf);
-            Base::checkTimestampInRange(timestamp, bucket_index);
-
-            ValueType value;
-            readBinaryLittleEndian(value, buf);
-
-            bucket.add(timestamp, value);
-        }
     }
 
     Aggregator createAggregator() const
@@ -201,6 +168,7 @@ public:
     }
 
     static constexpr UInt16 FORMAT_VERSION = 2;
+    static constexpr bool DateTime64Supported = true;
 
 protected:
     const Float64 predict_offset{};    /// Predict offset used by timeSeriesPredictLinearToGrid function, used to calculate the timestamp of the predicted value
