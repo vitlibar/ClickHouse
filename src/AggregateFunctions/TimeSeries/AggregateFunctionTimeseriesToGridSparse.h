@@ -71,12 +71,13 @@ struct AggregateFunctionTimeseriesToGridSparseTraits
             readBinaryLittleEndian(second, buf);
         }
 
-        void checkTimestamps(TimestampType start_time, TimestampType end_time) const
+        template <typename RangeType>
+        void checkTimestampsInRange(const RangeType & range) const
         {
-            if (has_value && (first <= start_time || first > end_time))
+            if (has_value && !range.contains(first))
                 throw Exception(ErrorCodes::INCORRECT_DATA,
-                    "Cannot deserialize data: timestamp {} is outside its bucket's range ({}, {}]",
-                    static_cast<Int64>(first), static_cast<Int64>(start_time), static_cast<Int64>(end_time));
+                    "Cannot deserialize data: timestamp {} is outside its bucket's range",
+                    static_cast<Int64>(first));
         }
     };
 

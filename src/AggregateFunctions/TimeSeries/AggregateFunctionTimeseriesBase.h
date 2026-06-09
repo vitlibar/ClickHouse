@@ -82,7 +82,7 @@ public:
         , buckets_per_window(bucketsPerWindow(step_, window_, window_remainder))
         , bucket_count(bucketCount(grid_size, buckets_per_window, buckets_per_step))
         , start_timestamp(start_timestamp_)
-        , end_timestamp(static_cast<TimestampType>(start_timestamp_ + (grid_size - 1) * step_))  /// Align end timestamp down by step
+        , end_timestamp(alignedEndTimestamp(start_timestamp_, grid_size, step_))
         , step(step_)
         , window(window_)
         , timestamp_scale_multiplier(static_cast<TimestampType>(DecimalUtils::scaleMultiplier<Int64>(timestamp_scale_)))
@@ -162,11 +162,24 @@ public:
         return static_cast<size_t>(quotient + 1);
     }
 
+    /// Calculates the grid's end timestamp: `start_timestamp + (grid_size - 1) * step`, aligned down by step.
+    static TimestampType alignedEndTimestamp(TimestampType start_timestamp, size_t grid_size, IntervalType step)
+    {
+        /// Compute using unsigned 64-bit arithmetic to avoid signed overflow for extreme inputs
+        /// (e.g. `start = INT64_MIN`, `step = INT64_MAX`).
+        const UInt64 start_bits = static_cast<UInt64>(static_cast<Int64>(start_timestamp));
+        const UInt64 step_bits = static_cast<UInt64>(static_cast<Int64>(step));
+        const UInt64 result_bits = start_bits + static_cast<UInt64>(grid_size - 1) * step_bits;
+        return static_cast<TimestampType>(static_cast<Int64>(result_bits));
+    }
+
     /// Calculates number of buckets: leading buckets related to the window of grid point #0
     /// plus 1 or 2 buckets per each step.
     static size_t bucketCount(size_t grid_size, size_t buckets_per_window, size_t buckets_per_step)
     {
         chassert(grid_size >= 1);
+        /// Cannot overflow `size_t`: `grid_size <= MAX_GRID_SIZE` (16M, enforced by `gridSize`),
+        /// `buckets_per_step` is 1 or 2.
         return buckets_per_window + (grid_size - 1) * buckets_per_step;
     }
 
@@ -193,7 +206,10 @@ public:
 
         const size_t whole_steps = static_cast<size_t>(window / step);
         if (window_remainder != 0)
+        {
+            /// Cannot overflow `size_t`: `window_remainder != 0` implies `step >= 2`.
             return 2 * whole_steps + 1;
+        }
         return whole_steps == 0 ? 1 : whole_steps;
     }
 
@@ -275,8 +291,20 @@ public:
         return static_cast<TimestampType>(static_cast<Int64>(result_bits));
     }
 
-    /// Returns the half-open timestamp range `(start, end]` of bucket `bucket_index`.
-    std::pair<TimestampType, TimestampType> bucketTimeRange(size_t bucket_index) const
+    /// Half-open timestamp range `(start_time, end_time]` of a bucket.
+    struct BucketTimeRange
+    {
+        std::optional<TimestampType> start_time;  /// The lower bound is optional
+        TimestampType end_time;
+
+        bool contains(const TimestampType & timestamp) const
+        {
+            return (!start_time || timestamp > *start_time) && timestamp <= end_time;
+        }
+    };
+
+    /// Returns the timestamp range of bucket `bucket_index`.
+    BucketTimeRange bucketTimeRange(size_t bucket_index) const
     {
         /// Computed in `Int128` to avoid overflow.
         const Int128 buckets_per_step_128 = static_cast<Int128>(buckets_per_step);
@@ -292,27 +320,32 @@ public:
         const Int128 grid_timestamp = static_cast<Int128>(static_cast<Int64>(start_timestamp))
             + grid_index * static_cast<Int128>(static_cast<Int64>(step));
 
-        Int128 start_time;
-        Int128 end_time;
+        Int128 start_time_128 = grid_timestamp;
+        Int128 end_time_128 = grid_timestamp;
         if (buckets_per_step == 1)
         {
-            start_time = grid_timestamp - static_cast<Int64>((step <= 0 || window < step) ? window : step);
-            end_time = grid_timestamp;
+            start_time_128 -= static_cast<Int64>((step <= 0 || window < step) ? window : step);
         }
         else if (offset_remainder != 0)
         {
             /// before split
-            start_time = grid_timestamp - static_cast<Int64>(step);
-            end_time = grid_timestamp - static_cast<Int64>(window_remainder);
+            start_time_128 -= static_cast<Int64>(step);
+            end_time_128 -= static_cast<Int64>(window_remainder);
         }
         else
         {
             /// after split
-            start_time = grid_timestamp - static_cast<Int64>(window_remainder);
-            end_time = grid_timestamp;
+            start_time_128 -= static_cast<Int64>(window_remainder);
         }
 
-        return {static_cast<TimestampType>(static_cast<Int64>(start_time)), static_cast<TimestampType>(static_cast<Int64>(end_time))};
+        /// `DateTime` can't be negative, so we should check here for underflow.
+        TimestampType start_time = static_cast<TimestampType>(static_cast<Int64>(start_time_128));
+        TimestampType end_time = static_cast<TimestampType>(static_cast<Int64>(end_time_128));
+        if (static_cast<Int128>(static_cast<Int64>(end_time)) != end_time_128)
+            return {0, 0};  /// Empty range
+        if (static_cast<Int128>(static_cast<Int64>(start_time)) != start_time_128)
+            return {std::nullopt, end_time};  /// No lower bound.
+        return {start_time, end_time};
     }
 
     /// Returns whether a sample at `timestamp` is past the sliding-window cutoff for grid point `grid_timestamp`.
@@ -593,8 +626,7 @@ public:
             bucket.deserialize(buf);
 
             /// Validate that each deserialized sample falls into this bucket's timestamp range.
-            const auto [bucket_start_time, bucket_end_time] = bucketTimeRange(index);
-            bucket.checkTimestamps(bucket_start_time, bucket_end_time);
+            bucket.checkTimestampsInRange(bucketTimeRange(index));
         }
     }
 
@@ -668,7 +700,7 @@ public:
     template <typename AggregationDataMap>
     void fillGridResults(const AggregationDataMap & aggregates, ValueType * values, UInt8 * nulls) const
     {
-        using AggregationDataType = std::decay_t<decltype(aggregates.begin()->second)>;
+        using AggregationDataType = typename AggregationDataMap::mapped_type;
         VectorWithMemoryTracking<std::pair<size_t, const AggregationDataType *>> sorted_buckets;
         sorted_buckets.reserve(aggregates.size());
         for (const auto & [bucket_index, data] : aggregates)

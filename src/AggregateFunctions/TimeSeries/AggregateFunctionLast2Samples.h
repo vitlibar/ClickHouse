@@ -144,19 +144,26 @@ public:
             readBinaryLittleEndian(filled, buf);
             if (filled > 2)
                 throw Exception(ErrorCodes::INCORRECT_DATA, "Cannot deserialize data with more than 2 samples in a bucket");
+
             for (size_t i = 0; i < filled; ++i)
                 readBinaryLittleEndian(timestamps[i], buf);
             for (size_t i = 0; i < filled; ++i)
                 readBinaryLittleEndian(values[i], buf);
+
+            if (filled == 2 && timestamps[1] >= timestamps[0])
+                throw Exception(ErrorCodes::INCORRECT_DATA,
+                    "Timestamps must be in strictly descending order, but got {} after {}",
+                    static_cast<Int64>(timestamps[1]), static_cast<Int64>(timestamps[0]));
         }
 
-        void checkTimestamps(TimestampType start_time, TimestampType end_time) const
+        template <typename RangeType>
+        void checkTimestampsInRange(const RangeType & range) const
         {
             for (size_t i = 0; i < filled; ++i)
-                if (timestamps[i] <= start_time || timestamps[i] > end_time)
+                if (!range.contains(timestamps[i]))
                     throw Exception(ErrorCodes::INCORRECT_DATA,
-                        "Cannot deserialize data: timestamp {} is outside its bucket's range ({}, {}]",
-                        static_cast<Int64>(timestamps[i]), static_cast<Int64>(start_time), static_cast<Int64>(end_time));
+                        "Cannot deserialize data: timestamp {} is outside its bucket's range",
+                        static_cast<Int64>(timestamps[i]));
         }
     };
 

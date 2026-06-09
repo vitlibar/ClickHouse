@@ -66,14 +66,15 @@ struct AggregateFunctionTimeseriesSamples
         }
     }
 
-    /// Throws if any sample's timestamp is outside the half-open range `(start_time, end_time]`.
-    void checkTimestamps(TimestampType start_time, TimestampType end_time) const
+    /// Throws if any sample's timestamp is outside the range.
+    template <typename RangeType>
+    void checkTimestampsInRange(const RangeType & range) const
     {
-        for (const auto & [timestamp, value] : samples)
-            if (timestamp <= start_time || timestamp > end_time)
+        for (const auto & [timestamp, _] : samples)
+            if (!range.contains(timestamp))
                 throw Exception(ErrorCodes::INCORRECT_DATA,
-                    "Cannot deserialize data: timestamp {} is outside its bucket's range ({}, {}]",
-                    static_cast<Int64>(timestamp), static_cast<Int64>(start_time), static_cast<Int64>(end_time));
+                    "Cannot deserialize data: timestamp {} is outside its bucket's range",
+                    static_cast<Int64>(timestamp));
     }
 
     /// `Aggregator` policy: builds the aggregation data from the bucket's samples, in arbitrary order
