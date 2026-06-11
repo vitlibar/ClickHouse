@@ -105,6 +105,10 @@ public:
     using Base = AggregateFunctionTimeseriesBase<AggregateFunctionTimeseriesToGridSparse<Traits>, Traits>;
     using Base::Base;
 
+    /// `merge` only keeps the latest sample (a compare and assign), quite fast,
+    /// so the two-stack queue pays off only for fairly wide windows.
+    static constexpr size_t TWO_STACKS_BUCKETS_PER_WINDOW_THRESHOLD = 32;
+
     static constexpr UInt16 FORMAT_VERSION = 3;
     static constexpr bool DateTime64Supported = true;
 };

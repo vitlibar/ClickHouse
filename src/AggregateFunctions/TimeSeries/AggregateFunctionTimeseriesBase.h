@@ -120,10 +120,15 @@ public:
     /// `AggregateFunctionIntervalLengthSum`, etc.).
     static constexpr size_t MAX_GRID_SIZE = 0xFFFFFF;
 
-    /// When a window spans more than this many buckets, `fillGridResults` switches from recomputing each
+    /// When a window spans at least this many buckets, `fillGridResults` switches from recomputing each
     /// window's aggregate to the sliding two-stack queue, whose per-grid-point cost does not grow with the
     /// window span. Below it the simpler recompute is cheaper thanks to its lower constant.
-    static constexpr size_t TWO_STACKS_BUCKETS_PER_WINDOW_THRESHOLD = 16;
+    ///
+    /// It depends on how expensive a single `AggregationData::merge` is, so derived classes redefine it. The
+    /// values are measured by the `timeseries_to_grid_two_stacks_threshold` example on dense input (recompute's
+    /// worst case), so a sparser input only makes recompute relatively cheaper.
+    /// No base default: each derived class must define its own.
+    /// static constexpr size_t TWO_STACKS_BUCKETS_PER_WINDOW_THRESHOLD = 16;
 
     /// Calculates number of grid points: (end - start) / step + 1.
     static size_t gridSize(TimestampType start_timestamp, TimestampType end_timestamp, IntervalType step)
@@ -710,7 +715,7 @@ public:
 
         /// Recomputing a window costs O(buckets_per_window) per grid point; the sliding two-stack queue costs
         /// ~O(1) per grid point but with a higher constant. Pick by buckets_per_window.
-        if (buckets_per_window > TWO_STACKS_BUCKETS_PER_WINDOW_THRESHOLD)
+        if (buckets_per_window >= FunctionImpl::TWO_STACKS_BUCKETS_PER_WINDOW_THRESHOLD)
             fillGridResultsByTwoStacks(sorted_buckets, values, nulls);
         else
             fillGridResultsByRecompute(sorted_buckets, values, nulls);
@@ -781,6 +786,12 @@ public:
         size_t window_first = 0;    /// index into sorted_buckets of the queue's front (oldest) bucket
         size_t window_last = 0;     /// one past the queue's back (newest) bucket
 
+        /// The merged aggregate is recomputed only when the `[window_first, window_last)` range
+        /// actually changes. Initial values (first=1 > last=0) never equal a real range, forcing the first recompute.
+        size_t prev_window_first = 1;
+        size_t prev_window_last = 0;
+        AggregationData window_aggregate;
+
         for (size_t i = 0; i < grid_size; ++i)
         {
             const auto [window_begin, window_end] = bucketRangeInWindow(i);
@@ -820,11 +831,16 @@ public:
             }
 
             /// The window's aggregate is the front stack (older) merged with the back stack (newer).
-            AggregationData window_aggregate;
-            if (!front_stack.empty())
-                window_aggregate.merge(front_stack.back().aggregate);
-            if (!back_stack.empty())
-                window_aggregate.merge(back_stack.back().aggregate);
+            if (window_first != prev_window_first || window_last != prev_window_last)
+            {
+                window_aggregate = AggregationData{};
+                if (!front_stack.empty())
+                    window_aggregate.merge(front_stack.back().aggregate);
+                if (!back_stack.empty())
+                    window_aggregate.merge(back_stack.back().aggregate);
+                prev_window_first = window_first;
+                prev_window_last = window_last;
+            }
 
             storeGridResult(i, window_aggregate, values, nulls);
         }

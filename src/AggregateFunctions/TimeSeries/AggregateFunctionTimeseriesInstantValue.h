@@ -80,6 +80,10 @@ public:
         return result;
     }
 
+    /// `merge` replays up to two samples through the branchy `Last2Samples::add`, so it is relatively costly
+    /// and the two-stack queue wins even for narrow windows.
+    static constexpr size_t TWO_STACKS_BUCKETS_PER_WINDOW_THRESHOLD = 10;
+
     static constexpr UInt16 FORMAT_VERSION = 3;
     static constexpr bool DateTime64Supported = true;
 };

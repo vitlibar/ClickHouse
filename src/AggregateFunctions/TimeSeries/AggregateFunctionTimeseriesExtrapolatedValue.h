@@ -176,6 +176,9 @@ public:
         return aggregate.getResult(grid_timestamp, Base::window, Base::timestamp_scale_multiplier);
     }
 
+    /// `merge` updates the first/last boundary samples plus reset accounting.
+    static constexpr size_t TWO_STACKS_BUCKETS_PER_WINDOW_THRESHOLD = 16;
+
     static constexpr UInt16 FORMAT_VERSION = 3;
     static constexpr bool DateTime64Supported = true;
 };

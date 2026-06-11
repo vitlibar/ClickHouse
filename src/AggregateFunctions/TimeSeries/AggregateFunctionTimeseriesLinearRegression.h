@@ -156,6 +156,10 @@ public:
         return aggregate.getResult(grid_timestamp, Base::start_timestamp, predict_offset);
     }
 
+    /// `merge` is Chan's parallel merge of centered moments — several multiplications and divisions,
+    /// quite expensive, so the O(buckets_per_window) recompute path is overtaken at a fairly narrow window.
+    static constexpr size_t TWO_STACKS_BUCKETS_PER_WINDOW_THRESHOLD = 14;
+
     static constexpr UInt16 FORMAT_VERSION = 2;
     static constexpr bool DateTime64Supported = true;
 

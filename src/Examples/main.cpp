@@ -21,6 +21,7 @@ std::pair<std::string_view, MainFunc> examples[] =
 #endif
     {"quantile-t-digest", mainEntryExampleQuantileTDigest},
     {"group_array_sorted", mainEntryExampleGroupArraySorted},
+    {"timeseries_to_grid_two_stacks_threshold", mainEntryExampleTimeSeriesToGridTwoStacksThreshold},
     {"test-connect", mainEntryExampleTestConnect},
     {"zkutil_test_commands", mainEntryExampleZkutilTestCommands},
     {"zkutil_test_commands_new_lib", mainEntryExampleZkutilTestCommandsNewLib},
