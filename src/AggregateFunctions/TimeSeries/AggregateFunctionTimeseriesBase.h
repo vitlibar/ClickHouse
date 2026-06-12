@@ -62,7 +62,6 @@ public:
 
     using Bucket = typename Traits::Bucket;
     using AggregationData = typename Traits::AggregationData;
-    using Aggregator = typename Traits::Aggregator;
 
     struct State
     {
@@ -636,10 +635,12 @@ public:
     }
 
     /// Creates the per-bucket aggregator used to build the aggregation data from a bucket.
-    /// Derived classes may redefine it.
-    static Aggregator createAggregator()
+    /// Used only when `Bucket` differs from `AggregationData`; derived classes may redefine it.
+    /// The `auto` return type keeps `Traits::Aggregator` unrequired for functions where the bucket already
+    /// is the aggregation data (and so have no `Aggregator`).
+    static auto createAggregator()
     {
-        return Aggregator{};
+        return typename Traits::Aggregator{};
     }
 
     /// Turns a window's `AggregationData` into the result value (or nullopt for NULL).
@@ -650,8 +651,9 @@ public:
     }
 
     /// Constructs a result array.
-    /// `Traits::Aggregator` describes how a bucket is turned into the per-bucket `AggregationData`.
-    /// Each derived class turns per-window `AggregationData` into a value via `finalizeAggregation`.
+    /// When `Bucket` differs from `AggregationData`, `Traits::Aggregator` turns each bucket into the
+    /// per-bucket `AggregationData`; otherwise the bucket already is the aggregation data and is merged
+    /// directly. Each derived class turns per-window `AggregationData` into a value via `finalizeAggregation`.
     void doInsertResultInto(AggregateDataPtr __restrict place, IColumn & to) const
     {
         ColumnArray & arr_to = typeid_cast<ColumnArray &>(to);
@@ -677,7 +679,12 @@ public:
 
         const auto & buckets = data(place)->buckets;
 
-        if constexpr (!std::is_void_v<Aggregator>)
+        if constexpr (std::is_same_v<Bucket, AggregationData>)
+        {
+            /// The bucket already is the aggregation data; merge the buckets directly.
+            fillGridResults(buckets, values, nulls);
+        }
+        else
         {
             /// Build the aggregation data for each bucket from its samples.
             UnorderedMapWithMemoryTracking<size_t, AggregationData> aggregates;
@@ -687,21 +694,14 @@ public:
                 aggregator.aggregate(bucket, aggregates[bucket_index]);
             fillGridResults(aggregates, values, nulls);
         }
-        else
-        {
-            /// The bucket already is the aggregation data; merge the buckets directly.
-            fillGridResults(buckets, values, nulls);
-        }
     }
 
     /// Computes each grid point's value as the aggregation data merged over the populated buckets inside its
     /// window. The populated buckets are sorted once by index; both window edges advance monotonically with the
     /// grid point, so the in-window range only slides forward.
-    template <typename AggregationDataMap>
-    void fillGridResults(const AggregationDataMap & aggregates, ValueType * values, UInt8 * nulls) const
+    void fillGridResults(const UnorderedMapWithMemoryTracking<size_t, AggregationData> & aggregates, ValueType * values, UInt8 * nulls) const
     {
-        using AggregationDataType = typename AggregationDataMap::mapped_type;
-        VectorWithMemoryTracking<std::pair<size_t, const AggregationDataType *>> sorted_buckets;
+        VectorWithMemoryTracking<std::pair<size_t, const AggregationData *>> sorted_buckets;
         sorted_buckets.reserve(aggregates.size());
         for (const auto & [bucket_index, data] : aggregates)
             sorted_buckets.emplace_back(bucket_index, &data);
@@ -720,9 +720,8 @@ public:
     /// window often stays the same across consecutive grid points (e.g. when the window is large compared to the
     /// data extent), so the merged aggregate is recomputed only when the `[window_first, window_last)` range
     /// actually changes.
-    template <typename AggregationDataType>
     void fillGridResultsByRecompute(
-        const VectorWithMemoryTracking<std::pair<size_t, const AggregationDataType *>> & sorted_buckets,
+        const VectorWithMemoryTracking<std::pair<size_t, const AggregationData *>> & sorted_buckets,
         ValueType * values, UInt8 * nulls) const
     {
         const size_t num_buckets = sorted_buckets.size();
@@ -761,14 +760,13 @@ public:
     /// The populated buckets currently inside the window form a queue ordered by time; buckets entering at the
     /// right edge are pushed onto the back stack, buckets leaving at the left edge are popped from the front
     /// stack (the back stack reversed, rebuilt when it runs empty).
-    template <typename AggregationDataType>
     void fillGridResultsByTwoStacks(
-        const VectorWithMemoryTracking<std::pair<size_t, const AggregationDataType *>> & sorted_buckets,
+        const VectorWithMemoryTracking<std::pair<size_t, const AggregationData *>> & sorted_buckets,
         ValueType * values, UInt8 * nulls) const
     {
         struct StackEntry
         {
-            const AggregationDataType * value;  /// the bucket's data
+            const AggregationData * value;      /// the bucket's data
             AggregationData aggregate;          /// running merge over this stack, in time order, up to this entry
         };
 
@@ -790,7 +788,7 @@ public:
             /// Push buckets entering at the right edge onto the back stack.
             while (window_last < num_buckets && sorted_buckets[window_last].first < window_end)
             {
-                const AggregationDataType * value = sorted_buckets[window_last].second;
+                const AggregationData * value = sorted_buckets[window_last].second;
                 AggregationData aggregate;
                 if (!back_stack.empty())
                     aggregate = back_stack.back().aggregate;    /// older part of the back stack ...
@@ -808,7 +806,7 @@ public:
                     /// top, accumulating each entry's running merge in time order (oldest .. this entry).
                     while (!back_stack.empty())
                     {
-                        const AggregationDataType * value = back_stack.back().value;
+                        const AggregationData * value = back_stack.back().value;
                         AggregationData aggregate;
                         aggregate.merge(*value);                            /// this (older) bucket ...
                         if (!front_stack.empty())

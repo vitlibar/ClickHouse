@@ -79,22 +79,17 @@ struct AggregateFunctionTimeseriesToGridSparseTraits
                     "Cannot deserialize data: timestamp {} is outside its bucket's range",
                     static_cast<Int64>(first));
         }
-    };
 
-    /// Per-bucket aggregation data. The bucket already keeps the most recent sample,
-    /// so the aggregation data just inherits it and adds the result computation.
-    struct AggregationData : Bucket
-    {
         std::optional<ValueType> getResult() const
         {
-            if (!this->has_value)
+            if (!has_value)
                 return std::nullopt;
-            return this->second;
+            return second;
         }
     };
 
-    /// The bucket already keeps the latest sample, so it is merged directly (no aggregation pass).
-    using Aggregator = void;
+    /// The bucket already keeps the most recent sample and serves as the aggregation data.
+    using AggregationData = Bucket;
 };
 
 
