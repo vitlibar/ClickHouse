@@ -684,32 +684,26 @@ public:
 
         const auto & buckets = data(place)->buckets;
 
+        /// Aggregate each populated bucket into a `(bucket index, aggregation data)` pair, sorted by index, in
+        /// one contiguous vector for the window slide below.
+        VectorWithMemoryTracking<std::pair<size_t, AggregationData>> sorted_buckets;
+        sorted_buckets.reserve(buckets.size());
         if constexpr (std::is_same_v<Bucket, AggregationData>)
         {
-            /// The bucket already is the aggregation data; merge the buckets directly.
-            fillGridResults(buckets, values, nulls);
+            /// The bucket already is the aggregation data.
+            for (const auto & [bucket_index, bucket] : buckets)
+                sorted_buckets.emplace_back(bucket_index, bucket);
         }
         else
         {
-            /// Build the aggregation data for each bucket from its samples.
-            UnorderedMapWithMemoryTracking<size_t, AggregationData> aggregates;
-            aggregates.reserve(buckets.size());
             auto aggregator = derived().createAggregator();
             for (const auto & [bucket_index, bucket] : buckets)
-                aggregator.aggregate(bucket, aggregates[bucket_index]);
-            fillGridResults(aggregates, values, nulls);
+            {
+                AggregationData aggregate;
+                aggregator.aggregate(bucket, aggregate);
+                sorted_buckets.emplace_back(bucket_index, std::move(aggregate));
+            }
         }
-    }
-
-    /// Computes each grid point's value as the aggregation data merged over the populated buckets inside its
-    /// window. The populated buckets are sorted once by index; both window edges advance monotonically with the
-    /// grid point, so the in-window range only slides forward.
-    void fillGridResults(const UnorderedMapWithMemoryTracking<size_t, AggregationData> & aggregates, ValueType * values, UInt8 * nulls) const
-    {
-        VectorWithMemoryTracking<std::pair<size_t, const AggregationData *>> sorted_buckets;
-        sorted_buckets.reserve(aggregates.size());
-        for (const auto & [bucket_index, data] : aggregates)
-            sorted_buckets.emplace_back(bucket_index, &data);
         std::sort(sorted_buckets.begin(), sorted_buckets.end(),
             [](const auto & lhs, const auto & rhs) { return lhs.first < rhs.first; });
 
@@ -726,7 +720,7 @@ public:
     /// data extent), so the merged aggregate is recomputed only when the `[window_first, window_last)` range
     /// actually changes.
     void fillGridResultsByRecompute(
-        const VectorWithMemoryTracking<std::pair<size_t, const AggregationData *>> & sorted_buckets,
+        const VectorWithMemoryTracking<std::pair<size_t, AggregationData>> & sorted_buckets,
         ValueType * values, UInt8 * nulls) const
     {
         const size_t num_buckets = sorted_buckets.size();
@@ -752,7 +746,7 @@ public:
             {
                 window_aggregate = AggregationData{};
                 for (size_t b = window_first; b < window_last; ++b)
-                    window_aggregate.merge(*sorted_buckets[b].second);
+                    window_aggregate.merge(sorted_buckets[b].second);
                 prev_window_first = window_first;
                 prev_window_last = window_last;
             }
@@ -766,7 +760,7 @@ public:
     /// right edge are pushed onto the back stack, buckets leaving at the left edge are popped from the front
     /// stack (the back stack reversed, rebuilt when it runs empty).
     void fillGridResultsByTwoStacks(
-        const VectorWithMemoryTracking<std::pair<size_t, const AggregationData *>> & sorted_buckets,
+        const VectorWithMemoryTracking<std::pair<size_t, AggregationData>> & sorted_buckets,
         ValueType * values, UInt8 * nulls) const
     {
         struct StackEntry
@@ -799,7 +793,7 @@ public:
             /// Push buckets entering at the right edge onto the back stack.
             while (window_last < num_buckets && sorted_buckets[window_last].first < window_end)
             {
-                const AggregationData * value = sorted_buckets[window_last].second;
+                const AggregationData * value = &sorted_buckets[window_last].second;
                 AggregationData aggregate;
                 if (!back_stack.empty())
                     aggregate = back_stack.back().aggregate;    /// older part of the back stack ...

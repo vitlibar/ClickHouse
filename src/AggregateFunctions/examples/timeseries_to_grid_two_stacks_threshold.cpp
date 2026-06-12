@@ -60,16 +60,16 @@ Bucket makeBucket(size_t i)
     return bucket;
 }
 
-/// Turns the populated per-bucket entries into the `(bucket index, data)` pointer vector the fill methods
+/// Turns the populated per-bucket entries into the `(bucket index, data)` value vector the fill methods
 /// consume, placing populated buckets `spacing` index positions apart.
 template <typename AggregationDataType>
-VectorWithMemoryTracking<std::pair<size_t, const AggregationDataType *>>
+VectorWithMemoryTracking<std::pair<size_t, AggregationDataType>>
 buildSortedBuckets(const VectorWithMemoryTracking<AggregationDataType> & storage, size_t spacing)
 {
-    VectorWithMemoryTracking<std::pair<size_t, const AggregationDataType *>> sorted_buckets;
+    VectorWithMemoryTracking<std::pair<size_t, AggregationDataType>> sorted_buckets;
     sorted_buckets.reserve(storage.size());
     for (size_t i = 0; i < storage.size(); ++i)
-        sorted_buckets.emplace_back(i * spacing, &storage[i]);
+        sorted_buckets.emplace_back(i * spacing, storage[i]);
     return sorted_buckets;
 }
 

@@ -113,8 +113,11 @@ struct AggregateFunctionTimeseriesLinearRegressionTraits
 
         void aggregate(const Bucket & bucket, AggregationData & data) const
         {
-            for (const auto & [timestamp, value] : bucket.samples)
-                data.add(timestamp, value, base);
+            const TimestampType base_timestamp = base;
+            bucket.forEachSample([&data, base_timestamp](TimestampType timestamp, ValueType value)
+            {
+                data.add(timestamp, value, base_timestamp);
+            });
         }
     };
 };

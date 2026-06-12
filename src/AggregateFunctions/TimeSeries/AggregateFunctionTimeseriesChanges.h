@@ -106,7 +106,7 @@ public:
 
     /// `merge` does a handful of integer comparisons and additions, quite fast,
     /// so the two-stack queue pays off only for fairly wide windows.
-    static constexpr size_t TWO_STACKS_BUCKETS_PER_WINDOW_THRESHOLD = 32;
+    static constexpr size_t TWO_STACKS_BUCKETS_PER_WINDOW_THRESHOLD = 44;
 
     static constexpr UInt16 FORMAT_VERSION = 2;
     static constexpr bool DateTime64Supported = true;
