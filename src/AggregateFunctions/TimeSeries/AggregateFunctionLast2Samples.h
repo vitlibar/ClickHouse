@@ -314,20 +314,8 @@ public:
 
     void serialize(ConstAggregateDataPtr __restrict place, WriteBuffer & buf, std::optional<size_t> /* version */) const override
     {
-        const Data & data = this->data(place);
-
         writeBinaryLittleEndian(FORMAT_VERSION, buf);
-        writeBinaryLittleEndian(data.filled, buf);
-
-        for (size_t i = 0; i < data.filled; ++i)
-        {
-            writeBinaryLittleEndian(data.timestamps[i], buf);
-        }
-
-        for (size_t i = 0; i < data.filled; ++i)
-        {
-            writeBinaryLittleEndian(data.values[i], buf);
-        }
+        data(place).serialize(buf);
     }
 
     void deserialize(AggregateDataPtr __restrict place, ReadBuffer & buf, std::optional<size_t> /* version */, Arena *) const override
@@ -341,29 +329,7 @@ public:
                 "Cannot deserialize data with different format version, expected {}, got {}",
                 FORMAT_VERSION, format_version);
 
-        Data & data = this->data(place);
-        readBinaryLittleEndian(data.filled, buf);
-
-        if (data.filled > 2)
-            throw Exception(
-                ErrorCodes::INCORRECT_DATA,
-                "Cannot deserialize data with different bucket count, expected 2, got {}",
-                data.filled);
-
-        for (size_t i = 0; i < data.filled; ++i)
-        {
-            readBinaryLittleEndian(data.timestamps[i], buf);
-            if (i > 0 && data.timestamps[i] > data.timestamps[i - 1])
-                throw Exception(
-                    ErrorCodes::INCORRECT_DATA,
-                    "Timestamps must be in descending order, but got {} after {}",
-                    static_cast<Int64>(data.timestamps[i]), static_cast<Int64>(data.timestamps[i - 1]));
-        }
-
-        for (size_t i = 0; i < data.filled; ++i)
-        {
-            readBinaryLittleEndian(data.values[i], buf);
-        }
+        data(place).deserialize(buf);
     }
 
     void insertResultInto(AggregateDataPtr __restrict place, IColumn & to, Arena *) const override
