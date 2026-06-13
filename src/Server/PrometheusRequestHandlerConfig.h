@@ -44,6 +44,12 @@ struct PrometheusRequestHandlerConfig
     /// Settings for types Query, Write, Read:
     QualifiedTableName time_series_table_name;
 
+    /// Names of the URL query parameters which carry the database and table names of the time series table.
+    /// They are used as an alternative to the static `time_series_table_name` and are mutually exclusive
+    /// with the `database` and `table` configuration elements. Empty when the name comes from the configuration.
+    String time_series_database_query_param;
+    String time_series_table_query_param;
+
     size_t keep_alive_timeout = 0;
     bool is_stacktrace_enabled = true;
 

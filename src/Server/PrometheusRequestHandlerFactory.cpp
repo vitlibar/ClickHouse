@@ -13,6 +13,7 @@ namespace DB
 
 namespace ErrorCodes
 {
+    extern const int BAD_ARGUMENTS;
     extern const int UNKNOWN_ELEMENT_IN_CONFIG;
 }
 
@@ -50,21 +51,40 @@ namespace
         return res;
     }
 
-    /// Extracts a qualified table name from the config. It can be set either as
-    ///     <table>mydb.prometheus</table>
-    /// or
-    ///     <database>mydb</database>
-    ///     <table>prometheus</table>
-    QualifiedTableName parseTableNameFromConfig(const Poco::Util::AbstractConfiguration & config, const String & config_prefix)
+    /// Extracts the time series table name from the config and stores it in `res`. The table name can be set
+    /// statically with the `table` element (optionally qualified as `mydb.prometheus`) and the `database` element.
+    /// Alternatively the database and table names can be taken at request time from URL query parameters whose
+    /// names are given by the `database_query_param` and `table_query_param` elements. The `table` and
+    /// `table_query_param` elements are mutually exclusive, and so are `database` and `database_query_param`.
+    void parseTableNameFromConfig(const Poco::Util::AbstractConfiguration & config, const String & config_prefix, PrometheusRequestHandlerConfig & res)
     {
-        QualifiedTableName res;
-        res.table = config.getString(config_prefix + ".table", "prometheus");
-        res.database = config.getString(config_prefix + ".database", "");
-        if (res.database.empty())
-            res = QualifiedTableName::parseFromString(res.table);
-        if (res.database.empty())
-            res.database = "default";
-        return res;
+        if (config.has(config_prefix + ".table") && config.has(config_prefix + ".table_query_param"))
+            throw Exception(ErrorCodes::BAD_ARGUMENTS,
+                "Only one of 'table' and 'table_query_param' can be specified in the configuration of a prometheus protocol");
+
+        if (config.has(config_prefix + ".database") && config.has(config_prefix + ".database_query_param"))
+            throw Exception(ErrorCodes::BAD_ARGUMENTS,
+                "Only one of 'database' and 'database_query_param' can be specified in the configuration of a prometheus protocol");
+
+        res.time_series_database_query_param = config.getString(config_prefix + ".database_query_param", "");
+        res.time_series_table_query_param = config.getString(config_prefix + ".table_query_param", "");
+
+        res.time_series_table_name.database = config.getString(config_prefix + ".database", "");
+        res.time_series_table_name.table = config.getString(config_prefix + ".table", "");
+
+        /// Apply the static "prometheus" default only when the table name doesn't come from a query parameter.
+        if (res.time_series_table_query_param.empty() && res.time_series_table_name.table.empty())
+            res.time_series_table_name.table = "prometheus";
+
+        /// When both names are static we can resolve them right away. Otherwise the final name is resolved
+        /// at request time in PrometheusRequestHandler after reading the query parameters.
+        if (res.time_series_database_query_param.empty() && res.time_series_table_query_param.empty())
+        {
+            if (res.time_series_table_name.database.empty())
+                res.time_series_table_name = QualifiedTableName::parseFromString(res.time_series_table_name.table);
+            if (res.time_series_table_name.database.empty())
+                res.time_series_table_name.database = "default";
+        }
     }
 
     /// Parses the optional <user> element and stores it as credentials in the connection config.
@@ -84,7 +104,7 @@ namespace
     {
         PrometheusRequestHandlerConfig res;
         res.type = PrometheusRequestHandlerConfig::Type::Write;
-        res.time_series_table_name = parseTableNameFromConfig(config, config_prefix);
+        parseTableNameFromConfig(config, config_prefix, res);
         parseCommonConfig(config, res);
         return res;
     }
@@ -96,7 +116,7 @@ namespace
     {
         PrometheusRequestHandlerConfig res;
         res.type = PrometheusRequestHandlerConfig::Type::Read;
-        res.time_series_table_name = parseTableNameFromConfig(config, config_prefix);
+        parseTableNameFromConfig(config, config_prefix, res);
         parseCommonConfig(config, res);
         parseUserFromConfig(config, config_prefix, res);
         return res;
@@ -109,7 +129,7 @@ namespace
     {
         PrometheusRequestHandlerConfig res;
         res.type = PrometheusRequestHandlerConfig::Type::Query;
-        res.time_series_table_name = parseTableNameFromConfig(config, config_prefix);
+        parseTableNameFromConfig(config, config_prefix, res);
         parseCommonConfig(config, res);
         parseUserFromConfig(config, config_prefix, res);
         return res;
@@ -122,7 +142,7 @@ namespace
     {
         PrometheusRequestHandlerConfig res;
         res.type = PrometheusRequestHandlerConfig::Type::APIv1;
-        res.time_series_table_name = parseTableNameFromConfig(config, config_prefix);
+        parseTableNameFromConfig(config, config_prefix, res);
         parseCommonConfig(config, res);
         parseUserFromConfig(config, config_prefix, res);
         return res;

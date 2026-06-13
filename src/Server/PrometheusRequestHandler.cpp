@@ -188,6 +188,10 @@ protected:
         if (name.empty())
             return false;
 
+        /// The query parameters carrying the database and table names are not ClickHouse settings.
+        if (name == config().time_series_database_query_param || name == config().time_series_table_query_param)
+            return false;
+
         /// Some parameters (database, default_format, everything used in the code above) do not
         /// belong to the Settings class.
         static const NameSet reserved_param_names{"user", "password", "quota_key", "stacktrace", "role", "query_id"};
@@ -226,6 +230,35 @@ protected:
         std::erase_if(query_id, [](unsigned char c) { return isControlASCII(c) || c == 0x7F; });
 
         context->setCurrentQueryId(query_id);
+    }
+
+    /// Resolves the time series table name for the current request. The database and table names come either
+    /// from the static configuration or from the URL query parameters named in the configuration.
+    StorageID getTimeSeriesTableID()
+    {
+        String database = config().time_series_table_name.database;
+        String table = config().time_series_table_name.table;
+
+        if (!config().time_series_database_query_param.empty())
+            database = params->get(config().time_series_database_query_param, "");
+
+        if (!config().time_series_table_query_param.empty())
+        {
+            table = params->get(config().time_series_table_query_param, "");
+            if (table.empty())
+                throw Exception(ErrorCodes::BAD_ARGUMENTS,
+                    "The time series table name is expected in the query parameter '{}', but the parameter is not set",
+                    config().time_series_table_query_param);
+        }
+
+        QualifiedTableName qualified_name;
+        qualified_name.database = database;
+        qualified_name.table = table;
+        if (qualified_name.database.empty())
+            qualified_name = QualifiedTableName::parseFromString(qualified_name.table);
+        if (qualified_name.database.empty())
+            qualified_name.database = "default";
+        return StorageID{qualified_name};
     }
 
     void onException() override
@@ -272,7 +305,7 @@ public:
                 throw Exception(ErrorCodes::BAD_ARGUMENTS, "Cannot parse WriteRequest");
         }
 
-        auto table = DatabaseCatalog::instance().getTable(StorageID{config().time_series_table_name}, context);
+        auto table = DatabaseCatalog::instance().getTable(getTimeSeriesTableID(), context);
         PrometheusRemoteWriteProtocol protocol{table, context};
 
         if (write_request.timeseries_size())
@@ -309,7 +342,7 @@ public:
         checkHTTPHeader(request, "Content-Type", "application/x-protobuf");
         checkHTTPHeader(request, "Content-Encoding", "snappy");
 
-        auto table = DatabaseCatalog::instance().getTable(StorageID{config().time_series_table_name}, context);
+        auto table = DatabaseCatalog::instance().getTable(getTimeSeriesTableID(), context);
         PrometheusRemoteReadProtocol protocol{table, context};
 
         prometheus::ReadRequest read_request;
@@ -376,6 +409,10 @@ public:
         if (name.empty())
             return false;
 
+        /// The query parameters carrying the database and table names are not ClickHouse settings.
+        if (name == config().time_series_database_query_param || name == config().time_series_table_query_param)
+            return false;
+
         /// Some parameters (database, default_format, everything used in the code above) do not
         /// belong to the Settings class.
         static const NameSet reserved_param_names{"user", "password", "query", "time", "start", "end", "step"};
@@ -384,7 +421,7 @@ public:
 
     void handlingRequestWithContext(HTTPServerRequest & request, HTTPServerResponse & response) override
     {
-        auto table = DatabaseCatalog::instance().getTable(StorageID{config().time_series_table_name}, context);
+        auto table = DatabaseCatalog::instance().getTable(getTimeSeriesTableID(), context);
         PrometheusHTTPProtocolAPI protocol{table, context};
 
         const String & uri = request.getURI();
