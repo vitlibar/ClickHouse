@@ -11,6 +11,7 @@
 
 #include <AggregateFunctions/TimeSeries/AggregateFunctionTimeseriesBase.h>
 #include <AggregateFunctions/TimeSeries/AggregateFunctionTimeseriesSamples.h>
+#include <Common/DequeWithMemoryTracking.h>
 
 #include <optional>
 
@@ -34,62 +35,93 @@ struct AggregateFunctionTimeseriesExtrapolatedValueTraits
 
     using Bucket = AggregateFunctionTimeseriesSamples<TimestampType, ValueType>;
 
-    /// Per-bucket aggregation data for rate/delta.
-    struct AggregationData
+    /// Sliding aggregator for rate/delta. Each bucket is preaggregated to its first/last sample, count and
+    /// internal reset adjustment (one `BucketSummary`), kept in a time-ordered deque. The window's total count and
+    /// reset adjustment (which includes the cross-bucket resets between adjacent buckets) are maintained
+    /// incrementally so `getResult` is O(1): it reads the window's first sample (deque front) and last sample
+    /// (deque back).
+    struct Aggregator
     {
-        TimestampType first_timestamp = 0;
-        ValueType first_value = 0;
-        TimestampType last_timestamp = 0;
-        ValueType last_value = 0;
-        UInt64 count = 0;       /// number of samples
-        Float64 resets = 0;     /// accumulated reset adjustment (rate only): sum of pre-reset values on each decrease
-
-        void add(TimestampType timestamp, ValueType value)
+        struct BucketSummary
         {
-            if (count == 0)
-            {
-                first_timestamp = timestamp;
-                first_value = value;
-            }
-            else if constexpr (is_rate)
-            {
-                /// Resets are taken into account for `rate` (counter that only increases); a decrease means a reset.
-                if (last_value > value)
-                    resets += static_cast<Float64>(last_value);
-            }
-            last_timestamp = timestamp;
-            last_value = value;
-            ++count;
-        }
+            TimestampType first_timestamp = 0;
+            ValueType first_value = 0;
+            TimestampType last_timestamp = 0;
+            ValueType last_value = 0;
+            UInt64 count = 0;
+            Float64 resets = 0;     /// reset adjustment within this bucket (rate only)
+        };
 
-        /// `later` holds the samples that come right after this aggregate's samples in time.
-        void merge(const AggregationData & later)
+        DequeWithMemoryTracking<BucketSummary> deque;
+        VectorWithMemoryTracking<std::pair<TimestampType, ValueType>> temp_buffer;  /// reused sort buffer
+        UInt64 total_count = 0;
+        Float64 total_resets = 0;
+        IntervalType window = 0;
+        TimestampType timestamp_scale_multiplier = 1;
+
+        /// The reset adjustment is the sum of pre-decrease values: `rate` expects a counter that only increases,
+        /// so a decrease between consecutive samples means a reset. `delta` (a gauge) does not count resets.
+        void addBucket(const Bucket & bucket)
         {
-            if (later.count == 0)
-                return;
-            if (count == 0)
+            BucketSummary summary{};
+            bucket.forEachSampleSorted([&summary](TimestampType timestamp, ValueType value)
             {
-                *this = later;
+                if (summary.count == 0)
+                {
+                    summary.first_timestamp = timestamp;
+                    summary.first_value = value;
+                }
+                else if constexpr (is_rate)
+                {
+                    if (summary.last_value > value)
+                        summary.resets += static_cast<Float64>(summary.last_value);
+                }
+                summary.last_timestamp = timestamp;
+                summary.last_value = value;
+                ++summary.count;
+            }, temp_buffer);
+
+            if (summary.count == 0)
                 return;
-            }
+
             if constexpr (is_rate)
             {
-                if (last_value > later.first_value)
-                    resets += static_cast<Float64>(last_value);
+                if (!deque.empty() && deque.back().last_value > summary.first_value)
+                    total_resets += static_cast<Float64>(deque.back().last_value);  /// reset across the bucket boundary
             }
-            resets += later.resets;
-            last_timestamp = later.last_timestamp;
-            last_value = later.last_value;
-            count += later.count;
+            total_resets += summary.resets;
+            total_count += summary.count;
+            deque.push_back(summary);
+        }
+
+        void removeBucket(TimestampType cut_off)
+        {
+            while (!deque.empty() && deque.front().last_timestamp <= cut_off)
+            {
+                const BucketSummary front = deque.front();
+                total_resets -= front.resets;
+                total_count -= front.count;
+                deque.pop_front();
+                if constexpr (is_rate)
+                {
+                    if (!deque.empty() && front.last_value > deque.front().first_value)
+                        total_resets -= static_cast<Float64>(front.last_value);  /// drop the cross-boundary reset
+                }
+            }
         }
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdouble-promotion"
-        std::optional<ValueType> getResult(TimestampType grid_timestamp, IntervalType window, TimestampType timestamp_scale_multiplier) const
+        std::optional<ValueType> getResult(TimestampType grid_timestamp) const
         {
             /// Need at least two samples to calculate the rate or delta.
-            if (count < 2)
+            if (total_count < 2)
                 return std::nullopt;
+
+            const TimestampType first_timestamp = deque.front().first_timestamp;
+            const ValueType first_value = deque.front().first_value;
+            const TimestampType last_timestamp = deque.back().last_timestamp;
+            const ValueType last_value = deque.back().last_value;
 
             /// The extrapolation logic is copied from Prometheus' rate calculation
             /// (https://github.com/prometheus/prometheus/blob/5e124cf4f2b9467e4ae1c679840005e727efd599/promql/functions.go#L127),
@@ -98,7 +130,7 @@ struct AggregateFunctionTimeseriesExtrapolatedValueTraits
             if (time_difference == 0)
                 return std::nullopt;
 
-            Float64 value_difference = last_value - first_value + resets;
+            Float64 value_difference = last_value - first_value + total_resets;
 
             // Duration between first/last samples and boundary of range. Subtract in `Int128` first to avoid
             // both signed overflow on `grid_timestamp - window` and `Float64` precision loss when timestamps
@@ -112,7 +144,7 @@ struct AggregateFunctionTimeseriesExtrapolatedValueTraits
                 - static_cast<Int128>(static_cast<Int64>(last_timestamp)));
 
             const auto sampled_interval = time_difference;
-            const Float64 average_duration_between_samples = static_cast<Float64>(sampled_interval) / static_cast<Float64>(count - 1);
+            const Float64 average_duration_between_samples = static_cast<Float64>(sampled_interval) / static_cast<Float64>(total_count - 1);
 
             // If samples are close enough to the (lower or upper) boundary of the range, we extrapolate the
             // rate all the way to the boundary in question. "Close enough" is up to 10% more than the average
@@ -150,9 +182,6 @@ struct AggregateFunctionTimeseriesExtrapolatedValueTraits
         }
 #pragma clang diagnostic pop
     };
-
-    /// First/last boundary samples and reset accounting need the samples in ascending timestamp order.
-    using Aggregator = typename Bucket::SortedAggregator;
 };
 
 
@@ -166,18 +195,17 @@ public:
 
     using TimestampType = typename Traits::TimestampType;
     using ValueType = typename Traits::ValueType;
-    using AggregationData = typename Traits::AggregationData;
 
     using Base = AggregateFunctionTimeseriesBase<AggregateFunctionTimeseriesExtrapolatedValue<Traits>, Traits>;
     using Base::Base;
 
-    std::optional<ValueType> finalizeAggregation(const AggregationData & aggregate, TimestampType grid_timestamp) const
+    typename Traits::Aggregator createAggregator() const
     {
-        return aggregate.getResult(grid_timestamp, Base::window, Base::timestamp_scale_multiplier);
+        typename Traits::Aggregator aggregator;
+        aggregator.window = Base::window;
+        aggregator.timestamp_scale_multiplier = Base::timestamp_scale_multiplier;
+        return aggregator;
     }
-
-    /// `merge` updates the first/last boundary samples plus reset accounting.
-    static constexpr size_t TWO_STACKS_BUCKETS_PER_WINDOW_THRESHOLD = 16;
 
     static constexpr UInt16 FORMAT_VERSION = 3;
     static constexpr bool DateTime64Supported = true;

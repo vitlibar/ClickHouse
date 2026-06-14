@@ -79,17 +79,36 @@ struct AggregateFunctionTimeseriesToGridSparseTraits
                     "Cannot deserialize data: timestamp {} is outside its bucket's range",
                     static_cast<Int64>(first));
         }
-
-        std::optional<ValueType> getResult() const
-        {
-            if (!has_value)
-                return std::nullopt;
-            return second;
-        }
     };
 
-    /// The bucket already keeps the most recent sample and serves as the aggregation data.
-    using AggregationData = Bucket;
+    /// Sliding aggregator: the result at a grid point is the most recent sample inside its window. Buckets are
+    /// added in time order, so each new bucket's sample is newer than the kept one; keeping a single newest
+    /// sample is enough. Once that newest sample falls out of the window every older sample is out too, so the
+    /// window is then empty.
+    struct Aggregator
+    {
+        Bucket latest;
+
+        void addBucket(const Bucket & bucket)
+        {
+            /// Buckets arrive in ascending time order, so a populated bucket's sample is newer than the kept one;
+            /// `merge` keeps the newer sample and ignores an empty bucket.
+            latest.merge(bucket);
+        }
+
+        void removeBucket(TimestampType cut_off)
+        {
+            if (latest.has_value && latest.first <= cut_off)
+                latest = Bucket{};
+        }
+
+        std::optional<ValueType> getResult(TimestampType /*grid_timestamp*/) const
+        {
+            if (!latest.has_value)
+                return std::nullopt;
+            return latest.second;
+        }
+    };
 };
 
 
@@ -105,9 +124,10 @@ public:
     using Base = AggregateFunctionTimeseriesBase<AggregateFunctionTimeseriesToGridSparse<Traits>, Traits>;
     using Base::Base;
 
-    /// `merge` only keeps the latest sample (a compare and assign), quite fast,
-    /// so the two-stack queue pays off only for fairly wide windows.
-    static constexpr size_t TWO_STACKS_BUCKETS_PER_WINDOW_THRESHOLD = 38;
+    typename Traits::Aggregator createAggregator() const
+    {
+        return {};
+    }
 
     static constexpr UInt16 FORMAT_VERSION = 3;
     static constexpr bool DateTime64Supported = true;

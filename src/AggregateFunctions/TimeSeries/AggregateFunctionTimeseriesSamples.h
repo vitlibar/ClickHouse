@@ -80,8 +80,8 @@ public:
         });
     }
 
-    /// Invokes `f(timestamp, value)` for every sample, in arbitrary order. Used by the aggregator policies below
-    /// and by the per-function aggregators defined in the derived classes (e.g. linear regression).
+    /// Invokes `f(timestamp, value)` for every sample, in arbitrary order. Used by the per-function sliding
+    /// aggregators for order-independent aggregates (e.g. linear regression moments).
     template <typename F>
     void forEachSample(F && f) const
     {
@@ -89,36 +89,19 @@ public:
             f(timestamp, value);
     }
 
-    /// `Aggregator` policy: builds the aggregation data from the bucket's samples, in arbitrary order
-    /// (for order-independent aggregates).
-    struct Aggregator
+    /// Invokes `f(timestamp, value)` for every sample in ascending timestamp order, using `temp_buffer` as a
+    /// reused sort buffer. Used by the order-dependent aggregators (rate reset accounting, counting transitions).
+    template <typename F>
+    void forEachSampleSorted(F && f, VectorWithMemoryTracking<std::pair<TimestampType, ValueType>> & temp_buffer) const
     {
-        template <typename AggregationData>
-        void aggregate(const AggregateFunctionTimeseriesSamples & bucket, AggregationData & data)
-        {
-            bucket.forEachSample([&data](TimestampType timestamp, ValueType value) { data.add(timestamp, value); });
-        }
-    };
-
-    /// `Aggregator` policy: builds the aggregation data from the bucket's samples sorted by timestamp
-    /// (for order-dependent aggregates, e.g. counting transitions or rate reset accounting). The sort buffer is
-    /// reused across buckets.
-    struct SortedAggregator
-    {
-        VectorWithMemoryTracking<std::pair<TimestampType, ValueType>> sorted_samples;
-
-        template <typename AggregationData>
-        void aggregate(const AggregateFunctionTimeseriesSamples & bucket, AggregationData & data)
-        {
-            sorted_samples.clear();
-            sorted_samples.reserve(bucket.buffer.size());
-            for (const auto & [timestamp, value] : bucket.buffer)
-                sorted_samples.emplace_back(timestamp, value);
-            std::sort(sorted_samples.begin(), sorted_samples.end());
-            for (const auto & [timestamp, value] : sorted_samples)
-                data.add(timestamp, value);
-        }
-    };
+        temp_buffer.clear();
+        temp_buffer.reserve(buffer.size());
+        for (const auto & [timestamp, value] : buffer)
+            temp_buffer.emplace_back(timestamp, value);
+        std::sort(temp_buffer.begin(), temp_buffer.end());
+        for (const auto & [timestamp, value] : temp_buffer)
+            f(timestamp, value);
+    }
 
 private:
     absl::flat_hash_map<TimestampType, ValueType> buffer;   /// samples keyed by timestamp

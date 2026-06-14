@@ -13,6 +13,7 @@
 
 #include <AggregateFunctions/TimeSeries/AggregateFunctionTimeseriesBase.h>
 #include <AggregateFunctions/TimeSeries/AggregateFunctionTimeseriesSamples.h>
+#include <Common/DequeWithMemoryTracking.h>
 
 
 namespace DB
@@ -35,13 +36,25 @@ struct AggregateFunctionTimeseriesChangesTraits
 
     using Bucket = AggregateFunctionTimeseriesSamples<TimestampType, ValueType>;
 
-    /// Per-bucket aggregation data for changes/resets.
-    struct AggregationData
+    /// Sliding aggregator for changes/resets. Each bucket is preaggregated to its first/last value, count and
+    /// internal transition count (one `BucketSummary`), kept in a time-ordered deque. The window's total count and
+    /// transition count (including the transition across each adjacent bucket boundary) are maintained
+    /// incrementally so `getResult` is O(1).
+    struct Aggregator
     {
-        ValueType first_value = 0;
-        ValueType last_value = 0;
-        UInt64 count = 0;       /// number of samples
-        UInt64 changes = 0;     /// number of counted transitions between consecutive samples so far
+        struct BucketSummary
+        {
+            ValueType first_value = 0;
+            ValueType last_value = 0;
+            TimestampType last_timestamp = 0;
+            UInt64 count = 0;
+            UInt64 changes = 0;     /// counted transitions within this bucket
+        };
+
+        DequeWithMemoryTracking<BucketSummary> deque;
+        VectorWithMemoryTracking<std::pair<TimestampType, ValueType>> temp_buffer;  /// reused sort buffer
+        UInt64 total_count = 0;
+        UInt64 total_changes = 0;
 
         /// Whether the transition prev -> curr is counted: a decrease for resets, any change otherwise.
         static bool isCounted(ValueType prev, ValueType curr)
@@ -52,45 +65,50 @@ struct AggregateFunctionTimeseriesChangesTraits
                 return curr != prev;
         }
 
-        /// Samples are always added in ascending timestamp order.
-        void add(TimestampType /* timestamp */, ValueType value)
+        void addBucket(const Bucket & bucket)
         {
-            if (count == 0)
-                first_value = value;
-            else if (isCounted(last_value, value))
-                ++changes;
-            last_value = value;
-            ++count;
-        }
-
-        /// `later` holds the samples that come right after this aggregate's samples in time.
-        void merge(const AggregationData & later)
-        {
-            if (later.count == 0)
-                return;
-            if (count == 0)
+            BucketSummary summary{};
+            bucket.forEachSampleSorted([&summary](TimestampType timestamp, ValueType value)
             {
-                *this = later;
+                if (summary.count == 0)
+                    summary.first_value = value;
+                else if (isCounted(summary.last_value, value))
+                    ++summary.changes;
+                summary.last_value = value;
+                summary.last_timestamp = timestamp;
+                ++summary.count;
+            }, temp_buffer);
+
+            if (summary.count == 0)
                 return;
-            }
-            if (isCounted(last_value, later.first_value))
-                ++changes;
-            changes += later.changes;
-            last_value = later.last_value;
-            count += later.count;
+
+            if (!deque.empty() && isCounted(deque.back().last_value, summary.first_value))
+                ++total_changes;        /// transition across the bucket boundary
+            total_changes += summary.changes;
+            total_count += summary.count;
+            deque.push_back(summary);
         }
 
-        /// Number of changes/resets in the window, or nullopt when there are no samples.
-        std::optional<ValueType> getResult() const
+        void removeBucket(TimestampType cut_off)
         {
-            if (count == 0)
+            while (!deque.empty() && deque.front().last_timestamp <= cut_off)
+            {
+                const BucketSummary front = deque.front();
+                total_changes -= front.changes;
+                total_count -= front.count;
+                deque.pop_front();
+                if (!deque.empty() && isCounted(front.last_value, deque.front().first_value))
+                    --total_changes;    /// drop the transition across the boundary
+            }
+        }
+
+        std::optional<ValueType> getResult(TimestampType /*grid_timestamp*/) const
+        {
+            if (total_count == 0)
                 return std::nullopt;
-            return static_cast<ValueType>(changes);
+            return static_cast<ValueType>(total_changes);
         }
     };
-
-    /// Counting transitions between consecutive samples needs them in ascending timestamp order.
-    using Aggregator = typename Bucket::SortedAggregator;
 };
 
 
@@ -104,9 +122,10 @@ public:
     using Base = AggregateFunctionTimeseriesBase<AggregateFunctionTimeseriesChanges<Traits>, Traits>;
     using Base::Base;
 
-    /// `merge` does a handful of integer comparisons and additions, quite fast,
-    /// so the two-stack queue pays off only for fairly wide windows.
-    static constexpr size_t TWO_STACKS_BUCKETS_PER_WINDOW_THRESHOLD = 44;
+    typename Traits::Aggregator createAggregator() const
+    {
+        return {};
+    }
 
     static constexpr UInt16 FORMAT_VERSION = 2;
     static constexpr bool DateTime64Supported = true;

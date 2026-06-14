@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <type_traits>
@@ -61,7 +62,6 @@ public:
     bool shouldPrintParametersWithTypes() const override { return true; }
 
     using Bucket = typename Traits::Bucket;
-    using AggregationData = typename Traits::AggregationData;
 
     struct State
     {
@@ -120,15 +120,10 @@ public:
     /// `AggregateFunctionIntervalLengthSum`, etc.).
     static constexpr size_t MAX_GRID_SIZE = 0xFFFFFF;
 
-    /// When a window spans at least this many buckets, `fillGridResults` switches from recomputing each
-    /// window's aggregate to the sliding two-stack queue, whose per-grid-point cost does not grow with the
-    /// window span. Below it the simpler recompute is cheaper thanks to its lower constant.
-    ///
-    /// It depends on how expensive a single `AggregationData::merge` is, so derived classes redefine it. The
-    /// values are measured by the `timeseries_to_grid_two_stacks_threshold` example on dense input (recompute's
-    /// worst case), so a sparser input only makes recompute relatively cheaper.
-    /// No base default: each derived class must define its own.
-    /// static constexpr size_t TWO_STACKS_BUCKETS_PER_WINDOW_THRESHOLD = 16;
+    /// `doInsertResultInto` visits the populated buckets in index order. When the number of bucket slots is
+    /// within this factor of the number of populated buckets, looking each index up in the hash map is cheaper
+    /// than collecting and sorting the populated buckets; above it (sparse data) the collect-and-sort wins.
+    static constexpr size_t DENSE_BUCKETS_FACTOR = 4;
 
     /// Calculates number of grid points: (end - start) / step + 1.
     static size_t gridSize(TimestampType start_timestamp, TimestampType end_timestamp, IntervalType step)
@@ -639,26 +634,11 @@ public:
         return static_cast<const FunctionImpl &>(*this);
     }
 
-    /// Creates the per-bucket aggregator used to build the aggregation data from a bucket.
-    /// Used only when `Bucket` differs from `AggregationData`; derived classes may redefine it.
-    /// The `auto` return type keeps `Traits::Aggregator` unrequired for functions where the bucket already
-    /// is the aggregation data (and so have no `Aggregator`).
-    static auto createAggregator()
-    {
-        return typename Traits::Aggregator{};
-    }
-
-    /// Turns a window's `AggregationData` into the result value (or nullopt for NULL).
-    /// Derived classes may redefine it.
-    std::optional<ValueType> finalizeAggregation(const AggregationData & aggregate, TimestampType /*grid_timestamp*/) const
-    {
-        return aggregate.getResult();
-    }
-
-    /// Constructs a result array.
-    /// When `Bucket` differs from `AggregationData`, `Traits::Aggregator` turns each bucket into the
-    /// per-bucket `AggregationData`; otherwise the bucket already is the aggregation data and is merged
-    /// directly. Each derived class turns per-window `AggregationData` into a value via `finalizeAggregation`.
+    /// Constructs the result array for one grid (one aggregate state). For each grid point the window's value is
+    /// computed by a per-function sliding `Aggregator` (built by `createAggregator` in the derived class): as the
+    /// grid advances, buckets entering the window are fed to `addBucket`, buckets leaving are dropped by
+    /// `removeBucket`, and `getResult` reads off the window's value. The aggregator keeps only the window's worth
+    /// of preaggregated data, so there is no materialization of all buckets and no global sort in the dense case.
     void doInsertResultInto(AggregateDataPtr __restrict place, IColumn & to) const
     {
         ColumnArray & arr_to = typeid_cast<ColumnArray &>(to);
@@ -683,167 +663,70 @@ public:
         UInt8 * nulls = nulls_to.data() + old_size;
 
         const auto & buckets = data(place)->buckets;
+        auto aggregator = derived().createAggregator();
 
-        /// Aggregate each populated bucket into a `(bucket index, aggregation data)` pair, sorted by index, in
-        /// one contiguous vector for the window slide below.
-        VectorWithMemoryTracking<std::pair<size_t, AggregationData>> sorted_buckets;
-        sorted_buckets.reserve(buckets.size());
-        if constexpr (std::is_same_v<Bucket, AggregationData>)
+        /// Visit the populated buckets in ascending index order, feeding each into the sliding window when its
+        /// grid point's window reaches it. When most bucket slots are populated (`dense`) looking each index up
+        /// in the hash map is cheaper than sorting; otherwise collect the populated buckets and sort them once.
+        const bool dense = (buckets.size() != 0) && (bucket_count <= buckets.size() * DENSE_BUCKETS_FACTOR);
+        if (dense)
         {
-            /// The bucket already is the aggregation data.
-            for (const auto & [bucket_index, bucket] : buckets)
-                sorted_buckets.emplace_back(bucket_index, bucket);
-        }
-        else
-        {
-            auto aggregator = derived().createAggregator();
-            for (const auto & [bucket_index, bucket] : buckets)
+            size_t next_bucket = 0;
+            for (size_t i = 0; i < grid_size; ++i)
             {
-                AggregationData aggregate;
-                aggregator.aggregate(bucket, aggregate);
-                sorted_buckets.emplace_back(bucket_index, std::move(aggregate));
-            }
-        }
-        std::sort(sorted_buckets.begin(), sorted_buckets.end(),
-            [](const auto & lhs, const auto & rhs) { return lhs.first < rhs.first; });
-
-        /// Recomputing a window costs O(buckets_per_window) per grid point; the sliding two-stack queue costs
-        /// ~O(1) per grid point but with a higher constant. Pick by buckets_per_window.
-        if (buckets_per_window >= FunctionImpl::TWO_STACKS_BUCKETS_PER_WINDOW_THRESHOLD)
-            fillGridResultsByTwoStacks(sorted_buckets, values, nulls);
-        else
-            fillGridResultsByRecompute(sorted_buckets, values, nulls);
-    }
-
-    /// Recompute path: re-merge the in-window buckets at each grid point. The set of populated buckets in the
-    /// window often stays the same across consecutive grid points (e.g. when the window is large compared to the
-    /// data extent), so the merged aggregate is recomputed only when the `[window_first, window_last)` range
-    /// actually changes.
-    void fillGridResultsByRecompute(
-        const VectorWithMemoryTracking<std::pair<size_t, AggregationData>> & sorted_buckets,
-        ValueType * values, UInt8 * nulls) const
-    {
-        const size_t num_buckets = sorted_buckets.size();
-        size_t window_first = 0;    /// index into sorted_buckets of the first populated bucket in the window
-        size_t window_last = 0;     /// one past the last populated bucket in the window
-
-        /// Initial values (first=1 > last=0) never equal a real range, forcing the first recompute.
-        size_t prev_window_first = 1;
-        size_t prev_window_last = 0;
-        AggregationData window_aggregate;
-
-        for (size_t i = 0; i < grid_size; ++i)
-        {
-            const auto [window_begin, window_end] = bucketRangeInWindow(i);
-
-            /// Both window edges move forward as `i` grows, so the cursors only ever advance.
-            while (window_last < num_buckets && sorted_buckets[window_last].first < window_end)
-                ++window_last;
-            while (window_first < window_last && sorted_buckets[window_first].first < window_begin)
-                ++window_first;
-
-            if (window_first != prev_window_first || window_last != prev_window_last)
-            {
-                window_aggregate = AggregationData{};
-                for (size_t b = window_first; b < window_last; ++b)
-                    window_aggregate.merge(sorted_buckets[b].second);
-                prev_window_first = window_first;
-                prev_window_last = window_last;
-            }
-
-            storeGridResult(i, window_aggregate, values, nulls);
-        }
-    }
-
-    /// Sliding path: a two-stack FIFO monoid queue (the "Two-Stacks" sliding-window aggregation algorithm).
-    /// The populated buckets currently inside the window form a queue ordered by time; buckets entering at the
-    /// right edge are pushed onto the back stack, buckets leaving at the left edge are popped from the front
-    /// stack (the back stack reversed, rebuilt when it runs empty).
-    void fillGridResultsByTwoStacks(
-        const VectorWithMemoryTracking<std::pair<size_t, AggregationData>> & sorted_buckets,
-        ValueType * values, UInt8 * nulls) const
-    {
-        struct StackEntry
-        {
-            const AggregationData * value;      /// the bucket's data
-            AggregationData aggregate;          /// running merge over this stack, in time order, up to this entry
-        };
-
-        const size_t num_buckets = sorted_buckets.size();
-        const size_t max_window_buckets = std::min(num_buckets, buckets_per_window);
-
-        VectorWithMemoryTracking<StackEntry> back_stack;   /// newer buckets; pushed here
-        VectorWithMemoryTracking<StackEntry> front_stack;  /// older buckets; popped here
-        back_stack.reserve(max_window_buckets);
-        front_stack.reserve(max_window_buckets);
-
-        size_t window_first = 0;    /// index into sorted_buckets of the queue's front (oldest) bucket
-        size_t window_last = 0;     /// one past the queue's back (newest) bucket
-
-        /// The merged aggregate is recomputed only when the `[window_first, window_last)` range
-        /// actually changes. Initial values (first=1 > last=0) never equal a real range, forcing the first recompute.
-        size_t prev_window_first = 1;
-        size_t prev_window_last = 0;
-        AggregationData window_aggregate;
-
-        for (size_t i = 0; i < grid_size; ++i)
-        {
-            const auto [window_begin, window_end] = bucketRangeInWindow(i);
-
-            /// Push buckets entering at the right edge onto the back stack.
-            while (window_last < num_buckets && sorted_buckets[window_last].first < window_end)
-            {
-                const AggregationData * value = &sorted_buckets[window_last].second;
-                AggregationData aggregate;
-                if (!back_stack.empty())
-                    aggregate = back_stack.back().aggregate;    /// older part of the back stack ...
-                aggregate.merge(*value);                        /// ... then this (newer) bucket
-                back_stack.push_back({value, std::move(aggregate)});
-                ++window_last;
-            }
-
-            /// Pop buckets leaving at the left edge from the front stack.
-            while (window_first < window_last && sorted_buckets[window_first].first < window_begin)
-            {
-                if (front_stack.empty())
+                const size_t window_end = bucketRangeInWindow(i).second;
+                for (; next_bucket < window_end; ++next_bucket)
                 {
-                    /// Flush the back stack into the front stack, reversing it so the oldest bucket ends up on
-                    /// top, accumulating each entry's running merge in time order (oldest .. this entry).
-                    while (!back_stack.empty())
-                    {
-                        const AggregationData * value = back_stack.back().value;
-                        AggregationData aggregate;
-                        aggregate.merge(*value);                            /// this (older) bucket ...
-                        if (!front_stack.empty())
-                            aggregate.merge(front_stack.back().aggregate);  /// ... then the newer ones
-                        front_stack.push_back({value, std::move(aggregate)});
-                        back_stack.pop_back();
-                    }
+                    const auto it = buckets.find(next_bucket);
+                    if (it != buckets.end())
+                        aggregator.addBucket(it->second);
                 }
-                front_stack.pop_back();
-                ++window_first;
+                removeOutOfWindow(aggregator, i);
+                storeGridResult(i, aggregator.getResult(timestampAtIndex(i)), values, nulls);
             }
+        }
+        else
+        {
+            VectorWithMemoryTracking<std::pair<size_t, const Bucket *>> ordered_buckets;
+            ordered_buckets.reserve(buckets.size());
+            for (const auto & [bucket_index, bucket] : buckets)
+                ordered_buckets.emplace_back(bucket_index, &bucket);
+            std::sort(ordered_buckets.begin(), ordered_buckets.end(),
+                [](const auto & lhs, const auto & rhs) { return lhs.first < rhs.first; });
 
-            /// The window's aggregate is the front stack (older) merged with the back stack (newer).
-            if (window_first != prev_window_first || window_last != prev_window_last)
+            size_t pos = 0;
+            for (size_t i = 0; i < grid_size; ++i)
             {
-                window_aggregate = AggregationData{};
-                if (!front_stack.empty())
-                    window_aggregate.merge(front_stack.back().aggregate);
-                if (!back_stack.empty())
-                    window_aggregate.merge(back_stack.back().aggregate);
-                prev_window_first = window_first;
-                prev_window_last = window_last;
+                const size_t window_end = bucketRangeInWindow(i).second;
+                for (; pos < ordered_buckets.size() && ordered_buckets[pos].first < window_end; ++pos)
+                    aggregator.addBucket(*ordered_buckets[pos].second);
+                removeOutOfWindow(aggregator, i);
+                storeGridResult(i, aggregator.getResult(timestampAtIndex(i)), values, nulls);
             }
-
-            storeGridResult(i, window_aggregate, values, nulls);
         }
     }
 
-    /// Finalizes a window's aggregate into the result value (or NULL) at grid point `i`.
-    void storeGridResult(size_t i, const AggregationData & window_aggregate, ValueType * values, UInt8 * nulls) const
+    /// Drops buckets that have left grid point `i`'s window from the front of the sliding `aggregator`. A bucket
+    /// is out of window once all its samples are at or before the cutoff `grid_timestamp - window`; window-aligned
+    /// buckets are fully in or out, so the bucket's latest timestamp decides. The cutoff is computed in `Int128`
+    /// because `grid_timestamp - window` can be negative (`grid_timestamp < window`) or even underflow `Int64`
+    /// (`start_timestamp` near `INT64_MIN` with a huge window). When it is below the smallest representable
+    /// timestamp (`0` for unsigned `DateTime`, `INT64_MIN` for `DateTime64`) no bucket can be out of window, so
+    /// `removeBucket` is skipped - which also avoids wrapping a negative cutoff cast to an unsigned `TimestampType`.
+    template <typename Aggregator>
+    void removeOutOfWindow(Aggregator & aggregator, size_t i) const
     {
-        if (auto result = derived().finalizeAggregation(window_aggregate, timestampAtIndex(i)))
+        static constexpr Int64 min_timestamp = std::is_unsigned_v<TimestampType> ? 0 : std::numeric_limits<Int64>::min();
+        const Int128 cut_off = static_cast<Int128>(static_cast<Int64>(timestampAtIndex(i)))
+            - static_cast<Int128>(static_cast<Int64>(window));
+        if (cut_off >= static_cast<Int128>(min_timestamp))
+            aggregator.removeBucket(static_cast<TimestampType>(static_cast<Int64>(cut_off)));
+    }
+
+    /// Stores the window's result value (or NULL when there is no result) at grid point `i`.
+    void storeGridResult(size_t i, const std::optional<ValueType> & result, ValueType * values, UInt8 * nulls) const
+    {
+        if (result)
         {
             values[i] = *result;
             nulls[i] = 0;

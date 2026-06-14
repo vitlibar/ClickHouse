@@ -1,8 +1,10 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <limits>
 #include <optional>
 
 
@@ -13,6 +15,7 @@
 
 #include <AggregateFunctions/TimeSeries/AggregateFunctionTimeseriesBase.h>
 #include <AggregateFunctions/TimeSeries/AggregateFunctionTimeseriesSamples.h>
+#include <Common/VectorWithMemoryTracking.h>
 
 
 namespace DB
@@ -35,12 +38,12 @@ struct AggregateFunctionTimeseriesLinearRegressionTraits
 
     using Bucket = AggregateFunctionTimeseriesSamples<TimestampType, ValueType>;
 
-    /// Per-bucket aggregation data for linear regression, kept as numerically stable centered moments
-    /// (Welford's algorithm with Chan's parallel merge). `mean_x`/`mean_y` are the running means;
-    /// `m2_x = sum of (x - mean_x)^2` and `c_xy = sum of (x - mean_x)(y - mean_y)` are the
-    /// centered (co)moments. Because the moments accumulate deviations from the running mean, they stay small
-    /// (~`window^2`) and precise regardless of how far the window sits from `base`.
-    struct AggregationData
+    /// Per-bucket regression data, kept as numerically stable centered moments (Welford's algorithm with Chan's
+    /// parallel merge). `mean_x`/`mean_y` are the running means; `m2_x = sum of (x - mean_x)^2` and
+    /// `c_xy = sum of (x - mean_x)(y - mean_y)` are the centered (co)moments. Because the moments accumulate
+    /// deviations from the running mean, they stay small (~`window^2`) and precise regardless of how far the
+    /// window sits from `base`. The merge is order-independent, so buckets can be combined in any order.
+    struct Moments
     {
         Float64 mean_x = 0;     /// running mean of x
         Float64 mean_y = 0;     /// running mean of y
@@ -67,7 +70,7 @@ struct AggregateFunctionTimeseriesLinearRegressionTraits
         }
 
         /// Chan's parallel merge of two centered-moment aggregates.
-        void merge(const AggregationData & other)
+        void merge(const Moments & other)
         {
             if (other.count == 0)
                 return;
@@ -84,40 +87,93 @@ struct AggregateFunctionTimeseriesLinearRegressionTraits
             c_xy += other.c_xy + dx * dy * na * nb / total;
             count += other.count;
         }
+    };
 
-        std::optional<ValueType> getResult(TimestampType grid_timestamp, TimestampType base, Float64 predict_offset) const
+    /// Sliding aggregator for linear regression. The moment merge is associative but not invertible (a bucket
+    /// leaving the window cannot be subtracted), so the window is maintained as a two-stack monoid queue (the
+    /// "Two-Stacks" sliding-window algorithm): buckets entering at the right edge are pushed onto the back stack,
+    /// buckets leaving at the left edge are popped from the front stack (the back stack reversed, rebuilt when it
+    /// runs empty). Each stack entry caches the running merge up to itself, so `getResult` combines just the two
+    /// stack tops in O(1) amortized regardless of how many buckets the window spans.
+    struct Aggregator
+    {
+        struct StackEntry
         {
-            if (count < 2 || m2_x == 0)
+            TimestampType last_timestamp;   /// the bucket's latest sample, used to decide when it leaves the window
+            Moments single;                 /// this bucket's moments alone
+            Moments combined;               /// running merge over this stack up to this entry
+        };
+
+        VectorWithMemoryTracking<StackEntry> back_stack;   /// newer buckets; pushed here
+        VectorWithMemoryTracking<StackEntry> front_stack;  /// older buckets; popped here
+        TimestampType base = 0;
+        Float64 predict_offset = 0;
+
+        void addBucket(const Bucket & bucket)
+        {
+            Moments moments;
+            TimestampType last_timestamp = std::numeric_limits<TimestampType>::min();
+            const TimestampType base_timestamp = base;
+            bucket.forEachSample([&moments, &last_timestamp, base_timestamp](TimestampType timestamp, ValueType value)
+            {
+                moments.add(timestamp, value, base_timestamp);
+                last_timestamp = std::max(last_timestamp, timestamp);
+            });
+            if (moments.count == 0)
+                return;
+
+            Moments combined = moments;
+            if (!back_stack.empty())
+                combined.merge(back_stack.back().combined);
+            back_stack.push_back({last_timestamp, moments, std::move(combined)});
+        }
+
+        void removeBucket(TimestampType cut_off)
+        {
+            while (true)
+            {
+                if (front_stack.empty())
+                {
+                    /// Flush the back stack into the front stack, reversing it so the oldest bucket ends up on top.
+                    while (!back_stack.empty())
+                    {
+                        Moments combined = back_stack.back().single;
+                        if (!front_stack.empty())
+                            combined.merge(front_stack.back().combined);
+                        front_stack.push_back({back_stack.back().last_timestamp, back_stack.back().single, std::move(combined)});
+                        back_stack.pop_back();
+                    }
+                }
+
+                if (front_stack.empty() || front_stack.back().last_timestamp > cut_off)
+                    break;
+                front_stack.pop_back();
+            }
+        }
+
+        std::optional<ValueType> getResult(TimestampType grid_timestamp) const
+        {
+            Moments window;
+            if (!front_stack.empty())
+                window.merge(front_stack.back().combined);
+            if (!back_stack.empty())
+                window.merge(back_stack.back().combined);
+
+            if (window.count < 2 || window.m2_x == 0)
                 return std::nullopt;
 
-            const Float64 slope = c_xy / m2_x;
+            const Float64 slope = window.c_xy / window.m2_x;
             if (!is_predict)
                 return static_cast<ValueType>(slope);
 
             /// Line y = slope * x + intercept with x centered on `base`; extrapolate to `grid_timestamp +
             /// predict_offset`, expressed in the same centered coordinates (subtract `base` in `Int128`).
-            const Float64 intercept = mean_y - slope * mean_x;
+            const Float64 intercept = window.mean_y - slope * window.mean_x;
             const Float64 predict_x = static_cast<Float64>(
                 static_cast<Int128>(static_cast<Int64>(grid_timestamp)) - static_cast<Int128>(static_cast<Int64>(base)))
                 + predict_offset;
             const Float64 predicted = slope * predict_x + intercept;
             return static_cast<ValueType>(predicted);
-        }
-    };
-
-    /// Builds the regression moments for a bucket, centering each timestamp on `base`.
-    /// The moments are order-independent, so samples are added directly without sorting.
-    struct Aggregator
-    {
-        TimestampType base = 0;
-
-        void aggregate(const Bucket & bucket, AggregationData & data) const
-        {
-            const TimestampType base_timestamp = base;
-            bucket.forEachSample([&data, base_timestamp](TimestampType timestamp, ValueType value)
-            {
-                data.add(timestamp, value, base_timestamp);
-            });
         }
     };
 };
@@ -134,7 +190,6 @@ public:
     using IntervalType = typename Traits::IntervalType;
     using ValueType = typename Traits::ValueType;
     using Aggregator = typename Traits::Aggregator;
-    using AggregationData = typename Traits::AggregationData;
 
     using Base = AggregateFunctionTimeseriesBase<AggregateFunctionTimeseriesLinearRegression<Traits>, Traits>;
     using Base::Base;
@@ -151,17 +206,11 @@ public:
 
     Aggregator createAggregator() const
     {
-        return Aggregator{Base::start_timestamp};
+        Aggregator aggregator;
+        aggregator.base = Base::start_timestamp;
+        aggregator.predict_offset = predict_offset;
+        return aggregator;
     }
-
-    std::optional<ValueType> finalizeAggregation(const AggregationData & aggregate, TimestampType grid_timestamp) const
-    {
-        return aggregate.getResult(grid_timestamp, Base::start_timestamp, predict_offset);
-    }
-
-    /// `merge` is Chan's parallel merge of centered moments — several multiplications and divisions,
-    /// quite expensive, so the O(buckets_per_window) recompute path is overtaken at a fairly narrow window.
-    static constexpr size_t TWO_STACKS_BUCKETS_PER_WINDOW_THRESHOLD = 14;
 
     static constexpr UInt16 FORMAT_VERSION = 2;
     static constexpr bool DateTime64Supported = true;
