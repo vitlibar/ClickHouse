@@ -935,7 +935,9 @@ void PredefinedQueryHandler::customizeContext(HTTPServerRequest & request, Conte
 
     for (const auto & [header_name, regex] : header_name_with_capture_regex)
     {
-        const auto & header_value = request.get(header_name);
+        /// A missing header is treated as an empty string, consistent with how `headersFilter` matches it,
+        /// so reading it here cannot throw (see https://github.com/ClickHouse/ClickHouse/issues/5436).
+        const auto header_value = request.get(header_name, "");
         set_query_params(header_value.data(), header_value.data() + header_value.size(), regex);
     }
 

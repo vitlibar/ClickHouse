@@ -1,0 +1,15 @@
+<clickhouse>
+    <http_handlers>
+        <rule>
+            <methods>GET</methods>
+            <url>/test_optional_header</url>
+            <headers_regex>
+                <XXX><![CDATA[(?P<setting_name>.*)]]></XXX>
+            </headers_regex>
+            <handler>
+                <type>predefined_query_handler</type>
+                <query>SELECT {setting_name:String}</query>
+            </handler>
+        </rule>
+    </http_handlers>
+</clickhouse>

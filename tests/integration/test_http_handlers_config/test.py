@@ -890,3 +890,28 @@ def test_catch_all_handler():
             response = cluster.instance.http_request(path, method="GET")
             assert response.status_code == 200, f"{path} -> {response.status_code}"
             assert response.content == b"catch-all matched", path
+
+
+def test_predefined_handler_optional_header():
+    with contextlib.closing(
+        SimpleCluster(
+            ClickHouseCluster(__file__),
+            "optional_header_handler",
+            "test_optional_header_handler",
+        )
+    ) as cluster:
+        # The rule matches header XXX against (?P<setting_name>.*) and the predefined query uses
+        # {setting_name:String}. The regex also matches a missing header (treated as an empty string).
+
+        # Header present: its value is captured and substituted into the query.
+        response = cluster.instance.http_request(
+            "test_optional_header", method="GET", headers={"XXX": "hello"}
+        )
+        assert response.status_code == 200, response.status_code
+        assert response.content == b"hello\n", response.content
+
+        # Header absent: the rule still matches (empty string), and the handler must return the query
+        # result with an empty parameter instead of throwing an exception.
+        response = cluster.instance.http_request("test_optional_header", method="GET")
+        assert response.status_code == 200, response.status_code
+        assert response.content == b"\n", response.content
