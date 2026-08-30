@@ -13,24 +13,26 @@ class IDataType;
 using DataTypePtr = std::shared_ptr<const IDataType>;
 struct CodecValidationSettings;
 
-/// Codecs declared for elements of a Tuple inside a column type, for example:
+/// Codecs declared for components of a column type: elements of a Tuple, or the key and the value
+/// of a Map. For example:
 ///     CREATE TABLE t
 ///     (
 ///         samples Array(Tuple(
 ///             timestamp DateTime64(3, 'UTC') CODEC(DoubleDelta, ZSTD(1)),
-///             value Float64 CODEC(Gorilla, ZSTD(1))))
+///             value Float64 CODEC(Gorilla, ZSTD(1)))),
+///         m Map(String CODEC(ZSTD(3)), Float64 CODEC(Gorilla, ZSTD(1)))
 ///     ) ENGINE = MergeTree ...
-/// The key is the subcolumn name of the element relative to the column (as in `SELECT samples.timestamp`),
-/// e.g. "timestamp" or "a.b" for an element of a nested tuple.
+/// The key is the subcolumn name of the component relative to the column (as in `SELECT samples.timestamp`),
+/// e.g. "timestamp", "a.b" for an element of a nested tuple, or "keys"/"values" for a Map.
 /// Such codecs are not part of the data type: they are extracted from the type AST when a column
 /// declaration is processed and stored in ColumnDescription::subcolumn_codecs. The MergeTree part
 /// writers use them for the streams of the corresponding subcolumns instead of the column-level codec.
 using SubcolumnCodecs = std::map<String, ASTPtr>;
 
-/// Whether the type AST contains codecs of tuple elements.
+/// Whether the type AST contains codecs of tuple elements or of Map key/value.
 bool typeASTHasSubcolumnCodecs(const IAST & type_ast);
 
-/// Collects codecs of tuple elements from the type AST into `out_codecs`, keyed by subcolumn name.
+/// Collects codecs of subcolumns from the type AST into `out_codecs`, keyed by subcolumn name.
 /// Returns the type AST without the codecs: the original AST if it has none, or a cleaned clone
 /// (the original AST is never modified because it can be a part of a query which is formatted later).
 ASTPtr extractSubcolumnCodecsFromTypeAST(const ASTPtr & type_ast, SubcolumnCodecs & out_codecs);

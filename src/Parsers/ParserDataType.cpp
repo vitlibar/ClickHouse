@@ -502,6 +502,8 @@ bool ParserDataType::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
 
     size_t arg_num = 0;
     bool have_version_of_aggregate_function = false;
+    bool has_argument_codecs = false;
+    ASTs argument_codecs_tmp;
     while (true)
     {
         if (arg_num > 0)
@@ -533,6 +535,23 @@ bool ParserDataType::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
             ParserNameTypePair name_and_type_parser;
             ParserDataType only_type_parser;
             name_and_type_parser.parse(pos, arg, expected) || only_type_parser.parse(pos, arg, expected);
+        }
+        else if (type_name == "Map")
+        {
+            ParserDataType map_argument_parser;
+            if (map_argument_parser.parse(pos, arg, expected))
+            {
+                /// Optional codec of the key or the value: Map(String CODEC(ZSTD(1)), Float64)
+                ASTPtr codec_node;
+                if (ParserKeyword(Keyword::CODEC).ignore(pos, expected))
+                {
+                    ParserCodec codec_parser;
+                    if (!codec_parser.parse(pos, codec_node, expected))
+                        return false;
+                    has_argument_codecs = true;
+                }
+                argument_codecs_tmp.push_back(std::move(codec_node));
+            }
         }
         else if (type_name == "AggregateFunction" || type_name == "SimpleAggregateFunction")
         {
@@ -609,6 +628,13 @@ bool ParserDataType::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
     /// parentheses produces a node with no children.
     if (!expr_list_args->children.empty())
         data_type_node->children.push_back(expr_list_args);
+
+    /// Only attach argument_codecs if any argument has a codec
+    if (has_argument_codecs)
+    {
+        argument_codecs_tmp.shrink_to_fit();
+        data_type_node->argument_codecs = std::move(argument_codecs_tmp);
+    }
 
     node = data_type_node;
     return true;

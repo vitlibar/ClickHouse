@@ -6,6 +6,8 @@ DROP TABLE IF EXISTS t_compact;
 DROP TABLE IF EXISTS t_alter;
 DROP TABLE IF EXISTS t_saf;
 DROP TABLE IF EXISTS t_map;
+DROP TABLE IF EXISTS t_map2;
+DROP TABLE IF EXISTS t_map_check;
 
 SELECT 'Create and show:';
 
@@ -102,13 +104,49 @@ SHOW CREATE TABLE t_map;
 INSERT INTO t_map VALUES ({'k': (1, 2)});
 SELECT m FROM t_map;
 
+SELECT 'Map key and value codecs:';
+
+CREATE TABLE t_map2
+(
+    m Map(String CODEC(ZSTD(3)), Float64 CODEC(Gorilla, ZSTD(1)))
+)
+ENGINE = MergeTree ORDER BY tuple();
+
+SHOW CREATE TABLE t_map2;
+INSERT INTO t_map2 VALUES ({'k': 1.5});
+SELECT m FROM t_map2;
+DETACH TABLE t_map2;
+ATTACH TABLE t_map2;
+SHOW CREATE TABLE t_map2;
+SELECT m FROM t_map2;
+
+SELECT 'Map codecs are applied per subcolumn:';
+
+CREATE TABLE t_map_check
+(
+    m Map(UInt64 CODEC(ZSTD(1)), UInt64) CODEC(NONE)
+)
+ENGINE = MergeTree ORDER BY tuple()
+SETTINGS min_bytes_for_wide_part = 0, min_rows_for_wide_part = 0;
+
+INSERT INTO t_map_check SELECT map(0, number) FROM numbers(100000);
+
+SELECT name, compressed < (uncompressed / 10), compressed >= uncompressed
+FROM system.parts_columns
+ARRAY JOIN `subcolumns.names` AS name, `subcolumns.data_compressed_bytes` AS compressed, `subcolumns.data_uncompressed_bytes` AS uncompressed
+WHERE database = currentDatabase() AND table = 't_map_check' AND column = 'm' AND active AND name IN ('keys', 'values')
+ORDER BY name;
+
 SELECT 'Errors:';
 
 SELECT CAST((1, 2), 'Tuple(a UInt64 CODEC(LZ4), b UInt64)'); -- { serverError BAD_ARGUMENTS }
+SELECT CAST(map('k', 1), 'Map(String CODEC(LZ4), UInt8)'); -- { serverError BAD_ARGUMENTS }
 CREATE TABLE t_err (t Tuple(x UInt32 CODEC(Gorilla, ZSTD(1)))) ENGINE = MergeTree ORDER BY tuple(); -- { serverError BAD_ARGUMENTS }
+CREATE TABLE t_err (m Map(UInt64 CODEC(Gorilla, ZSTD(1)), Float64)) ENGINE = MergeTree ORDER BY tuple(); -- { serverError BAD_ARGUMENTS }
 CREATE TABLE t_err (x UInt64, a Tuple(p UInt64 CODEC(LZ4)) ALIAS tuple(x)) ENGINE = MergeTree ORDER BY x; -- { serverError BAD_ARGUMENTS }
 CREATE TABLE t_err (n Nested(x UInt32 CODEC(LZ4))) ENGINE = MergeTree ORDER BY tuple(); -- { clientError SYNTAX_ERROR }
 CREATE TABLE t_err (t Tuple(UInt32 CODEC(LZ4))) ENGINE = MergeTree ORDER BY tuple(); -- { clientError SYNTAX_ERROR }
+CREATE TABLE t_err (a Array(UInt64 CODEC(LZ4))) ENGINE = MergeTree ORDER BY tuple(); -- { clientError SYNTAX_ERROR }
 
 DROP TABLE ts_series;
 DROP TABLE t_check;
@@ -116,3 +154,5 @@ DROP TABLE t_compact;
 DROP TABLE t_alter;
 DROP TABLE t_saf;
 DROP TABLE t_map;
+DROP TABLE t_map2;
+DROP TABLE t_map_check;

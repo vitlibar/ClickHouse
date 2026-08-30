@@ -28,6 +28,13 @@ ASTPtr ASTDataType::clone() const
     if (arguments)
         res->children.push_back(arguments->clone());
 
+    /// argument_codecs entries are shared after the copy constructor, so clone them.
+    for (auto & codec : res->argument_codecs)
+    {
+        if (codec)
+            codec = codec->clone();
+    }
+
     return res;
 }
 
@@ -44,6 +51,10 @@ void ASTDataType::writeJSON(WriteBuffer & out) const
     w.writeString("name", name);
     if (auto args = getArguments())
         w.writeChild("arguments", args);
+
+    /// argument_codecs are not serialized: a type AST inside a serialized query plan never carries them,
+    /// because they can appear only in column declarations of CREATE/ALTER TABLE queries, where they are
+    /// extracted from the type AST before the column type is created.
 }
 
 void ASTDataType::readJSON(const Poco::JSON::Object & json)
@@ -67,10 +78,22 @@ void ASTDataType::resetArguments()
     children.clear();
 }
 
-void ASTDataType::updateTreeHashImpl(SipHash & hash_state, bool) const
+void ASTDataType::updateTreeHashImpl(SipHash & hash_state, bool ignore_aliases) const
 {
     hash_state.update(name.size());
     hash_state.update(name);
+
+    if (!argument_codecs.empty())
+    {
+        hash_state.update(argument_codecs.size());
+        for (const auto & codec : argument_codecs)
+        {
+            hash_state.update(codec != nullptr);
+            if (codec)
+                codec->updateTreeHashImpl(hash_state, ignore_aliases);
+        }
+    }
+
     /// Children are hashed automatically.
 }
 
@@ -93,6 +116,21 @@ void ASTDataType::formatImpl(WriteBuffer & ostr, const FormatSettings & settings
                     ostr << ',';
                 ostr << indent_str;
                 arguments->children[i]->format(ostr, settings, state, frame);
+            }
+        }
+        else if (!argument_codecs.empty())
+        {
+            /// Print codecs of arguments (used for the key and the value of Map) after their types.
+            for (size_t i = 0, size = arguments->children.size(); i < size; ++i)
+            {
+                if (i != 0)
+                    ostr << ", ";
+                arguments->children[i]->format(ostr, settings, state, frame);
+                if (i < argument_codecs.size() && argument_codecs[i])
+                {
+                    ostr << ' ';
+                    argument_codecs[i]->format(ostr, settings, state, frame);
+                }
             }
         }
         else

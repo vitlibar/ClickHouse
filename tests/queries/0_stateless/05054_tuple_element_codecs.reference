@@ -27,4 +27,12 @@ CREATE TABLE default.t_saf\n(\n    `id` UInt64,\n    `t` SimpleAggregateFunction
 Tuple inside Map:
 CREATE TABLE default.t_map\n(\n    `m` Map(String, Tuple(x UInt64 CODEC(ZSTD(1)), y UInt64))\n)\nENGINE = MergeTree\nORDER BY tuple()\nSETTINGS index_granularity = 8192
 {'k':(1,2)}
+Map key and value codecs:
+CREATE TABLE default.t_map2\n(\n    `m` Map(String CODEC(ZSTD(3)), Float64 CODEC(Gorilla(8), ZSTD(1)))\n)\nENGINE = MergeTree\nORDER BY tuple()\nSETTINGS index_granularity = 8192
+{'k':1.5}
+CREATE TABLE default.t_map2\n(\n    `m` Map(String CODEC(ZSTD(3)), Float64 CODEC(Gorilla(8), ZSTD(1)))\n)\nENGINE = MergeTree\nORDER BY tuple()\nSETTINGS index_granularity = 8192
+{'k':1.5}
+Map codecs are applied per subcolumn:
+keys	1	0
+values	0	1
 Errors:

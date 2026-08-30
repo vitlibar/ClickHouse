@@ -215,6 +215,20 @@ DataTypePtr DataTypeFactory::getImpl(const ASTPtr & ast) const
 
     if (const auto * type = ast->as<ASTDataType>())
     {
+        /// Codecs of Map key/value are not part of the data type, similarly to codecs of Tuple
+        /// elements (see createTupleFromAST() above).
+        for (const auto & codec : type->argument_codecs)
+        {
+            if (codec)
+            {
+                if constexpr (nullptr_on_error)
+                    return nullptr;
+                throw Exception(ErrorCodes::BAD_ARGUMENTS,
+                    "Codecs for the key and the value of Map can be specified only in a column declaration "
+                    "of a CREATE TABLE or ALTER TABLE query");
+            }
+        }
+
         return getImpl<nullptr_on_error>(type->name, type->getArguments());
     }
 

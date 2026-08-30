@@ -344,6 +344,24 @@ SELECT m.values FROM tab; -- same as mapValues(m)
 └──────────┘
 ```
 
+## Compression codecs for Map key and value {#compression-codecs-for-map-key-and-value}
+
+When a column of a `MergeTree` family table is defined, the key and the value of a `Map` can get their own
+[compression codecs](/reference/statements/create/table#column_compression_codec), similar to
+[codecs of Tuple elements](/reference/data-types/tuple#compression-codecs-for-tuple-elements):
+
+```sql
+CREATE TABLE tab
+(
+    m Map(String CODEC(ZSTD(3)), Float64 CODEC(Gorilla, ZSTD(1)))
+)
+ENGINE = MergeTree ORDER BY tuple();
+```
+
+A codec applies to the streams of the corresponding subcolumn (`m.keys` or `m.values`) instead of the codec
+of the whole column. Such codecs can be specified only in column declarations of `CREATE TABLE` and
+`ALTER TABLE` queries.
+
 ## Bucketed Map Serialization in MergeTree {#bucketed-map-serialization}
 
 By default, a `Map` column in MergeTree is stored as a single `Array(Tuple(K, V))` stream.
