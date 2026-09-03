@@ -1172,13 +1172,16 @@ namespace
             as_create_query = normalized;
         }
 
-        /// Copy settings from the other table.
-        if (as_create_query->storage && as_create_query->storage->settings
-            && (!create_query.storage || !create_query.storage->settings))
+        /// Copy settings from the other table. Settings are merged by name: a setting written in this query wins.
+        if (as_create_query->storage && as_create_query->storage->settings)
         {
             if (!create_query.storage)
                 create_query.set(create_query.storage, make_intrusive<ASTStorage>());
-            create_query.storage->set(create_query.storage->settings, as_create_query->storage->settings->clone());
+
+            auto merged_settings = boost::static_pointer_cast<ASTSetQuery>(as_create_query->storage->settings->clone());
+            if (create_query.storage->settings)
+                merged_settings->changes.setSettings(create_query.storage->settings->changes);
+            create_query.storage->set(create_query.storage->settings, merged_settings);
         }
 
         /// Copy outer column from the other table.
