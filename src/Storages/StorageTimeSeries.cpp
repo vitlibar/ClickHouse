@@ -1103,14 +1103,23 @@ SETTINGS index_granularity = 8192
 
 ## Creating a table AS existing table {#create-as}
 
-Statement `CREATE TABLE new_table AS existing_table` copies from the `existing_table`:
+Statement `CREATE TABLE new_table AS existing_table` creates a `TimeSeries` table configured like `existing_table`,
+which must be a `TimeSeries` table without external targets. The statement copies from `existing_table`:
 
-- `SETTINGS`
-- `INNER COLUMNS` for each kind
-- `INNER ENGINE` for each kind
+- the `SETTINGS` clause, except `version`: the new table always gets the latest version. Settings written in the statement
+  itself are merged with the copied ones by name, so a written setting wins over the copied one, and `name = DEFAULT`
+  resets a copied setting to its default value;
+- the `INNER COLUMNS` and `INNER ENGINE` clauses of each inner table. Customized columns (e.g. extra columns, columns
+  with a codec or a DEFAULT expression) and customized engine parts (e.g. an engine with arguments, a custom sorting key
+  or engine setting) are kept, the other columns and engine parts are adjusted to the settings of the new table, so that
+  e.g. `tags_to_columns`, `aggregate_min_time_and_max_time` or `tags_index_granularity` written in the statement take effect.
 
-The statement is not allowed if the `existing_table` has external targets.
+The types of the `id`, timestamp and value columns and the replication type of the inner engines (`MergeTree`,
+`ReplicatedMergeTree` or `SharedMergeTree`) are taken from `existing_table` too, unless the statement declares them itself.
 The outer column list is regenerated and not copied.
+
+A table created by an older version of ClickHouse can be used as `existing_table`: the new table gets the current
+structure, e.g. the current `id` type and default identifier expression.
 
 ## Adjusting types of columns {#adjusting-column-types}
 
