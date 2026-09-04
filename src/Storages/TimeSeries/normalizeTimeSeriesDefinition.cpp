@@ -399,7 +399,7 @@ namespace
     /// Adds missing required columns to an inner table's column list, building them in canonical order.
     /// Existing columns are taken from `inner_table_columns`; missing columns are created with the given type.
     /// Returns true if the column list was modified.
-    bool normalizeInnerTableColumns(
+    bool normalizeInnerColumns(
         ASTColumns & inner_table_columns,
         ViewTarget::Kind inner_table_kind,
         const TimeSeriesSettings & time_series_settings,
@@ -463,18 +463,30 @@ namespace
             case ViewTarget::Tags:
             {
                 /// Column "id" - with a DEFAULT expression that computes the identifier from "metric_name" and tags.
-                /// The DEFAULT is auto-added (derived from the id type) only when the `id_generator` setting is not set.
+                /// The `id_generator` setting says how the identifier is computed, so it replaces the DEFAULT
+                /// expression, which can also come from another table through `CREATE ... AS`. Without that
+                /// setting the DEFAULT is kept, and derived from the id type when there is none.
                 add_column_if_missing(TimeSeriesColumnNames::ID, dataTypeToAST(resolved_types.id_type));
                 {
                     auto & column = new_list->children.back();
-                    if (!column->as<ASTColumnDeclaration &>().getDefaultExpression()
-                        && !time_series_settings[TimeSeriesSetting::id_generator].value)
+                    auto default_expression = column->as<ASTColumnDeclaration &>().getDefaultExpression();
+
+                    ASTPtr new_default_expression;
+                    if (const auto & id_generator = time_series_settings[TimeSeriesSetting::id_generator].value)
+                        new_default_expression = id_generator->clone();
+                    else if (!default_expression)
+                        new_default_expression = TimeSeriesIDGenerator::getDefault(resolved_types.id_type, table_id);
+
+                    if (new_default_expression
+                        && (!default_expression
+                            || (default_expression->formatWithSecretsOneLine()
+                                != new_default_expression->formatWithSecretsOneLine())))
                     {
                         column = column->clone();
                         auto & new_decl = column->as<ASTColumnDeclaration &>();
                         new_decl.default_specifier = ColumnDefaultSpecifier::Default;
                         new_decl.ephemeral_default = false;
-                        new_decl.setDefaultExpression(TimeSeriesIDGenerator::getDefault(resolved_types.id_type, table_id));
+                        new_decl.setDefaultExpression(std::move(new_default_expression));
                         changed = true;
                     }
                 }
@@ -494,32 +506,54 @@ namespace
                 add_column_if_missing(TimeSeriesColumnNames::Tags,
                     makeASTDataType("Map", makeASTDataType("LowCardinality", makeASTDataType("String")), makeASTDataType("String")));
 
-                /// Columns "min_time" and "max_time".
+                /// Columns "min_time" and "max_time". Their type is determined by the settings, so a column
+                /// whose type doesn't match is replaced - it can also come from another table through
+                /// `CREATE ... AS`. Both columns are dropped when they are not stored at all.
+                const bool aggregate_min_time_and_max_time
+                    = time_series_settings[TimeSeriesSetting::aggregate_min_time_and_max_time];
+
+                /// When aggregation is enabled the columns need a custom SimpleAggregateFunction type.
+                auto make_min_max_time_type = [&](const String & func_name) -> ASTPtr
+                {
+                    DataTypePtr ts_type = makeNullable(resolved_types.timestamp_type);
+                    if (!aggregate_min_time_and_max_time)
+                        return dataTypeToAST(ts_type);
+                    AggregateFunctionProperties properties;
+                    auto func = AggregateFunctionFactory::instance().get(func_name, NullsAction::EMPTY, {ts_type}, {}, properties);
+                    auto custom_name = std::make_unique<DataTypeCustomSimpleAggregateFunction>(func, DataTypes{ts_type}, Array{});
+                    auto type = DataTypeFactory::instance().getCustom(std::make_unique<DataTypeCustomDesc>(std::move(custom_name)));
+                    return dataTypeToAST(type);
+                };
+
+                /// Adds the column, or replaces the type of an existing one when it doesn't match the settings.
+                auto add_or_retype_min_max_time_column = [&](const String & name, const String & func_name)
+                {
+                    auto type_ast = make_min_max_time_type(func_name);
+                    if (add_column_if_missing(name, type_ast->clone()))
+                        return;
+
+                    auto & column = new_list->children.back();
+                    auto declared_type = column->as<ASTColumnDeclaration &>().getType();
+                    if (declared_type && (declared_type->formatWithSecretsOneLine() == type_ast->formatWithSecretsOneLine()))
+                        return;
+
+                    column = column->clone();
+                    column->as<ASTColumnDeclaration &>().setType(std::move(type_ast));
+                    changed = true;
+                };
+
                 if (time_series_settings[TimeSeriesSetting::store_min_time_and_max_time])
                 {
-                    if (time_series_settings[TimeSeriesSetting::aggregate_min_time_and_max_time])
-                    {
-                        /// When aggregation is enabled the columns need a custom SimpleAggregateFunction type.
-                        auto make_agg_type = [&](const String & func_name) -> ASTPtr
-                        {
-                            DataTypePtr ts_type = makeNullable(resolved_types.timestamp_type);
-                            AggregateFunctionProperties properties;
-                            auto func = AggregateFunctionFactory::instance().get(func_name, NullsAction::EMPTY, {ts_type}, {}, properties);
-                            auto custom_name = std::make_unique<DataTypeCustomSimpleAggregateFunction>(func, DataTypes{ts_type}, Array{});
-                            auto type = DataTypeFactory::instance().getCustom(std::make_unique<DataTypeCustomDesc>(std::move(custom_name)));
-                            return dataTypeToAST(type);
-                        };
-
-                        add_column_if_missing(TimeSeriesColumnNames::MinTime, make_agg_type("min"));
-                        add_column_if_missing(TimeSeriesColumnNames::MaxTime, make_agg_type("max"));
-                    }
-                    else
-                    {
-                        add_column_if_missing(TimeSeriesColumnNames::MinTime,
-                            dataTypeToAST(makeNullable(resolved_types.timestamp_type)));
-                        add_column_if_missing(TimeSeriesColumnNames::MaxTime,
-                            dataTypeToAST(makeNullable(resolved_types.timestamp_type)));
-                    }
+                    add_or_retype_min_max_time_column(TimeSeriesColumnNames::MinTime, "min");
+                    add_or_retype_min_max_time_column(TimeSeriesColumnNames::MaxTime, "max");
+                }
+                else
+                {
+                    /// Nothing reads these columns, so they are dropped even if the other table had them.
+                    if (original.erase(TimeSeriesColumnNames::MinTime))
+                        changed = true;
+                    if (original.erase(TimeSeriesColumnNames::MaxTime))
+                        changed = true;
                 }
 
                 break;
@@ -557,15 +591,32 @@ namespace
 
     /// Sets a setting in the SETTINGS clause of an inner table's engine declaration,
     /// overwriting the existing value if present.
-    void setEngineSettings(ASTStorage & storage, std::string_view name, const Field & value)
+    /// Returns false if the setting already had this value.
+    bool setEngineSettings(ASTStorage & storage, std::string_view name, const Field & value)
     {
-        if (!storage.settings)
+        if (storage.settings)
+        {
+            if (const auto * current = storage.settings->changes.tryGet(name); current && (*current == value))
+                return false;
+        }
+        else
         {
             auto settings_ast = make_intrusive<ASTSetQuery>();
             settings_ast->is_standalone = false;
             storage.set(storage.settings, settings_ast);
         }
         storage.settings->changes.setSetting(name, value);
+        return true;
+    }
+
+    /// Replaces a clause of an inner table's engine declaration. Returns false if it was already the same.
+    template <typename T>
+    bool setEngineClause(ASTStorage & storage, T *& clause, ASTPtr new_clause)
+    {
+        if (clause && (clause->formatWithSecretsOneLine() == new_clause->formatWithSecretsOneLine()))
+            return false;
+        storage.setOrReplace(clause, new_clause);
+        return true;
     }
 
     /// Detects prealpha version by outer columns: prealpha had outer columns `id`, `timestamp`, `value`,
@@ -821,158 +872,230 @@ namespace
         }
     }
 
-    /// Makes the definition of the default engine for an inner table.
-    /// The engine family (plain, Replicated or Shared) follows the `default_table_engine` setting.
-    boost::intrusive_ptr<ASTStorage> generateInnerEngine(
-        ViewTarget::Kind target_kind, const TimeSeriesSettings & settings, const ContextPtr & context)
+    /// Brings the engine of an inner table into line with the TimeSeries settings: derives an engine if
+    /// there is none, corrects a declared one which contradicts the settings, and sets the properties the
+    /// settings define. The counterpart of `normalizeInnerColumns` for the engine.
+    /// Returns true if the engine was modified.
+    bool normalizeInnerEngine(
+        ASTStorage & inner_engine,
+        ViewTarget::Kind inner_table_kind,
+        const TimeSeriesSettings & time_series_settings,
+        const StorageID & table_id,
+        const ContextPtr & context)
     {
-        auto storage = make_intrusive<ASTStorage>();
+        bool changed = false;
 
-        switch (target_kind)
+        auto column = [](std::string_view name) -> ASTPtr { return make_intrusive<ASTIdentifier>(String{name}); };
+
+        /// The engine family (plain, Replicated or Shared) follows the `default_table_engine` setting.
+        auto set_engine = [&](std::string_view engine_kind)
+        {
+            auto engine = makeASTFunction(
+                fmt::format("{}{}", getInnerEngineFamilyPrefix(inner_table_kind, context), engine_kind));
+            engine->setNoEmptyArgs(false);
+            inner_engine.setOrReplace(inner_engine.engine, engine);
+            changed = true;
+        };
+
+        auto set_sorting_key = [&](ASTs key_columns)
+        {
+            auto sorting_key = makeASTFunction("tuple");
+            sorting_key->arguments->children = std::move(key_columns);
+            changed |= setEngineClause(inner_engine, inner_engine.order_by, sorting_key);
+        };
+
+        auto set_setting = [&](std::string_view name, UInt64 value)
+        {
+            changed |= setEngineSettings(inner_engine, name, Field(value));
+        };
+
+        auto is_merge_tree = [&] { return inner_engine.engine && inner_engine.engine->name.ends_with("MergeTree"); };
+
+        /// Whether `ast` uses the identifier `name`.
+        auto uses_identifier = [](this auto && self, const IAST & ast, std::string_view name) -> bool
+        {
+            if (const auto * identifier = ast.as<ASTIdentifier>(); identifier && (identifier->name() == name))
+                return true;
+            for (const auto & child : ast.children)
+            {
+                if (self(*child, name))
+                    return true;
+            }
+            return false;
+        };
+
+        auto sorting_key_uses = [&](std::string_view name)
+        {
+            return inner_engine.order_by && uses_identifier(*inner_engine.order_by, name);
+        };
+
+        /// Whether the engine collapses the rows sharing a sorting key when it merges parts.
+        auto collapses_rows = [&]
+        {
+            const String & engine_name = inner_engine.engine->name;
+            return engine_name.contains("Aggregating") || engine_name.contains("Replacing")
+                || engine_name.contains("Collapsing") || engine_name.contains("Summing");
+        };
+
+        /// The reader prunes time series by `min_time` and `max_time` (see the `filter_by_min_time_and_max_time`
+        /// setting), so the inner `tags` table has to keep them as the bounds over all the samples of a series.
+        /// A merge collapses the rows of a series into one, and then the bounds survive only if the engine merges
+        /// them - which is what `aggregate_min_time_and_max_time` asks for - or if they belong to the sorting key,
+        /// so that the rows of different insertions are never collapsed together. `normalizeInnerColumns` types
+        /// the columns after the same setting, and an aggregated type cannot be a part of a key, so which of the
+        /// two layouts is required follows from the setting alone.
+        auto keeps_min_time_and_max_time = [&]
+        {
+            if (!time_series_settings[TimeSeriesSetting::store_min_time_and_max_time])
+                return true;
+
+            if (!inner_engine.engine || !collapses_rows())
+                return true;
+
+            if (time_series_settings[TimeSeriesSetting::aggregate_min_time_and_max_time])
+                return inner_engine.engine->name.contains("Aggregating");
+
+            return sorting_key_uses(TimeSeriesColumnNames::MinTime) && sorting_key_uses(TimeSeriesColumnNames::MaxTime);
+        };
+
+        /// The `*_index_granularity` settings set `index_granularity` of the inner MergeTree tables, overriding the engine declaration.
+        auto apply_index_granularity = [&](const SettingFieldUInt64 & index_granularity)
+        {
+            if (is_merge_tree() && (index_granularity.isChanged() || !hasEngineSetting(inner_engine, "index_granularity")))
+                set_setting("index_granularity", index_granularity.value);
+        };
+
+        switch (inner_table_kind)
         {
             case ViewTarget::Samples:
             case ViewTarget::RecentSamples:
             {
-                /// The recent samples table gets the same generated engine as the samples table; it becomes
-                /// partitioned and TTL'd later (see applyInnerEnginePartitionBy and applyRecentSamplesTTL).
-                auto engine = makeASTFunction(fmt::format("{}MergeTree", getInnerEngineFamilyPrefix(target_kind, context)));
-                engine->setNoEmptyArgs(false);
-                storage->set(storage->engine, engine);
+                /// The recent samples table gets the same engine as the samples table; it becomes partitioned
+                /// and TTL'd below.
+                if (!inner_engine.engine)
+                {
+                    set_engine("MergeTree");
+                    set_sorting_key({column(TimeSeriesColumnNames::ID), column(TimeSeriesColumnNames::Timestamp)});
+                }
 
-                storage->set(storage->order_by,
-                    makeASTOperator("tuple",
-                        make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::ID),
-                        make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Timestamp)));
-                return storage;
+                apply_index_granularity(time_series_settings[(inner_table_kind == ViewTarget::Samples)
+                    ? TimeSeriesSetting::samples_index_granularity
+                    : TimeSeriesSetting::recent_samples_index_granularity]);
+
+                if (inner_table_kind != ViewTarget::RecentSamples)
+                    break;
+
+                /// The table is partitioned by time, so `ttl_only_drop_parts` lets the TTL drop whole expired parts instead of rewriting them.
+                if (is_merge_tree() && !hasEngineSetting(inner_engine, "ttl_only_drop_parts"))
+                    set_setting("ttl_only_drop_parts", 1);
+
+                if (is_merge_tree())
+                {
+                    if (const auto & partition_by = time_series_settings[TimeSeriesSetting::recent_samples_partition_by].value)
+                    {
+                        /// An explicitly set `recent_samples_partition_by` overrides the partition key from the engine declaration.
+                        changed |= setEngineClause(inner_engine, inner_engine.partition_by, partition_by->clone());
+                    }
+                    else if (!inner_engine.partition_by)
+                    {
+                        /// Otherwise a declared partition key is kept; if there is none, the default one (5-hour buckets) is used.
+                        /// `toDateTime` makes the default partition key work for any timestamp type (e.g. a raw `UInt32`),
+                        /// same as the TTL expression.
+                        inner_engine.set(inner_engine.partition_by,
+                            makeASTFunction("toStartOfInterval",
+                                makeASTFunction("toDateTime", column(TimeSeriesColumnNames::Timestamp)),
+                                makeASTFunction("toIntervalHour", make_intrusive<ASTLiteral>(static_cast<UInt64>(5)))));
+                        changed = true;
+                    }
+                }
+
+                /// `recent_samples_ttl_seconds` is a correctness contract for the reader: the TTL always comes from it; non-TTL engines are rejected.
+                if (!is_merge_tree())
+                    throw Exception(ErrorCodes::INVALID_SETTING_VALUE,
+                        "{}: The inner recent samples table requires a MergeTree-family engine to apply the TTL "
+                        "defined by the `recent_samples_ttl_seconds` setting", table_id.getNameForLogs());
+
+                auto ttl_element = make_intrusive<ASTTTLElement>(TTLMode::DELETE, DataDestinationType::DELETE, "", /*if_exists=*/ false);
+                ttl_element->setTTL(makeASTOperator("plus",
+                    makeASTFunction("toDateTime", column(TimeSeriesColumnNames::Timestamp)),
+                    makeASTFunction("toIntervalSecond",
+                        make_intrusive<ASTLiteral>(time_series_settings[TimeSeriesSetting::recent_samples_ttl_seconds].value))));
+                auto ttl_list = make_intrusive<ASTExpressionList>();
+                ttl_list->children.push_back(std::move(ttl_element));
+                changed |= setEngineClause(inner_engine, inner_engine.ttl_table, ttl_list);
+                break;
             }
 
             case ViewTarget::Tags:
             {
-                const bool aggregate_min_time_and_max_time = settings[TimeSeriesSetting::aggregate_min_time_and_max_time];
-                std::string_view engine_kind = aggregate_min_time_and_max_time
-                    ? "AggregatingMergeTree"
-                    : "ReplacingMergeTree";
-                auto engine = makeASTFunction(fmt::format("{}{}", getInnerEngineFamilyPrefix(target_kind, context), engine_kind));
-                engine->setNoEmptyArgs(false);
-                storage->set(storage->engine, engine);
+                const bool aggregate_min_time_and_max_time
+                    = time_series_settings[TimeSeriesSetting::aggregate_min_time_and_max_time];
 
-                storage->set(storage->primary_key, make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::MetricName));
-
-                ASTs order_by_list;
-                order_by_list.push_back(make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::MetricName));
-                order_by_list.push_back(make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::ID));
-                if (settings[TimeSeriesSetting::store_min_time_and_max_time] && !aggregate_min_time_and_max_time)
+                /// The settings decide how `min_time` and `max_time` are kept, so a declared engine which
+                /// contradicts them is corrected - it can also come from another table through `CREATE ... AS`,
+                /// where it was derived from different settings. Only the engine and the keys are corrected;
+                /// the rest of the declaration is kept, so that e.g. a declared `index_granularity` still
+                /// loses only to an explicit `tags_index_granularity`.
+                if (!inner_engine.engine || !keeps_min_time_and_max_time())
                 {
-                    order_by_list.push_back(make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::MinTime));
-                    order_by_list.push_back(make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::MaxTime));
+                    set_engine(aggregate_min_time_and_max_time ? "AggregatingMergeTree" : "ReplacingMergeTree");
+                    changed |= setEngineClause(
+                        inner_engine, inner_engine.primary_key, column(TimeSeriesColumnNames::MetricName));
+
+                    ASTs key_columns = {column(TimeSeriesColumnNames::MetricName), column(TimeSeriesColumnNames::ID)};
+                    if (time_series_settings[TimeSeriesSetting::store_min_time_and_max_time] && !aggregate_min_time_and_max_time)
+                    {
+                        /// Without aggregating them, the bounds survive a merge only in the sorting key, so that
+                        /// the rows of different insertions are never collapsed together.
+                        key_columns.push_back(column(TimeSeriesColumnNames::MinTime));
+                        key_columns.push_back(column(TimeSeriesColumnNames::MaxTime));
+                    }
+                    set_sorting_key(std::move(key_columns));
                 }
-                auto order_by_tuple = make_intrusive<ASTFunction>();
-                order_by_tuple->name = "tuple";
-                auto arguments_list = make_intrusive<ASTExpressionList>();
-                arguments_list->children = std::move(order_by_list);
-                order_by_tuple->arguments = arguments_list;
-                storage->set(storage->order_by, order_by_tuple);
-                return storage;
+
+                apply_index_granularity(time_series_settings[TimeSeriesSetting::tags_index_granularity]);
+
+                /// The TimeSeries `tags` inner table keeps the tag columns (and the `tags` Map) outside
+                /// the sorting key, but they are functionally dependent on `id`, which is part of it: every group of
+                /// rows that a background merge collapses together shares the same `id`, hence the same values of
+                /// those columns, so this off-key layout is safe here. `AggregatingMergeTree` rejects such a layout
+                /// by default (see the `allow_dimensions_outside_sorting_key` setting and
+                /// https://github.com/ClickHouse/ClickHouse/issues/751), so enable that setting on the inner tags
+                /// engine - both when we derive it and when the user specifies an aggregating engine explicitly.
+                if (inner_engine.engine && inner_engine.engine->name.contains("Aggregating")
+                    && !hasEngineSetting(inner_engine, "allow_dimensions_outside_sorting_key"))
+                {
+                    set_setting("allow_dimensions_outside_sorting_key", 1);
+                }
+
+                /// `min_time` and `max_time` are nullable, so a sorting key containing them needs `allow_nullable_key` -
+                /// both for the engine we derive and for an engine which puts those columns into its sorting key itself.
+                if (is_merge_tree()
+                    && sorting_key_uses(TimeSeriesColumnNames::MinTime)
+                    && sorting_key_uses(TimeSeriesColumnNames::MaxTime)
+                    && !hasEngineSetting(inner_engine, "allow_nullable_key"))
+                {
+                    set_setting("allow_nullable_key", 1);
+                }
+                break;
             }
 
             case ViewTarget::Metrics:
             {
-                auto engine = makeASTFunction(fmt::format("{}ReplacingMergeTree", getInnerEngineFamilyPrefix(target_kind, context)));
-                engine->setNoEmptyArgs(false);
-                storage->set(storage->engine, engine);
-                storage->set(storage->order_by, make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::MetricFamilyName));
-                return storage;
+                if (!inner_engine.engine)
+                {
+                    set_engine("ReplacingMergeTree");
+                    changed |= setEngineClause(
+                        inner_engine, inner_engine.order_by, column(TimeSeriesColumnNames::MetricFamilyName));
+                }
+                break;
             }
 
             default:
-                break;
+                UNREACHABLE();
         }
 
-        UNREACHABLE();
-    }
-
-    /// Applies engine settings driven by the TimeSeries settings to an inner table's engine,
-    /// whether the engine was generated or specified by the user.
-    void applyInnerEngineSettings(ViewTarget::Kind kind, ASTStorage & storage, const TimeSeriesSettings & settings)
-    {
-        if (!storage.engine)
-            return;
-
-        const auto & engine_name = storage.engine->name;
-
-        /// The `*_index_granularity` settings set `index_granularity` of the inner MergeTree tables, overriding the engine declaration.
-        if ((kind == ViewTarget::Samples || kind == ViewTarget::Tags || kind == ViewTarget::RecentSamples)
-            && engine_name.ends_with("MergeTree"))
-        {
-            const auto & index_granularity = settings[(kind == ViewTarget::Samples)
-                ? TimeSeriesSetting::samples_index_granularity
-                : ((kind == ViewTarget::Tags)
-                    ? TimeSeriesSetting::tags_index_granularity
-                    : TimeSeriesSetting::recent_samples_index_granularity)];
-            if (index_granularity.isChanged() || !hasEngineSetting(storage, "index_granularity"))
-                setEngineSettings(storage, "index_granularity", Field(index_granularity.value));
-        }
-
-        /// The table is partitioned by time, so `ttl_only_drop_parts` lets the TTL drop whole expired parts instead of rewriting them.
-        if (kind == ViewTarget::RecentSamples && engine_name.ends_with("MergeTree")
-            && !hasEngineSetting(storage, "ttl_only_drop_parts"))
-        {
-            setEngineSettings(storage, "ttl_only_drop_parts", Field(static_cast<UInt64>(1)));
-        }
-
-        /// The TimeSeries `tags` inner table keeps the tag columns (and the `tags` Map) outside
-        /// the sorting key, but they are functionally dependent on `id`, which is part of it: every group of
-        /// rows that a background merge collapses together shares the same `id`, hence the same values of
-        /// those columns, so this off-key layout is safe here. `AggregatingMergeTree` rejects such a layout
-        /// by default (see the `allow_dimensions_outside_sorting_key` setting and
-        /// https://github.com/ClickHouse/ClickHouse/issues/751), so enable that setting on the inner tags
-        /// engine — both when we generate it and when the user specifies an aggregating engine explicitly.
-        if (kind == ViewTarget::Tags && engine_name.contains("Aggregating")
-            && !hasEngineSetting(storage, "allow_dimensions_outside_sorting_key"))
-        {
-            setEngineSettings(storage, "allow_dimensions_outside_sorting_key", Field(static_cast<UInt64>(1)));
-        }
-    }
-
-    /// Sets the partition key of the inner recent samples table.
-    void applyInnerEnginePartitionBy(ViewTarget::Kind kind, ASTStorage & storage, const TimeSeriesSettings & settings)
-    {
-        if (kind != ViewTarget::RecentSamples || !storage.engine || !storage.engine->name.ends_with("MergeTree"))
-            return;
-
-        if (const auto & partition_by = settings[TimeSeriesSetting::recent_samples_partition_by].value)
-        {
-            /// An explicitly set `recent_samples_partition_by` overrides the partition key from the engine declaration.
-            storage.setOrReplace(storage.partition_by, partition_by->clone());
-        }
-        else if (!storage.partition_by)
-        {
-            /// Otherwise a declared partition key is kept; if there is none, the default one (5-hour buckets) is used.
-            /// `toDateTime` makes the default partition key work for any timestamp type (e.g. a raw `UInt32`),
-            /// same as the TTL expression.
-            storage.set(storage.partition_by,
-                makeASTFunction("toStartOfInterval",
-                    makeASTFunction("toDateTime", make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Timestamp)),
-                    makeASTFunction("toIntervalHour", make_intrusive<ASTLiteral>(static_cast<UInt64>(5)))));
-        }
-    }
-
-    /// `recent_samples_ttl_seconds` is a correctness contract for the reader: the TTL always comes from it; non-TTL engines are rejected.
-    void applyRecentSamplesTTL(ASTStorage & storage, const TimeSeriesSettings & settings, const StorageID & table_id)
-    {
-        if (!storage.engine || !storage.engine->name.ends_with("MergeTree"))
-            throw Exception(ErrorCodes::INVALID_SETTING_VALUE,
-                "{}: The inner recent samples table requires a MergeTree-family engine to apply the TTL "
-                "defined by the `recent_samples_ttl_seconds` setting", table_id.getNameForLogs());
-
-        auto ttl_element = make_intrusive<ASTTTLElement>(TTLMode::DELETE, DataDestinationType::DELETE, "", /*if_exists=*/ false);
-        ttl_element->setTTL(makeASTOperator("plus",
-            makeASTFunction("toDateTime", make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Timestamp)),
-            makeASTFunction("toIntervalSecond",
-                make_intrusive<ASTLiteral>(settings[TimeSeriesSetting::recent_samples_ttl_seconds].value))));
-        auto ttl_list = make_intrusive<ASTExpressionList>();
-        ttl_list->children.push_back(std::move(ttl_element));
-        storage.setOrReplace(storage.ttl_table, ttl_list);
+        return changed;
     }
 
     /// Checks that two inner tables have the same replication type (replicated, shared, or non-replicated),
@@ -1315,9 +1438,10 @@ void normalizeTimeSeriesDefinition(ASTCreateQuery & create_query, const ContextP
                 create_query.targets->removeTarget(ViewTarget::RecentSamples);
         }
 
-        /// The previous inner engine to compare with in checkInnerEngineReplicationMatches.
+        /// The previous inner engine to compare with in checkInnerEngineReplicationMatches. It owns the engine,
+        /// which is not always stored in `create_query` - `normalizeInnerEngine` can leave it unchanged.
         ViewTarget::Kind prev_inner_kind{};
-        const ASTStorage * prev_inner_engine = nullptr;
+        boost::intrusive_ptr<ASTStorage> prev_inner_engine;
 
         for (auto kind : getTargetKinds())
         {
@@ -1341,7 +1465,7 @@ void normalizeTimeSeriesDefinition(ASTCreateQuery & create_query, const ContextP
                 auto inner_columns = create_query.getTargetInnerColumns(kind)
                     ? boost::static_pointer_cast<ASTColumns>(create_query.getTargetInnerColumns(kind)->clone())
                     : make_intrusive<ASTColumns>();
-                if (normalizeInnerTableColumns(*inner_columns, kind, settings, resolved_types, table_id))
+                if (normalizeInnerColumns(*inner_columns, kind, settings, resolved_types, table_id))
                     create_query.setTargetInnerColumns(kind, inner_columns);
 
                 /// Validate the user-provided types of the inner columns the same way external targets are validated.
@@ -1349,20 +1473,15 @@ void normalizeTimeSeriesDefinition(ASTCreateQuery & create_query, const ContextP
                     *inner_columns->columns, context, mode);
                 checkTargetTable(inner_columns_description, kind, settings, resolved_types, table_id);
 
-                if (!hasInnerEngine(create_query, kind))
-                    create_query.setTargetInnerEngine(kind, generateInnerEngine(kind, settings, context));
+                auto inner_engine = create_query.getTargetInnerEngine(kind)
+                    ? boost::static_pointer_cast<ASTStorage>(create_query.getTargetInnerEngine(kind)->clone())
+                    : make_intrusive<ASTStorage>();
+                if (normalizeInnerEngine(*inner_engine, kind, settings, table_id, context))
+                    create_query.setTargetInnerEngine(kind, inner_engine);
 
-                if (auto * inner_engine = create_query.getTargetInnerEngine(kind))
-                {
-                    applyInnerEngineSettings(kind, *inner_engine, settings);
-                    applyInnerEnginePartitionBy(kind, *inner_engine, settings);
-                    if (kind == ViewTarget::RecentSamples)
-                        applyRecentSamplesTTL(*inner_engine, settings, table_id);
-
-                    checkInnerEngineReplicationMatches(kind, *inner_engine, prev_inner_kind, prev_inner_engine);
-                    prev_inner_kind = kind;
-                    prev_inner_engine = inner_engine;
-                }
+                checkInnerEngineReplicationMatches(kind, *inner_engine, prev_inner_kind, prev_inner_engine.get());
+                prev_inner_kind = kind;
+                prev_inner_engine = inner_engine;
             }
         }
     }

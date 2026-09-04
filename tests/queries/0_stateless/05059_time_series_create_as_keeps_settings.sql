@@ -19,11 +19,13 @@ SELECT extract(create_table_query, 'TAGS INNER COLUMNS \((.*?)\) TAGS INNER ENGI
 FROM system.tables WHERE database = currentDatabase() AND name = 'ts_copy';
 
 SELECT '-- `AS` with a `SETTINGS` clause: the written `store_min_time_and_max_time` overrides the copied one so';
-SELECT '-- `min_time`/`max_time` appear, the written `aggregate_min_time_and_max_time` is added so they are not';
-SELECT '-- aggregated, and `tags_to_columns` is still copied from `ts_src`';
+SELECT '-- `min_time`/`max_time` appear, the written `tags_index_granularity` is added, and `tags_to_columns`';
+SELECT '-- is still copied from `ts_src`';
 CREATE TABLE ts_derived AS ts_src ENGINE = TimeSeries
-SETTINGS store_min_time_and_max_time = 1, aggregate_min_time_and_max_time = 0;
+SETTINGS store_min_time_and_max_time = 1, tags_index_granularity = 4096;
 SELECT extract(create_table_query, 'TAGS INNER COLUMNS \((.*?)\) TAGS INNER ENGINE')
+FROM system.tables WHERE database = currentDatabase() AND name = 'ts_derived';
+SELECT extract(create_table_query, 'TAGS INNER ENGINE.*?(index_granularity = \d+)')
 FROM system.tables WHERE database = currentDatabase() AND name = 'ts_derived';
 
 -- The `job` column comes with the copied inner columns anyway, so check that it's actually filled -
