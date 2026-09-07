@@ -8,7 +8,9 @@
 #include <Processors/Sinks/SinkToStorage.h>
 #include <QueryPipeline/BlockIO.h>
 #include <Storages/TimeSeries/TimeSeriesDeduplicationCache.h>
+#include <base/Decimal.h>
 
+#include <optional>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
@@ -27,6 +29,10 @@ using TimeSeriesSettingsPtr = std::shared_ptr<const TimeSeriesSettings>;
 /// Sink for inserting data into the TimeSeries table engine.
 /// Transforms outer columns (samples, metric_name, tags, metric_family, type, unit, help)
 /// into blocks for the target tables (Tags, TimeRanges, Samples, RecentSamples, MetricFamilies).
+/// For a table with buckets of samples (see `TimeSeriesSettings::hasBucketedSamples`) the samples of a series are sorted,
+/// deduplicated and split into time buckets, each bucket makes a row of the samples tables with the columns
+/// `id`, `samples`, `bucket`, `min_time`, `max_time`. For a table of an earlier version every sample makes a row
+/// with the columns `id`, `timestamp`, `value`.
 class TimeSeriesSink : public SinkToStorage, WithContext
 {
 public:
@@ -95,12 +101,22 @@ private:
     /// Type of the `id` column in the tags target table.
     DataTypePtr id_type;
 
+    /// Types of the timestamps and the values of the samples, taken from the input header (see initTagsAndSamplesPipelines).
+    DataTypePtr timestamp_type;
+    DataTypePtr value_type;
+
     /// True when the resolved id-generator references the `all_tags` identifier.
     bool id_generator_uses_all_tags = false;
 
     /// Precomputed ExpressionActions for calculating the "id" column from a tags block.
     std::shared_ptr<ExpressionActions> calculate_id_actions;
     std::shared_ptr<ExpressionActions> convert_id_actions;
+
+    /// The steps of the buckets of the samples table and of the recent samples table (unset if there is no such table)
+    /// with the scale of `timestamp_type`, e.g. in milliseconds for `DateTime64(3)`.
+    /// Used only for a table with buckets of samples (see `TimeSeriesSettings::hasBucketedSamples`).
+    Decimal64 samples_bucket_step{0};
+    std::optional<Decimal64> recent_samples_bucket_step;
 
     std::unique_ptr<TargetPipeline> tags_pipeline;
     std::unique_ptr<TargetPipeline> time_ranges_pipeline;

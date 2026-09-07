@@ -1,17 +1,23 @@
 #include <Storages/TimeSeries/TimeSeriesSink.h>
 
 #include <Columns/ColumnArray.h>
+#include <Columns/ColumnDecimal.h>
 #include <Columns/ColumnMap.h>
 #include <Columns/ColumnString.h>
 #include <Columns/ColumnTuple.h>
+#include <Columns/ColumnsNumber.h>
+#include <Common/DateLUTImpl.h>
+#include <Common/NaNUtils.h>
 #include <Common/logger_useful.h>
 #include <Common/typeid_cast.h>
+#include <Core/DecimalFunctions.h>
 #include <Core/Field.h>
 #include <DataTypes/DataTypeArray.h>
 #include <DataTypes/DataTypeLowCardinality.h>
 #include <DataTypes/DataTypeMap.h>
 #include <DataTypes/DataTypeNullable.h>
 #include <DataTypes/DataTypeTuple.h>
+#include <DataTypes/DataTypesDecimal.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/ExpressionActions.h>
 #include <Interpreters/InterpreterInsertQuery.h>
@@ -29,8 +35,10 @@
 #include <Storages/TimeSeries/TimeSeriesIDGenerator.h>
 #include <Storages/TimeSeries/TimeSeriesTagNames.h>
 #include <base/EnumReflection.h>
+#include <base/sort.h>
 
 #include <algorithm>
+#include <optional>
 #include <ranges>
 
 
@@ -40,6 +48,8 @@ namespace DB
 namespace TimeSeriesSetting
 {
     extern const TimeSeriesSettingsASTFunction id_generator;
+    extern const TimeSeriesSettingsUInt64 recent_samples_bucket_step_seconds;
+    extern const TimeSeriesSettingsUInt64 samples_bucket_step_seconds;
     extern const TimeSeriesSettingsMap tags_to_columns;
 }
 
@@ -171,7 +181,15 @@ namespace
         }
     }
 
-    /// Fills columns id, timestamp, value for the "samples" table.
+    /// Throws if a row without a metric name and tags has samples: such samples can't be stored.
+    void checkNoSamplesWithoutTimeSeries(size_t num_samples)
+    {
+        if (num_samples > 0)
+            throw Exception(ErrorCodes::INCORRECT_DATA, "Got {} samples without a metric name or tags", num_samples);
+    }
+
+    /// Fills columns id, timestamp, value for the "samples" table of a table storing one sample per row
+    /// (tables of earlier versions, see `TimeSeriesSettings::hasBucketedSamples`).
     void fillSamplesColumns(
         const PaddedPODArray<UInt8> & filter,
         const IColumn & id_column,
@@ -191,11 +209,7 @@ namespace
 
             if (!filter[i])
             {
-                if (num_samples > 0)
-                {
-                    /// We can't store time series without metric name and tags.
-                    throw Exception(ErrorCodes::INCORRECT_DATA, "Got {} samples without a metric name or tags", num_samples);
-                }
+                checkNoSamplesWithoutTimeSeries(num_samples);
                 continue;
             }
 
@@ -208,6 +222,284 @@ namespace
 
             ++id_index;
         }
+    }
+
+    /// Sorts the samples of each time series by timestamp and removes the samples with duplicate timestamps
+    /// (the sample with the greatest value is kept, a NaN value loses to any other value).
+    /// The result is stored as indexes of the samples in the nested columns of the outer column with samples:
+    /// `sorted_indices` contains the indexes, and `sorted_offsets[i]` is the end of the range of row `i` in `sorted_indices`.
+    template <typename TimestampColumn>
+    void sortSamples(
+        const PaddedPODArray<UInt8> & filter,
+        const ColumnArray::Offsets & ts_offsets,
+        const TimestampColumn & ts_timestamps,
+        const IColumn & ts_values,
+        PaddedPODArray<size_t> & sorted_indices,
+        PaddedPODArray<size_t> & sorted_offsets)
+    {
+        const auto & timestamps = ts_timestamps.getData();
+
+        sorted_indices.clear();
+        sorted_indices.reserve(timestamps.size());
+        sorted_offsets.clear();
+        sorted_offsets.reserve(filter.size());
+
+        for (size_t i = 0; i < filter.size(); ++i)
+        {
+            size_t ts_start = (i == 0) ? 0 : ts_offsets[i - 1];
+            size_t ts_end = ts_offsets[i];
+            size_t num_samples = ts_end - ts_start;
+
+            if (!filter[i])
+            {
+                checkNoSamplesWithoutTimeSeries(num_samples);
+                sorted_offsets.push_back(sorted_indices.size());
+                continue;
+            }
+
+            size_t row_begin = sorted_indices.size();
+            for (size_t j = ts_start; j < ts_end; ++j)
+                sorted_indices.push_back(j);
+
+            auto less_by_timestamp = [&](size_t lhs, size_t rhs) { return timestamps[lhs] < timestamps[rhs]; };
+            size_t * row_data = sorted_indices.data() + row_begin;
+
+            /// Samples usually arrive in timestamp order.
+            if (!std::is_sorted(row_data, row_data + num_samples, less_by_timestamp))
+                ::sort(row_data, row_data + num_samples, less_by_timestamp);
+
+            /// Collapse each run of equal timestamps into one sample: the sample with the greatest value,
+            /// where a NaN value loses to any other value.
+            auto new_sample_wins = [&](size_t kept_index, size_t new_index)
+            {
+                Float64 kept_value = ts_values.getFloat64(kept_index);
+                Float64 new_value = ts_values.getFloat64(new_index);
+                if (isNaN(new_value))
+                    return false;
+                return isNaN(kept_value) || (new_value > kept_value);
+            };
+
+            size_t last_unique = 0;
+            for (size_t k = 1; k < num_samples; ++k)
+            {
+                if (timestamps[row_data[k]] == timestamps[row_data[last_unique]])
+                {
+                    if (new_sample_wins(row_data[last_unique], row_data[k]))
+                        row_data[last_unique] = row_data[k];
+                }
+                else
+                {
+                    row_data[++last_unique] = row_data[k];
+                }
+            }
+            if (num_samples > 0)
+                sorted_indices.resize(row_begin + last_unique + 1);
+
+            sorted_offsets.push_back(sorted_indices.size());
+        }
+    }
+
+    /// Returns the start of the bucket containing a timestamp: the timestamp rounded down to a multiple of the bucket step.
+    /// The timestamp, the step and the result have the scale of the timestamp type.
+    Decimal64 getBucket(Decimal64 timestamp, Decimal64 bucket_step)
+    {
+        /// The rounding is towards negative infinity, which matters for timestamps before 1970 (negative values):
+        /// the start of a bucket must not be greater than any timestamp in it.
+        return Decimal64(DateLUTImpl::roundDownToMultiple(timestamp.value, bucket_step.value));
+    }
+
+    /// Copies the samples `indices[begin, end)` of `ts_timestamps` and `ts_values` to the columns of the `samples` array.
+    void insertSamplesByIndices(
+        const size_t * indices, size_t begin, size_t end,
+        const IColumn & ts_timestamps, const IColumn & ts_values,
+        IColumn & out_timestamps, IColumn & out_values)
+    {
+        /// The indices are increasing, so the samples are copied by ranges:
+        /// usually the input is already sorted and a bucket is one range.
+        size_t range_start = begin;
+        while (range_start < end)
+        {
+            size_t range_end = range_start + 1;
+            while ((range_end < end) && (indices[range_end] == indices[range_end - 1] + 1))
+                ++range_end;
+            size_t first_index = indices[range_start];
+            out_timestamps.insertRangeFrom(ts_timestamps, first_index, range_end - range_start);
+            out_values.insertRangeFrom(ts_values, first_index, range_end - range_start);
+            range_start = range_end;
+        }
+    }
+
+    /// Converts a timestamp to `Decimal64` with the scale of the timestamp type.
+    Decimal64 toDecimal64(DateTime64 timestamp)
+    {
+        return timestamp;
+    }
+
+    Decimal64 toDecimal64(UInt32 timestamp)
+    {
+        return Decimal64(timestamp);
+    }
+
+    /// Converts a `Decimal64` value with the scale of the timestamp type back
+    /// to the value type of the timestamp column.
+    template <typename TimestampColumn>
+    typename TimestampColumn::ValueType toTimestamp(Decimal64 value)
+    {
+        using TimestampValue = typename TimestampColumn::ValueType;
+        if constexpr (is_decimal<TimestampValue>)
+            return TimestampValue(value.value);
+        else
+            return static_cast<TimestampValue>(value.value);
+    }
+
+    /// The type of the `samples` column of a samples block: `Array(Tuple(timestamp <timestamp_type>, value <value_type>))`.
+    DataTypePtr makeSamplesArrayDataType(const DataTypePtr & timestamp_type, const DataTypePtr & value_type)
+    {
+        return std::make_shared<DataTypeArray>(std::make_shared<DataTypeTuple>(
+            DataTypes{timestamp_type, value_type}, Strings{TimeSeriesColumnNames::Timestamp, TimeSeriesColumnNames::Value}));
+    }
+
+    /// Builds a block for a samples table from the sorted samples of the series in the input block (see sortSamples).
+    /// A row of the block contains the samples of one series within one bucket of `bucket_step` (with the scale of the timestamp type).
+    template <typename TimestampColumn>
+    Block makeSamplesBlock(
+        const PaddedPODArray<UInt8> & filter,
+        const IColumn & id_column,
+        const DataTypePtr & id_type,
+        const TimestampColumn & ts_timestamps,
+        const DataTypePtr & timestamp_type,
+        const IColumn & ts_values,
+        const DataTypePtr & value_type,
+        const PaddedPODArray<size_t> & sorted_indices,
+        const PaddedPODArray<size_t> & sorted_offsets,
+        Decimal64 bucket_step)
+    {
+        const auto & timestamps = ts_timestamps.getData();
+        size_t total_samples = sorted_indices.size();
+
+        auto out_id = id_type->createColumn();
+        auto out_timestamps = ts_timestamps.cloneEmpty();
+        auto out_values = ts_values.cloneEmpty();
+        auto out_offsets = ColumnArray::ColumnOffsets::create();
+        auto out_min_time = ts_timestamps.cloneEmpty();
+        auto out_max_time = ts_timestamps.cloneEmpty();
+
+        /// `cloneEmpty` keeps the scale of `DateTime64`.
+        auto out_bucket = ts_timestamps.cloneEmpty();
+        auto & bucket_data = assert_cast<TimestampColumn &>(*out_bucket).getData();
+
+        out_timestamps->reserve(total_samples);
+        out_values->reserve(total_samples);
+
+        /// The filtered-in rows and the rows of `id_column` correspond one-to-one.
+        size_t id_index = 0;
+        for (size_t i = 0; i < filter.size(); ++i)
+        {
+            if (!filter[i])
+                continue;
+
+            size_t row_begin = (i == 0) ? 0 : sorted_offsets[i - 1];
+            size_t row_end = sorted_offsets[i];
+
+            /// The samples are sorted, so the samples of one bucket are adjacent.
+            size_t bucket_begin = row_begin;
+            while (bucket_begin < row_end)
+            {
+                Decimal64 bucket = getBucket(toDecimal64(timestamps[sorted_indices[bucket_begin]]), bucket_step);
+                size_t bucket_end = bucket_begin + 1;
+                while ((bucket_end < row_end) && (getBucket(toDecimal64(timestamps[sorted_indices[bucket_end]]), bucket_step) == bucket))
+                    ++bucket_end;
+
+                out_id->insertFrom(id_column, id_index);
+                insertSamplesByIndices(sorted_indices.data(), bucket_begin, bucket_end, ts_timestamps, ts_values, *out_timestamps, *out_values);
+                out_offsets->getData().push_back(out_timestamps->size());
+                bucket_data.push_back(toTimestamp<TimestampColumn>(bucket));
+                out_min_time->insertFrom(ts_timestamps, sorted_indices[bucket_begin]);
+                out_max_time->insertFrom(ts_timestamps, sorted_indices[bucket_end - 1]);
+
+                bucket_begin = bucket_end;
+            }
+
+            ++id_index;
+        }
+
+        auto samples_column = ColumnArray::create(
+            ColumnTuple::create(Columns{std::move(out_timestamps), std::move(out_values)}), std::move(out_offsets));
+
+        Block samples_block;
+        samples_block.insert(ColumnWithTypeAndName{std::move(out_id), id_type, TimeSeriesColumnNames::ID});
+        samples_block.insert(ColumnWithTypeAndName{std::move(samples_column), makeSamplesArrayDataType(timestamp_type, value_type), TimeSeriesColumnNames::Samples});
+        samples_block.insert(ColumnWithTypeAndName{std::move(out_bucket), timestamp_type, TimeSeriesColumnNames::Bucket});
+        samples_block.insert(ColumnWithTypeAndName{std::move(out_min_time), timestamp_type, TimeSeriesColumnNames::MinTime});
+        samples_block.insert(ColumnWithTypeAndName{std::move(out_max_time), timestamp_type, TimeSeriesColumnNames::MaxTime});
+        return samples_block;
+    }
+
+    /// The blocks to insert into the samples table and into the recent samples table (if there is one).
+    struct SamplesBlocks
+    {
+        Block samples_block;
+        std::optional<Block> recent_samples_block;
+    };
+
+    /// Builds the blocks for the samples tables from the series in the input block: the samples of each series
+    /// are sorted once (see sortSamples), then split into the buckets of each table (see makeSamplesBlock).
+    /// `recent_samples_bucket_step` is unset if there is no recent samples table.
+    template <typename TimestampColumn>
+    SamplesBlocks makeSamplesBlocksForTimestampType(
+        const PaddedPODArray<UInt8> & filter,
+        const IColumn & id_column,
+        const DataTypePtr & id_type,
+        const TimestampColumn & ts_timestamps,
+        const DataTypePtr & timestamp_type,
+        const IColumn & ts_values,
+        const DataTypePtr & value_type,
+        const ColumnArray::Offsets & ts_offsets,
+        Decimal64 samples_bucket_step,
+        std::optional<Decimal64> recent_samples_bucket_step)
+    {
+        PaddedPODArray<size_t> sorted_indices;
+        PaddedPODArray<size_t> sorted_offsets;
+        sortSamples(filter, ts_offsets, ts_timestamps, ts_values, sorted_indices, sorted_offsets);
+
+        SamplesBlocks res;
+        res.samples_block = makeSamplesBlock(
+            filter, id_column, id_type, ts_timestamps, timestamp_type, ts_values, value_type, sorted_indices, sorted_offsets, samples_bucket_step);
+
+        if (recent_samples_bucket_step)
+        {
+            /// The same block is reused if the buckets of the two tables have the same step
+            /// (a Block copy is cheap: it only copies column pointers).
+            if (*recent_samples_bucket_step == samples_bucket_step)
+                res.recent_samples_block = res.samples_block;
+            else
+                res.recent_samples_block = makeSamplesBlock(
+                    filter, id_column, id_type, ts_timestamps, timestamp_type, ts_values, value_type, sorted_indices, sorted_offsets, *recent_samples_bucket_step);
+        }
+
+        return res;
+    }
+
+    /// Calls makeSamplesBlocksForTimestampType with the type of the column of the timestamps.
+    SamplesBlocks makeSamplesBlocks(
+        const PaddedPODArray<UInt8> & filter,
+        const IColumn & id_column,
+        const DataTypePtr & id_type,
+        const IColumn & ts_timestamps,
+        const DataTypePtr & timestamp_type,
+        const IColumn & ts_values,
+        const DataTypePtr & value_type,
+        const ColumnArray::Offsets & ts_offsets,
+        Decimal64 samples_bucket_step,
+        std::optional<Decimal64> recent_samples_bucket_step)
+    {
+        if (const auto * decimal_timestamps = typeid_cast<const ColumnDecimal<DateTime64> *>(&ts_timestamps))
+            return makeSamplesBlocksForTimestampType(filter, id_column, id_type, *decimal_timestamps, timestamp_type, ts_values, value_type, ts_offsets, samples_bucket_step, recent_samples_bucket_step);
+
+        if (const auto * uint32_timestamps = typeid_cast<const ColumnUInt32 *>(&ts_timestamps))
+            return makeSamplesBlocksForTimestampType(filter, id_column, id_type, *uint32_timestamps, timestamp_type, ts_values, value_type, ts_offsets, samples_bucket_step, recent_samples_bucket_step);
+
+        throw Exception(ErrorCodes::ILLEGAL_COLUMN, "Unexpected column {} of timestamps in the column with samples", ts_timestamps.getName());
     }
 
     /// Returns the total number of samples in the outer column with samples across all rows.
@@ -540,11 +832,11 @@ void TimeSeriesSink::initTagsAndSamplesPipelines()
     /// This part is different from class PrometheusRemoteWriteProtocol.
     /// Class PrometheusRemoteWriteProtocol derives these types from the samples target metadata
     /// because it creates columns from protobuf data.
-    /// And here we derive them from the input chunk's column because fillSamplesColumns()
-    /// later does insertRangeFrom(), which requires matching binary representations.
+    /// And here we derive them from the input chunk's column because the samples are copied from the input columns as is
+    /// with insertRangeFrom(), which requires matching binary representations.
     /// In the end any final difference is handled by the converting actions inside `samples_pipeline`.
     const auto * samples_column_name = TimeSeriesColumnNames::getOuterSamples(time_series_storage.getVersion());
-    auto [timestamp_type, value_type] = splitTimeSeriesType(getHeader().getByName(samples_column_name).type);
+    std::tie(timestamp_type, value_type) = splitTimeSeriesType(getHeader().getByName(samples_column_name).type);
 
     if (settings.hasMinTimeAndMaxTimeInTagsTable())
     {
@@ -618,11 +910,29 @@ void TimeSeriesSink::initTagsAndSamplesPipelines()
     /// Build source header for samples block.
     Block samples_header;
     samples_header.insert(ColumnWithTypeAndName{id_type, TimeSeriesColumnNames::ID});
-    samples_header.insert(ColumnWithTypeAndName{timestamp_type, TimeSeriesColumnNames::Timestamp});
-    samples_header.insert(ColumnWithTypeAndName{value_type, TimeSeriesColumnNames::Value});
+    if (settings.hasBucketedSamples())
+    {
+        /// A row contains the samples of one series within one time bucket.
+        samples_header.insert(ColumnWithTypeAndName{makeSamplesArrayDataType(timestamp_type, value_type), TimeSeriesColumnNames::Samples});
+        samples_header.insert(ColumnWithTypeAndName{timestamp_type, TimeSeriesColumnNames::Bucket});
+        samples_header.insert(ColumnWithTypeAndName{timestamp_type, TimeSeriesColumnNames::MinTime});
+        samples_header.insert(ColumnWithTypeAndName{timestamp_type, TimeSeriesColumnNames::MaxTime});
+
+        /// The steps of the buckets are converted from seconds to the scale of the timestamp type.
+        Int64 timestamp_scale_multiplier = DecimalUtils::scaleMultiplier<Int64>(tryGetDecimalScale(*timestamp_type).value_or(0));
+        samples_bucket_step = Decimal64(static_cast<Int64>(settings[TimeSeriesSetting::samples_bucket_step_seconds].value) * timestamp_scale_multiplier);
+        if (time_series_storage.hasTarget(ViewTarget::RecentSamples))
+            recent_samples_bucket_step = Decimal64(static_cast<Int64>(settings[TimeSeriesSetting::recent_samples_bucket_step_seconds].value) * timestamp_scale_multiplier);
+    }
+    else
+    {
+        /// A row contains one sample (tables of earlier versions).
+        samples_header.insert(ColumnWithTypeAndName{timestamp_type, TimeSeriesColumnNames::Timestamp});
+        samples_header.insert(ColumnWithTypeAndName{value_type, TimeSeriesColumnNames::Value});
+    }
     samples_pipeline = createTargetPipeline(ViewTarget::Samples, samples_header);
 
-    /// The recent samples table (if any) receives a copy of every samples block.
+    /// The recent samples table (if any) receives every sample too, but its buckets can have another step.
     if (time_series_storage.hasTarget(ViewTarget::RecentSamples))
         recent_samples_pipeline = createTargetPipeline(ViewTarget::RecentSamples, samples_header);
 }
@@ -658,8 +968,7 @@ void TimeSeriesSink::consumeTagsAndSamples(const Block & block)
     if (!num_time_series)
     {
         /// All rows have empty metric names and no tags - samples must also be empty.
-        if (total_samples)
-            throw Exception(ErrorCodes::INCORRECT_DATA, "Got {} samples without a metric name or tags", total_samples);
+        checkNoSamplesWithoutTimeSeries(total_samples);
 
         /// Nothing to insert.
         return;
@@ -710,8 +1019,6 @@ void TimeSeriesSink::consumeTagsAndSamples(const Block & block)
         tags_offsets, tags_keys, tags_values,
         *new_tags_names, *new_tags_values, *new_tags_offsets,
         columns_by_tag_name);
-
-    auto [timestamp_type, value_type] = splitTimeSeriesType(time_series_col.type);
 
     /// Fill min_time and max_time columns if the tags table stores them (tables of earlier versions).
     MutableColumnPtr min_time_column;
@@ -794,10 +1101,26 @@ void TimeSeriesSink::consumeTagsAndSamples(const Block & block)
         time_ranges_pipeline->push(std::move(time_ranges_block));
     }
 
-    /// Step 6. Assemble and push the samples block.
-    if (total_samples)
+    /// Step 6. Assemble and push the samples blocks.
+    /// The samples table is written before the recent samples table: if the insert fails between
+    /// the two writes, the sample is then missing from the recent samples table and just stays
+    /// invisible until the TTL window slides past it. With the opposite order the sample would be
+    /// visible in the TTL window and then disappear, which looks like data loss.
+    if (!total_samples)
+        return;
+
+    if (settings.hasBucketedSamples())
     {
-        /// Build columns for the samples block.
+        SamplesBlocks samples_blocks = makeSamplesBlocks(
+            filter, *id_column, id_type, ts_timestamps, timestamp_type, ts_values, value_type, ts_offsets, samples_bucket_step, recent_samples_bucket_step);
+
+        samples_pipeline->push(std::move(samples_blocks.samples_block));
+        if (samples_blocks.recent_samples_block)
+            recent_samples_pipeline->push(std::move(*samples_blocks.recent_samples_block));
+    }
+    else
+    {
+        /// Build columns for the samples block of a table storing one sample per row.
         auto samples_id_column = id_type->createColumn();
         samples_id_column->reserve(total_samples);
 
@@ -812,16 +1135,11 @@ void TimeSeriesSink::consumeTagsAndSamples(const Block & block)
             *id_column, ts_timestamps, ts_values, ts_offsets,
             *samples_id_column, *timestamp_column, *value_column);
 
-        /// Assemble the block and push it to the "samples" table.
         Block samples_block;
         samples_block.insert(ColumnWithTypeAndName{std::move(samples_id_column), id_type, TimeSeriesColumnNames::ID});
         samples_block.insert(ColumnWithTypeAndName{std::move(timestamp_column), timestamp_type, TimeSeriesColumnNames::Timestamp});
         samples_block.insert(ColumnWithTypeAndName{std::move(value_column), value_type, TimeSeriesColumnNames::Value});
 
-        /// The samples table is written before the recent samples table: if the insert fails between
-        /// the two writes, the sample is then missing from the recent samples table and just stays
-        /// invisible until the TTL window slides past it. With the opposite order the sample would be
-        /// visible in the TTL window and then disappear, which looks like data loss.
         /// The copy is cheap: a Block copy only copies column pointers.
         samples_pipeline->push(samples_block);
 

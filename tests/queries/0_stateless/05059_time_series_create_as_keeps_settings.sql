@@ -39,7 +39,7 @@ DROP TABLE ts_src;
 DROP TABLE IF EXISTS ts_custom_src;
 DROP TABLE IF EXISTS ts_custom_copy;
 CREATE TABLE ts_custom_src ENGINE = TimeSeries
-SAMPLES ENGINE = ReplacingMergeTree(timestamp) PRIMARY KEY id ORDER BY (id, timestamp);
+SAMPLES ENGINE = ReplacingMergeTree(bucket) PRIMARY KEY id ORDER BY (id, bucket);
 
 SELECT '-- a custom SAMPLES engine with its own primary key survives the copy';
 CREATE TABLE ts_custom_copy AS ts_custom_src;

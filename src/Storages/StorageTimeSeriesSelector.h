@@ -19,8 +19,9 @@ public:
     {
         StorageID time_series_storage_id = StorageID::createEmpty();
 
-        /// Data types of the columns `id`, `timestamp` and `value` in the TimeSeries table.
-        /// The columns returned by table function timeSeriesSelector() have these data types.
+        /// Data types of the `id` column, the timestamps and the values in the TimeSeries table.
+        /// The table function timeSeriesSelector() returns the columns `id` (of type `table_id_type`)
+        /// and `samples` (of type `Array(Tuple(table_timestamp_type, table_value_type))`).
         DataTypePtr table_id_type;
         DataTypePtr table_timestamp_type;
         DataTypePtr table_value_type;

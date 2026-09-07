@@ -45,12 +45,14 @@ enum class StoreMethod
     /// Can be used with types ResultType::INSTANT_VECTOR, ResultType::RANGE_VECTOR.
     VECTOR_GRID,
 
-    /// Data are stored in three columns:
+    /// Data are stored in two columns:
     /// - `group` (UInt64),
-    /// - `timestamp` (the type of the timestamps in the TimeSeries table,
-    ///   or `ConverterContext::result_timestamp_type` after applying an offset),
-    /// - `value` (Float64 or Float32, the type of the values in the table).
-    /// The columns keep the types they have in the table because raw data can be big: the aggregate functions accept
+    /// - `samples` (Array(Tuple(timestamp, value)): the samples of a time series sorted by timestamp, where `timestamp` has
+    ///   the type of the timestamps in the TimeSeries table, or `ConverterContext::result_timestamp_type` after applying an offset,
+    ///   and `value` has the type of the values in the table, Float64 or Float32).
+    /// A `group` can appear in multiple rows (e.g. one row per time bucket of the samples table): the aggregate functions
+    /// consuming raw data merge the rows of a group.
+    /// The samples keep the types they have in the table because raw data can be big: the aggregate functions accept
     /// any of these types, and the result is converted to `ConverterContext::result_timestamp_type` and Float64 later.
     /// RAW_DATA is produced by selectors in a prometheus query.
     /// Can be used only with type ResultType::RANGE_VECTOR.
@@ -93,8 +95,8 @@ struct SQLQueryPiece
     /// If `store_method` is SINGLE_SCALAR then the SELECT query outputs one column `value` (Float64) with a single row.
     /// If `store_method` is SCALAR_GRID then the SELECT query outputs one column `values` (Array(Float64)) with a single row.
     /// If `store_method` is VECTOR_GRID then the SELECT query outputs two columns `group` (UInt64), `values` (Array(Nullable(Float64))).
-    /// If `store_method` is RAW_DATA then the SELECT query outputs three columns `group` (UInt64), `timestamp`, `value`
-    /// (see the comment for StoreMethod::RAW_DATA for their types).
+    /// If `store_method` is RAW_DATA then the SELECT query outputs two columns `group` (UInt64), `samples`
+    /// (see the comment for StoreMethod::RAW_DATA for the type of `samples`).
     /// If `store_method` is CONST_SCALAR or CONST_STRING then the SELECT query is not used.
     ASTPtr select_query;
 };

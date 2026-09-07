@@ -1,12 +1,15 @@
 #include <Storages/StorageTimeSeriesSelector.h>
 
+#include <Common/DateLUTImpl.h>
 #include <Common/Exception.h>
 #include <Common/logger_useful.h>
 #include <Common/quoteString.h>
 #include <Columns/IColumn.h>
+#include <DataTypes/DataTypeArray.h>
 #include <DataTypes/DataTypeLowCardinality.h>
 #include <DataTypes/DataTypeNullable.h>
 #include <DataTypes/DataTypeString.h>
+#include <DataTypes/DataTypeTuple.h>
 #include <Core/DecimalFunctions.h>
 #include <Core/Joins.h>
 #include <Core/Settings.h>
@@ -63,7 +66,9 @@ namespace TimeSeriesSetting
     extern const TimeSeriesSettingsBool filter_by_min_time_and_max_time;
     extern const TimeSeriesSettingsMap tags_to_columns;
     extern const TimeSeriesSettingsASTFunction id_generator;
+    extern const TimeSeriesSettingsUInt64 recent_samples_bucket_step_seconds;
     extern const TimeSeriesSettingsUInt64 recent_samples_ttl_seconds;
+    extern const TimeSeriesSettingsUInt64 samples_bucket_step_seconds;
 }
 
 namespace Setting
@@ -128,6 +133,16 @@ bool isWithinRecentSamplesTTL(UInt64 recent_samples_ttl_seconds, Int64 now_secon
     const Int64 timestamp_seconds = convertToScale(timestamp, timestamp_scale, /* target_scale = */ 0, /* round_up = */ false).value;
     return timestamp_seconds >= now_seconds - static_cast<Int64>(recent_samples_ttl_seconds) + safety_margin_seconds;
 }
+
+/// How the samples table being read stores the samples (see `TimeSeriesSettings::hasBucketedSamples`).
+struct SamplesTableLayout
+{
+    /// Set for a table with buckets of samples: the step of the buckets of the table being read (the samples table
+    /// and the recent samples table have their own steps). Unset for a table storing one sample per row.
+    std::optional<UInt64> bucket_step_seconds;
+
+    bool hasBucketedSamples() const { return bucket_step_seconds.has_value(); }
+};
 
 /// The smallest and the largest timestamps representable in the timestamp type of the table:
 /// `DateTime` and `UInt32` can't hold timestamps before 1970 or after 2106.
@@ -653,39 +668,91 @@ namespace
         return wrapIntoSelectWithUnionQuery(std::move(select_query));
     }
 
+    /// Makes the conditions selecting the rows of a samples table with buckets of samples which can contain samples
+    /// with timestamps in `time_range`: `bucket >= <the bucket of min_time> AND bucket <= <max_time>` for the primary key index,
+    /// and `max_time >= <min_time> AND min_time <= <max_time>` to skip the rows whose samples are all outside of the range.
+    /// The bounds of `time_range` must have the scale of `table_timestamp_type`.
+    ASTs makeBucketedSamplesTimeRangeConditions(
+        const TableTimeRange & time_range,
+        const DataTypePtr & table_timestamp_type,
+        UInt64 bucket_step_seconds)
+    {
+        ASTs conditions;
+
+        if (time_range.min_time)
+        {
+            /// The step of the buckets with the scale of the timestamp type.
+            Int64 scale_multiplier = DecimalUtils::scaleMultiplier<Int64>(tryGetDecimalScale(*table_timestamp_type).value_or(0));
+            Int64 bucket_step = static_cast<Int64>(bucket_step_seconds) * scale_multiplier;
+
+            /// The same rounding as in TimeSeriesSink: towards negative infinity, so that a bucket starts at or before its samples.
+            DateTime64 min_bucket{DateLUTImpl::roundDownToMultiple(time_range.min_time->value, bucket_step)};
+
+            /// bucket >= <min_bucket>
+            conditions.push_back(makeASTFunction(
+                "greaterOrEquals",
+                make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Bucket),
+                timeSeriesTimestampToAST(min_bucket, table_timestamp_type)));
+        }
+
+        if (time_range.max_time)
+        {
+            /// bucket <= <max_time>
+            conditions.push_back(makeASTFunction(
+                "lessOrEquals",
+                make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Bucket),
+                timeSeriesTimestampToAST(*time_range.max_time, table_timestamp_type)));
+        }
+
+        /// max_time >= <min_time> AND min_time <= <max_time>
+        insertAtEnd(conditions, makeTimeRangeConditions(time_range, table_timestamp_type));
+
+        return conditions;
+    }
+
     /// The bounds of `time_range_to_filter_samples` must have the scale of `table_timestamp_type`.
     ASTPtr makeWhereFilterForSamplesTable(
         ASTPtr select_query_from_tags_table,
         const TableTimeRange & time_range_to_filter_samples,
         const DataTypePtr & table_timestamp_type,
+        const SamplesTableLayout & samples_table_layout,
         ASTPtr whole_metric_id_range_condition)
     {
         ASTs conditions;
 
-        /// Emit the timestamp range BEFORE the `id IN <set>` condition: on the default schema
-        /// (ORDER BY (id, timestamp)) primary-key pruning already returns mostly granules of matched
-        /// series, so the `id IN <set>` check passes almost all read rows, while the timestamp range
-        /// is the selective condition (e.g. a few rows per 32768-row granule for a short lookback).
+        /// Emit the time range conditions BEFORE the `id IN <set>` condition: on the default schema
+        /// (ORDER BY (id, bucket), or ORDER BY (id, timestamp) in tables of earlier versions) primary-key pruning
+        /// already returns mostly granules of matched series, so the `id IN <set>` check passes almost all read rows,
+        /// while the time range is the selective condition (e.g. a few rows per granule for a short lookback).
         /// The PREWHERE optimizer keeps this order whenever its selectivity estimation is inconclusive,
-        /// and running the cheap timestamp comparison before the hash-set probe of `in` significantly
+        /// and running the cheap comparisons before the hash-set probe of `in` significantly
         /// reduces the scan CPU of short-window selectors.
 
-        /// timestamp >= min_time
-        if (time_range_to_filter_samples.min_time)
+        if (samples_table_layout.hasBucketedSamples())
         {
-            conditions.push_back(makeASTFunction(
-                "greaterOrEquals",
-                make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Timestamp),
-                timeSeriesTimestampToAST(*time_range_to_filter_samples.min_time, table_timestamp_type)));
+            /// bucket >= <min_bucket> AND bucket <= <max_time> AND max_time >= <min_time> AND min_time <= <max_time>
+            insertAtEnd(conditions, makeBucketedSamplesTimeRangeConditions(
+                time_range_to_filter_samples, table_timestamp_type, *samples_table_layout.bucket_step_seconds));
         }
-
-        /// timestamp <= max_time
-        if (time_range_to_filter_samples.max_time)
+        else
         {
-            conditions.push_back(makeASTFunction(
-                "lessOrEquals",
-                make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Timestamp),
-                timeSeriesTimestampToAST(*time_range_to_filter_samples.max_time, table_timestamp_type)));
+            /// timestamp >= min_time
+            if (time_range_to_filter_samples.min_time)
+            {
+                conditions.push_back(makeASTFunction(
+                    "greaterOrEquals",
+                    make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Timestamp),
+                    timeSeriesTimestampToAST(*time_range_to_filter_samples.min_time, table_timestamp_type)));
+            }
+
+            /// timestamp <= max_time
+            if (time_range_to_filter_samples.max_time)
+            {
+                conditions.push_back(makeASTFunction(
+                    "lessOrEquals",
+                    make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Timestamp),
+                    timeSeriesTimestampToAST(*time_range_to_filter_samples.max_time, table_timestamp_type)));
+            }
         }
 
         /// id IN (SELECT id FROM (select_id_query))
@@ -704,18 +771,35 @@ namespace
         return makeASTForLogicalAnd(std::move(conditions));
     }
 
+    /// Makes the query reading the samples of the selected time series from the samples table.
+    /// For a table with buckets of samples:
+    ///
+    /// SELECT id, timeSeriesSliceSortedArray(samples, <min_time>, <max_time>) AS samples
+    /// FROM samples_table_id
+    /// WHERE (bucket >= <min_bucket>) AND (bucket <= <max_time>) AND (max_time >= <min_time>) AND (min_time <= <max_time>)
+    ///       AND (id IN <select_query_from_tags_table>)
+    ///
+    /// A row of the samples table contains the samples of one series within one bucket sorted by timestamp,
+    /// `timeSeriesSliceSortedArray` cuts out the samples with timestamps in [min_time, max_time].
+    ///
+    /// For a table of an earlier version storing one sample per row, every row makes an array of one sample:
+    ///
+    /// SELECT id, [(timestamp, value)] AS samples
+    /// FROM samples_table_id
+    /// WHERE (timestamp >= <min_time>) AND (timestamp <= <max_time>) AND (id IN <select_query_from_tags_table>)
+    ///
+    /// The bounds of `time_range_to_filter_samples` must have the scale of `table_timestamp_type`.
     ASTPtr makeSelectQueryFromSamplesTable(const StorageID & samples_table_id,
                                            ASTPtr select_query_from_tags_table,
                                            const TableTimeRange & time_range_to_filter_samples,
                                            const DataTypePtr & table_timestamp_type,
+                                           const SamplesTableLayout & samples_table_layout,
                                            ASTPtr whole_metric_id_range_condition)
     {
         auto select_query = make_intrusive<ASTSelectQuery>();
 
-        /// SELECT id, timestamp, value
-        ///
-        /// The columns are read as is, without casts to the data types declared by this storage.
-        /// A cast aliased in the SELECT list (e.g. `toDateTime64(timestamp, 3) AS timestamp`) would
+        /// The `id` column and the columns of the WHERE conditions are read as is, without casts to the data types
+        /// declared by this storage. A cast aliased in the SELECT list (e.g. `toUInt64(id) AS id`) would
         /// shadow the raw column, and the WHERE conditions below would wrap the primary key
         /// columns, degrading the index analysis and the ordering of the PREWHERE conditions.
         /// The casts to the declared types are applied by an outer SELECT instead
@@ -725,8 +809,25 @@ namespace
             auto & select_list = select_list_exp->children;
 
             select_list.push_back(make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::ID));
-            select_list.push_back(make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Timestamp));
-            select_list.push_back(make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Value));
+
+            ASTPtr samples;
+            if (samples_table_layout.hasBucketedSamples())
+            {
+                /// timeSeriesSliceSortedArray(samples, <min_time>, <max_time>)
+                samples = makeASTFunction(
+                    "timeSeriesSliceSortedArray",
+                    make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Samples),
+                    timeSeriesTimestampToAST(time_range_to_filter_samples.min_time.value_or(minRepresentableTime(table_timestamp_type)), table_timestamp_type),
+                    timeSeriesTimestampToAST(time_range_to_filter_samples.max_time.value_or(maxRepresentableTime(table_timestamp_type)), table_timestamp_type));
+            }
+            else
+            {
+                /// [(timestamp, value)]
+                samples = makeASTFunction("array", makeASTFunction("tuple",
+                    make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Timestamp), make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Value)));
+            }
+            samples->setAlias(TimeSeriesColumnNames::Samples);
+            select_list.push_back(std::move(samples));
 
             select_query->setExpression(ASTSelectQuery::Expression::SELECT, select_list_exp);
         }
@@ -746,14 +847,14 @@ namespace
             select_query->setExpression(ASTSelectQuery::Expression::TABLES, tables);
         }
 
-        /// WHERE (timestamp >= min_time) AND (timestamp <= max_time) AND (id IN <select_query_from_tags_table>)
+        /// WHERE <time range conditions> AND (id IN <select_query_from_tags_table>)
         ///
         /// where <select_query_from_tags_table> is roughly:
         ///   SELECT timeSeriesStoreTags(id, tags, '__name__', metric_name, ...) FROM tags_table WHERE <matchers>
         /// with the time ranges table joined to filter the time series by time (see addTimeRangesTableJoin).
         {
             auto where_filter = makeWhereFilterForSamplesTable(
-                select_query_from_tags_table, time_range_to_filter_samples, table_timestamp_type, std::move(whole_metric_id_range_condition));
+                select_query_from_tags_table, time_range_to_filter_samples, table_timestamp_type, samples_table_layout, std::move(whole_metric_id_range_condition));
             select_query->setExpression(ASTSelectQuery::Expression::WHERE, std::move(where_filter));
         }
 
@@ -771,17 +872,21 @@ namespace
     /// Makes the final select query by wrapping the select query from the samples table into an outer
     /// SELECT which casts the columns to the data types expected by this storage:
     ///
-    /// SELECT _CAST(id, 'UInt64') AS id, _CAST(timestamp, 'DateTime64(3)') AS timestamp, _CAST(value, 'Float64') AS value
+    /// SELECT _CAST(id, 'UInt64') AS id, _CAST(samples, 'Array(Tuple(DateTime64(3), Float64))') AS samples
     /// FROM (select_query_from_samples_table)
+    /// WHERE notEmpty(samples)
     ///
     /// The inner query reads the samples table columns as is (see makeSelectQueryFromSamplesTable()),
     /// so its result types are the physical column types, which can differ from the expected ones
-    /// (e.g. a samples table can store `timestamp` with a different timezone). Casting in an outer
+    /// (e.g. a samples table can store the timestamps with a different timezone, and the tuple elements
+    /// of the `samples` column have names). Casting in an outer
     /// SELECT keeps the WHERE conditions of the inner query on the bare primary key columns, and
     /// the casts run only for the rows which passed the filter. The internal `_CAST` is used here
     /// because it returns exactly the specified type (`CAST` and conversion functions like
     /// `toDateTime64` keep the timezone of the casted expression), and it is free when the type
     /// already matches.
+    /// The conditions of the inner query select the rows of a table with buckets of samples by `min_time` and `max_time`,
+    /// so a row can match them without having samples in the requested range; such rows are filtered out here.
     ASTPtr makeSelectQuery(ASTPtr select_query_from_samples_table,
                            const DataTypePtr & table_id_type,
                            const DataTypePtr & table_timestamp_type,
@@ -789,7 +894,7 @@ namespace
     {
         auto select_query = make_intrusive<ASTSelectQuery>();
 
-        /// SELECT _CAST(id, 'UInt64') AS id, _CAST(timestamp, 'DateTime64(3)') AS timestamp, _CAST(value, 'Float64') AS value
+        /// SELECT _CAST(id, 'UInt64') AS id, _CAST(samples, 'Array(Tuple(DateTime64(3), Float64))') AS samples
         {
             auto select_list_exp = make_intrusive<ASTExpressionList>();
             auto & select_list = select_list_exp->children;
@@ -798,18 +903,17 @@ namespace
                 "_CAST", make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::ID), make_intrusive<ASTLiteral>(table_id_type->getName())));
             select_list.back()->setAlias(TimeSeriesColumnNames::ID);
 
+            DataTypePtr samples_type = std::make_shared<DataTypeArray>(std::make_shared<DataTypeTuple>(DataTypes{table_timestamp_type, table_value_type}));
             select_list.push_back(makeASTFunction(
-                "_CAST",
-                make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Timestamp),
-                make_intrusive<ASTLiteral>(table_timestamp_type->getName())));
-            select_list.back()->setAlias(TimeSeriesColumnNames::Timestamp);
-
-            select_list.push_back(makeASTFunction(
-                "_CAST", make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Value), make_intrusive<ASTLiteral>(table_value_type->getName())));
-            select_list.back()->setAlias(TimeSeriesColumnNames::Value);
+                "_CAST", make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Samples), make_intrusive<ASTLiteral>(samples_type->getName())));
+            select_list.back()->setAlias(TimeSeriesColumnNames::Samples);
 
             select_query->setExpression(ASTSelectQuery::Expression::SELECT, select_list_exp);
         }
+
+        /// WHERE notEmpty(samples)
+        select_query->setExpression(ASTSelectQuery::Expression::WHERE,
+            makeASTFunction("notEmpty", make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Samples)));
 
         /// FROM (select_query_from_samples_table)
         {
@@ -1070,6 +1174,9 @@ void StorageTimeSeriesSelector::readImpl(
 
     /// Prefer the recent samples table when the whole range fits in its TTL window: it's a much smaller copy of the recent samples.
     auto samples_table_kind = ViewTarget::Samples;
+    SamplesTableLayout samples_table_layout;
+    if (time_series_settings->hasBucketedSamples())
+        samples_table_layout.bucket_step_seconds = (*time_series_settings)[TimeSeriesSetting::samples_bucket_step_seconds];
     const auto recent_samples_ttl_seconds = (*time_series_settings)[TimeSeriesSetting::recent_samples_ttl_seconds].value;
     if (recent_samples_ttl_seconds && context->getSettingsRef()[Setting::time_series_prefer_recent_samples_table])
     {
@@ -1078,6 +1185,8 @@ void StorageTimeSeriesSelector::readImpl(
             && time_series_storage->tryGetTargetTable(ViewTarget::RecentSamples, context))
         {
             samples_table_kind = ViewTarget::RecentSamples;
+            if (time_series_settings->hasBucketedSamples())
+                samples_table_layout.bucket_step_seconds = (*time_series_settings)[TimeSeriesSetting::recent_samples_bucket_step_seconds];
             LOG_DEBUG(log, "Selector {} time range [{}, {}] fits in the recent samples TTL window: reading from the recent samples table",
                       quoteString(config.selector.toString()), config.min_time.value, config.max_time.value);
         }
@@ -1117,6 +1226,11 @@ void StorageTimeSeriesSelector::readImpl(
     if (!context->getSettingsRef().isChanged("merge_tree_min_bytes_for_concurrent_read_for_remote_filesystem"))
         modified_context->setSetting("merge_tree_min_bytes_for_concurrent_read_for_remote_filesystem", UInt64{4 * 1024 * 1024});
 
+    /// A row of a table with buckets of samples contains many samples, so the threshold in rows for a concurrent read
+    /// is disabled: otherwise the default threshold in rows (163840) would dominate the threshold in bytes.
+    if (samples_table_layout.hasBucketedSamples() && !context->getSettingsRef().isChanged("merge_tree_min_rows_for_concurrent_read"))
+        modified_context->setSetting("merge_tree_min_rows_for_concurrent_read", UInt64{0});
+
     const auto metric_id_ranges = tryGetTimeSeriesIDRanges(
         matchers, getIDGenerator(*time_series_settings, tags_table_metadata->getColumns(), config.table_id_type), config.table_id_type);
 
@@ -1153,6 +1267,7 @@ void StorageTimeSeriesSelector::readImpl(
         select_query_from_tags_table,
         time_range_to_filter_samples,
         config.table_timestamp_type,
+        samples_table_layout,
         std::move(whole_metric_id_range_condition));
 
     ASTPtr select_query = makeSelectQuery(

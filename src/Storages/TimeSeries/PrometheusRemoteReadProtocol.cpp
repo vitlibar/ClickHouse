@@ -84,7 +84,7 @@ namespace
     }
 
     /// The function builds a SELECT query for reading time series:
-    /// SELECT timeSeriesGroupToTags(group) AS tags, timeSeriesGroupArray(timestamp, value) AS samples
+    /// SELECT timeSeriesGroupToTags(group) AS tags, timeSeriesGroupArray(samples) AS samples
     /// FROM timeSeriesSelector(time_series_storage_id, "label_matchers", min_time, max_time)
     /// GROUP BY timeSeriesIdToGroup(id) AS group
     ASTPtr buildSelectQueryForReadingTimeSeries(
@@ -96,7 +96,7 @@ namespace
         auto select_query = make_intrusive<ASTSelectQuery>();
 
         {
-            /// SELECT timeSeriesGroupToTags(group) AS tags, timeSeriesGroupArray(timestamp, value) AS samples
+            /// SELECT timeSeriesGroupToTags(group) AS tags, timeSeriesGroupArray(samples) AS samples
             auto select_list_exp = make_intrusive<ASTExpressionList>();
 
             select_list_exp->children.push_back(
@@ -104,10 +104,7 @@ namespace
 
             select_list_exp->children.back()->setAlias(TimeSeriesColumnNames::Tags);
 
-            select_list_exp->children.push_back(makeASTFunction(
-                "timeSeriesGroupArray",
-                make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Timestamp),
-                make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Value)));
+            select_list_exp->children.push_back(makeASTFunction("timeSeriesGroupArray", make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Samples)));
 
             select_list_exp->children.back()->setAlias(TimeSeriesColumnNames::Samples);
 

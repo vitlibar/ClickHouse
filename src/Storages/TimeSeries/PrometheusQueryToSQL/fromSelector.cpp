@@ -36,16 +36,34 @@ namespace
 
         SQLQueryPiece res{node, ResultType::RANGE_VECTOR, StoreMethod::RAW_DATA};
 
-        /// SELECT timeSeriesIdToGroup(id) AS group, timestamp, value
+        /// SELECT timeSeriesIdToGroup(id) AS group, samples
         /// FROM timeSeriesSelector(<database>, <time_series_table>, <selector>, <min_time>, <max_time>)
         SelectQueryBuilder builder;
 
         builder.select_list.push_back(makeASTFunction("timeSeriesIdToGroup", make_intrusive<ASTIdentifier>(ColumnNames::ID)));
         builder.select_list.back()->setAlias(ColumnNames::Group);
 
-        /// The columns `timestamp` and `value` keep the types they have in the table, see the comment for StoreMethod::RAW_DATA.
-        builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Timestamp));
-        builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Value));
+        /// The samples keep the types they have in the table, see the comment for StoreMethod::RAW_DATA.
+        /// A time series can come in several rows (e.g. one row per time bucket of the samples table).
+        ASTPtr samples = make_intrusive<ASTIdentifier>(ColumnNames::Samples);
+
+        /// Prometheus range selectors omit the dedicated stale-NaN payload while preserving
+        /// ordinary NaN samples as data:
+        /// arrayFilter(sample -> NOT <sample.2 is a stale marker>, samples) AS samples
+        if (filter_stale_markers)
+        {
+            const String iterator_name = "sample";
+            samples = makeASTFunction(
+                "arrayFilter",
+                makeASTFunction(
+                    "lambda",
+                    makeASTFunction("tuple", make_intrusive<ASTIdentifier>(iterator_name)),
+                    makeASTFunction("not", isStaleMarker(makeASTFunction("tupleElement", make_intrusive<ASTIdentifier>(iterator_name), make_intrusive<ASTLiteral>(UInt64{2}))))),
+                std::move(samples));
+            samples->setAlias(ColumnNames::Samples);
+        }
+
+        builder.select_list.push_back(std::move(samples));
 
         /// The range is (start_time - window, end_time] at the result scale. The table function converts the bounds to the scale
         /// of the table itself, rounding them towards the inside of the range.
@@ -59,15 +77,6 @@ namespace
             make_intrusive<ASTLiteral>(String{instant_selector_text}),
             timeSeriesTimestampToAST(min_time, context.result_timestamp_type),
             timeSeriesTimestampToAST(max_time, context.result_timestamp_type));
-
-        /// Prometheus range selectors omit the dedicated stale-NaN payload while preserving
-        /// ordinary NaN samples as data.
-        if (filter_stale_markers)
-        {
-            builder.where = makeASTFunction(
-                "not",
-                isStaleMarker(make_intrusive<ASTIdentifier>(ColumnNames::Value)));
-        }
 
         res.select_query = builder.getSelectQuery();
         return res;
@@ -162,22 +171,33 @@ SQLQueryPiece fromSelectorSampleTimestamps(const PrometheusQueryTree::InstantSel
 
     if (range_selector.store_method == StoreMethod::RAW_DATA)
     {
-        /// SELECT group, timestamp,
-        ///        if(<value is a stale marker>, CAST(value, 'Float64'), CAST(timestamp, 'Float64')) AS value
+        /// SELECT group,
+        ///        arrayMap(sample -> (sample.1, if(<sample.2 is a stale marker>, CAST(sample.2, 'Float64'), CAST(sample.1, 'Float64'))), samples) AS samples
         /// FROM <raw_data>
         /// Stale markers are kept so that last_over_time() can still select them and they are turned into absence below,
         /// exactly as for a plain instant selector.
         SelectQueryBuilder builder;
         builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Group));
-        builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Timestamp));
 
-        ASTPtr value = makeASTFunction(
+        const String iterator_name = "sample";
+        auto sample_timestamp = [&] { return makeASTFunction("tupleElement", make_intrusive<ASTIdentifier>(iterator_name), make_intrusive<ASTLiteral>(UInt64{1})); };
+        auto sample_value = [&] { return makeASTFunction("tupleElement", make_intrusive<ASTIdentifier>(iterator_name), make_intrusive<ASTLiteral>(UInt64{2})); };
+
+        ASTPtr new_value = makeASTFunction(
             "if",
-            isStaleMarker(make_intrusive<ASTIdentifier>(ColumnNames::Value)),
-            makeASTFunction("CAST", make_intrusive<ASTIdentifier>(ColumnNames::Value), make_intrusive<ASTLiteral>("Float64")),
-            makeASTFunction("CAST", make_intrusive<ASTIdentifier>(ColumnNames::Timestamp), make_intrusive<ASTLiteral>("Float64")));
-        value->setAlias(ColumnNames::Value);
-        builder.select_list.push_back(std::move(value));
+            isStaleMarker(sample_value()),
+            makeASTFunction("CAST", sample_value(), make_intrusive<ASTLiteral>("Float64")),
+            makeASTFunction("CAST", sample_timestamp(), make_intrusive<ASTLiteral>("Float64")));
+
+        auto samples = makeASTFunction(
+            "arrayMap",
+            makeASTFunction(
+                "lambda",
+                makeASTFunction("tuple", make_intrusive<ASTIdentifier>(iterator_name)),
+                makeASTFunction("tuple", sample_timestamp(), std::move(new_value))),
+            make_intrusive<ASTIdentifier>(ColumnNames::Samples));
+        samples->setAlias(ColumnNames::Samples);
+        builder.select_list.push_back(std::move(samples));
 
         context.subqueries.emplace_back(
             context.subqueries.size(),
