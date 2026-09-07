@@ -27,6 +27,7 @@ struct AggregateFunctionTimeseriesToGridSparseTraits
     using TimestampType = TimestampType_;
     using IntervalType = IntervalType_;
     using ValueType = ValueType_;
+    using ResultValueType = ValueType_;
 
     static String getName()
     {

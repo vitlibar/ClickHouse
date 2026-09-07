@@ -105,6 +105,30 @@ namespace
                  /* drop_metric_name = */ false,
              }},
 
+            {"max_over_time",
+             {
+                 "timeSeriesMaxToGrid",
+                 /* drop_metric_name = */ true,
+             }},
+
+            {"min_over_time",
+             {
+                 "timeSeriesMinToGrid",
+                 /* drop_metric_name = */ true,
+             }},
+
+            {"ts_of_max_over_time",
+             {
+                 "timeSeriesTimestampOfMaxToGrid",
+                 /* drop_metric_name = */ true,
+             }},
+
+            {"ts_of_min_over_time",
+             {
+                 "timeSeriesTimestampOfMinToGrid",
+                 /* drop_metric_name = */ true,
+             }},
+
             {"deriv",
              {
                  "timeSeriesDerivToGrid",
@@ -126,8 +150,6 @@ namespace
             /// TODO:
             /// predict_linear
             /// avg_over_time
-            /// min_over_time
-            /// max_over_time
             /// sum_over_time
             /// count_over_time
             /// quantile_over_time
@@ -136,8 +158,6 @@ namespace
             /// present_over_time
             /// absent_over_time
             /// mad_over_time
-            /// ts_of_min_over_time
-            /// ts_of_max_over_time
             /// ts_of_last_over_time
             /// first_over_time
             /// ts_of_first_over_time
