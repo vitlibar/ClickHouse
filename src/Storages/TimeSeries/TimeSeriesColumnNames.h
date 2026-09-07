@@ -8,6 +8,16 @@ struct TimeSeriesColumnNames
 {
     /// The "samples" table contains time series:
     static constexpr const char * ID = "id";
+
+    /// Since version 2 a row of the "samples" table contains the samples of one time series within one time bucket:
+    /// the column "samples" contains the samples sorted by timestamp as an array of tuples (timestamp, value),
+    /// the column "bucket" contains the start of the bucket, and the columns "min_time" and "max_time"
+    /// (declared below) contain the time range of the samples in the row.
+    static constexpr const char * Samples = "samples";
+    static constexpr const char * Bucket = "bucket";
+
+    /// Tables of versions before 2 store one sample per row in the "samples" table in the columns "timestamp" and "value".
+    /// These names are also used for the columns returned by the table function prometheusQuery().
     static constexpr const char * Timestamp = "timestamp";
     static constexpr const char * Value = "value";
 
@@ -23,7 +33,7 @@ struct TimeSeriesColumnNames
     /// and without the metric name, so reading must be able to handle both cases.)
     static constexpr const char * Tags = "tags";
 
-    /// Contains the time range of a time series.
+    /// Contains the time range of a time series (in the "tags" table) or of the samples in a row (in the "samples" table).
     static constexpr const char * MinTime = "min_time";
     static constexpr const char * MaxTime = "max_time";
 

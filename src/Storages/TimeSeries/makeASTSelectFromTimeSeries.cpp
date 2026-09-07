@@ -25,6 +25,7 @@
 #include <Storages/TimeSeries/TimeSeriesColumnNames.h>
 #include <Storages/TimeSeries/TimeSeriesSettings.h>
 #include <Storages/TimeSeries/TimeSeriesTagNames.h>
+#include <Storages/TimeSeries/TimeSeriesVersion.h>
 
 #include <optional>
 #include <string_view>
@@ -189,20 +190,47 @@ namespace
         return requested_tags;
     }
 
-    /// Builds the `arrayZip(groupArray(timestamp), groupArray(value)) AS time_series` expression used by
-    /// the samples-side branches. Both `groupArray` states are filled by the same aggregation in the same
-    /// row order, so element i of both arrays comes from the same sample.
-    /// This form is used instead of `groupArray(tuple(timestamp, value))` because `arrayZip` makes tuples
-    /// without element names regardless of the `enable_named_columns_in_function_tuple` setting (which
+    /// Describes how the "samples" table is read, it depends on the version of the TimeSeries table (see TimeSeriesVersion.h).
+    struct SamplesTableInfo
+    {
+        StorageID table_id = StorageID::createEmpty();
+
+        /// Whether a row of the table contains a bucket of samples (version 2) or a single sample (older versions).
+        bool bucketed = false;
+
+        /// The type of the outer `time_series` column, which the aggregated samples are cast to.
+        DataTypePtr time_series_type;
+    };
+
+    /// Builds the expression aggregating the samples of one series into the `time_series` column.
+    ///
+    /// For a table storing one sample per row it's `arrayZip(groupArray(timestamp), groupArray(value)) AS time_series`.
+    /// Both `groupArray` states are filled by the same aggregation in the same row order, so element i of both arrays
+    /// comes from the same sample. This form is used instead of `groupArray(tuple(timestamp, value))` because `arrayZip`
+    /// makes tuples without element names regardless of the `enable_named_columns_in_function_tuple` setting (which
     /// would give `tuple` named elements, mismatching the declared type of the `time_series` column),
     /// and because `groupArray` over a plain column is faster than over tuples.
-    ASTPtr makeGroupArrayOfSamples()
+    ///
+    /// For a table storing buckets of samples it's `_CAST(timeSeriesGroupArray(samples), '<time_series type>') AS time_series`:
+    /// `timeSeriesGroupArray` merges the sorted arrays of the buckets (and of unmerged rows of the same bucket),
+    /// and the cast drops the names of the tuple elements which the `samples` column has.
+    ASTPtr makeGroupArrayOfSamples(const SamplesTableInfo & samples_table)
     {
-        auto array_zip = makeASTFunction("arrayZip",
-            makeASTFunction("groupArray", make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Timestamp)),
-            makeASTFunction("groupArray", make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Value)));
-        array_zip->setAlias(TimeSeriesColumnNames::TimeSeries);
-        return array_zip;
+        ASTPtr time_series;
+        if (samples_table.bucketed)
+        {
+            time_series = makeASTFunction("_CAST",
+                makeASTFunction("timeSeriesGroupArray", make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Samples)),
+                make_intrusive<ASTLiteral>(samples_table.time_series_type->getName()));
+        }
+        else
+        {
+            time_series = makeASTFunction("arrayZip",
+                makeASTFunction("groupArray", make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Timestamp)),
+                makeASTFunction("groupArray", make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Value)));
+        }
+        time_series->setAlias(TimeSeriesColumnNames::TimeSeries);
+        return time_series;
     }
 
     /// Returns an expression for the value of the tag `tag_name`.
@@ -336,20 +364,22 @@ namespace
 
     /// Builds a subquery to read from the "samples" table:
     /// (
-    ///     SELECT id, arrayZip(groupArray(timestamp), groupArray(value)) AS time_series
+    ///     SELECT id, <aggregated samples> AS time_series
     ///     FROM <samples>
     ///     GROUP BY id
     /// ) AS __samples
-    ASTPtr makeSamplesTableElement(const StorageID & samples_table_id)
+    /// where <aggregated samples> is `arrayZip(groupArray(timestamp), groupArray(value))` or
+    /// `_CAST(timeSeriesGroupArray(samples), '<time_series type>')` depending on the version (see makeGroupArrayOfSamples).
+    ASTPtr makeSamplesTableElement(const SamplesTableInfo & samples_table)
     {
         auto inner = make_intrusive<ASTSelectQuery>();
 
         auto select_list = make_intrusive<ASTExpressionList>();
         select_list->children.push_back(make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::ID));
-        select_list->children.push_back(makeGroupArrayOfSamples());
+        select_list->children.push_back(makeGroupArrayOfSamples(samples_table));
         inner->setExpression(ASTSelectQuery::Expression::SELECT, select_list);
 
-        inner->setExpression(ASTSelectQuery::Expression::TABLES, makeSingleTableList(samples_table_id));
+        inner->setExpression(ASTSelectQuery::Expression::TABLES, makeSingleTableList(samples_table.table_id));
 
         auto group_by = make_intrusive<ASTExpressionList>();
         group_by->children.push_back(make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::ID));
@@ -518,14 +548,14 @@ namespace
     /// SELECT time_series
     /// FROM
     /// (
-    ///     SELECT id, arrayZip(groupArray(timestamp), groupArray(value)) AS time_series
+    ///     SELECT id, <aggregated samples> AS time_series
     ///     FROM <samples>
     ///     GROUP BY id
     /// ) AS __samples
     ///
     /// Unlike the joined read (where the SEMI JOIN with the "tags" table drops them), this branch also returns
     /// samples whose id has no "tags" row - possible only after direct writes into the inner "samples" table.
-    ASTPtr buildSelectQueryFromSamplesOnly(const StorageID & samples_table_id, const NameSet & requested_columns)
+    ASTPtr buildSelectQueryFromSamplesOnly(const SamplesTableInfo & samples_table, const NameSet & requested_columns)
     {
         auto select_query = make_intrusive<ASTSelectQuery>();
         auto select_list = make_intrusive<ASTExpressionList>();
@@ -539,7 +569,7 @@ namespace
         select_query->setExpression(ASTSelectQuery::Expression::SELECT, select_list);
 
         auto tables = make_intrusive<ASTTablesInSelectQuery>();
-        tables->children.push_back(makeSamplesTableElement(samples_table_id));
+        tables->children.push_back(makeSamplesTableElement(samples_table));
         select_query->setExpression(ASTSelectQuery::Expression::TABLES, tables);
 
         return makeSelectWithUnionQuery(std::move(select_query));
@@ -634,7 +664,7 @@ namespace
     ///        type, unit, help
     /// FROM
     /// (
-    ///     SELECT id, arrayZip(groupArray(timestamp), groupArray(value)) AS time_series
+    ///     SELECT id, <aggregated samples> AS time_series
     ///     FROM <samples>
     ///     GROUP BY id
     /// ) AS __samples
@@ -658,7 +688,7 @@ namespace
     /// metric_name against the expanded member names).
     ASTPtr buildSelectQueryFromMultipleTables(
         const StorageID & tags_table_id,
-        const std::optional<StorageID> & samples_table_id,
+        const std::optional<SamplesTableInfo> & samples_table,
         const std::optional<StorageID> & metrics_table_id,
         const NameSet & requested_columns,
         const NameSet & requested_tags,
@@ -670,10 +700,10 @@ namespace
             makeJoinedSelectList(requested_columns, requested_tags, columns_by_tags));
 
         auto tables = make_intrusive<ASTTablesInSelectQuery>();
-        if (samples_table_id)
+        if (samples_table)
         {
             /// Samples-anchored: samples are the (streamed) probe side, tags/metrics the smaller build sides.
-            tables->children.push_back(makeSamplesTableElement(*samples_table_id));
+            tables->children.push_back(makeSamplesTableElement(*samples_table));
             tables->children.push_back(makeTagsSemiJoinElement(tags_table_id));
         }
         else
@@ -719,9 +749,15 @@ ASTPtr makeASTSelectFromTimeSeries(
         need_tags = true;
 
     /// Collect information about each target table we're going to read.
-    std::optional<StorageID> samples_table_id;
+    std::optional<SamplesTableInfo> samples_table;
     if (need_samples)
-        samples_table_id = storage.getTargetTableID(ViewTarget::Samples, context);
+    {
+        samples_table.emplace();
+        samples_table->table_id = storage.getTargetTableID(ViewTarget::Samples, context);
+        samples_table->bucketed = (storage.getVersion() >= 2);
+        auto storage_metadata = storage.getInMemoryMetadataPtr(context, false);
+        samples_table->time_series_type = storage_metadata->getColumns().get(TimeSeriesColumnNames::TimeSeries).type;
+    }
 
     std::optional<StorageID> tags_table_id;
 
@@ -745,7 +781,7 @@ ASTPtr makeASTSelectFromTimeSeries(
 
     /// Single-table reads (no join).
     if (need_samples && !need_tags && !need_metrics)
-        return buildSelectQueryFromSamplesOnly(*samples_table_id, requested_columns);
+        return buildSelectQueryFromSamplesOnly(*samples_table, requested_columns);
 
     if (need_tags && !need_samples && !need_metrics)
         return buildSelectQueryFromTagsOnly(*tags_table_id, requested_columns, requested_tags, columns_by_tags,
@@ -756,7 +792,7 @@ ASTPtr makeASTSelectFromTimeSeries(
 
     /// Multi-table reads: anchored on "samples" when it is read, otherwise on "tags".
     chassert(need_tags);
-    return buildSelectQueryFromMultipleTables(*tags_table_id, samples_table_id, metrics_table_id, requested_columns,
+    return buildSelectQueryFromMultipleTables(*tags_table_id, samples_table, metrics_table_id, requested_columns,
                                            requested_tags, columns_by_tags, deduplicate_tags_by_id);
 }
 
@@ -766,7 +802,7 @@ SettingsChanges getSettingsForSelectFromTimeSeries(bool final)
 
     /// If `aggregate_functions_null_for_empty` is 1 then the `time_series` column would become Nullable and
     /// could return NULL instead of an empty array (because that setting rewrites every aggregate,
-    /// including the `groupArray`s in `arrayZip(groupArray(timestamp), groupArray(value))`,
+    /// including the `groupArray`s in `arrayZip(groupArray(timestamp), groupArray(value))` and `timeSeriesGroupArray`,
     /// to its `...OrNull` variant).
     changes.emplace_back("aggregate_functions_null_for_empty", Field{false});
 
@@ -784,7 +820,8 @@ SettingsChanges getSettingsForSelectFromTimeSeries(bool final)
 
     /// If `optimize_aggregation_in_order` is 0 then the GROUP BY id over the "samples" table would build a hash
     /// table of all the series in memory (because only this setting lets the aggregation stream in sorting-key
-    /// order, which is possible here: `id` is the first column of the default samples sorting key `(id, timestamp)`).
+    /// order, which is possible here: `id` is the first column of the default samples sorting key `(id, bucket)`,
+    /// or `(id, timestamp)` in the older versions).
     changes.emplace_back("optimize_aggregation_in_order", Field{true});
 
     if (!final)

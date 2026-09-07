@@ -396,7 +396,7 @@ namespace
             case StoreMethod::RAW_DATA:
             {
                 /// SELECT timeSeriesGroupToTags(group) AS tags,
-                ///        timeSeriesGroupArray(timestamp::timestamp_data_type, value::scalar_data_type) AS time_series
+                ///        timeSeriesGroupArray(time_series) AS time_series
                 /// FROM <raw_data>
                 /// GROUP BY group
                 /// HAVING notEmpty(time_series)
@@ -405,11 +405,9 @@ namespace
                 tags = makeASTFunction("timeSeriesGroupToTags", make_intrusive<ASTIdentifier>(ColumnNames::Group));
                 tags->setAlias(ColumnNames::Tags);
 
-                /// timeSeriesGroupArray(timestamp, value) AS time_series
-                time_series = makeASTFunction(
-                    "timeSeriesGroupArray",
-                    timeSeriesTimestampASTCast(make_intrusive<ASTIdentifier>(ColumnNames::Timestamp), context.timestamp_data_type),
-                    timeSeriesScalarASTCast(make_intrusive<ASTIdentifier>(ColumnNames::Value), context.scalar_data_type));
+                /// timeSeriesGroupArray(time_series) AS time_series
+                /// The function merges the sorted arrays of the rows of a group, the result has the same type as the argument.
+                time_series = makeASTFunction("timeSeriesGroupArray", make_intrusive<ASTIdentifier>(ColumnNames::TimeSeries));
                 time_series->setAlias(ColumnNames::TimeSeries);
 
                 group_by.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Group));

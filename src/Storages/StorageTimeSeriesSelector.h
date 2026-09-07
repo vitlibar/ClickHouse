@@ -24,6 +24,9 @@ public:
         DataTypePtr timestamp_data_type;
         DataTypePtr scalar_data_type;
 
+        /// The type of the `time_series` column returned by the table function: `Array(Tuple(timestamp_data_type, scalar_data_type))`.
+        DataTypePtr getTimeSeriesDataType() const;
+
         PrometheusQueryTree selector;
 
         /// The scale of these fields is the same as the scale used in `timestamp_data_type`.

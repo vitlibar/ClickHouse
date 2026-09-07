@@ -16,8 +16,8 @@ DROP TABLE mt;
 
 SELECT '-- declared engines without keys get the generated keys';
 CREATE TABLE ts_src ENGINE = TimeSeries
-SAMPLES ENGINE = MergeTree
-RECENT SAMPLES ENGINE = MergeTree
+SAMPLES ENGINE = AggregatingMergeTree
+RECENT SAMPLES ENGINE = AggregatingMergeTree
 TAGS ENGINE = AggregatingMergeTree
 METRICS ENGINE = ReplacingMergeTree;
 SELECT extract(create_table_query, 'SAMPLES INNER ENGINE = (.*?) RECENT SAMPLES INNER')
@@ -50,10 +50,10 @@ FROM system.tables WHERE database = currentDatabase() AND name = 'ts_copy';
 DROP TABLE ts_copy;
 DROP TABLE ts_src;
 
--- The source customizes the codec of `timestamp` and adds an extra column in the samples table, sets the `id` type,
+-- The source customizes the codec of `samples` and adds an extra column in the samples table, sets the `id` type,
 -- and adds settings to the tags engine; everything else is generated.
 CREATE TABLE ts_src ENGINE = TimeSeries
-SAMPLES INNER COLUMNS (timestamp DateTime64(6) CODEC(Delta, ZSTD(1)), extra UInt8)
+SAMPLES INNER COLUMNS (samples SimpleAggregateFunction(timeSeriesGroupArray, Array(Tuple(timestamp DateTime64(6), value Float64))) CODEC(ZSTD(1)), extra UInt8)
 TAGS INNER COLUMNS (id UInt64)
 TAGS ENGINE = AggregatingMergeTree ORDER BY (metric_name, id) SETTINGS index_granularity = 1024, min_bytes_for_wide_part = 0;
 
@@ -68,9 +68,9 @@ SELECT extract(create_table_query, 'TAGS INNER ENGINE = (.*?) METRICS INNER')
 FROM system.tables WHERE database = currentDatabase() AND name = 'ts_copy';
 DROP TABLE ts_copy;
 
-SELECT '-- a type declared in the query wins over the type of the other table, the other types are inherited: `value` is';
-SELECT '-- Float32 as declared, `timestamp` is DateTime64(6) as in `ts_src`. The declared samples columns replace the copied ones';
-CREATE TABLE ts_copy AS ts_src ENGINE = TimeSeries SAMPLES INNER COLUMNS (value Float32);
+SELECT '-- the types declared in the query win over the types of the other table, the other types are inherited: the timestamps and';
+SELECT '-- values are DateTime64(3) and Float32 as declared, `id` is UInt64 as in `ts_src`. The declared samples column replaces the copied one';
+CREATE TABLE ts_copy AS ts_src ENGINE = TimeSeries SAMPLES INNER COLUMNS (samples SimpleAggregateFunction(timeSeriesGroupArray, Array(Tuple(timestamp DateTime64(3), value Float32))));
 SELECT extract(create_table_query, 'SAMPLES INNER COLUMNS \((.*?)\) SAMPLES INNER ENGINE')
 FROM system.tables WHERE database = currentDatabase() AND name = 'ts_copy';
 SELECT extract(create_table_query, 'RECENT SAMPLES INNER COLUMNS \((.*?)\) RECENT SAMPLES INNER ENGINE')

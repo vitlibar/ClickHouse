@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Common/Logger_fwd.h>
+#include <Common/PODArray_fwd.h>
 #include <Core/Block.h>
 #include <DataTypes/IDataType.h>
 #include <Interpreters/Context_fwd.h>
@@ -25,7 +26,10 @@ using TimeSeriesSettingsPtr = std::shared_ptr<const TimeSeriesSettings>;
 
 /// Sink for inserting data into the TimeSeries table engine.
 /// Transforms outer columns (time_series, metric_name, tags, metric_family, type, unit, help)
-/// into blocks for the three inner target tables (Tags, Samples, Metrics).
+/// into blocks for the target tables (Tags, Samples, RecentSamples, Metrics).
+/// The sink writes the samples tables in the layout of version 2 (see TimeSeriesVersion.h): the samples of a series
+/// are sorted, deduplicated and split into time buckets, each bucket makes a row with the columns
+/// `id`, `samples`, `bucket`, `min_time`, `max_time`.
 class TimeSeriesSink : public SinkToStorage, WithContext
 {
 public:
@@ -101,9 +105,36 @@ private:
     std::shared_ptr<ExpressionActions> calculate_id_actions;
     std::shared_ptr<ExpressionActions> convert_id_actions;
 
+    /// Types of the columns of the samples blocks: the samples table and the recent samples table get the same columns.
+    DataTypePtr timestamp_type;
+    DataTypePtr scalar_type;
+    DataTypePtr samples_array_type;
+    DataTypePtr bucket_type;
+
+    /// The number of ticks of `timestamp_type` in a second, e.g. 1000 for `DateTime64(3)`.
+    Int64 timestamp_scale_multiplier = 1;
+
+    /// A pipeline writing to a samples table together with the length of its buckets.
+    struct SamplesPipeline
+    {
+        std::unique_ptr<TargetPipeline> pipeline;
+        UInt64 bucket_step_seconds = 0;
+    };
+
+    /// Builds a block for a samples table from the sorted samples of the series in the input block (see consumeTagsAndSamples).
+    Block makeSamplesBlock(
+        const PaddedPODArray<UInt8> & filter,
+        const IColumn & id_column,
+        const IColumn & ts_timestamps,
+        const IColumn & ts_values,
+        const PaddedPODArray<Int64> & raw_timestamps,
+        const PaddedPODArray<size_t> & sorted_indices,
+        const PaddedPODArray<size_t> & sorted_offsets,
+        UInt64 bucket_step_seconds) const;
+
     std::unique_ptr<TargetPipeline> tags_pipeline;
-    std::unique_ptr<TargetPipeline> samples_pipeline;
-    std::unique_ptr<TargetPipeline> recent_samples_pipeline;
+    SamplesPipeline samples_pipeline;
+    SamplesPipeline recent_samples_pipeline;
     std::unique_ptr<TargetPipeline> metrics_pipeline;
 };
 
