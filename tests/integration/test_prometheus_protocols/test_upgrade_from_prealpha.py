@@ -7,7 +7,7 @@ from helpers.database_disk import get_database_disk_name, write_metadata
 from helpers.test_tools import TSV
 from .prometheus_test_utils import (
     convert_time_series_to_protobuf,
-    send_protobuf_to_remote_write,
+    get_response_to_remote_write,
 )
 
 
@@ -34,7 +34,8 @@ def start_cluster():
 # Time series data for "foo" — inserted directly into prealpha inner tables before upgrade.
 foo = [({"__name__": "foo", "job": "prometheus"}, {1000.0: 10.0})]
 
-# Time series data for "bar" — inserted via RemoteWrite after upgrade.
+# Time series data for "bar" — an attempt to insert it via RemoteWrite after upgrade must be rejected:
+# a prealpha table has version 0, which is too old to write into (see TimeSeriesVersion.h).
 bar = [({"__name__": "bar", "job": "prometheus"}, {2000.0: 20.0})]
 
 
@@ -178,14 +179,18 @@ def insert_foo_into_prealpha_time_series(data_table, tags_table, metrics_table):
     node.query(f"INSERT INTO `{metrics_table}` VALUES ('foo', 'gauge', 'bytes', 'Foo metric')")
 
 
-# Sends the `bar` metric via RemoteWrite protocol to a table after it's upgraded or restored.
-def send_bar_via_remote_write():
+# Tries to send the `bar` metric via RemoteWrite protocol to a table after it's upgraded or restored:
+# the table is too old to write into, so the write must be rejected.
+def check_bar_is_rejected_by_remote_write():
     protobuf = convert_time_series_to_protobuf(bar)
-    send_protobuf_to_remote_write(node.ip_address, 9093, "/write", protobuf)
+    response = get_response_to_remote_write(node.ip_address, 9093, "/write", protobuf)
+    assert not response.ok
+    assert "INCOMPATIBLE_SCHEMA" in response.text
 
 
-# Checks that both `foo` and `bar` metrics exist.
-def check_foo_and_bar():
+# Checks that the `foo` metric can be read from the upgraded table, and that the table can be copied
+# into a new TimeSeries table of the latest version.
+def check_foo():
     result = node.query(
         "SELECT t.metric_name, d.timestamp, d.value"
         " FROM timeSeriesData(prometheus) AS d"
@@ -193,9 +198,33 @@ def check_foo_and_bar():
         " ORDER BY t.metric_name, d.timestamp"
     )
     assert result == TSV([
-        ["bar", "1970-01-01 00:33:20.000", "20"],
         ["foo", "1970-01-01 00:16:40.000", "10"],
     ])
+
+    assert node.query(
+        "SELECT metric_name, tags, time_series FROM prometheus ORDER BY metric_name"
+    ) == TSV([
+        ["foo", "{'__name__':'foo','job':'prometheus'}", "[('1970-01-01 00:16:40.000',10)]"],
+    ])
+
+    # A table of an old version is read-only, PromQL rejects it too.
+    assert "INCOMPATIBLE_SCHEMA" in node.query_and_get_error(
+        "SELECT * FROM prometheusQuery(prometheus, 'foo', 1000)"
+    )
+
+    # The data can be copied into a new table with INSERT SELECT.
+    node.query("DROP TABLE IF EXISTS prometheus_copy SYNC")
+    node.query("CREATE TABLE prometheus_copy ENGINE=TimeSeries")
+    node.query("INSERT INTO prometheus_copy SELECT * FROM prometheus")
+    assert node.query(
+        "SELECT metric_name, tags, time_series FROM prometheus_copy ORDER BY metric_name"
+    ) == TSV([
+        ["foo", "{'__name__':'foo','job':'prometheus'}", "[('1970-01-01 00:16:40.000',10)]"],
+    ])
+    assert node.query(
+        "SELECT * FROM prometheusQuery(prometheus_copy, 'foo', 1000)"
+    ) == TSV([["[('__name__','foo'),('job','prometheus')]", "1970-01-01 00:16:40.000", "10"]])
+    node.query("DROP TABLE prometheus_copy SYNC")
 
 
 @pytest.fixture(autouse=True)
@@ -209,8 +238,8 @@ def cleanup_after_test():
 # Checks that an prealpha-version TimeSeries table can be attached and used.
 def test_upgrade_from_prealpha():
     create_and_fill_prealpha_time_series()
-    send_bar_via_remote_write()
-    check_foo_and_bar()
+    check_bar_is_rejected_by_remote_write()
+    check_foo()
 
 
 # Checks that an prealpha-version TimeSeries table can be attached and used (Ordinary database).
@@ -222,8 +251,8 @@ def test_upgrade_from_prealpha_ordinary_db():
     )
 
     create_and_fill_prealpha_time_series()
-    send_bar_via_remote_write()
-    check_foo_and_bar()
+    check_bar_is_rejected_by_remote_write()
+    check_foo()
 
     node.query("DROP TABLE default.prometheus SYNC")
     node.query("DROP DATABASE default SYNC")
@@ -235,5 +264,5 @@ def test_restore_from_prealpha():
     backup_file = os.path.join(os.path.dirname(__file__), "backups", "time_series_prealpha.zip")
     node.copy_file_to_container(backup_file, "/backups/time_series_prealpha.zip")
     node.query("RESTORE TABLE default.prometheus FROM Disk('backups', 'time_series_prealpha.zip')")
-    send_bar_via_remote_write()
-    check_foo_and_bar()
+    check_bar_is_rejected_by_remote_write()
+    check_foo()

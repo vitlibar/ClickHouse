@@ -1,0 +1,12 @@
+-- default index granularity of the inner samples tables
+recentsamples	['index_granularity = 1024','index_granularity_bytes = 1048576']
+samples	['index_granularity = 1024','index_granularity_bytes = 1048576']
+-- the settings override the defaults
+recentsamples	['index_granularity = 8192','index_granularity_bytes = 65536']
+samples	['index_granularity = 256','index_granularity_bytes = 4194304']
+-- the values from the engine declaration are kept unless the settings are set explicitly
+recentsamples	['index_granularity_bytes = 131072','index_granularity = 1024']
+samples	['index_granularity_bytes = 2097152','index_granularity = 1024']
+-- the settings are ignored for a non-MergeTree engine
+Memory
+-- the setting of the recent samples table requires the table

@@ -29,8 +29,7 @@ ColumnsDescription TableFunctionTimeSeriesSelector::getActualTableStructure(Cont
 {
     return ColumnsDescription({
         {TimeSeriesColumnNames::ID, config.id_data_type},
-        {TimeSeriesColumnNames::Timestamp, config.timestamp_data_type},
-        {TimeSeriesColumnNames::Value, config.scalar_data_type}
+        {TimeSeriesColumnNames::TimeSeries, config.getTimeSeriesDataType()}
     });
 }
 
