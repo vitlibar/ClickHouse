@@ -14,7 +14,7 @@ from .prometheus_test_utils import (
 V2_SAMPLES_COLUMNS = (
     "(id UUID, "
     "samples SimpleAggregateFunction(timeSeriesGroupArray, Array(Tuple(timestamp DateTime64(3), value Float64))), "
-    "bucket DateTime('UTC'), "
+    "bucket DateTime64(3), "
     "min_time SimpleAggregateFunction(min, DateTime64(3)), "
     "max_time SimpleAggregateFunction(max, DateTime64(3))) "
 )

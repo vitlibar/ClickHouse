@@ -95,7 +95,7 @@ def test_async_insert_no_acknowledgement_on_failure():
     node.query(
         "CREATE TABLE samples (id UUID, "
         "samples SimpleAggregateFunction(timeSeriesGroupArray, Array(Tuple(timestamp DateTime64(3), value Float64))), "
-        "bucket DateTime('UTC'), min_time SimpleAggregateFunction(min, DateTime64(3)), max_time SimpleAggregateFunction(max, DateTime64(3)), "
+        "bucket DateTime64(3), min_time SimpleAggregateFunction(min, DateTime64(3)), max_time SimpleAggregateFunction(max, DateTime64(3)), "
         "CONSTRAINT reject_all CHECK empty(samples)) ENGINE=AggregatingMergeTree ORDER BY (id, bucket)"
     )
     node.query("CREATE TABLE prometheus ENGINE=TimeSeries DATA samples")

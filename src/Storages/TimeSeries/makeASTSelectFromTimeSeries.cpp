@@ -793,7 +793,7 @@ ASTPtr makeASTSelectFromTimeSeries(
     /// Multi-table reads: anchored on "samples" when it is read, otherwise on "tags".
     chassert(need_tags);
     return buildSelectQueryFromMultipleTables(*tags_table_id, samples_table, metrics_table_id, requested_columns,
-                                           requested_tags, columns_by_tags, deduplicate_tags_by_id);
+                                              requested_tags, columns_by_tags, deduplicate_tags_by_id);
 }
 
 SettingsChanges getSettingsForSelectFromTimeSeries(bool final)

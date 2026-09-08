@@ -23,7 +23,7 @@ def start_cluster():
         node.query(
             "CREATE TABLE prometheus_data (id UUID,"
             " samples SimpleAggregateFunction(timeSeriesGroupArray, Array(Tuple(timestamp DateTime64(3, 'UTC'), value Float64))),"
-            " bucket DateTime('UTC'),"
+            " bucket DateTime64(3, 'UTC'),"
             " min_time SimpleAggregateFunction(min, DateTime64(3, 'UTC')),"
             " max_time SimpleAggregateFunction(max, DateTime64(3, 'UTC')))"
             " ENGINE = AggregatingMergeTree ORDER BY (id, bucket)"

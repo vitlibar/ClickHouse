@@ -14,7 +14,7 @@ CREATE TABLE samples_table
 (
     id UInt64,
     samples SimpleAggregateFunction(timeSeriesGroupArray, Array(Tuple(timestamp DateTime64(3), value Float64))),
-    bucket DateTime('UTC'),
+    bucket DateTime64(3),
     min_time SimpleAggregateFunction(min, DateTime64(3)),
     max_time SimpleAggregateFunction(max, DateTime64(3))
 ) ENGINE = AggregatingMergeTree() ORDER BY (id, bucket);
@@ -68,7 +68,7 @@ CREATE TABLE recent_table
 (
     id Tuple(UInt64, UUID),
     samples SimpleAggregateFunction(timeSeriesGroupArray, Array(Tuple(timestamp DateTime64(3), value Float64))),
-    bucket DateTime('UTC'),
+    bucket DateTime64(3),
     min_time SimpleAggregateFunction(min, DateTime64(3)),
     max_time SimpleAggregateFunction(max, DateTime64(3))
 ) ENGINE = AggregatingMergeTree() ORDER BY (id, bucket);

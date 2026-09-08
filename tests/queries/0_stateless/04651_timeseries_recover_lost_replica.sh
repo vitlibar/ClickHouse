@@ -140,15 +140,14 @@ ${CLICKHOUSE_CLIENT} -q "CREATE DATABASE ${DB} ENGINE = Replicated('${ZK_PATH}',
 
 ${CLIENT} -q "CREATE TABLE ${DB}.ext_data (id UUID,
                   samples SimpleAggregateFunction(timeSeriesGroupArray, Array(Tuple(timestamp DateTime64(3), value Float64))),
-                  bucket DateTime('UTC'),
+                  bucket DateTime64(3),
                   min_time SimpleAggregateFunction(min, DateTime64(3)),
                   max_time SimpleAggregateFunction(max, DateTime64(3)))
               ENGINE = ReplicatedAggregatingMergeTree ORDER BY (id, bucket)"
 ${CLIENT} -q "CREATE TABLE ${DB}.ext_tags (
-                  id UUID DEFAULT reinterpretAsUUID(sipHash128(metric_name, all_tags)),
+                  id UUID DEFAULT reinterpretAsUUID(sipHash128(metric_name, tags)),
                   metric_name LowCardinality(String),
                   tags Map(LowCardinality(String), String),
-                  all_tags Map(String, String),
                   min_time SimpleAggregateFunction(min, Nullable(DateTime64(3))),
                   max_time SimpleAggregateFunction(max, Nullable(DateTime64(3))))
               ENGINE = ReplicatedAggregatingMergeTree PRIMARY KEY metric_name

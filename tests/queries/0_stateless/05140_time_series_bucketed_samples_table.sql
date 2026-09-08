@@ -46,7 +46,7 @@ OPTIMIZE TABLE ts FINAL;
 SELECT count() FROM timeSeriesSamples(ts);
 SELECT t.tags['env'] AS env, s.bucket, s.samples, s.min_time, s.max_time
 FROM timeSeriesSamples(ts) AS s JOIN timeSeriesTags(ts) AS t ON s.id = t.id
-WHERE s.bucket = toDateTime(0)
+WHERE s.bucket = toDateTime64(0, 3)
 ORDER BY env;
 
 SELECT '-- timeSeriesSelector returns the buckets cut to the requested interval, the rows of a series can be merged with timeSeriesGroupArray';
@@ -139,7 +139,7 @@ SELECT '-- an external samples table can use plain types';
 
 DROP TABLE IF EXISTS ts_ext;
 DROP TABLE IF EXISTS ext_samples;
-CREATE TABLE ext_samples (id UUID, samples Array(Tuple(DateTime64(3), Float64)), bucket DateTime, min_time DateTime64(3), max_time DateTime64(3))
+CREATE TABLE ext_samples (id UUID, samples Array(Tuple(DateTime64(3), Float64)), bucket DateTime64(3), min_time DateTime64(3), max_time DateTime64(3))
 ENGINE = MergeTree ORDER BY (id, bucket);
 CREATE TABLE ts_ext ENGINE = TimeSeries SETTINGS recent_samples_ttl_seconds = 0 SAMPLES ext_samples TAGS INNER COLUMNS (id UUID);
 INSERT INTO ts_ext (metric_name, tags, time_series) VALUES ('m', map(), [(toDateTime64(4000, 3), 1.), (toDateTime64(100, 3), 2.)]);
@@ -154,13 +154,13 @@ DROP TABLE IF EXISTS ext_bad;
 CREATE TABLE ext_bad (id UUID, timestamp DateTime64(3), value Float64) ENGINE = MergeTree ORDER BY (id, timestamp);
 CREATE TABLE ts_bad ENGINE = TimeSeries SAMPLES ext_bad TAGS INNER COLUMNS (id UUID); -- { serverError INCORRECT_QUERY }
 DROP TABLE ext_bad;
-CREATE TABLE ext_bad (id UUID, samples Array(Tuple(DateTime64(3), Float64)), bucket DateTime) ENGINE = MergeTree ORDER BY (id, bucket);
+CREATE TABLE ext_bad (id UUID, samples Array(Tuple(DateTime64(3), Float64)), bucket DateTime64(3)) ENGINE = MergeTree ORDER BY (id, bucket);
 CREATE TABLE ts_bad ENGINE = TimeSeries SAMPLES ext_bad TAGS INNER COLUMNS (id UUID); -- { serverError THERE_IS_NO_COLUMN }
 DROP TABLE ext_bad;
 CREATE TABLE ext_bad (id UUID, samples Array(Tuple(DateTime64(3), Float64)), bucket String, min_time DateTime64(3), max_time DateTime64(3)) ENGINE = MergeTree ORDER BY (id, bucket);
 CREATE TABLE ts_bad ENGINE = TimeSeries SAMPLES ext_bad TAGS INNER COLUMNS (id UUID); -- { serverError BAD_TYPE_OF_FIELD }
 DROP TABLE ext_bad;
-CREATE TABLE ext_bad (id UUID, samples Array(Tuple(DateTime64(3), Float32)), bucket DateTime, min_time DateTime64(3), max_time DateTime64(3)) ENGINE = MergeTree ORDER BY (id, bucket);
+CREATE TABLE ext_bad (id UUID, samples Array(Tuple(DateTime64(3), Float32)), bucket DateTime64(3), min_time DateTime64(3), max_time DateTime64(3)) ENGINE = MergeTree ORDER BY (id, bucket);
 CREATE TABLE ts_bad (time_series Array(Tuple(DateTime64(3), Float64))) ENGINE = TimeSeries SAMPLES ext_bad TAGS INNER COLUMNS (id UUID); -- { serverError BAD_TYPE_OF_FIELD }
 DROP TABLE ext_bad;
 
@@ -177,3 +177,23 @@ SELECT extract(create_table_query, 'version = (\d+)'), extract(create_table_quer
 FROM system.tables WHERE database = currentDatabase() AND name = 'ts_v1_copy';
 DROP TABLE ts_v1_copy;
 DROP TABLE ts_v1;
+
+SELECT '-- the all_tags column of version 0 cannot be used by id generators';
+
+CREATE TABLE ts_bad ENGINE = TimeSeries SETTINGS id_generator = 'reinterpretAsUUID(sipHash128(metric_name, all_tags))' TAGS INNER COLUMNS (id UUID); -- { serverError INVALID_SETTING_VALUE }
+CREATE TABLE ts_bad ENGINE = TimeSeries TAGS INNER COLUMNS (id UUID DEFAULT reinterpretAsUUID(sipHash128(metric_name, all_tags))); -- { serverError INCORRECT_QUERY }
+
+DROP TABLE IF EXISTS ext_tags;
+CREATE TABLE ext_tags (id UUID DEFAULT reinterpretAsUUID(sipHash128(metric_name, all_tags)), metric_name LowCardinality(String), tags Map(LowCardinality(String), String), all_tags Map(String, String) EPHEMERAL)
+ENGINE = MergeTree ORDER BY (metric_name, id);
+CREATE TABLE ts_bad ENGINE = TimeSeries SETTINGS store_min_time_and_max_time = 0 TAGS ext_tags; -- { serverError INCORRECT_QUERY }
+DROP TABLE ext_tags;
+
+-- A generator of a table of version 0 which references `all_tags` is not copied by CREATE AS: the copy gets the canonical generator.
+DROP TABLE IF EXISTS ts_v0;
+DROP TABLE IF EXISTS ts_v0_copy;
+CREATE TABLE ts_v0 ENGINE = TimeSeries SETTINGS version = 0, recent_samples_ttl_seconds = 0, id_generator = 'reinterpretAsUUID(sipHash128(metric_name, all_tags))' TAGS INNER COLUMNS (id UUID);
+CREATE TABLE ts_v0_copy AS ts_v0;
+SELECT create_table_query LIKE '%id_generator%', extract(create_table_query, 'TAGS INNER COLUMNS \((.*?),') FROM system.tables WHERE database = currentDatabase() AND name = 'ts_v0_copy';
+DROP TABLE ts_v0_copy;
+DROP TABLE ts_v0;

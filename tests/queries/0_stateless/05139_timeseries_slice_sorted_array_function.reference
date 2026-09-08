@@ -32,6 +32,16 @@ other_scale_bounds: [('2025-06-01 00:00:30.000',2)]
 1	[(10,1)]
 2	[(10,1),(20,2)]
 3	[(10,1),(20,2),(30,3)]
+-- consecutive rows: slices before and after the interval, a partial slice, an empty array and a whole array
+0	[]
+1	[(110,1),(120,2)]
+2	[]
+3	[(300,0),(310,1),(320,2)]
+4	[]
+-- every slice is a whole array
+0	[(0,0),(10,1),(20,2)]
+1	[(100,0),(110,1),(120,2)]
+2	[(200,0),(210,1),(220,2)]
 -- a column of an aggregating table
 [('2025-06-01 00:00:30.000',2),('2025-06-01 00:01:00.000',3)]	Array(Tuple(\n    timestamp DateTime64(3),\n    value Float64))
 [('2025-06-01 00:00:45.000',2.5)]	Array(Tuple(\n    timestamp DateTime64(3),\n    value Float64))

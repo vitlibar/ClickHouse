@@ -13,7 +13,6 @@
 #include <Interpreters/StorageID.h>
 #include <Common/logger_useful.h>
 #include <Common/typeid_cast.h>
-#include <DataTypes/DataTypeDateTime.h>
 #include <DataTypes/DataTypeDateTime64.h>
 #include <DataTypes/DataTypeFactory.h>
 #include <DataTypes/dataTypeToAST.h>
@@ -161,10 +160,20 @@ namespace
         return DataTypeFactory::instance().getCustom(std::make_unique<DataTypeCustomDesc>(std::move(custom_name)));
     }
 
-    /// The type of the `bucket` column of the samples table of version 2.
-    DataTypePtr makeBucketType()
+    /// Makes the `bucket` column as a date-time expression for the partition key and the TTL of the samples tables:
+    /// `bucket` for `DateTime` and `DateTime64` timestamps, `toDateTime(bucket)` for raw `UInt32` timestamps.
+    ASTPtr makeBucketAsDateTimeAST(const DataTypePtr & timestamp_type)
     {
-        return std::make_shared<DataTypeDateTime>("UTC");
+        ASTPtr bucket = make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Bucket);
+        if (isDateTime64(timestamp_type) || isDateTime(timestamp_type))
+            return bucket;
+        return makeASTFunction("toDateTime", std::move(bucket));
+    }
+
+    /// The forms of a generated expression over the `bucket` column (see makeBucketAsDateTimeAST) for a format string with `{}`.
+    Strings makeBucketExpressionForms(std::string_view format_string)
+    {
+        return {fmt::format(fmt::runtime(format_string), "bucket"), fmt::format(fmt::runtime(format_string), "toDateTime(bucket)")};
     }
 
     /// Conflict-checking setter for `DataTypePtr`.
@@ -605,6 +614,16 @@ namespace
             old_settings.removeSetting("id_generator");
     }
 
+    /// Removes the `id_generator` setting copied from the old table if it references the `all_tags` column of version 0,
+    /// which is not supported since version 2 (see `checkTimeSeriesSettings`): the new table gets the canonical generator.
+    void removeOldIdGeneratorUsingAllTags(SettingsChanges & old_settings, const TimeSeriesSettings & new_settings)
+    {
+        if (!hasBucketedSamples(new_settings))
+            return;
+        if (const auto * value = old_settings.tryGet("id_generator"); value && TimeSeriesIDGenerator::usesAllTags(SettingFieldASTFunction{*value}.value))
+            old_settings.removeSetting("id_generator");
+    }
+
     /// Removes the columns copied from the old table which the settings of this table disable.
     /// `old_settings` are the settings of the old table, `new_settings` are the settings of this table.
     void removeInnerColumnsDisabledByNewSettings(
@@ -735,8 +754,9 @@ namespace
                     if (codec)
                         return false;
 
+                    /// The generated "bucket" column has the type of the timestamps.
                     if (name == TimeSeriesColumnNames::Bucket)
-                        return type->equals(*makeBucketType());
+                        return is_timestamp_type(*type);
 
                     if ((name == TimeSeriesColumnNames::MinTime) || (name == TimeSeriesColumnNames::MaxTime))
                     {
@@ -900,14 +920,17 @@ namespace
             return (key_str == columns) || (key_str == fmt::format("({})", columns)) || (key_str == fmt::format("tuple({})", columns));
         };
 
-        auto partitioning_equals = [&](std::string_view expression)
+        /// The timestamp type of the old table is not known here, so a generated expression over `bucket` is recognized in both forms.
+        auto partitioning_equals_any = [&](const Strings & expressions)
         {
-            return inner_engine.partition_by && (inner_engine.partition_by->formatWithSecretsOneLine() == expression);
+            return inner_engine.partition_by
+                && (std::ranges::find(expressions, inner_engine.partition_by->formatWithSecretsOneLine()) != expressions.end());
         };
 
-        auto ttl_equals = [&](std::string_view expression)
+        auto ttl_equals_any = [&](const Strings & expressions)
         {
-            return inner_engine.ttl_table && (inner_engine.ttl_table->formatWithSecretsOneLine() == expression);
+            return inner_engine.ttl_table
+                && (std::ranges::find(expressions, inner_engine.ttl_table->formatWithSecretsOneLine()) != expressions.end());
         };
 
         /// Removes the settings with the expected values; the settings clause goes away with its last setting.
@@ -938,12 +961,12 @@ namespace
                 /// The partition key is the `samples_partition_by` setting if set, otherwise the default one
                 /// (the samples tables of the older versions were generated without a partition key).
                 const auto & partition_by = settings[TimeSeriesSetting::samples_partition_by].value;
-                String expected_partition_by;
+                Strings expected_partition_by;
                 if (partition_by)
-                    expected_partition_by = partition_by->formatWithSecretsOneLine();
+                    expected_partition_by = {partition_by->formatWithSecretsOneLine()};
                 else if (bucketed)
-                    expected_partition_by = "toYYYYMM(bucket)";
-                if (!expected_partition_by.empty() && partitioning_equals(expected_partition_by))
+                    expected_partition_by = makeBucketExpressionForms("toYYYYMM({})");
+                if (partitioning_equals_any(expected_partition_by))
                     inner_engine.reset(inner_engine.partition_by);
 
                 remove_settings({
@@ -962,21 +985,21 @@ namespace
 
                 /// The partition key is the `recent_samples_partition_by` setting if set, otherwise the default one.
                 const auto & partition_by = settings[TimeSeriesSetting::recent_samples_partition_by].value;
-                String expected_partition_by;
+                Strings expected_partition_by;
                 if (partition_by)
-                    expected_partition_by = partition_by->formatWithSecretsOneLine();
+                    expected_partition_by = {partition_by->formatWithSecretsOneLine()};
                 else if (bucketed)
-                    expected_partition_by = "toStartOfInterval(bucket, toIntervalHour(5))";
+                    expected_partition_by = makeBucketExpressionForms("toStartOfInterval({}, toIntervalHour(5))");
                 else
-                    expected_partition_by = "toStartOfInterval(toDateTime(timestamp), toIntervalHour(5))";
-                if (partitioning_equals(expected_partition_by))
+                    expected_partition_by = {"toStartOfInterval(toDateTime(timestamp), toIntervalHour(5))"};
+                if (partitioning_equals_any(expected_partition_by))
                     inner_engine.reset(inner_engine.partition_by);
 
                 UInt64 ttl_seconds = settings[TimeSeriesSetting::recent_samples_ttl_seconds];
-                String expected_ttl = bucketed
-                    ? fmt::format("bucket + toIntervalSecond({})", ttl_seconds + settings[TimeSeriesSetting::recent_samples_bucket_step_seconds].value)
-                    : fmt::format("toDateTime(timestamp) + toIntervalSecond({})", ttl_seconds);
-                if (ttl_equals(expected_ttl))
+                Strings expected_ttl = bucketed
+                    ? makeBucketExpressionForms(fmt::format("{{}} + toIntervalSecond({})", ttl_seconds + settings[TimeSeriesSetting::recent_samples_bucket_step_seconds].value))
+                    : Strings{fmt::format("toDateTime(timestamp) + toIntervalSecond({})", ttl_seconds)};
+                if (ttl_equals_any(expected_ttl))
                     inner_engine.reset(inner_engine.ttl_table);
 
                 remove_settings({
@@ -1102,7 +1125,7 @@ namespace
 
                     /// The start of the bucket, computed on insertion from the `samples_bucket_step_seconds` setting
                     /// (or `recent_samples_bucket_step_seconds` for the recent samples table).
-                    add_column_if_missing(TimeSeriesColumnNames::Bucket, dataTypeToAST(makeBucketType()));
+                    add_column_if_missing(TimeSeriesColumnNames::Bucket, dataTypeToAST(resolved_types.timestamp_type));
 
                     /// The time range of the samples in the row: it's used to skip rows when reading a time range.
                     add_column_if_missing(TimeSeriesColumnNames::MinTime, dataTypeToAST(makeMinMaxAggregateType("min", resolved_types.timestamp_type)));
@@ -1633,7 +1656,7 @@ namespace
                     else if (bucketed && is_merge_tree() && !has_partition_by())
                     {
                         /// Otherwise a declared partition key is kept; if there is none, the default one (one partition per month) is used.
-                        set_partition_by(makeASTFunction("toYYYYMM", make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Bucket)));
+                        set_partition_by(makeASTFunction("toYYYYMM", makeBucketAsDateTimeAST(resolved_types.timestamp_type)));
                     }
                     break;
                 }
@@ -1657,10 +1680,10 @@ namespace
                 {
                     /// Otherwise a declared partition key is kept; if there is none, the default one (5-hour buckets) is used.
                     /// `toDateTime` makes the default partition key work for any timestamp type (e.g. a raw `UInt32`),
-                    /// same as the TTL expression. The `bucket` column is always `DateTime`.
+                    /// same as the TTL expression.
                     ASTPtr time_column;
                     if (bucketed)
-                        time_column = make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Bucket);
+                        time_column = makeBucketAsDateTimeAST(resolved_types.timestamp_type);
                     else
                         time_column = makeASTFunction("toDateTime", make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Timestamp));
                     set_partition_by(makeASTFunction("toStartOfInterval",
@@ -1675,7 +1698,7 @@ namespace
                     UInt64 ttl_seconds = settings[TimeSeriesSetting::recent_samples_ttl_seconds].value
                         + settings[TimeSeriesSetting::recent_samples_bucket_step_seconds].value;
                     set_ttl(makeASTOperator("plus",
-                        make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Bucket),
+                        makeBucketAsDateTimeAST(resolved_types.timestamp_type),
                         makeASTFunction("toIntervalSecond", make_intrusive<ASTLiteral>(ttl_seconds))));
                 }
                 else
@@ -1896,19 +1919,8 @@ namespace
                             resolved_types.scalar_type->getName());
                 }
 
-                /// `DateTime` with any timezone.
-                {
-                    check_column(TimeSeriesColumnNames::Bucket);
-                    const auto * col = target_table_columns.tryGet(TimeSeriesColumnNames::Bucket);
-                    if (!isDateTime(col->type))
-                        throw Exception(
-                            ErrorCodes::BAD_TYPE_OF_FIELD,
-                            "{}: Column {} in the {} table has type {}, but expected DateTime",
-                            table_id.getNameForLogs(),
-                            TimeSeriesColumnNames::Bucket,
-                            target_kind,
-                            col->type->getName());
-                }
+                /// The type of the timestamps.
+                check_column_type(TimeSeriesColumnNames::Bucket, resolved_types.timestamp_type);
 
                 /// `timestamp_type` optionally wrapped in `SimpleAggregateFunction(min|max, ...)`.
                 for (std::string_view column_name : {TimeSeriesColumnNames::MinTime, TimeSeriesColumnNames::MaxTime})
@@ -1934,6 +1946,18 @@ namespace
             {
                 check_column_type(TimeSeriesColumnNames::ID, resolved_types.id_type);
                 check_column_is_string(TimeSeriesColumnNames::MetricName);
+
+                /// The ephemeral column `all_tags` of version 0 is not supported since version 2.
+                if (hasBucketedSamples(time_series_settings)
+                    && TimeSeriesIDGenerator::usesAllTags(target_table_columns.get(TimeSeriesColumnNames::ID).default_desc.expression))
+                {
+                    throw Exception(
+                        ErrorCodes::INCORRECT_QUERY,
+                        "{}: The DEFAULT expression of the column {} in the {} table must not reference the `{}` column, "
+                        "which is not supported since version {} of the TimeSeries table engine; use the `{}` column, which contains all the tags",
+                        table_id.getNameForLogs(), TimeSeriesColumnNames::ID, target_kind, TimeSeriesColumnNames::AllTags,
+                        time_series_settings[TimeSeriesSetting::version].value, TimeSeriesColumnNames::Tags);
+                }
 
                 const Map & tags_to_columns = time_series_settings[TimeSeriesSetting::tags_to_columns];
                 for (const auto & tag_name_and_column_name : tags_to_columns)
@@ -2013,8 +2037,16 @@ namespace
             /// Some settings of the old table are not copied because the settings written in this query disable them.
             removeOldSettingsDisabledByNewSettings(merged_settings->changes, create_query.storage->settings);
 
-            /// The `id_generator` of the old table is not copied if this table has another `id` type.
+            /// The `id_generator` of the old table is not copied if this table has another `id` type,
+            /// or if it references the `all_tags` column of version 0 while this table has a newer version.
             removeOldSettingsDisabledByIdTypeChange(merged_settings->changes, old_types.id_type, new_types.id_type);
+            {
+                TimeSeriesSettings new_settings_for_id_generator;
+                if (create_query.storage->settings)
+                    new_settings_for_id_generator.applyChanges(create_query.storage->settings->changes);
+                /// The version is pinned later, an absent version means the latest one.
+                removeOldIdGeneratorUsingAllTags(merged_settings->changes, new_settings_for_id_generator);
+            }
 
             if (create_query.storage->settings)
             {

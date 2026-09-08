@@ -6,6 +6,7 @@
 #include <Parsers/ASTFunction.h>
 #include <Parsers/ASTSetQuery.h>
 #include <Storages/TimeSeries/TimeSeriesColumnNames.h>
+#include <Storages/TimeSeries/TimeSeriesIDGenerator.h>
 #include <Storages/TimeSeries/TimeSeriesTagNames.h>
 #include <Storages/TimeSeries/TimeSeriesVersion.h>
 
@@ -119,6 +120,12 @@ void checkTimeSeriesSettings(const TimeSeriesSettings & settings)
             "A table definition with another version was written by a different version of ClickHouse",
             version, TimeSeriesVersion::MIN_SUPPORTED, TimeSeriesVersion::LATEST);
 
+    /// The ephemeral column `all_tags` of version 0 is not supported since version 2: the `tags` column contains all the tags.
+    if ((version >= 2) && TimeSeriesIDGenerator::usesAllTags(settings[TimeSeriesSetting::id_generator].value))
+        throw Exception(ErrorCodes::INVALID_SETTING_VALUE,
+            "Setting `id_generator` must not reference the `{}` column, which is not supported since version 2 of the TimeSeries table engine; "
+            "use the `{}` column, which contains all the tags", TimeSeriesColumnNames::AllTags, TimeSeriesColumnNames::Tags);
+
     if (!settings[TimeSeriesSetting::recent_samples_ttl_seconds])
     {
         /// Settings of the recent samples table make no sense without the table itself.
@@ -133,7 +140,8 @@ void checkTimeSeriesSettings(const TimeSeriesSettings & settings)
                 "Setting `recent_samples_bucket_step_seconds` requires `recent_samples_ttl_seconds` to be set to a non-zero value");
     }
 
-    /// The bucket start is stored in a `DateTime` column, so a step must fit in it.
+    /// The `bucket` column has the type of the timestamps, so a step must fit in `DateTime`; in the units of `DateTime64(9)`
+    /// such a step still fits in `Int64`.
     auto check_bucket_step = [](const SettingFieldUInt64 & bucket_step, std::string_view setting_name)
     {
         if (!bucket_step.value || (bucket_step.value > std::numeric_limits<UInt32>::max()))

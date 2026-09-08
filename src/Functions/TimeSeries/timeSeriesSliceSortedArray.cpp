@@ -113,9 +113,9 @@ public:
         {
             if (bounds_are_const)
                 return executeForTimestampType<TimestampColumnType, /* bounds_are_const = */ true>(
-                    *samples_column, timestamps, *min_time_column, *max_time_column, input_rows_count);
+                    samples_column_holder, timestamps, *min_time_column, *max_time_column, input_rows_count);
             return executeForTimestampType<TimestampColumnType, /* bounds_are_const = */ false>(
-                *samples_column, timestamps, *min_time_column, *max_time_column, input_rows_count);
+                samples_column_holder, timestamps, *min_time_column, *max_time_column, input_rows_count);
         };
 
         if (isDateTime64(timestamp_type))
@@ -124,16 +124,18 @@ public:
     }
 
 private:
+    /// `samples_column_ptr` is a `ColumnArray`, it's returned as is if every slice is a whole array.
     /// If `bounds_are_const`, `min_time_column` and `max_time_column` contain one row used for all the arrays,
     /// otherwise they contain a row per array.
     template <typename TimestampColumnType, bool bounds_are_const>
     static ColumnPtr executeForTimestampType(
-        const ColumnArray & samples_column,
+        const ColumnPtr & samples_column_ptr,
         const IColumn & timestamps,
         const IColumn & min_time_column,
         const IColumn & max_time_column,
         size_t input_rows_count)
     {
+        const auto & samples_column = assert_cast<const ColumnArray &>(*samples_column_ptr);
         const auto * typed_timestamps = checkAndGetColumn<TimestampColumnType>(&timestamps);
         const auto * typed_min_time = checkAndGetColumn<TimestampColumnType>(&min_time_column);
         const auto * typed_max_time = checkAndGetColumn<TimestampColumnType>(&max_time_column);
@@ -144,11 +146,13 @@ private:
         const auto & timestamps_data = typed_timestamps->getData();
         const auto & min_time_data = typed_min_time->getData();
         const auto & max_time_data = typed_max_time->getData();
-        const auto & offsets = samples_column.getOffsets();
 
-        auto res_tuples = samples_column.getData().cloneEmpty();
+        const auto & source_tuples = samples_column.getData();
+
+        auto res_tuples = source_tuples.cloneEmpty();
         auto res_offsets = ColumnArray::ColumnOffsets::create();
-        res_offsets->reserve(input_rows_count);
+        auto & res_offsets_data = res_offsets->getData();
+        res_offsets_data.reserve(input_rows_count);
 
         typename TimestampColumnType::ValueType min_time{};
         typename TimestampColumnType::ValueType max_time{};
@@ -158,10 +162,23 @@ private:
             max_time = max_time_data[0];
         }
 
+        /// The slices of consecutive rows are adjacent in the nested column if a slice reaches the end of its array
+        /// and the next slice starts at the start of its array. That is the usual case when a time range covers
+        /// whole buckets, so adjacent slices are accumulated in a pending range and copied together.
+        size_t pending_begin = 0;
+        size_t pending_end = 0;
+        size_t res_size = 0;
+
+        auto copy_pending = [&]
+        {
+            if (pending_begin < pending_end)
+                res_tuples->insertRangeFrom(source_tuples, pending_begin, pending_end - pending_begin);
+        };
+
         for (size_t i = 0; i < input_rows_count; ++i)
         {
-            size_t begin = (i == 0) ? 0 : offsets[i - 1];
-            size_t end = offsets[i];
+            size_t begin = samples_column.offsetAt(i);
+            size_t end = samples_column.offsetAt(i + 1);
 
             if constexpr (!bounds_are_const)
             {
@@ -169,18 +186,45 @@ private:
                 max_time = max_time_data[i];
             }
 
-            /// The samples are sorted by timestamp, so the slice is found with a binary search.
-            const auto * first = timestamps_data.data() + begin;
-            const auto * last = timestamps_data.data() + end;
-            size_t slice_begin = std::lower_bound(first, last, min_time) - timestamps_data.data();
-            size_t slice_end = std::upper_bound(first, last, max_time) - timestamps_data.data();
+            size_t slice_begin = begin;
+            size_t slice_end = end;
+            if (begin < end)
+            {
+                const auto * first = timestamps_data.data() + begin;
+                const auto * last = timestamps_data.data() + end;
 
-            if (slice_begin < slice_end)
-                res_tuples->insertRangeFrom(samples_column.getData(), slice_begin, slice_end - slice_begin);
+                /// The samples are sorted by timestamp, so a slice is found with a binary search.
+                /// A search is skipped if the bound is outside of the array, which is the usual case for whole buckets.
+                if (timestamps_data[begin] < min_time)
+                    slice_begin = std::lower_bound(first, last, min_time) - timestamps_data.data();
+                if (max_time < timestamps_data[end - 1])
+                    slice_end = std::upper_bound(first, last, max_time) - timestamps_data.data();
 
-            res_offsets->getData().push_back(res_tuples->size());
+                /// `min_time` greater than `max_time` gives an empty slice.
+                if (slice_end < slice_begin)
+                    slice_end = slice_begin;
+            }
+
+            if (slice_begin != pending_end)
+            {
+                copy_pending();
+                pending_begin = slice_begin;
+            }
+            pending_end = slice_end;
+
+            res_size += slice_end - slice_begin;
+            res_offsets_data.push_back(res_size);
         }
 
+        /// Every slice is a whole array: the result is the source column, nothing needs to be copied.
+        /// A copy moves `pending_begin` past the copied range, so nothing has been copied if it's still zero.
+        if ((pending_begin == 0) && (pending_end == source_tuples.size()))
+        {
+            chassert(res_tuples->empty());
+            return samples_column_ptr;
+        }
+
+        copy_pending();
         return ColumnArray::create(std::move(res_tuples), std::move(res_offsets));
     }
 };

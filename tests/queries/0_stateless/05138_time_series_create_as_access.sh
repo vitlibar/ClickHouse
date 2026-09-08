@@ -17,7 +17,7 @@ ${CLICKHOUSE_CLIENT} --allow_experimental_time_series_table 1 -q "
     GRANT CREATE TABLE ON ${db}.* TO ${user};
     GRANT TABLE ENGINE ON TimeSeries, TABLE ENGINE ON MergeTree, TABLE ENGINE ON AggregatingMergeTree, TABLE ENGINE ON ReplacingMergeTree TO ${user};
 
-    CREATE TABLE ${db}.ext_data (id UUID, samples SimpleAggregateFunction(timeSeriesGroupArray, Array(Tuple(timestamp DateTime64(6), value Float64))), bucket DateTime('UTC'), min_time SimpleAggregateFunction(min, DateTime64(6)), max_time SimpleAggregateFunction(max, DateTime64(6))) ENGINE = AggregatingMergeTree ORDER BY (id, bucket);
+    CREATE TABLE ${db}.ext_data (id UUID, samples SimpleAggregateFunction(timeSeriesGroupArray, Array(Tuple(timestamp DateTime64(6), value Float64))), bucket DateTime64(6), min_time SimpleAggregateFunction(min, DateTime64(6)), max_time SimpleAggregateFunction(max, DateTime64(6))) ENGINE = AggregatingMergeTree ORDER BY (id, bucket);
     CREATE TABLE ${db}.ext_tags (id UUID, metric_name LowCardinality(String), tags Map(LowCardinality(String), String))
         ENGINE = MergeTree ORDER BY (metric_name, id);
     CREATE TABLE ${db}.ts_src ENGINE = TimeSeries

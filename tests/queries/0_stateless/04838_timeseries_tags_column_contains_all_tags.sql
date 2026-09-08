@@ -35,9 +35,10 @@ SELECT countIf(id = tuple(sipHash64(metric_name), reinterpretAsUUID(sipHash128(t
 SELECT 'prometheusQuery:';
 SELECT tags, value FROM prometheusQuery(ts, 'http_requests', 1080) ORDER BY tags;
 
--- For compatibility an id-generator expression can reference `all_tags` - there is no such column,
--- but on insertion it's resolved as the same data as the `tags` column.
-ALTER TABLE ts MODIFY SETTING id_generator = 'tuple(sipHash64(metric_name), reinterpretAsUUID(sipHash128(metric_name, all_tags)))';
+-- The ephemeral column `all_tags` of version 0 is not supported since version 2: an id generator must use the `tags` column,
+-- which contains all the tags.
+ALTER TABLE ts MODIFY SETTING id_generator = 'tuple(sipHash64(metric_name), reinterpretAsUUID(sipHash128(metric_name, all_tags)))'; -- { serverError INVALID_SETTING_VALUE }
+ALTER TABLE ts MODIFY SETTING id_generator = 'tuple(sipHash64(metric_name), reinterpretAsUUID(sipHash128(metric_name, tags)))';
 
 INSERT INTO ts (metric_name, tags, time_series) VALUES
     ('http_requests', {'job': 'miner', 'instance': 'host3:8080'}, [(toDateTime64(1120, 3), 3.5)]);

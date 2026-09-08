@@ -349,7 +349,9 @@ namespace
         return select_with_union_query;
     }
 
-    /// Division rounding towards negative infinity, for a positive divisor.
+    /// Division rounding towards negative infinity, for a positive divisor (the same as in TimeSeriesSink).
+    /// It matters for timestamps before 1970, whose raw `DateTime64` value is negative: the start of a bucket
+    /// must not be greater than the timestamps in it, while the operator `/` rounds towards zero.
     Int64 floorDiv(Int64 dividend, Int64 divisor)
     {
         Int64 quotient = dividend / divisor;
@@ -358,16 +360,11 @@ namespace
         return quotient;
     }
 
-    /// Converts a timestamp to whole seconds rounded down, clamped to the range of `DateTime` (the type of the `bucket` column).
-    UInt32 toBucketSeconds(Int64 seconds)
-    {
-        return static_cast<UInt32>(std::clamp<Int64>(seconds, 0, std::numeric_limits<UInt32>::max()));
-    }
-
     /// Makes the conditions on the `bucket` column of the samples table selecting the buckets which can contain
     /// samples with timestamps in [min_time, max_time]. A row of the table contains samples with timestamps
     /// in [bucket, bucket + bucket_step) where `bucket` is a multiple of `bucket_step` (see TimeSeriesSink),
-    /// so the condition is `bucket >= <the bucket of min_time> AND bucket <= <max_time rounded down to seconds>`.
+    /// so the condition is `bucket >= <the bucket of min_time> AND bucket <= <max_time>`.
+    /// The `bucket` column has the timestamp type, and the timestamps are its raw values.
     ASTs makeBucketRangeConditions(
         DateTime64 min_time,
         DateTime64 max_time,
@@ -375,25 +372,30 @@ namespace
         UInt64 bucket_step_seconds)
     {
         Int64 scale_multiplier = DecimalUtils::scaleMultiplier<Int64>(tryGetDecimalScale(*timestamp_data_type).value_or(0));
-        Int64 min_time_seconds = floorDiv(min_time.value, scale_multiplier);
-        Int64 max_time_seconds = floorDiv(max_time.value, scale_multiplier);
-        auto step = static_cast<Int64>(bucket_step_seconds);
-        UInt32 min_bucket = toBucketSeconds(floorDiv(min_time_seconds, step) * step);
-        UInt32 max_bucket = toBucketSeconds(max_time_seconds);
+        Int64 bucket_step_ticks = static_cast<Int64>(bucket_step_seconds) * scale_multiplier;
+        DateTime64 min_bucket{floorDiv(min_time.value, bucket_step_ticks) * bucket_step_ticks};
+        DateTime64 max_bucket = max_time;
+
+        /// `DateTime` and `UInt32` timestamps can't be outside of the range of `UInt32`.
+        if (!isDateTime64(timestamp_data_type))
+        {
+            min_bucket.value = std::clamp<Int64>(min_bucket.value, 0, std::numeric_limits<UInt32>::max());
+            max_bucket.value = std::clamp<Int64>(max_bucket.value, 0, std::numeric_limits<UInt32>::max());
+        }
 
         ASTs conditions;
 
-        /// bucket >= toDateTime(<min_bucket>)
+        /// bucket >= <min_bucket>
         conditions.push_back(makeASTFunction(
             "greaterOrEquals",
             make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Bucket),
-            makeASTFunction("toDateTime", make_intrusive<ASTLiteral>(static_cast<UInt64>(min_bucket)))));
+            timeSeriesTimestampToAST(min_bucket, timestamp_data_type)));
 
-        /// bucket <= toDateTime(<max_bucket>)
+        /// bucket <= <max_bucket>
         conditions.push_back(makeASTFunction(
             "lessOrEquals",
             make_intrusive<ASTIdentifier>(TimeSeriesColumnNames::Bucket),
-            makeASTFunction("toDateTime", make_intrusive<ASTLiteral>(static_cast<UInt64>(max_bucket)))));
+            timeSeriesTimestampToAST(max_bucket, timestamp_data_type)));
 
         return conditions;
     }

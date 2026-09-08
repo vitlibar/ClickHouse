@@ -306,8 +306,6 @@ namespace
         ASTPtr time_series;
         ASTPtr values;
         ASTPtr where;
-        ASTs group_by;
-        ASTPtr having;
 
         switch (result.store_method)
         {
@@ -395,23 +393,33 @@ namespace
 
             case StoreMethod::RAW_DATA:
             {
-                /// SELECT timeSeriesGroupToTags(group) AS tags,
-                ///        timeSeriesGroupArray(time_series) AS time_series
+                /// SELECT group, timeSeriesGroupArray(time_series) AS time_series
                 /// FROM <raw_data>
                 /// GROUP BY group
-                /// HAVING notEmpty(time_series)
+                {
+                    chassert(result.select_query);
+                    context.subqueries.emplace_back(SQLSubquery{context.subqueries.size(), std::move(result.select_query), SQLSubqueryType::TABLE});
 
-                /// timeSeriesGroupToTags(group) AS tags
+                    SelectQueryBuilder aggregation_builder;
+                    aggregation_builder.from_table = context.subqueries.back().name;
+                    aggregation_builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Group));
+                    aggregation_builder.select_list.push_back(
+                        makeASTFunction("timeSeriesGroupArray", make_intrusive<ASTIdentifier>(ColumnNames::TimeSeries)));
+                    aggregation_builder.select_list.back()->setAlias(ColumnNames::TimeSeries);
+                    aggregation_builder.group_by.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Group));
+
+                    result.select_query = aggregation_builder.getSelectQuery();
+                }
+
+                /// SELECT timeSeriesGroupToTags(group) AS tags, time_series
+                /// FROM <merged_series>
+                /// WHERE notEmpty(time_series)
+                /// (A separate subquery because the input column and the merged array have the same name `time_series`.)
                 tags = makeASTFunction("timeSeriesGroupToTags", make_intrusive<ASTIdentifier>(ColumnNames::Group));
                 tags->setAlias(ColumnNames::Tags);
 
-                /// timeSeriesGroupArray(time_series) AS time_series
-                /// The function merges the sorted arrays of the rows of a group, the result has the same type as the argument.
-                time_series = makeASTFunction("timeSeriesGroupArray", make_intrusive<ASTIdentifier>(ColumnNames::TimeSeries));
-                time_series->setAlias(ColumnNames::TimeSeries);
-
-                group_by.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Group));
-                having = makeASTFunction("notEmpty", make_intrusive<ASTIdentifier>(ColumnNames::TimeSeries));
+                time_series = make_intrusive<ASTIdentifier>(ColumnNames::TimeSeries);
+                where = makeASTFunction("notEmpty", make_intrusive<ASTIdentifier>(ColumnNames::TimeSeries));
 
                 break;
             }
@@ -452,8 +460,6 @@ namespace
         builder.select_list.push_back(std::move(time_series));
 
         builder.where = std::move(where);
-        builder.group_by = std::move(group_by);
-        builder.having = std::move(having);
 
         /// Data from range queries comes sorted alphabetically by tags.
         builder.order_by.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Tags));

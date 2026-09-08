@@ -19,7 +19,7 @@ CREATE TABLE ts_data
 (
     id UUID,
     samples SimpleAggregateFunction(timeSeriesGroupArray, Array(Tuple(timestamp DateTime64(9, 'UTC'), value Float64))),
-    bucket DateTime('UTC'),
+    bucket DateTime64(9, 'UTC'),
     min_time SimpleAggregateFunction(min, DateTime64(9, 'UTC')),
     max_time SimpleAggregateFunction(max, DateTime64(9, 'UTC'))
 )

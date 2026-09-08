@@ -940,7 +940,7 @@ The _samples_ table must have columns:
 |---|---|---|---|---|
 | `id` | [x] | `Tuple(UInt64, LowCardinality(UUID))` | any | Identifies a combination of a metric names and tags |
 | `samples` | [x] | `SimpleAggregateFunction(timeSeriesGroupArray, Array(Tuple(timestamp DateTime64(3), value Float64)))` | `Array(Tuple(DateTime64(X), Float32 or Float64))`, optionally with named tuple elements and optionally wrapped in `SimpleAggregateFunction(timeSeriesGroupArray, ...)` | The samples of a time series within the bucket sorted by timestamp |
-| `bucket` | [x] | `DateTime('UTC')` | `DateTime` | The start of the bucket: the timestamps of the samples rounded down to a multiple of the bucket length |
+| `bucket` | [x] | `DateTime64(3)` | the type of the timestamps | The start of the bucket: the timestamps of the samples rounded down to a multiple of the bucket length |
 | `min_time` | [x] | `SimpleAggregateFunction(min, DateTime64(3))` | the type of the timestamps, optionally wrapped in `SimpleAggregateFunction(min, ...)` | The minimum timestamp of the samples in the row |
 | `max_time` | [x] | `SimpleAggregateFunction(max, DateTime64(3))` | the type of the timestamps, optionally wrapped in `SimpleAggregateFunction(max, ...)` | The maximum timestamp of the samples in the row |
 
@@ -967,7 +967,8 @@ because it's much smaller (this can be disabled with the query-level setting `ti
 
 The TTL of the inner recent samples table is always derived from the [recent_samples_ttl_seconds](#settings) setting:
 a row expires when all its samples are older than the TTL, i.e. the TTL expression is
-`bucket + toIntervalSecond(recent_samples_ttl_seconds + recent_samples_bucket_step_seconds)`.
+`bucket + toIntervalSecond(recent_samples_ttl_seconds + recent_samples_bucket_step_seconds)`
+(with `toDateTime(bucket)` instead of `bucket` if the timestamps are raw `UInt32`).
 
 ### Tags table {#tags-table}
 
@@ -1025,7 +1026,7 @@ SAMPLES INNER COLUMNS
 (
     `id` Tuple(UInt64, LowCardinality(UUID)),
     `samples` SimpleAggregateFunction(timeSeriesGroupArray, Array(Tuple(timestamp DateTime64(3), value Float64))) CODEC(ZSTD(3)),
-    `bucket` DateTime('UTC'),
+    `bucket` DateTime64(3),
     `min_time` SimpleAggregateFunction(min, DateTime64(3)),
     `max_time` SimpleAggregateFunction(max, DateTime64(3))
 )
@@ -1034,7 +1035,7 @@ RECENT SAMPLES INNER COLUMNS
 (
     `id` Tuple(UInt64, LowCardinality(UUID)),
     `samples` SimpleAggregateFunction(timeSeriesGroupArray, Array(Tuple(timestamp DateTime64(3), value Float64))) CODEC(ZSTD(3)),
-    `bucket` DateTime('UTC'),
+    `bucket` DateTime64(3),
     `min_time` SimpleAggregateFunction(min, DateTime64(3)),
     `max_time` SimpleAggregateFunction(max, DateTime64(3))
 )
@@ -1074,7 +1075,7 @@ CREATE TABLE default.`.inner_id.samples.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`
 (
     `id` Tuple(UInt64, LowCardinality(UUID)),
     `samples` SimpleAggregateFunction(timeSeriesGroupArray, Array(Tuple(timestamp DateTime64(3), value Float64))) CODEC(ZSTD(3)),
-    `bucket` DateTime('UTC'),
+    `bucket` DateTime64(3),
     `min_time` SimpleAggregateFunction(min, DateTime64(3)),
     `max_time` SimpleAggregateFunction(max, DateTime64(3))
 )
@@ -1089,7 +1090,7 @@ CREATE TABLE default.`.inner_id.recentsamples.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxx
 (
     `id` Tuple(UInt64, LowCardinality(UUID)),
     `samples` SimpleAggregateFunction(timeSeriesGroupArray, Array(Tuple(timestamp DateTime64(3), value Float64))) CODEC(ZSTD(3)),
-    `bucket` DateTime('UTC'),
+    `bucket` DateTime64(3),
     `min_time` SimpleAggregateFunction(min, DateTime64(3)),
     `max_time` SimpleAggregateFunction(max, DateTime64(3))
 )
@@ -1221,7 +1222,8 @@ The values of the tags `instance` and `job` will be stored both in those columns
 :::note
 In tables created by older versions of ClickHouse the `tags` column contains only the tags without dedicated
 columns and without the metric name, and the `all_tags` column is an ephemeral column which was filled on insertion
-with all the tags except the metric name.
+with all the tags except the metric name. Since version 2 the `id_generator` setting and the `DEFAULT` expression
+of the `id` column must not reference `all_tags`; use `tags` instead.
 :::
 
 ## Table engines of inner target tables {#inner-table-engines}
@@ -1265,6 +1267,9 @@ for a manually created [external](#external-target-tables) aggregating tags tabl
 The same setting is set on the inner [samples](#samples-table) and [recent samples](#recent-samples-table) tables,
 so that extra columns can be declared in them.
 
+The default partition keys and the TTL of the inner samples tables are expressions over the `bucket` column, which has the type
+of the timestamps. If the timestamps are raw `UInt32`, these expressions use `toDateTime(bucket)` instead of `bucket`.
+
 ## External target tables {#external-target-tables}
 
 It's possible to make a `TimeSeries` table use a manually created table:
@@ -1274,7 +1279,7 @@ CREATE TABLE samples_for_my_table
 (
     `id` UUID,
     `samples` SimpleAggregateFunction(timeSeriesGroupArray, Array(Tuple(timestamp DateTime64(3), value Float64))),
-    `bucket` DateTime('UTC'),
+    `bucket` DateTime64(3),
     `min_time` SimpleAggregateFunction(min, DateTime64(3)),
     `max_time` SimpleAggregateFunction(max, DateTime64(3))
 )

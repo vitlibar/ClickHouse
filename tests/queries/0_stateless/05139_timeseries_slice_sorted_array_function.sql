@@ -36,6 +36,12 @@ SELECT number, timeSeriesSliceSortedArray(arrayMap(i -> (toUInt32(i * 10), toFlo
 SELECT '-- a constant bound together with a non-constant one';
 SELECT number, timeSeriesSliceSortedArray(arrayMap(i -> (toUInt32(i * 10), toFloat64(i)), range(5)), 10, number * 10) FROM numbers(4);
 
+SELECT '-- consecutive rows: slices before and after the interval, a partial slice, an empty array and a whole array';
+SELECT number, timeSeriesSliceSortedArray(arrayMap(i -> (toUInt32(number * 100 + i * 10), toFloat64(i)), range(if(number = 2, 0, 3))), 105, 320) FROM numbers(5);
+
+SELECT '-- every slice is a whole array';
+SELECT number, timeSeriesSliceSortedArray(arrayMap(i -> (toUInt32(number * 100 + i * 10), toFloat64(i)), range(3)), 0, 1000) FROM numbers(3);
+
 SELECT '-- a column of an aggregating table';
 DROP TABLE IF EXISTS slice_test;
 CREATE TABLE slice_test (id UInt8, samples SimpleAggregateFunction(timeSeriesGroupArray, Array(Tuple(timestamp DateTime64(3), value Float64))))

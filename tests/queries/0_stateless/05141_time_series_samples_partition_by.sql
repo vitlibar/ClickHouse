@@ -63,7 +63,7 @@ CREATE TABLE samples_ext
 (
     `id` Tuple(UInt64, LowCardinality(UUID)),
     `samples` SimpleAggregateFunction(timeSeriesGroupArray, Array(Tuple(timestamp DateTime64(3), value Float64))),
-    `bucket` DateTime('UTC'),
+    `bucket` DateTime64(3),
     `min_time` SimpleAggregateFunction(min, DateTime64(3)),
     `max_time` SimpleAggregateFunction(max, DateTime64(3))
 )

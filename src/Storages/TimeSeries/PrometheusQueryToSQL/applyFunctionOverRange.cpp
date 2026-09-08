@@ -250,8 +250,9 @@ SQLQueryPiece applyFunctionOverRange(
     ASTPtr timestamps;
     ASTPtr values;
 
-    /// Whether `values` contains both timestamps and values as an array of tuples (timestamp, value).
-    bool samples_in_single_argument = false;
+    /// Whether the aggregate function gets `timestamps` and `values` as two arguments; otherwise `values` contains
+    /// both timestamps and values as an array of tuples (timestamp, value) and is passed as the single argument.
+    bool timestamps_in_separate_argument = false;
 
     switch (argument.store_method)
     {
@@ -277,6 +278,7 @@ SQLQueryPiece applyFunctionOverRange(
                 make_intrusive<ASTLiteral>(stepsInTimeSeriesRange(argument.start_time, argument.end_time, argument.step)),
                 value);
 
+            timestamps_in_separate_argument = true;
             res.store_method = StoreMethod::SCALAR_GRID;
             res.scalar_value = {};
             break;
@@ -288,32 +290,26 @@ SQLQueryPiece applyFunctionOverRange(
             ///                             values)) AS values
             /// FROM <scalar_grid>
             values = make_intrusive<ASTIdentifier>(ColumnNames::Values);
+            timestamps_in_separate_argument = true;
             break;
         }
 
         case StoreMethod::VECTOR_GRID:
         {
             /// SELECT group,
-            ///        <aggregate_function>((timeSeriesFromGrid(<start_time>, <end_time>, <step>, values) AS time_series).1,
-            ///                             time_series.2)) AS values
+            ///        <aggregate_function>(timeSeriesFromGrid(<start_time>, <end_time>, <step>, values)) AS values
             /// FROM <vector_grid>
             /// GROUP BY group
+            /// `timeSeriesFromGrid` returns the samples as an array of tuples (timestamp, value), which is passed
+            /// to the aggregate function as a single argument.
             has_group = true;
 
-            /// (timeSeriesFromGrid(<start_time>, <end_time>, <step>, values) AS time_series).1
-            ASTPtr ts = makeASTFunction(
+            values = makeASTFunction(
                 "timeSeriesFromGrid",
                 timeSeriesTimestampToAST(argument.start_time, context.timestamp_data_type),
                 timeSeriesTimestampToAST(argument.end_time, context.timestamp_data_type),
                 timeSeriesDurationToAST(argument.step, context.timestamp_data_type),
                 make_intrusive<ASTIdentifier>(ColumnNames::Values));
-            ts->setAlias(ColumnNames::TimeSeries);
-            timestamps = makeASTFunction("tupleElement", std::move(ts), make_intrusive<ASTLiteral>(1));
-
-            /// time_series.2
-            values = makeASTFunction(
-                "tupleElement", make_intrusive<ASTIdentifier>(ColumnNames::TimeSeries), make_intrusive<ASTLiteral>(2));
-
             break;
         }
 
@@ -327,7 +323,6 @@ SQLQueryPiece applyFunctionOverRange(
             has_group = true;
 
             values = make_intrusive<ASTIdentifier>(ColumnNames::TimeSeries);
-            samples_in_single_argument = true;
             res.store_method = StoreMethod::VECTOR_GRID;
 
             break;
@@ -343,7 +338,7 @@ SQLQueryPiece applyFunctionOverRange(
 
     chassert(values);
 
-    if (!timestamps && !samples_in_single_argument)
+    if (timestamps_in_separate_argument)
     {
         /// timeSeriesRange(<start_time>, <end_time>, <step>)
         timestamps = makeASTFunction(
@@ -359,9 +354,9 @@ SQLQueryPiece applyFunctionOverRange(
         builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Group));
 
     /// <aggregate_function>(<timestamps>, <values>) AS values, or <aggregate_function>(<samples>) AS values
-    auto aggregate_function = samples_in_single_argument
-        ? makeASTFunction(impl_info->ch_function_name, std::move(values))
-        : makeASTFunction(impl_info->ch_function_name, std::move(timestamps), std::move(values));
+    auto aggregate_function = timestamps_in_separate_argument
+        ? makeASTFunction(impl_info->ch_function_name, std::move(timestamps), std::move(values))
+        : makeASTFunction(impl_info->ch_function_name, std::move(values));
     auto aggregate_values = addParametersToAggregateFunction(
         std::move(aggregate_function),
         timeSeriesTimestampToAST(aggregation_start_time, context.timestamp_data_type),

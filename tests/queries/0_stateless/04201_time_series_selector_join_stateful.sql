@@ -28,7 +28,7 @@ CREATE TABLE samples_table
 (
     id UInt64,
     samples SimpleAggregateFunction(timeSeriesGroupArray, Array(Tuple(timestamp DateTime64(3), value Float64))),
-    bucket DateTime('UTC'),
+    bucket DateTime64(3),
     min_time SimpleAggregateFunction(min, DateTime64(3)),
     max_time SimpleAggregateFunction(max, DateTime64(3))
 ) ENGINE = AggregatingMergeTree() ORDER BY (id, bucket);
@@ -55,7 +55,7 @@ INSERT INTO samples_table (id, samples, bucket, min_time, max_time) VALUES
 -- (
 --     SELECT timeSeriesIdToGroup(id) AS group, timeSeriesSliceSortedArray(samples, toDateTime64(60, 3), toDateTime64(150, 3)) AS time_series
 --     FROM samples_table
---     WHERE bucket >= toDateTime(0) AND bucket <= toDateTime(150)
+--     WHERE bucket >= toDateTime64(0, 3) AND bucket <= toDateTime64(150, 3)
 --       AND max_time >= toDateTime64(60, 3) AND min_time <= toDateTime64(150, 3)
 --       AND id IN (
 --         SELECT timeSeriesStoreTags(id, tags, '__name__', metric_name)
@@ -66,7 +66,7 @@ INSERT INTO samples_table (id, samples, bucket, min_time, max_time) VALUES
 -- (
 --     SELECT timeSeriesIdToGroup(id) AS group, timeSeriesSliceSortedArray(samples, toDateTime64(60, 3), toDateTime64(150, 3)) AS time_series
 --     FROM samples_table
---     WHERE bucket >= toDateTime(0) AND bucket <= toDateTime(150)
+--     WHERE bucket >= toDateTime64(0, 3) AND bucket <= toDateTime64(150, 3)
 --       AND max_time >= toDateTime64(60, 3) AND min_time <= toDateTime64(150, 3)
 --       AND id IN (
 --         SELECT timeSeriesStoreTags(id, tags, '__name__', metric_name)

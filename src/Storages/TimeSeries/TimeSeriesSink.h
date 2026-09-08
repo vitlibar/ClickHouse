@@ -3,12 +3,14 @@
 #include <Common/Logger_fwd.h>
 #include <Common/PODArray_fwd.h>
 #include <Core/Block.h>
+#include <base/Decimal.h>
 #include <DataTypes/IDataType.h>
 #include <Interpreters/Context_fwd.h>
 #include <Parsers/ASTViewTargets.h>
 #include <Processors/Sinks/SinkToStorage.h>
 #include <QueryPipeline/BlockIO.h>
 
+#include <optional>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
@@ -92,49 +94,26 @@ private:
     bool insert_metrics = false;
     bool async_insert = false;
 
+    /// Types of the `id` column of the tags table, and of the timestamps and the values of the samples.
+    DataTypePtr id_type;
+    DataTypePtr timestamp_type;
+    DataTypePtr value_type;
+
     /// Source header for the tags pipeline WITHOUT the `id` column.
     Block tags_header_before_id;
-
-    /// Type of the `id` column in the tags target table.
-    DataTypePtr id_type;
-
-    /// True when the resolved id-generator references the `all_tags` identifier.
-    bool id_generator_uses_all_tags = false;
 
     /// Precomputed ExpressionActions for calculating the "id" column from a tags block.
     std::shared_ptr<ExpressionActions> calculate_id_actions;
     std::shared_ptr<ExpressionActions> convert_id_actions;
 
-    /// Types of the columns of the samples blocks: the samples table and the recent samples table get the same columns.
-    DataTypePtr timestamp_type;
-    DataTypePtr scalar_type;
-    DataTypePtr samples_array_type;
-    DataTypePtr bucket_type;
-
-    /// The number of ticks of `timestamp_type` in a second, e.g. 1000 for `DateTime64(3)`.
-    Int64 timestamp_scale_multiplier = 1;
-
-    /// A pipeline writing to a samples table together with the length of its buckets.
-    struct SamplesPipeline
-    {
-        std::unique_ptr<TargetPipeline> pipeline;
-        UInt64 bucket_step_seconds = 0;
-    };
-
-    /// Builds a block for a samples table from the sorted samples of the series in the input block (see consumeTagsAndSamples).
-    Block makeSamplesBlock(
-        const PaddedPODArray<UInt8> & filter,
-        const IColumn & id_column,
-        const IColumn & ts_timestamps,
-        const IColumn & ts_values,
-        const PaddedPODArray<Int64> & raw_timestamps,
-        const PaddedPODArray<size_t> & sorted_indices,
-        const PaddedPODArray<size_t> & sorted_offsets,
-        UInt64 bucket_step_seconds) const;
+    /// The steps of the buckets of the samples table and of the recent samples table (unset if there is no such table)
+    /// with the scale of `timestamp_type`, e.g. in milliseconds for `DateTime64(3)`.
+    Decimal64 samples_bucket_step;
+    std::optional<Decimal64> recent_samples_bucket_step;
 
     std::unique_ptr<TargetPipeline> tags_pipeline;
-    SamplesPipeline samples_pipeline;
-    SamplesPipeline recent_samples_pipeline;
+    std::unique_ptr<TargetPipeline> samples_pipeline;
+    std::unique_ptr<TargetPipeline> recent_samples_pipeline;
     std::unique_ptr<TargetPipeline> metrics_pipeline;
 };
 
