@@ -1,17 +1,19 @@
 -- the default partition key makes one partition per month
-AggregatingMergeTree PARTITION BY toYYYYMM(bucket) ORDER BY (id, bucket) SETTINGS index_granularity = 32768, allow_dimensions_outside_sorting_key = 1
+AggregatingMergeTree PARTITION BY toYYYYMM(bucket) ORDER BY (id, bucket) SETTINGS index_granularity = 1024, index_granularity_bytes = 1048576, allow_dimensions_outside_sorting_key = 1
 202601	1
 202602	2
-m	[('2026-01-15 10:00:00.000',1),('2026-02-15 10:00:00.000',2),('2026-02-20 10:00:00.000',3)]
+m	[('2026-01-15 10:00:00.000',1)]
+m	[('2026-02-15 10:00:00.000',2)]
+m	[('2026-02-20 10:00:00.000',3)]
 -- the setting overrides the partition key of a declared engine
-AggregatingMergeTree PARTITION BY toStartOfWeek(bucket) ORDER BY (id, bucket) SETTINGS index_granularity = 32768, allow_dimensions_outside_sorting_key = 1
+AggregatingMergeTree PARTITION BY toStartOfWeek(bucket) ORDER BY (id, bucket) SETTINGS index_granularity = 1024, index_granularity_bytes = 1048576, allow_dimensions_outside_sorting_key = 1
 -- a declared partition key is kept if the setting is not set
-AggregatingMergeTree PARTITION BY toDate(bucket) ORDER BY (id, bucket) SETTINGS index_granularity = 32768, allow_dimensions_outside_sorting_key = 1
+AggregatingMergeTree PARTITION BY toDate(bucket) ORDER BY (id, bucket) SETTINGS index_granularity = 1024, index_granularity_bytes = 1048576, allow_dimensions_outside_sorting_key = 1
 -- CREATE AS generates the partition key again for the new table
-AggregatingMergeTree PARTITION BY toStartOfWeek(bucket) ORDER BY (id, bucket) SETTINGS index_granularity = 32768, allow_dimensions_outside_sorting_key = 1
+AggregatingMergeTree PARTITION BY toStartOfWeek(bucket) ORDER BY (id, bucket) SETTINGS index_granularity = 1024, index_granularity_bytes = 1048576, allow_dimensions_outside_sorting_key = 1
 -- CREATE AS copies a customized partition key
-AggregatingMergeTree PARTITION BY toDate(bucket) ORDER BY (id, bucket) SETTINGS index_granularity = 32768, allow_dimensions_outside_sorting_key = 1
+AggregatingMergeTree PARTITION BY toDate(bucket) ORDER BY (id, bucket) SETTINGS index_granularity = 1024, index_granularity_bytes = 1048576, allow_dimensions_outside_sorting_key = 1
 -- the setting is ignored for an external samples table
-AggregatingMergeTree ORDER BY (id, bucket)
+AggregatingMergeTree	
 -- the setting requires a MergeTree-family engine of the inner samples table
 -- the setting cannot be changed after the table is created

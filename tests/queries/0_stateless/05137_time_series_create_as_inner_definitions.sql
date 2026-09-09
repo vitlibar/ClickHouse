@@ -5,7 +5,7 @@
 SET allow_experimental_time_series_table = 1;
 
 DROP TABLE IF EXISTS mt;
-DROP TABLE IF EXISTS ext_data;
+DROP TABLE IF EXISTS ext_samples;
 DROP TABLE IF EXISTS ts_src;
 DROP TABLE IF EXISTS ts_copy;
 
@@ -93,13 +93,22 @@ DROP TABLE ts_copy;
 DROP TABLE ts_src;
 
 SELECT '-- the inner columns of the other table are not copied for a target replaced with an external table, the types come';
-SELECT '-- from the external table: `timestamp` is DateTime64(3) in `ts_src` and DateTime64(6) in `ext_data`';
-CREATE TABLE ext_data (id UInt64, timestamp DateTime64(6), value Float64) ENGINE = MergeTree ORDER BY (id, timestamp);
-CREATE TABLE ts_src ENGINE = TimeSeries SAMPLES INNER COLUMNS (timestamp DateTime64(3) CODEC(ZSTD(5)));
-CREATE TABLE ts_copy AS ts_src ENGINE = TimeSeries SAMPLES ext_data;
-SELECT create_table_query LIKE '%ext_data SAMPLES INNER COLUMNS%' FROM system.tables WHERE database = currentDatabase() AND name = 'ts_copy';
+SELECT '-- from the external table: the timestamps are DateTime64(3) in `ts_src` and DateTime64(6) in `ext_samples`';
+CREATE TABLE ext_samples
+(
+    id Tuple(UInt64, LowCardinality(UUID)),
+    samples SimpleAggregateFunction(timeSeriesGroupArray, Array(Tuple(timestamp DateTime64(6), value Float64))),
+    bucket DateTime64(6),
+    min_time SimpleAggregateFunction(min, DateTime64(6)),
+    max_time SimpleAggregateFunction(max, DateTime64(6))
+)
+ENGINE = AggregatingMergeTree ORDER BY (id, bucket);
+CREATE TABLE ts_src ENGINE = TimeSeries
+SAMPLES INNER COLUMNS (samples SimpleAggregateFunction(timeSeriesGroupArray, Array(Tuple(timestamp DateTime64(3), value Float64))) CODEC(ZSTD(5)));
+CREATE TABLE ts_copy AS ts_src ENGINE = TimeSeries SAMPLES ext_samples;
+SELECT create_table_query LIKE '%ext_samples SAMPLES INNER COLUMNS%' FROM system.tables WHERE database = currentDatabase() AND name = 'ts_copy';
 SELECT extract(create_table_query, 'RECENT SAMPLES INNER COLUMNS \((.*?)\) RECENT SAMPLES INNER ENGINE')
 FROM system.tables WHERE database = currentDatabase() AND name = 'ts_copy';
 DROP TABLE ts_copy;
 DROP TABLE ts_src;
-DROP TABLE ext_data;
+DROP TABLE ext_samples;

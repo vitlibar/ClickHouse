@@ -20,7 +20,7 @@ SELECT partition, sum(rows) AS rows
 FROM system.parts WHERE database = currentDatabase() AND table LIKE '.inner\_id.samples.%' AND active
 GROUP BY partition ORDER BY partition;
 
-SELECT metric_name, time_series FROM ts;
+SELECT metric_name, time_series FROM ts ORDER BY time_series;
 
 DROP TABLE ts;
 
@@ -69,7 +69,7 @@ CREATE TABLE samples_ext
 )
 ENGINE = AggregatingMergeTree ORDER BY (id, bucket);
 CREATE TABLE ts ENGINE = TimeSeries SETTINGS recent_samples_ttl_seconds = 0, samples_partition_by = 'toStartOfWeek(bucket)' SAMPLES samples_ext;
-SELECT engine_full FROM system.tables WHERE database = currentDatabase() AND name = 'samples_ext';
+SELECT engine, partition_key FROM system.tables WHERE database = currentDatabase() AND name = 'samples_ext';
 DROP TABLE ts;
 DROP TABLE samples_ext;
 

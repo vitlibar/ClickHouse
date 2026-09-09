@@ -370,18 +370,20 @@ def test_inner_engines():
     check()
 
 
-# Checks that the `samples_index_granularity` and `tags_index_granularity` settings
-# set `index_granularity` of the samples and tags inner tables.
+# Checks that the `samples_index_granularity`, `samples_index_granularity_bytes` and `tags_index_granularity` settings
+# set `index_granularity` and `index_granularity_bytes` of the samples and tags inner tables.
 def test_index_granularity():
-    # The default value of `samples_index_granularity` is 32768,
+    # The default value of `samples_index_granularity` is 1024, the default value of `samples_index_granularity_bytes` is 1 MiB,
     # the default value of `tags_index_granularity` is 8192.
     node.query("CREATE TABLE prometheus ENGINE=TimeSeries")
     check()
 
-    assert "index_granularity = 32768" in node.query(
+    samples_engine = node.query(
         "SELECT engine_full FROM system.tables WHERE database = currentDatabase() "
         "AND name = (SELECT _table FROM timeSeriesSamples(prometheus) LIMIT 1)"
     )
+    assert "index_granularity = 1024" in samples_engine
+    assert "index_granularity_bytes = 1048576" in samples_engine
     assert "index_granularity = 8192" in node.query(
         "SELECT engine_full FROM system.tables WHERE database = currentDatabase() "
         "AND name = (SELECT _table FROM timeSeriesTags(prometheus) LIMIT 1)"
@@ -391,14 +393,16 @@ def test_index_granularity():
 
     node.query(
         "CREATE TABLE prometheus ENGINE=TimeSeries "
-        "SETTINGS samples_index_granularity = 16384, tags_index_granularity = 4096"
+        "SETTINGS samples_index_granularity = 16384, samples_index_granularity_bytes = 4194304, tags_index_granularity = 4096"
     )
     check()
 
-    assert "index_granularity = 16384" in node.query(
+    samples_engine = node.query(
         "SELECT engine_full FROM system.tables WHERE database = currentDatabase() "
         "AND name = (SELECT _table FROM timeSeriesSamples(prometheus) LIMIT 1)"
     )
+    assert "index_granularity = 16384" in samples_engine
+    assert "index_granularity_bytes = 4194304" in samples_engine
     assert "index_granularity = 4096" in node.query(
         "SELECT engine_full FROM system.tables WHERE database = currentDatabase() "
         "AND name = (SELECT _table FROM timeSeriesTags(prometheus) LIMIT 1)"

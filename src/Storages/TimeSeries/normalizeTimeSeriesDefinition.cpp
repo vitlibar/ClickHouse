@@ -55,10 +55,12 @@ namespace TimeSeriesSetting
     extern const TimeSeriesSettingsASTFunction id_generator;
     extern const TimeSeriesSettingsUInt64 recent_samples_bucket_step_seconds;
     extern const TimeSeriesSettingsUInt64 recent_samples_index_granularity;
+    extern const TimeSeriesSettingsUInt64 recent_samples_index_granularity_bytes;
     extern const TimeSeriesSettingsASTFunction recent_samples_partition_by;
     extern const TimeSeriesSettingsUInt64 recent_samples_ttl_seconds;
     extern const TimeSeriesSettingsUInt64 samples_bucket_step_seconds;
     extern const TimeSeriesSettingsUInt64 samples_index_granularity;
+    extern const TimeSeriesSettingsUInt64 samples_index_granularity_bytes;
     extern const TimeSeriesSettingsASTFunction samples_partition_by;
     extern const TimeSeriesSettingsBool store_min_time_and_max_time;
     extern const TimeSeriesSettingsUInt64 tags_index_granularity;
@@ -600,7 +602,7 @@ namespace
 
         /// The default value of `recent_samples_ttl_seconds` is 345600 (4 days), so an absent setting doesn't disable the recent samples table.
         if (const auto * value = get_new_value("recent_samples_ttl_seconds"); value && (SettingFieldUInt64{*value}.value == 0))
-            old_settings.removeSettings({"recent_samples_partition_by", "recent_samples_index_granularity"});
+            old_settings.removeSettings({"recent_samples_partition_by", "recent_samples_index_granularity", "recent_samples_index_granularity_bytes"});
 
         /// The default value of `store_min_time_and_max_time` is true, so an absent setting doesn't disable the columns.
         if (const auto * value = get_new_value("store_min_time_and_max_time"); value && !SettingFieldBool{*value}.value)
@@ -971,6 +973,7 @@ namespace
 
                 remove_settings({
                     {"index_granularity", settings[TimeSeriesSetting::samples_index_granularity].value},
+                    {"index_granularity_bytes", settings[TimeSeriesSetting::samples_index_granularity_bytes].value},
                     {"allow_dimensions_outside_sorting_key", static_cast<UInt64>(1)}});
                 break;
             }
@@ -1004,6 +1007,7 @@ namespace
 
                 remove_settings({
                     {"index_granularity", settings[TimeSeriesSetting::recent_samples_index_granularity].value},
+                    {"index_granularity_bytes", settings[TimeSeriesSetting::recent_samples_index_granularity_bytes].value},
                     {"ttl_only_drop_parts", static_cast<UInt64>(1)},
                     {"allow_dimensions_outside_sorting_key", static_cast<UInt64>(1)}});
                 break;
@@ -1603,11 +1607,12 @@ namespace
             changed = true;
         };
 
-        /// The `*_index_granularity` settings set `index_granularity` of the inner MergeTree tables, overriding the engine declaration.
-        auto set_index_granularity = [&](const SettingFieldUInt64 & index_granularity)
+        /// The `*_index_granularity` and `*_index_granularity_bytes` settings set the same-named settings of the inner MergeTree tables,
+        /// overriding the engine declaration.
+        auto set_merge_tree_setting = [&](std::string_view name, const SettingFieldUInt64 & setting)
         {
-            if (is_merge_tree() && (index_granularity.isChanged() || !has_engine_setting("index_granularity")))
-                set_engine_setting("index_granularity", index_granularity.value);
+            if (is_merge_tree() && (setting.isChanged() || !has_engine_setting(name)))
+                set_engine_setting(name, setting.value);
         };
 
         switch (inner_table_kind)
@@ -1628,10 +1633,11 @@ namespace
                         make_intrusive<ASTIdentifier>(bucketed ? TimeSeriesColumnNames::Bucket : TimeSeriesColumnNames::Timestamp)});
                 }
 
-                const auto & index_granularity = settings[(inner_table_kind == ViewTarget::Samples)
-                    ? TimeSeriesSetting::samples_index_granularity
-                    : TimeSeriesSetting::recent_samples_index_granularity];
-                set_index_granularity(index_granularity);
+                bool is_samples = (inner_table_kind == ViewTarget::Samples);
+                set_merge_tree_setting("index_granularity",
+                    settings[is_samples ? TimeSeriesSetting::samples_index_granularity : TimeSeriesSetting::recent_samples_index_granularity]);
+                set_merge_tree_setting("index_granularity_bytes",
+                    settings[is_samples ? TimeSeriesSetting::samples_index_granularity_bytes : TimeSeriesSetting::recent_samples_index_granularity_bytes]);
 
                 /// `AggregatingMergeTree` rejects columns outside the sorting key which are not aggregates
                 /// (see the `allow_dimensions_outside_sorting_key` setting), so extra columns declared by the user
@@ -1735,7 +1741,7 @@ namespace
                     set_sorting_key(std::move(key_columns));
                 }
 
-                set_index_granularity(settings[TimeSeriesSetting::tags_index_granularity]);
+                set_merge_tree_setting("index_granularity", settings[TimeSeriesSetting::tags_index_granularity]);
 
                 /// The TimeSeries `tags` inner table keeps the tag columns (and the `tags` Map) outside
                 /// the sorting key, but they are functionally dependent on `id`, which is part of it: every group of

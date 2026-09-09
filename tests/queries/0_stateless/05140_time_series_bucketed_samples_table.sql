@@ -172,7 +172,7 @@ SELECT '-- a table created AS a table of an older version gets the new layout wi
 DROP TABLE IF EXISTS ts_v1;
 DROP TABLE IF EXISTS ts_v1_copy;
 CREATE TABLE ts_v1 ENGINE = TimeSeries SETTINGS version = 1, recent_samples_ttl_seconds = 0
-SAMPLES INNER COLUMNS (timestamp DateTime64(6) CODEC(Delta), value Float32);
+SAMPLES INNER COLUMNS (timestamp DateTime64(6) CODEC(Delta, ZSTD), value Float32);
 SELECT extract(create_table_query, 'SAMPLES INNER COLUMNS \((.*?)\) SAMPLES INNER ENGINE'), extract(create_table_query, 'SAMPLES INNER ENGINE = (.*?) TAGS INNER')
 FROM system.tables WHERE database = currentDatabase() AND name = 'ts_v1';
 CREATE TABLE ts_v1_copy AS ts_v1;
@@ -184,7 +184,7 @@ DROP TABLE ts_v1;
 SELECT '-- the all_tags column of version 0 cannot be used by id generators';
 
 CREATE TABLE ts_bad ENGINE = TimeSeries SETTINGS id_generator = 'reinterpretAsUUID(sipHash128(metric_name, all_tags))' TAGS INNER COLUMNS (id UUID); -- { serverError INVALID_SETTING_VALUE }
-CREATE TABLE ts_bad ENGINE = TimeSeries TAGS INNER COLUMNS (id UUID DEFAULT reinterpretAsUUID(sipHash128(metric_name, all_tags))); -- { serverError INCORRECT_QUERY }
+CREATE TABLE ts_bad ENGINE = TimeSeries TAGS INNER COLUMNS (id UUID DEFAULT reinterpretAsUUID(sipHash128(metric_name, all_tags))); -- { serverError UNKNOWN_IDENTIFIER }
 
 DROP TABLE IF EXISTS ext_tags;
 CREATE TABLE ext_tags (id UUID DEFAULT reinterpretAsUUID(sipHash128(metric_name, all_tags)), metric_name LowCardinality(String), tags Map(LowCardinality(String), String), all_tags Map(String, String) EPHEMERAL)
