@@ -727,7 +727,7 @@ void StorageTimeSeries::readImpl(
     /// Run the generated read query on a child context with a few settings pinned so its results
     /// don't depend on the caller's session/profile (see getSettingsForSelectFromTimeSeries).
     auto read_context = Context::createCopy(local_context);
-    read_context->applySettingsChanges(getSettingsForSelectFromTimeSeries(query_info.isFinal()));
+    read_context->applySettingsChanges(getSettingsForSelectFromTimeSeries(*getStorageSettings(), query_info.isFinal()));
 
     NameSet requested_columns{column_names.begin(), column_names.end()};
     auto select_query = makeASTSelectFromTimeSeries(*this, requested_columns, query_info, read_context);
@@ -860,7 +860,7 @@ Columns of a TimeSeries table are generated automatically. These are outer colum
 |---|---|---|
 | `metric_name` | `String` | The name of the metric |
 | `tags` | `Map(String, String)` | Map of tags (labels) for the time series |
-| `time_series` | `Array(Tuple(DateTime64(3), Float64))` by default | Array of (timestamp, value) pairs for a time series. The tuple's timestamp and scalar element types can be derived from the samples `INNER COLUMNS` declaration (see [Specifying outer columns](#specifying-outer-columns)) |
+| `time_series` | `Array(Tuple(DateTime64(3), Float64))` by default | Array of (timestamp, value) pairs for a time series, sorted by timestamp. A `SELECT` returns the rows of the [samples](#samples-table) table as they are, so a time series is returned in several rows (one per bucket, and `SELECT ... FINAL` merges the rows of the same bucket which are not merged yet); use the aggregate function `timeSeriesGroupArray` to merge the rows of a time series into one array. The tuple's timestamp and scalar element types can be derived from the samples `INNER COLUMNS` declaration (see [Specifying outer columns](#specifying-outer-columns)) |
 | `metric_family` | `String` | The name of the metric family (for metrics metadata) |
 | `type` | `String` | The type of the metric (e.g. "counter", "gauge") |
 | `unit` | `String` | The unit of the metric |

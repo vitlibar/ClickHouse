@@ -32,15 +32,18 @@ SELECT t.tags['env'] AS env, s.bucket, s.samples, s.min_time, s.max_time
 FROM timeSeriesSamples(ts) AS s JOIN timeSeriesTags(ts) AS t ON s.id = t.id
 ORDER BY env, s.bucket;
 
-SELECT '-- reading the TimeSeries table merges the buckets of a series';
+SELECT '-- reading the TimeSeries table returns a row per bucket, the rows of a series can be merged with timeSeriesGroupArray';
 
-SELECT metric_name, tags, time_series FROM ts ORDER BY tags;
+SELECT metric_name, tags, time_series FROM ts ORDER BY tags, time_series;
+SELECT metric_name, tags, timeSeriesGroupArray(time_series) FROM ts FINAL GROUP BY metric_name, tags ORDER BY tags;
 
 SELECT '-- the rows of the same bucket are merged by the engine';
 
 INSERT INTO ts (metric_name, tags, time_series) VALUES ('m', map('env', 'prod'), [(toDateTime64(150, 3), 1.5), (toDateTime64(100, 3), 1.)]);
 SELECT count() FROM timeSeriesSamples(ts);
-SELECT metric_name, tags, time_series FROM ts ORDER BY tags;
+SELECT '-- without FINAL the rows of the unmerged parts are returned as they are, with FINAL the rows of the same bucket are merged';
+SELECT metric_name, tags, time_series FROM ts ORDER BY tags, time_series;
+SELECT metric_name, tags, time_series FROM ts FINAL ORDER BY tags, time_series;
 
 OPTIMIZE TABLE ts FINAL;
 SELECT count() FROM timeSeriesSamples(ts);

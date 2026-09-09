@@ -3,6 +3,7 @@
 #include <Common/Exception.h>
 #include <Common/logger_useful.h>
 #include <Common/quoteString.h>
+#include <Common/DateLUTImpl.h>
 #include <Columns/IColumn.h>
 #include <DataTypes/DataTypeArray.h>
 #include <DataTypes/DataTypeFixedString.h>
@@ -349,17 +350,6 @@ namespace
         return select_with_union_query;
     }
 
-    /// Division rounding towards negative infinity, for a positive divisor (the same as in TimeSeriesSink).
-    /// It matters for timestamps before 1970, whose raw `DateTime64` value is negative: the start of a bucket
-    /// must not be greater than the timestamps in it, while the operator `/` rounds towards zero.
-    Int64 floorDiv(Int64 dividend, Int64 divisor)
-    {
-        Int64 quotient = dividend / divisor;
-        if ((dividend % divisor != 0) && (dividend < 0))
-            --quotient;
-        return quotient;
-    }
-
     /// Makes the conditions on the `bucket` column of the samples table selecting the buckets which can contain
     /// samples with timestamps in [min_time, max_time]. A row of the table contains samples with timestamps
     /// in [bucket, bucket + bucket_step) where `bucket` is a multiple of `bucket_step` (see TimeSeriesSink),
@@ -371,9 +361,12 @@ namespace
         const DataTypePtr & timestamp_data_type,
         UInt64 bucket_step_seconds)
     {
+        /// The step of the buckets with the scale of the timestamp type.
         Int64 scale_multiplier = DecimalUtils::scaleMultiplier<Int64>(tryGetDecimalScale(*timestamp_data_type).value_or(0));
-        Int64 bucket_step_ticks = static_cast<Int64>(bucket_step_seconds) * scale_multiplier;
-        DateTime64 min_bucket{floorDiv(min_time.value, bucket_step_ticks) * bucket_step_ticks};
+        Decimal64 bucket_step{static_cast<Int64>(bucket_step_seconds) * scale_multiplier};
+
+        /// The same rounding as in TimeSeriesSink: towards negative infinity, so that a bucket starts at or before its samples.
+        DateTime64 min_bucket{DateLUTImpl::roundDownToMultiple(min_time.value, bucket_step.value)};
         DateTime64 max_bucket = max_time;
 
         /// `DateTime` and `UInt32` timestamps can't be outside of the range of `UInt32`.
@@ -400,7 +393,7 @@ namespace
         return conditions;
     }
 
-    ASTPtr makeWhereFilterForDataTable(
+    ASTPtr makeWhereFilterForSamplesTable(
         ASTPtr select_query_from_tags_table,
         DateTime64 min_time,
         DateTime64 max_time,
@@ -453,7 +446,7 @@ namespace
         return makeASTForLogicalAnd(std::move(conditions));
     }
 
-    ASTPtr makeSelectQueryFromDataTable(const StorageID & data_table_id,
+    ASTPtr makeSelectQueryFromSamplesTable(const StorageID & samples_table_id,
                                         ASTPtr select_query_from_tags_table,
                                         DateTime64 min_time,
                                         DateTime64 max_time,
@@ -489,13 +482,13 @@ namespace
             select_query->setExpression(ASTSelectQuery::Expression::SELECT, select_list_exp);
         }
 
-        /// FROM data_table_id
+        /// FROM samples_table_id
         auto tables = make_intrusive<ASTTablesInSelectQuery>();
 
         {
             auto table = make_intrusive<ASTTablesInSelectQueryElement>();
             auto table_exp = make_intrusive<ASTTableExpression>();
-            table_exp->database_and_table_name = make_intrusive<ASTTableIdentifier>(data_table_id);
+            table_exp->database_and_table_name = make_intrusive<ASTTableIdentifier>(samples_table_id);
             table_exp->children.emplace_back(table_exp->database_and_table_name);
 
             table->table_expression = table_exp;
@@ -510,7 +503,7 @@ namespace
         /// where <select_query_from_tags_table> is roughly:
         ///   SELECT timeSeriesStoreTags(id, tags, '__name__', metric_name, ...) FROM tags_table WHERE <matchers>
         {
-            auto where_filter = makeWhereFilterForDataTable(
+            auto where_filter = makeWhereFilterForSamplesTable(
                 select_query_from_tags_table, min_time, max_time, timestamp_data_type, bucket_step_seconds, std::move(whole_metric_id_range_conditions));
             select_query->setExpression(ASTSelectQuery::Expression::WHERE, std::move(where_filter));
         }
@@ -526,13 +519,13 @@ namespace
         return select_with_union_query;
     }
 
-    /// Makes the final select query by wrapping the select query from the data table into an outer
+    /// Makes the final select query by wrapping the select query from the samples table into an outer
     /// SELECT which casts the columns to the data types expected by this storage:
     ///
     /// SELECT _CAST(id, 'UInt64') AS id, _CAST(time_series, 'Array(Tuple(DateTime64(3), Float64))') AS time_series
-    /// FROM (select_query_from_data_table)
+    /// FROM (select_query_from_samples_table)
     ///
-    /// The inner query reads the samples table columns as is (see makeSelectQueryFromDataTable()),
+    /// The inner query reads the samples table columns as is (see makeSelectQueryFromSamplesTable()),
     /// so its result types are the physical column types, which can differ from the expected ones
     /// (e.g. a samples table can store timestamps with a different timezone, and the tuple elements
     /// of the `samples` column have names). Casting in an outer
@@ -541,7 +534,7 @@ namespace
     /// because it returns exactly the specified type (`CAST` and conversion functions like
     /// `toDateTime64` keep the timezone of the casted expression), and it is free when the type
     /// already matches.
-    ASTPtr makeSelectQuery(ASTPtr select_query_from_data_table,
+    ASTPtr makeSelectQuery(ASTPtr select_query_from_samples_table,
                            const DataTypePtr & id_data_type,
                            const DataTypePtr & time_series_data_type)
     {
@@ -565,10 +558,10 @@ namespace
             select_query->setExpression(ASTSelectQuery::Expression::SELECT, select_list_exp);
         }
 
-        /// FROM (select_query_from_data_table)
+        /// FROM (select_query_from_samples_table)
         {
             auto table_exp = make_intrusive<ASTTableExpression>();
-            table_exp->subquery = make_intrusive<ASTSubquery>(std::move(select_query_from_data_table));
+            table_exp->subquery = make_intrusive<ASTSubquery>(std::move(select_query_from_samples_table));
             table_exp->children.push_back(table_exp->subquery);
 
             auto table = make_intrusive<ASTTablesInSelectQueryElement>();
@@ -688,8 +681,8 @@ namespace
     ASTs tryMakeWholeMetricIDRangeConditions(
         const PrometheusQueryTree::MatcherList & matchers,
         const std::unordered_map<String, String> & column_name_by_tag_name,
-        const StorageID & data_table_id,
-        const ColumnsDescription & data_table_columns,
+        const StorageID & samples_table_id,
+        const ColumnsDescription & samples_table_columns,
         const StorageID & tags_table_id,
         const ColumnsDescription & tags_table_columns,
         const TimeSeriesSettings & time_series_settings,
@@ -731,8 +724,8 @@ namespace
 
         /// 3. The samples table stores `id` physically with exactly this type: the range conditions
         /// compare the raw column (bypassing the identity-cast alias of the SELECT list).
-        auto data_table_id_column = data_table_columns.tryGetPhysical(TimeSeriesColumnNames::ID);
-        if (!data_table_id_column || (data_table_id_column->type->getName() != id_data_type->getName()))
+        auto samples_table_id_column = samples_table_columns.tryGetPhysical(TimeSeriesColumnNames::ID);
+        if (!samples_table_id_column || (samples_table_id_column->type->getName() != id_data_type->getName()))
             return {};
 
         /// 2b. The id generator is the canonical one for this id type. The resolution order mirrors
@@ -845,7 +838,7 @@ namespace
         auto make_qualified_id = [&]
         {
             return make_intrusive<ASTIdentifier>(
-                std::vector<String>{data_table_id.database_name, data_table_id.table_name, TimeSeriesColumnNames::ID});
+                std::vector<String>{samples_table_id.database_name, samples_table_id.table_name, TimeSeriesColumnNames::ID});
         };
 
         ASTs conditions;
@@ -908,9 +901,9 @@ void StorageTimeSeriesSelector::readImpl(
         static constexpr Int64 safety_margin_seconds = 60;
         UInt32 timestamp_scale = tryGetDecimalScale(*config.timestamp_data_type).value_or(0);
         Int64 now_seconds = std::time(nullptr);
-        Int64 min_guaranteed_time = (now_seconds - static_cast<Int64>(recent_samples_ttl_seconds) + safety_margin_seconds)
-            * DecimalUtils::scaleMultiplier<Int64>(timestamp_scale);
-        if ((config.min_time.value >= min_guaranteed_time)
+        DateTime64 min_guaranteed_time{(now_seconds - static_cast<Int64>(recent_samples_ttl_seconds) + safety_margin_seconds)
+            * DecimalUtils::scaleMultiplier<Int64>(timestamp_scale)};
+        if ((config.min_time >= min_guaranteed_time)
             && time_series_storage->tryGetTargetTable(ViewTarget::RecentSamples, context))
         {
             samples_table_kind = ViewTarget::RecentSamples;
@@ -989,7 +982,7 @@ void StorageTimeSeriesSelector::readImpl(
                   quoteString(config.selector.toString()));
     }
 
-    ASTPtr select_query_from_data_table = makeSelectQueryFromDataTable(
+    ASTPtr select_query_from_samples_table = makeSelectQueryFromSamplesTable(
         samples_table_id,
         select_query_from_tags_table,
         config.min_time,
@@ -999,7 +992,7 @@ void StorageTimeSeriesSelector::readImpl(
         std::move(whole_metric_id_range_conditions));
 
     ASTPtr select_query = makeSelectQuery(
-        std::move(select_query_from_data_table),
+        std::move(select_query_from_samples_table),
         config.id_data_type,
         config.getTimeSeriesDataType());
 

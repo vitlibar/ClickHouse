@@ -7,6 +7,7 @@
 #include <Columns/ColumnTuple.h>
 #include <Columns/ColumnsNumber.h>
 #include <Common/NaNUtils.h>
+#include <Common/DateLUTImpl.h>
 #include <Common/logger_useful.h>
 #include <Common/typeid_cast.h>
 #include <Core/DecimalFunctions.h>
@@ -311,22 +312,13 @@ namespace
         }
     }
 
-    /// Division rounding towards negative infinity, for a positive divisor.
-    /// It matters for timestamps before 1970, whose raw `DateTime64` value is negative: the start of a bucket
-    /// must not be greater than the timestamps in it, while the operator `/` rounds towards zero.
-    Int64 floorDiv(Int64 dividend, Int64 divisor)
-    {
-        Int64 quotient = dividend / divisor;
-        if ((dividend % divisor != 0) && (dividend < 0))
-            --quotient;
-        return quotient;
-    }
-
     /// Returns the start of the bucket containing a timestamp: the timestamp rounded down to a multiple of the bucket step.
-    /// The timestamp, the step and the result have the scale of the timestamp type (see toRawTimestamp).
-    Decimal64 getBucket(Decimal64 raw_timestamp, Decimal64 bucket_step)
+    /// The timestamp, the step and the result have the scale of the timestamp type (see toDecimal64).
+    /// The rounding is towards negative infinity, which matters for timestamps before 1970 (negative values):
+    /// the start of a bucket must not be greater than the timestamps in it.
+    Decimal64 getBucket(Decimal64 timestamp, Decimal64 bucket_step)
     {
-        return Decimal64(floorDiv(raw_timestamp.value, bucket_step.value) * bucket_step.value);
+        return Decimal64(DateLUTImpl::roundDownToMultiple(timestamp.value, bucket_step.value));
     }
 
     /// Copies the samples `indices[begin, end)` of `ts_timestamps` and `ts_values` to the columns of the `samples` array.
@@ -353,27 +345,28 @@ namespace
     /// The timestamps are rounded to buckets as `Decimal64` values with the scale of the timestamp type:
     /// the number of ticks of the scale for `DateTime64`, or seconds for `DateTime` and `UInt32`.
     /// The types are checked when a TimeSeries table is created.
-    Decimal64 toRawTimestamp(DateTime64 timestamp)
+    Decimal64 toDecimal64(DateTime64 timestamp)
     {
         return timestamp;
     }
 
-    Decimal64 toRawTimestamp(UInt32 timestamp)
+    Decimal64 toDecimal64(UInt32 timestamp)
     {
         return Decimal64(timestamp);
     }
 
+    /// The reverse of toDecimal64.
     template <typename TimestampValue>
-    TimestampValue fromRawTimestamp(Decimal64 raw_timestamp)
+    TimestampValue toTimestamp(Decimal64 value)
     {
         if constexpr (is_decimal<TimestampValue>)
-            return TimestampValue(raw_timestamp.value);
+            return TimestampValue(value.value);
         else
-            return static_cast<TimestampValue>(raw_timestamp.value);
+            return static_cast<TimestampValue>(value.value);
     }
 
     /// The type of the `samples` column of a samples block: `Array(Tuple(timestamp <timestamp_type>, value <value_type>))`.
-    DataTypePtr makeSamplesArrayType(const DataTypePtr & timestamp_type, const DataTypePtr & value_type)
+    DataTypePtr makeSamplesArrayDataType(const DataTypePtr & timestamp_type, const DataTypePtr & value_type)
     {
         return std::make_shared<DataTypeArray>(std::make_shared<DataTypeTuple>(
             DataTypes{timestamp_type, value_type}, Strings{TimeSeriesColumnNames::Timestamp, TimeSeriesColumnNames::Value}));
@@ -425,15 +418,15 @@ namespace
             size_t bucket_begin = row_begin;
             while (bucket_begin < row_end)
             {
-                Decimal64 bucket = getBucket(toRawTimestamp(timestamps[sorted_indices[bucket_begin]]), bucket_step);
+                Decimal64 bucket = getBucket(toDecimal64(timestamps[sorted_indices[bucket_begin]]), bucket_step);
                 size_t bucket_end = bucket_begin + 1;
-                while ((bucket_end < row_end) && (getBucket(toRawTimestamp(timestamps[sorted_indices[bucket_end]]), bucket_step) == bucket))
+                while ((bucket_end < row_end) && (getBucket(toDecimal64(timestamps[sorted_indices[bucket_end]]), bucket_step) == bucket))
                     ++bucket_end;
 
                 out_id->insertFrom(id_column, id_index);
                 insertSamplesByIndices(sorted_indices.data(), bucket_begin, bucket_end, ts_timestamps, ts_values, *out_timestamps, *out_values);
                 out_offsets->getData().push_back(out_timestamps->size());
-                bucket_data.push_back(fromRawTimestamp<typename TimestampColumn::ValueType>(bucket));
+                bucket_data.push_back(toTimestamp<typename TimestampColumn::ValueType>(bucket));
                 out_min_time->insertFrom(ts_timestamps, sorted_indices[bucket_begin]);
                 out_max_time->insertFrom(ts_timestamps, sorted_indices[bucket_end - 1]);
 
@@ -448,7 +441,7 @@ namespace
 
         Block samples_block;
         samples_block.insert(ColumnWithTypeAndName{std::move(out_id), id_type, TimeSeriesColumnNames::ID});
-        samples_block.insert(ColumnWithTypeAndName{std::move(samples_column), makeSamplesArrayType(timestamp_type, value_type), TimeSeriesColumnNames::Samples});
+        samples_block.insert(ColumnWithTypeAndName{std::move(samples_column), makeSamplesArrayDataType(timestamp_type, value_type), TimeSeriesColumnNames::Samples});
         samples_block.insert(ColumnWithTypeAndName{std::move(out_bucket), timestamp_type, TimeSeriesColumnNames::Bucket});
         samples_block.insert(ColumnWithTypeAndName{std::move(out_min_time), timestamp_type, TimeSeriesColumnNames::MinTime});
         samples_block.insert(ColumnWithTypeAndName{std::move(out_max_time), timestamp_type, TimeSeriesColumnNames::MaxTime});
@@ -904,7 +897,7 @@ void TimeSeriesSink::initTagsAndSamplesPipelines()
 
     Block samples_header;
     samples_header.insert(ColumnWithTypeAndName{id_type, TimeSeriesColumnNames::ID});
-    samples_header.insert(ColumnWithTypeAndName{makeSamplesArrayType(timestamp_type, value_type), TimeSeriesColumnNames::Samples});
+    samples_header.insert(ColumnWithTypeAndName{makeSamplesArrayDataType(timestamp_type, value_type), TimeSeriesColumnNames::Samples});
     samples_header.insert(ColumnWithTypeAndName{timestamp_type, TimeSeriesColumnNames::Bucket});
     samples_header.insert(ColumnWithTypeAndName{timestamp_type, TimeSeriesColumnNames::MinTime});
     samples_header.insert(ColumnWithTypeAndName{timestamp_type, TimeSeriesColumnNames::MaxTime});
