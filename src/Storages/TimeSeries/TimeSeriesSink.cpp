@@ -893,7 +893,8 @@ void TimeSeriesSink::initTagsAndSamplesPipelines()
     tags_pipeline = createTargetPipeline(ViewTarget::Tags, tags_header);
 
     /// Build source header for samples block: a row contains the samples of one series within one time bucket.
-    timestamp_scale_multiplier = DecimalUtils::scaleMultiplier<Int64>(tryGetDecimalScale(*timestamp_type).value_or(0));
+    /// The steps of the buckets are converted from seconds to the scale of the timestamp type.
+    Int64 timestamp_scale_multiplier = DecimalUtils::scaleMultiplier<Int64>(tryGetDecimalScale(*timestamp_type).value_or(0));
 
     Block samples_header;
     samples_header.insert(ColumnWithTypeAndName{id_type, TimeSeriesColumnNames::ID});

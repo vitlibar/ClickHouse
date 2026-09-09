@@ -175,10 +175,11 @@ private:
                 res_tuples->insertRangeFrom(source_tuples, pending_begin, pending_end - pending_begin);
         };
 
+        const auto & offsets = samples_column.getOffsets();
         for (size_t i = 0; i < input_rows_count; ++i)
         {
-            size_t begin = samples_column.offsetAt(i);
-            size_t end = samples_column.offsetAt(i + 1);
+            size_t begin = (i == 0) ? 0 : offsets[i - 1];
+            size_t end = offsets[i];
 
             if constexpr (!bounds_are_const)
             {
