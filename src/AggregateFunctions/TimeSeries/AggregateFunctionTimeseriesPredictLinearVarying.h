@@ -239,7 +239,6 @@ public:
     }
 
     static constexpr UInt16 FORMAT_VERSION = 1;
-    static constexpr bool DateTime64Supported = true;
 
 private:
     static constexpr size_t MAX_GRID_SIZE = 0xFFFFFF; /// Matches AggregateFunctionTimeseriesBase::MAX_GRID_SIZE.
