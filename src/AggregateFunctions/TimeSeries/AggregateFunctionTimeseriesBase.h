@@ -72,11 +72,8 @@ public:
     using IntervalType = typename Traits::IntervalType;
     using ValueType = typename Traits::ValueType;
 
-    /// What `Aggregator::getResult` calculates for one grid point. Normally it is one number: `ValueType` for most
-    /// functions, but e.g. the `ts_of_*` functions return timestamps in seconds as `Float64` regardless of the value type.
-    /// A function can also return two numbers per grid point as `std::pair` (e.g. `timeSeriesLinearRegressionToGrid`
-    /// returns the fitted value and the slope). Such a function's traits also define `getResultTupleElementNames()`,
-    /// see `AggregateFunctionTimeSeriesResultWriter` for how the results are stored in either case.
+    /// The result for one grid point: a number, or a `std::pair` of numbers stored as a tuple whose element names
+    /// the traits define in `getResultTupleElementNames()`.
     using ResultType = typename Traits::ResultType;
     using ResultWriter = AggregateFunctionTimeSeriesResultWriter<ResultType>;
 

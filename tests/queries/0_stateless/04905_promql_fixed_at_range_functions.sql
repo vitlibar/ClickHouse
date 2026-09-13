@@ -59,10 +59,20 @@ FROM prometheusQueryRange(ts, 'quantile_over_time(0.5, up[3m] @ 1700000000)', 17
 ORDER BY ALL;
 
 -- A fixed `@` freezes the samples but not the other argument, so with a per-step-varying scalar the
--- call is no longer step-invariant and PromQL keeps evaluating it per step against the frozen window.
--- The `timeSeries*VaryingToGrid` aggregates derive their window from each grid point and cannot
--- express that, so the combination is rejected instead of returning sliding-window results.
-SELECT * FROM prometheusQueryRange(ts, 'predict_linear(up[3m] @ 1700000000, time())', 1700000100, 1700000400, 100); -- { serverError NOT_IMPLEMENTED }
+-- call is no longer step-invariant and PromQL evaluates it at every step against the frozen window.
+-- For `predict_linear` the prediction at the step `t` is `30 + (t - 1700000000 + horizon) / 6`: the fit
+-- at the frozen timestamp, extrapolated to the step and then by the horizon. The horizon `60 + 0 * time()`
+-- is 60 at every step (it varies with `time()` only formally), `time()` is the step itself.
+SELECT 'predict_linear with a fixed @ and a varying horizon: per-step predictions from the frozen fit:';
+SELECT tags, arrayMap(x -> round(x.2, 3), time_series) AS values
+FROM prometheusQueryRange(ts, 'predict_linear(up[3m] @ 1700000000, 60 + 0 * time())', 1700000100, 1700000400, 100)
+ORDER BY ALL;
+SELECT tags, arrayMap(x -> round(x.2, 3), time_series) AS values
+FROM prometheusQueryRange(ts, 'predict_linear(up[3m] @ 1700000000, time())', 1700000100, 1700000400, 100)
+ORDER BY ALL;
+
+-- `timeSeriesQuantileVaryingToGrid` derives its window from each grid point and cannot express a frozen
+-- window with a per-point quantile level, so this combination is rejected instead of returning sliding-window results.
 SELECT * FROM prometheusQueryRange(ts, 'quantile_over_time(time(), up[3m] @ 1700000000)', 1700000100, 1700000400, 100); -- { serverError NOT_IMPLEMENTED }
 
 DROP TABLE ts;

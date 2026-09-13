@@ -277,7 +277,7 @@ Instant selectors, range selectors, label matchers (`=`, `!=`, `=~`, `!~`), offs
 
 **Note**: `ts_of_min_over_time` and `ts_of_max_over_time` are experimental functions in Prometheus (enabled there with `--enable-feature=promql-experimental-functions`); ClickHouse evaluates them without requiring that flag.
 
-**Note**: the scalar arguments of `quantile_over_time` and `predict_linear` have the same limitation: on a range vector with a fixed `@` timestamp, an expression that varies per step, such as `quantile_over_time(time(), m[5m] @ 1700000000)` or `predict_linear(m[5m] @ 1700000000, time())`, is rejected with a `NOT_IMPLEMENTED` exception. On a table whose value type is not `Float64`, a varying scalar argument may use `time()` only as a bare call (also inside `scalar()`/`vector()`), which is evaluated at native precision; arithmetic around it, such as `predict_linear(m[5m], time() - 60)`, would round the evaluation time to the value type first and is rejected with a `CANNOT_EXECUTE_PROMQL_QUERY` exception.
+**Note**: the scalar argument of `quantile_over_time` has the same limitation: on a range vector with a fixed `@` timestamp, an expression that varies per step, such as `quantile_over_time(time(), m[5m] @ 1700000000)`, is rejected with a `NOT_IMPLEMENTED` exception. On a table whose value type is not `Float64`, a varying scalar argument may use `time()` only as a bare call (also inside `scalar()`/`vector()`), which is evaluated at native precision; arithmetic around it, such as `predict_linear(m[5m], time() - 60)`, would round the evaluation time to the value type first and is rejected with a `CANNOT_EXECUTE_PROMQL_QUERY` exception.
 
 ### Operators {#operators}
 
@@ -356,7 +356,7 @@ Instant selectors, range selectors, label matchers (`=`, `!=`, `=~`, `!~`), offs
 
 **Note**: `ts_of_min_over_time` and `ts_of_max_over_time` are experimental functions in Prometheus (enabled there with `--enable-feature=promql-experimental-functions`); ClickHouse evaluates them without requiring that flag.
 
-**Note**: the scalar arguments of `quantile_over_time` and `predict_linear` have the same limitation: on a range vector with a fixed `@` timestamp, an expression that varies per step, such as `quantile_over_time(time(), m[5m] @ 1700000000)` or `predict_linear(m[5m] @ 1700000000, time())`, is rejected with a `NOT_IMPLEMENTED` exception. On a table whose value type is not `Float64`, a varying scalar argument may use `time()` only as a bare call (also inside `scalar()`/`vector()`), which is evaluated at native precision; arithmetic around it, such as `predict_linear(m[5m], time() - 60)`, would round the evaluation time to the value type first and is rejected with a `CANNOT_EXECUTE_PROMQL_QUERY` exception.
+**Note**: the scalar argument of `quantile_over_time` has the same limitation: on a range vector with a fixed `@` timestamp, an expression that varies per step, such as `quantile_over_time(time(), m[5m] @ 1700000000)`, is rejected with a `NOT_IMPLEMENTED` exception. On a table whose value type is not `Float64`, a varying scalar argument may use `time()` only as a bare call (also inside `scalar()`/`vector()`), which is evaluated at native precision; arithmetic around it, such as `predict_linear(m[5m], time() - 60)`, would round the evaluation time to the value type first and is rejected with a `CANNOT_EXECUTE_PROMQL_QUERY` exception.
 
 ### Operators {#operators}
 
