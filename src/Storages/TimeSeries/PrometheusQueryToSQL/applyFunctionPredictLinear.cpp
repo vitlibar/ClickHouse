@@ -11,6 +11,7 @@
 #include <Storages/TimeSeries/PrometheusQueryToSQL/SelectQueryBuilder.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/fixedAtModifier.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/dropMetricName.h>
+#include <Storages/TimeSeries/PrometheusQueryToSQL/getToGridAggregateFunctionArguments.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/fromFunctionTime.h>
 #include <Storages/TimeSeries/timeSeriesTypesToAST.h>
 
@@ -154,202 +155,97 @@ SQLQueryPiece applyFunctionPredictLinear(
 
     auto argument = std::move(arguments[0]);
 
+    if (argument.store_method == StoreMethod::EMPTY)
+        return SQLQueryPiece{function_node, ResultType::INSTANT_VECTOR, StoreMethod::EMPTY}; /// The range vector is empty, so is the result.
+
+    ASTs aggregate_function_arguments = getToGridAggregateFunctionArguments(argument, context);
+
+    /// A fixed @ on the range vector freezes the sample window at the fixed timestamp.
+    const auto * fixed_at_node = getFixedAtModifier(argument);
     const auto aggregation_range = getRangeAggregationRange(fixed_at_node, node_range, context);
     const size_t result_grid_size = stepsInTimeSeriesRange(start_time, end_time, step);
 
-    /// A fixed @ on the range vector makes the whole call step-invariant in PromQL, so it is evaluated once.
-    const auto * fixed_at_node = getFixedAtModifier(arguments[0]);
-
     if (fixed_at_node)
     {
-        /// A fixed @ freezes only the sample window, the prediction is still made from the evaluation time. The fit is
-        /// linear, so predicting further ahead by the distance from the frozen timestamp to the evaluation time moves the
-        /// origin there exactly. With a constant horizon the whole call is step-invariant and PromQL evaluates it once at
-        /// the range start; with a varying horizon it is evaluated at every step of the grid.
+        /// A fixed @ freezes only the sample window, the prediction is still made from the evaluation time: PromQL evaluates
+        /// `predict_linear` at every step even if all its arguments are fixed (see AtModifierUnsafeFunctions in Prometheus).
+        /// The fit is linear, so predicting further ahead by the distance from the frozen timestamp to the step moves the
+        /// origin there exactly. So the horizon of the step `i` becomes `horizon + (<shift_at_start> + i * <step_in_seconds>)`:
+        /// arrayMap(i -> <horizon> + (...), range(<result_grid_size>))          -- constant horizon
+        /// arrayMap((t, i) -> t + (...), <horizons>, range(<result_grid_size>)) -- one horizon per grid point
         const Float64 shift_at_start = DecimalUtils::convertTo<Float64>(
             DurationType{start_time.value - aggregation_range.start_time.value}, context.timestamp_scale);
+        const Float64 step_in_seconds = DecimalUtils::convertTo<Float64>(step, context.timestamp_scale);
 
-        if (prediction_offset.is_constant)
+        auto makeShiftedHorizon = [&](ASTPtr && horizon)
         {
-            if (shift_at_start != 0)
-                prediction_offset.ast = makeASTFunction("plus", std::move(prediction_offset.ast), make_intrusive<ASTLiteral>(shift_at_start));
-        }
-        else
-        {
-            /// arrayMap((t, i) -> t + (<shift_at_start> + i * <step_in_seconds>), <horizons>, range(<result_grid_size>))
-            const Float64 step_in_seconds = DecimalUtils::convertTo<Float64>(step, context.timestamp_scale);
-            ASTPtr shifted_horizon = makeASTFunction(
+            return makeASTFunction(
                 "plus",
-                make_intrusive<ASTIdentifier>("t"),
+                std::move(horizon),
                 makeASTFunction(
                     "plus",
                     make_intrusive<ASTLiteral>(shift_at_start),
                     makeASTFunction("multiply", make_intrusive<ASTIdentifier>("i"), make_intrusive<ASTLiteral>(step_in_seconds))));
+        };
+        ASTPtr grid_indices = makeASTFunction("range", make_intrusive<ASTLiteral>(result_grid_size));
+
+        if (prediction_offset.is_constant)
+        {
+            prediction_offset.ast = makeASTFunction(
+                "arrayMap", makeASTLambda({"i"}, makeShiftedHorizon(std::move(prediction_offset.ast))), std::move(grid_indices));
+            prediction_offset.is_constant = false;
+        }
+        else
+        {
             prediction_offset.ast = makeASTFunction(
                 "arrayMap",
-                makeASTLambda({"t", "i"}, std::move(shifted_horizon)),
+                makeASTLambda({"t", "i"}, makeShiftedHorizon(make_intrusive<ASTIdentifier>("t"))),
                 std::move(prediction_offset.ast),
-                makeASTFunction("range", make_intrusive<ASTLiteral>(result_grid_size)));
+                std::move(grid_indices));
         }
     }
 
-    SQLQueryPiece res = argument;
-    res.node = function_node;
-    res.type = ResultType::INSTANT_VECTOR;
-
-    bool has_group = false;
-    ASTPtr timestamps;
-    ASTPtr values;
-
-    switch (argument.store_method)
-    {
-        case StoreMethod::EMPTY:
-        {
-            return res;
-        }
-
-        case StoreMethod::CONST_SCALAR:
-        case StoreMethod::SINGLE_SCALAR:
-        {
-            /// SELECT <aggregate_function>(timeSeriesRange(<start_time>, <end_time>, <step>),
-            ///                             arrayResize([], <count_of_time_steps>, <scalar_value>)) AS values
-            /// FROM <subquery>
-            ASTPtr value = (argument.store_method == StoreMethod::CONST_SCALAR)
-                ? timeSeriesScalarToAST(argument.scalar_value, context.scalar_data_type)
-                : make_intrusive<ASTIdentifier>(ColumnNames::Value);
-
-            /// arrayResize([], <count_of_time_steps>, <scalar_value>)
-            values = makeASTFunction(
-                "arrayResize",
-                make_intrusive<ASTLiteral>(Array{}),
-                make_intrusive<ASTLiteral>(stepsInTimeSeriesRange(argument.start_time, argument.end_time, argument.step)),
-                value);
-
-            res.store_method = StoreMethod::SCALAR_GRID;
-            res.scalar_value = {};
-            break;
-        }
-
-        case StoreMethod::SCALAR_GRID:
-        {
-            /// SELECT <aggregate_function>(timeSeriesRange(<start_time>, <end_time>, <step>),
-            ///                             values) AS values
-            /// FROM <scalar_grid>
-            values = make_intrusive<ASTIdentifier>(ColumnNames::Values);
-            break;
-        }
-
-        case StoreMethod::VECTOR_GRID:
-        {
-            /// SELECT group,
-            ///        <aggregate_function>((timeSeriesFromGrid(<start_time>, <end_time>, <step>, values) AS time_series).1,
-            ///                             time_series.2) AS values
-            /// FROM <vector_grid>
-            /// GROUP BY group
-            has_group = true;
-
-            /// (timeSeriesFromGrid(<start_time>, <end_time>, <step>, values) AS time_series).1
-            ASTPtr ts = makeASTFunction(
-                "timeSeriesFromGrid",
-                timeSeriesTimestampToAST(argument.start_time, context.timestamp_data_type),
-                timeSeriesTimestampToAST(argument.end_time, context.timestamp_data_type),
-                timeSeriesDurationToAST(argument.step, context.timestamp_data_type),
-                make_intrusive<ASTIdentifier>(ColumnNames::Values));
-            ts->setAlias(ColumnNames::TimeSeries);
-            timestamps = makeASTFunction("tupleElement", std::move(ts), make_intrusive<ASTLiteral>(1));
-
-            /// time_series.2
-            values = makeASTFunction(
-                "tupleElement", make_intrusive<ASTIdentifier>(ColumnNames::TimeSeries), make_intrusive<ASTLiteral>(2));
-
-            break;
-        }
-
-        case StoreMethod::RAW_DATA:
-        {
-            /// SELECT group,
-            ///        <aggregate_function>(timestamp, value) AS values
-            /// FROM <raw_data>
-            /// GROUP BY group
-            has_group = true;
-
-            timestamps = make_intrusive<ASTIdentifier>(ColumnNames::Timestamp);
-            values = make_intrusive<ASTIdentifier>(ColumnNames::Value);
-            res.store_method = StoreMethod::VECTOR_GRID;
-
-            break;
-        }
-
-        case StoreMethod::CONST_STRING:
-        {
-            /// Can't get in here because the store method CONST_STRING is incompatible with the allowed
-            /// argument types (see checkArgumentTypes()).
-            throwUnexpectedStoreMethod(argument, context);
-        }
-    }
-
-    chassert(values);
-
-    if (!timestamps)
-    {
-        /// timeSeriesRange(<start_time>, <end_time>, <step>)
-        timestamps = makeASTFunction(
-            "timeSeriesRange",
-            timeSeriesTimestampToAST(argument.start_time, context.timestamp_data_type),
-            timeSeriesTimestampToAST(argument.end_time, context.timestamp_data_type),
-            timeSeriesDurationToAST(argument.step, context.timestamp_data_type));
-    }
+    /// The result is a vector grid (one row per series, the aggregate function is calculated `GROUP BY group`) if the
+    /// range vector holds series, and a scalar grid if it was made from a scalar.
+    const bool has_group = (argument.store_method == StoreMethod::VECTOR_GRID) || (argument.store_method == StoreMethod::RAW_DATA);
 
     SelectQueryBuilder builder;
 
     if (has_group)
         builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Group));
 
-    ASTPtr aggregate_values;
-    if (prediction_offset.is_constant)
+    /// timeSeriesLinearRegressionToGrid returns the tuple `(intercept, slope)` for every grid point, and the prediction
+    /// is calculated as `intercept + slope * horizon`:
+    /// arrayMap(r -> r.1 + r.2 * <horizon>, <regression>)          -- constant horizon
+    /// arrayMap((r, t) -> r.1 + r.2 * t, <regression>, <horizons>) -- one horizon per grid point
+    /// NULLs (no fit in the window) pass through.
+    ASTPtr regression = addParametersToAggregateFunction(
+        makeASTFunction("timeSeriesLinearRegressionToGrid", std::move(aggregate_function_arguments)),
+        timeSeriesTimestampToAST(aggregation_range.start_time, context.timestamp_data_type),
+        timeSeriesTimestampToAST(aggregation_range.end_time, context.timestamp_data_type),
+        timeSeriesDurationToAST(aggregation_range.step, context.timestamp_data_type),
+        timeSeriesDurationToAST(window, context.timestamp_data_type));
+
+    /// The line fitted to the frozen window is the same at every step, the horizons (shifted above) are not.
+    if (fixed_at_node)
+        regression = repeatFixedAtResultOverGrid(std::move(regression), aggregation_range, result_grid_size);
+
+    auto makePrediction = [](ASTPtr && horizon)
     {
-        /// Constant or single-row horizon: `predict_offset` is the 5th parameter of timeSeriesPredictLinearToGrid.
-        aggregate_values = addParametersToAggregateFunction(
-            makeASTFunction("timeSeriesPredictLinearToGrid", std::move(timestamps), std::move(values)),
-            timeSeriesTimestampToAST(aggregation_range.start_time, context.timestamp_data_type),
-            timeSeriesTimestampToAST(aggregation_range.end_time, context.timestamp_data_type),
-            timeSeriesDurationToAST(aggregation_range.step, context.timestamp_data_type),
-            timeSeriesDurationToAST(window, context.timestamp_data_type),
-            std::move(prediction_offset.ast));
-
-        if (fixed_at_node)
-            aggregate_values = repeatFixedAtResultOverGrid(std::move(aggregate_values), aggregation_range, result_grid_size);
-    }
-    else
-    {
-        /// Per-grid-point horizon (e.g. `predict_linear(v[5m], time())`): timeSeriesLinearRegressionToGrid returns the
-        /// tuple `(intercept, slope)` for every grid point, and the prediction is calculated as `intercept + slope * horizon`:
-        /// CAST(arrayMap((r, t) -> r.1 + r.2 * t, <regression>, <horizons>), 'Array(Nullable(<scalar_data_type>))')
-        /// The cast keeps the result typed like every other vector grid; NULLs (no fit in the window) pass through.
-        ASTPtr regression = addParametersToAggregateFunction(
-            makeASTFunction("timeSeriesLinearRegressionToGrid", std::move(timestamps), std::move(values)),
-            timeSeriesTimestampToAST(aggregation_range.start_time, context.timestamp_data_type),
-            timeSeriesTimestampToAST(aggregation_range.end_time, context.timestamp_data_type),
-            timeSeriesDurationToAST(aggregation_range.step, context.timestamp_data_type),
-            timeSeriesDurationToAST(window, context.timestamp_data_type));
-
-        /// The line fitted to the frozen window is the same at every step, the horizons (shifted above) are not.
-        if (fixed_at_node)
-            regression = repeatFixedAtResultOverGrid(std::move(regression), aggregation_range, result_grid_size);
-
-        ASTPtr prediction = makeASTFunction(
+        return makeASTFunction(
             "plus",
             makeASTFunction("tupleElement", make_intrusive<ASTIdentifier>("r"), make_intrusive<ASTLiteral>(1u)),
             makeASTFunction(
                 "multiply",
                 makeASTFunction("tupleElement", make_intrusive<ASTIdentifier>("r"), make_intrusive<ASTLiteral>(2u)),
-                make_intrusive<ASTIdentifier>("t")));
+                std::move(horizon)));
+    };
 
-        aggregate_values = makeASTFunction(
-            "CAST",
-            makeASTFunction("arrayMap", makeASTLambda({"r", "t"}, std::move(prediction)), std::move(regression), std::move(prediction_offset.ast)),
-            make_intrusive<ASTLiteral>(fmt::format("Array(Nullable({}))", context.scalar_data_type->getName())));
-    }
+    ASTPtr aggregate_values;
+    if (prediction_offset.is_constant)
+        aggregate_values = makeASTFunction("arrayMap", makeASTLambda({"r"}, makePrediction(std::move(prediction_offset.ast))), std::move(regression));
+    else
+        aggregate_values = makeASTFunction("arrayMap", makeASTLambda({"r", "t"}, makePrediction(make_intrusive<ASTIdentifier>("t"))), std::move(regression), std::move(prediction_offset.ast));
 
     builder.select_list.push_back(std::move(aggregate_values));
     builder.select_list.back()->setAlias(ColumnNames::Values);
@@ -364,7 +260,13 @@ SQLQueryPiece applyFunctionPredictLinear(
         builder.from_table = subqueries.back().name;
     }
 
+    SQLQueryPiece res = argument;
+    res.store_method = has_group ? StoreMethod::VECTOR_GRID : StoreMethod::SCALAR_GRID;
+    res.scalar_value = {};
+    res.node = function_node;
+
     res.select_query = builder.getSelectQuery();
+    res.type = ResultType::INSTANT_VECTOR;
     res.start_time = start_time;
     res.end_time = end_time;
     res.step = step;

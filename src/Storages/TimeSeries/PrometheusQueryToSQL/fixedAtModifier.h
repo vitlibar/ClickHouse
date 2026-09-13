@@ -15,7 +15,9 @@ struct ConverterContext;
 /// For example, `rate(v[5m] @ 1600000000)[1h:10m]` evaluated at 1700003600 is a
 /// subquery with six steps at 1700000600, 1700001200, ..., 1700003600, and each of them gets the rate calculated over
 /// the same window (1599999700, 1600000000], not over a window ending at the step's own timestamp.
-/// The functions below implement that for the translators of the range functions.
+/// The functions below implement that for the translators of the range functions. The exception is `predict_linear`:
+/// its result depends on the evaluation time, so PromQL evaluates it at every step even with a fixed @ (see
+/// AtModifierUnsafeFunctions in Prometheus); its translator uses the frozen window but shifts the prediction per step.
 
 /// Returns the fixed @ modifier directly applied to a range-vector argument, or nullptr if the argument is not a range
 /// vector or has no fixed @ modifier. This relies on `applyOffset` keeping the `Offset` node as the node of a range-vector piece.

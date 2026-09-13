@@ -9,6 +9,7 @@
 #include <Storages/TimeSeries/PrometheusQueryToSQL/NodeEvaluationRange.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/SelectQueryBuilder.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/dropMetricName.h>
+#include <Storages/TimeSeries/PrometheusQueryToSQL/getToGridAggregateFunctionArguments.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/fixedAtModifier.h>
 #include <Storages/TimeSeries/timeSeriesTypesToAST.h>
 
@@ -214,115 +215,17 @@ SQLQueryPiece applyFunctionOverRange(
 
     auto argument = std::move(arguments[0]);
 
+    if (argument.store_method == StoreMethod::EMPTY)
+        return SQLQueryPiece{node, ResultType::INSTANT_VECTOR, StoreMethod::EMPTY}; /// The range vector is empty, so is the result.
+
+    ASTs aggregate_function_arguments = getToGridAggregateFunctionArguments(argument, context);
+
     const auto * fixed_at_node = getFixedAtModifier(argument);
     const auto aggregation_range = getRangeAggregationRange(fixed_at_node, node_range, context);
 
-    SQLQueryPiece res = argument;
-    res.node = node;
-    res.type = ResultType::INSTANT_VECTOR;
-
-    bool has_group = false;
-    ASTPtr timestamps;
-    ASTPtr values;
-
-    switch (argument.store_method)
-    {
-        case StoreMethod::EMPTY:
-        {
-            return res;
-        }
-
-        case StoreMethod::CONST_SCALAR:
-        case StoreMethod::SINGLE_SCALAR:
-        {
-            /// SELECT <aggregate_function>(timeSeriesRange(<start_time>, <end_time>, <step>),
-            ///                             arrayResize([], <count_of_time_steps>, <scalar_value>)) AS values
-            /// FROM <subquery>
-            ASTPtr value = (argument.store_method == StoreMethod::CONST_SCALAR)
-                ? timeSeriesScalarToAST(argument.scalar_value, context.scalar_data_type)
-                : make_intrusive<ASTIdentifier>(ColumnNames::Value);
-
-            /// arrayResize([], <count_of_time_steps>, <scalar_value>)
-            values = makeASTFunction(
-                "arrayResize",
-                make_intrusive<ASTLiteral>(Array{}),
-                make_intrusive<ASTLiteral>(stepsInTimeSeriesRange(argument.start_time, argument.end_time, argument.step)),
-                value);
-
-            res.store_method = StoreMethod::SCALAR_GRID;
-            res.scalar_value = {};
-            break;
-        }
-
-        case StoreMethod::SCALAR_GRID:
-        {
-            /// SELECT <aggregate_function>(timeSeriesRange(<start_time>, <end_time>, <step>),
-            ///                             values)) AS values
-            /// FROM <scalar_grid>
-            values = make_intrusive<ASTIdentifier>(ColumnNames::Values);
-            break;
-        }
-
-        case StoreMethod::VECTOR_GRID:
-        {
-            /// SELECT group,
-            ///        <aggregate_function>((timeSeriesFromGrid(<start_time>, <end_time>, <step>, values) AS time_series).1,
-            ///                             time_series.2)) AS values
-            /// FROM <vector_grid>
-            /// GROUP BY group
-            has_group = true;
-
-            /// (timeSeriesFromGrid(<start_time>, <end_time>, <step>, values) AS time_series).1
-            ASTPtr ts = makeASTFunction(
-                "timeSeriesFromGrid",
-                timeSeriesTimestampToAST(argument.start_time, context.timestamp_data_type),
-                timeSeriesTimestampToAST(argument.end_time, context.timestamp_data_type),
-                timeSeriesDurationToAST(argument.step, context.timestamp_data_type),
-                make_intrusive<ASTIdentifier>(ColumnNames::Values));
-            ts->setAlias(ColumnNames::TimeSeries);
-            timestamps = makeASTFunction("tupleElement", std::move(ts), make_intrusive<ASTLiteral>(1));
-
-            /// time_series.2
-            values = makeASTFunction(
-                "tupleElement", make_intrusive<ASTIdentifier>(ColumnNames::TimeSeries), make_intrusive<ASTLiteral>(2));
-
-            break;
-        }
-
-        case StoreMethod::RAW_DATA:
-        {
-            /// SELECT group,
-            ///        <aggregate_function>(timestamp, value) AS values
-            /// FROM <raw_data>
-            /// GROUP BY group
-            has_group = true;
-
-            timestamps = make_intrusive<ASTIdentifier>(ColumnNames::Timestamp);
-            values = make_intrusive<ASTIdentifier>(ColumnNames::Value);
-            res.store_method = StoreMethod::VECTOR_GRID;
-
-            break;
-        }
-
-        case StoreMethod::CONST_STRING:
-        {
-            /// Can't get in here because the store method CONST_STRING is incompatible with the allowed
-            /// argument types (see checkArgumentTypes()).
-            throwUnexpectedStoreMethod(argument, context);
-        }
-    }
-
-    chassert(values);
-
-    if (!timestamps)
-    {
-        /// timeSeriesRange(<start_time>, <end_time>, <step>)
-        timestamps = makeASTFunction(
-            "timeSeriesRange",
-            timeSeriesTimestampToAST(argument.start_time, context.timestamp_data_type),
-            timeSeriesTimestampToAST(argument.end_time, context.timestamp_data_type),
-            timeSeriesDurationToAST(argument.step, context.timestamp_data_type));
-    }
+    /// The result is a vector grid (one row per series, the aggregate function is calculated `GROUP BY group`) if the
+    /// range vector holds series, and a scalar grid if it was made from a scalar.
+    const bool has_group = (argument.store_method == StoreMethod::VECTOR_GRID) || (argument.store_method == StoreMethod::RAW_DATA);
 
     SelectQueryBuilder builder;
 
@@ -331,7 +234,7 @@ SQLQueryPiece applyFunctionOverRange(
 
     /// <aggregate_function>(<timestamps>, <values>) AS values
     ASTPtr aggregate_values = addParametersToAggregateFunction(
-        makeASTFunction(impl_info->ch_function_name, std::move(timestamps), std::move(values)),
+        makeASTFunction(impl_info->ch_function_name, std::move(aggregate_function_arguments)),
         timeSeriesTimestampToAST(aggregation_range.start_time, context.timestamp_data_type),
         timeSeriesTimestampToAST(aggregation_range.end_time, context.timestamp_data_type),
         timeSeriesDurationToAST(aggregation_range.step, context.timestamp_data_type),
@@ -342,7 +245,6 @@ SQLQueryPiece applyFunctionOverRange(
             std::move(aggregate_values), aggregation_range, stepsInTimeSeriesRange(start_time, end_time, step));
 
     builder.select_list.push_back(std::move(aggregate_values));
-
     builder.select_list.back()->setAlias(ColumnNames::Values);
 
     if (has_group)
@@ -355,7 +257,13 @@ SQLQueryPiece applyFunctionOverRange(
         builder.from_table = subqueries.back().name;
     }
 
+    SQLQueryPiece res = argument;
+    res.node = node;
+    res.scalar_value = {};
+
     res.select_query = builder.getSelectQuery();
+    res.type = ResultType::INSTANT_VECTOR;
+    res.store_method = has_group ? StoreMethod::VECTOR_GRID : StoreMethod::SCALAR_GRID;
     res.start_time = start_time;
     res.end_time = end_time;
     res.step = step;

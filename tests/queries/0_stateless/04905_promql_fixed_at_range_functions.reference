@@ -1,7 +1,5 @@
-predict_linear with a fixed @, range query: the fit at 1700000100, +60s, repeated:
-[('instance','host1')]	[56.666666666666664,56.666666666666664,56.666666666666664,56.666666666666664]
-predict_linear with a fixed @: exactly one distinct value across all steps:
-1
+predict_linear with a fixed @, range query: the frozen fit extrapolated to every step:
+[('instance','host1')]	[56.667,73.333,90,106.667]
 predict_linear with a fixed @ at the evaluation time: no shift, 40:
 [('instance','host1')]	40
 predict_linear with a fixed @, instant query 100s later:

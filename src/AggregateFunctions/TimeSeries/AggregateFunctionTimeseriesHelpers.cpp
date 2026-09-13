@@ -1009,7 +1009,7 @@ SELECT timeSeriesPredictLinearToGrid(start_ts, end_ts, step_seconds, window_seco
     FunctionDocumentation::Description description_timeSeriesLinearRegressionToGrid = R"(
 Aggregate function that takes time series data as pairs of timestamps and values and fits a line to the values on a regular time grid described by start timestamp, end timestamp and step. For each point on the grid the samples within the specified time window are fitted by a line, and the function returns the tuple `(intercept, slope)`: `intercept` is the value of that line at the grid point's timestamp and `slope` is its slope per second. Both are NULL if there are not enough samples in the window.
 
-The result of `timeSeriesPredictLinearToGrid` with the offset `t` equals `intercept + slope * t`, and the result of `timeSeriesDerivToGrid` equals `slope`. This function is meant for predictions whose offset differs between grid points, like the PromQL function `predict_linear(v, time())`.
+The result of `timeSeriesPredictLinearToGrid` with the offset `t` equals `intercept + slope * t`, and the result of `timeSeriesDerivToGrid` equals `slope`. The PromQL function `predict_linear` is implemented with this function, which allows the prediction offset to differ between grid points, like in `predict_linear(v, time())`.
 
 The samples can be passed in one of three forms:
 - as two arguments `timestamp` and `value`, where each row holds a single sample;

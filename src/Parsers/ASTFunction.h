@@ -139,6 +139,21 @@ boost::intrusive_ptr<ASTFunction> makeASTFunction(std::string_view name, Args &&
     return function;
 }
 
+/// The same, with the arguments passed as a list.
+inline boost::intrusive_ptr<ASTFunction> makeASTFunction(std::string_view name, ASTs && arguments)
+{
+    auto function = make_intrusive<ASTFunction>();
+
+    function->name = name;
+
+    function->arguments = make_intrusive<ASTExpressionList>();
+    function->children.push_back(function->arguments);
+
+    function->arguments->children = std::move(arguments);
+
+    return function;
+}
+
 template <typename... Args>
 boost::intrusive_ptr<ASTFunction> makeASTOperator(const String & name, Args &&... args)
 {
