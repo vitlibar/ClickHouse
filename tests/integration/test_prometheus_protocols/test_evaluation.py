@@ -2001,10 +2001,11 @@ def test_date_time_functions_zero_arg_with_float32_scalar():
 
 # Regression test: `predict_linear` and `quantile_over_time` accept a scalar argument that varies with the
 # evaluation time (such as `time()` in a range query). Such a scalar is carried as an array of one value per
-# evaluation step, typed after the TimeSeries table's scalar (value) type, and passed to the underlying
-# timeSeries{PredictLinear,Quantile}VaryingToGrid aggregate functions. ClickHouse's TimeSeries engine explicitly
-# supports Float32-typed value columns, so on such a table these queries used to be rejected with
-# "Illegal type Array(Float32) of 3rd argument" - the aggregate functions accepted only Array(Float64).
+# evaluation step, typed after the TimeSeries table's scalar (value) type. For `predict_linear` it is combined in
+# SQL with the `(intercept, slope)` result of `timeSeriesLinearRegressionToGrid`, for `quantile_over_time` it is passed
+# to `timeSeriesQuantileVaryingToGrid` as the 3rd argument. ClickHouse's TimeSeries engine explicitly supports
+# Float32-typed value columns, so on such a table these queries used to be rejected with
+# "Illegal type Array(Float32) of 3rd argument" - the aggregate function accepted only Array(Float64).
 def test_range_functions_with_varying_scalar_on_float32_table():
     node.query(
         "CREATE TABLE prometheus_f32_range (time_series Array(Tuple(DateTime64(3), Float32))) ENGINE=TimeSeries"

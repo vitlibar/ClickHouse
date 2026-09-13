@@ -23,6 +23,7 @@
 #include <DataTypes/DataTypesDecimal.h>
 
 #include <AggregateFunctions/IAggregateFunction.h>
+#include <AggregateFunctions/TimeSeries/AggregateFunctionTimeSeriesResultWriter.h>
 #include <AggregateFunctions/TimeSeries/AggregateFunctionTimeseriesSamples.h>
 #include <Common/HashTable/HashMap.h>
 #include <Common/TargetSpecific.h>
@@ -71,13 +72,16 @@ public:
     using IntervalType = typename Traits::IntervalType;
     using ValueType = typename Traits::ValueType;
 
-    /// Element type of the result array. It is `ValueType` for most functions, but e.g. the `ts_of_*` functions
-    /// return timestamps in seconds as `Float64` regardless of the value type.
+    /// What `Aggregator::getResult` calculates for one grid point. Normally it is one number: `ValueType` for most
+    /// functions, but e.g. the `ts_of_*` functions return timestamps in seconds as `Float64` regardless of the value type.
+    /// A function can also return two numbers per grid point as `std::pair` (e.g. `timeSeriesLinearRegressionToGrid`
+    /// returns the fitted value and the slope). Such a function's traits also define `getResultTupleElementNames()`,
+    /// see `AggregateFunctionTimeSeriesResultWriter` for how the results are stored in either case.
     using ResultType = typename Traits::ResultType;
+    using ResultWriter = AggregateFunctionTimeSeriesResultWriter<ResultType>;
 
     using ColVecType = ColumnVectorOrDecimal<TimestampType>;
     using ColVecValueType = ColumnVectorOrDecimal<ValueType>;
-    using ColVecResultType = ColumnVectorOrDecimal<ResultType>;
 
     using Bucket = typename Traits::Bucket;
 
@@ -347,7 +351,8 @@ public:
 
     void insertResultInto(AggregateDataPtr __restrict place, IColumn & to, Arena *) const override
     {
-        derived().doInsertResultInto(place, to);
+        ResultWriter writer(to, grid_size);
+        derived().doInsertResultInto(place, writer);
     }
 
     void insertResultIntoBatch(
@@ -359,25 +364,15 @@ public:
         Arena *) const override
     {
         size_t batch_index = row_begin;
-        const size_t batch_size = row_end - row_begin;
 
-        /// Reserve offsets and values in column to
-        ColumnArray & arr_to = typeid_cast<ColumnArray &>(to);
-        ColumnArray::Offsets & offsets_to = arr_to.getOffsets();
-
-        ColumnNullable & result_to = typeid_cast<ColumnNullable &>(arr_to.getData());
-        auto & data_to = typeid_cast<ColVecResultType &>(result_to.getNestedColumn()).getData();
-        auto & nulls_to = result_to.getNullMapData();
-
-        offsets_to.reserve(offsets_to.size() + batch_size);
-        data_to.reserve(data_to.size() + batch_size * grid_size);
-        nulls_to.reserve(nulls_to.size() + batch_size * grid_size);
+        ResultWriter writer(to, grid_size);
+        writer.reserve(row_end - row_begin);
 
         try
         {
             for (; batch_index < row_end; ++batch_index)
             {
-                derived().doInsertResultInto(places[batch_index] + place_offset, to);
+                derived().doInsertResultInto(places[batch_index] + place_offset, writer);
                 /// For State AggregateFunction ownership of aggregate place is passed to result column after insert,
                 /// so we need to destroy all states up to state of -State combinator.
                 Base::destroyUpToState(places[batch_index] + place_offset);
@@ -399,28 +394,12 @@ protected:
     /// `Summary` where needed), buckets leaving are dropped by `removeBefore`, and `getResult` reads off the window's
     /// value. The aggregator keeps only the window's worth of data, so there is no materialization of all buckets and
     /// no global sort in the dense case.
-    void doInsertResultInto(AggregateDataPtr __restrict place, IColumn & to) const
+    void doInsertResultInto(AggregateDataPtr __restrict place, ResultWriter & writer) const
     {
-        ColumnArray & arr_to = typeid_cast<ColumnArray &>(to);
-        ColumnArray::Offsets & offsets_to = arr_to.getOffsets();
-
-        offsets_to.push_back(offsets_to.empty() ? grid_size : offsets_to.back() + grid_size);
+        writer.addRow();
 
         if (!grid_size)
             return;
-
-        ColumnNullable & result_to = typeid_cast<ColumnNullable &>(arr_to.getData());
-        auto & data_to = typeid_cast<ColVecResultType &>(result_to.getNestedColumn()).getData();
-        auto & nulls_to = result_to.getNullMapData();
-
-        const size_t old_size = data_to.size();
-        chassert(old_size == nulls_to.size(), "Sizes of nested column and null map of Nullable column are not equal");
-
-        data_to.resize(old_size + grid_size);
-        nulls_to.resize(old_size + grid_size);
-
-        ResultType * values = data_to.data() + old_size;
-        UInt8 * nulls = nulls_to.data() + old_size;
 
         const auto & buckets = data(place)->buckets;
         auto aggregator = derived().createAggregator(getStackSizeForTwoStacks(buckets.size()));
@@ -443,7 +422,7 @@ protected:
                         aggregator.add(it->getMapped(), bucketEndTimestamp(next_bucket));
                 }
                 removeOutOfWindow(aggregator, grid_index);
-                storeGridResult(grid_index, aggregator.getResult(timestampAtIndex(grid_index)), values, nulls);
+                writer.store(grid_index, aggregator.getResult(timestampAtIndex(grid_index)));
             }
         }
         else
@@ -462,7 +441,7 @@ protected:
                 for (; pos < ordered_buckets.size() && ordered_buckets[pos].first < window_end; ++pos)
                     aggregator.add(*ordered_buckets[pos].second, bucketEndTimestamp(ordered_buckets[pos].first));
                 removeOutOfWindow(aggregator, grid_index);
-                storeGridResult(grid_index, aggregator.getResult(timestampAtIndex(grid_index)), values, nulls);
+                writer.store(grid_index, aggregator.getResult(timestampAtIndex(grid_index)));
             }
         }
     }
@@ -513,7 +492,10 @@ private:
 
     static DataTypePtr createResultType()
     {
-        return std::make_shared<DataTypeArray>(std::make_shared<DataTypeNullable>(std::make_shared<DataTypeNumber<ResultType>>()));
+        if constexpr (requires { Traits::getResultTupleElementNames(); })
+            return ResultWriter::createResultType(Traits::getResultTupleElementNames());
+        else
+            return ResultWriter::createResultType();
     }
 
     /// Upper bound on the number of grid points (the output array length) for a single grid.
@@ -1286,21 +1268,6 @@ private:
             aggregator.removeBefore(static_cast<TimestampType>(grid_timestamp - static_cast<Int64>(window)));
     }
 
-    /// Stores the window's result value (or NULL when there is no result) at grid point `grid_index`.
-    void storeGridResult(size_t grid_index, const std::optional<ResultType> & result, ResultType * values, UInt8 * nulls) const
-    {
-        chassert(grid_index < grid_size);
-        if (result)
-        {
-            values[grid_index] = *result;
-            nulls[grid_index] = 0;
-        }
-        else
-        {
-            values[grid_index] = ResultType{};
-            nulls[grid_index] = 1;
-        }
-    }
 };
 
 }

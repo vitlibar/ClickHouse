@@ -30,9 +30,9 @@ namespace
 
 /// Constant/single-row prediction horizon: `predict_offset` is a fixed aggregate-function parameter.
 constexpr std::string_view ch_function_name = "timeSeriesPredictLinearToGrid";
-/// Per-grid-point-varying horizon (e.g. `predict_linear(v[5m], time())`): `predict_offset` is a
-/// third Array(Float64) argument instead. See AggregateFunctionTimeseriesPredictLinearVarying.h.
-constexpr std::string_view ch_function_name_varying = "timeSeriesPredictLinearVaryingToGrid";
+/// Per-grid-point-varying horizon (e.g. `predict_linear(v[5m], time())`): this function returns the tuple
+/// `(intercept, slope)` for every grid point, and the prediction is calculated as `base + slope * horizon` in SQL.
+constexpr std::string_view ch_regression_function_name = "timeSeriesLinearRegressionToGrid";
 
 /// `predict_linear` always drops the metric name (PromQL: function outputs have no `__name__`).
 constexpr bool drop_metric_name = true;
@@ -110,8 +110,8 @@ SQLQueryPiece applyFunctionPredictLinear(
         case StoreMethod::SCALAR_GRID:
             if (fixed_at_node)
             {
-                /// A fixed @ freezes the samples but not the horizon, so PromQL still evaluates per step; the
-                /// varying aggregate derives its window from each grid point and cannot express a frozen window.
+                /// A fixed @ freezes the samples but not the horizon, so PromQL still evaluates per step; the aggregate
+                /// derives its window from each grid point and cannot express a frozen window with a per-point horizon.
                 throw Exception(ErrorCodes::NOT_IMPLEMENTED,
                                 "Function '{}' does not support a time-varying second argument (the prediction horizon) "
                                 "together with a fixed @ modifier on the range vector {}",
@@ -272,16 +272,31 @@ SQLQueryPiece applyFunctionPredictLinear(
         builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Group));
 
     /// Constant/single-row horizon: predict_offset is the aggregate's 5th parameter.
-    /// Varying horizon: predict_offset is a 3rd argument instead, one value per grid point.
+    /// Varying horizon: the aggregate returns `(intercept, slope)` per grid point and the horizons are applied in SQL.
     ASTPtr aggregate_values;
     if (varying_predict_offset)
     {
-        aggregate_values = addParametersToAggregateFunction(
-            makeASTFunction(std::string{ch_function_name_varying}, std::move(timestamps), std::move(values), std::move(predict_offset_ast)),
+        /// CAST(arrayMap((r, t) -> r.1 + r.2 * t, <regression>, <horizons>), 'Array(Nullable(<scalar_data_type>))')
+        /// The cast keeps the result typed like every other vector grid; NULLs (no fit in the window) pass through.
+        ASTPtr regression = addParametersToAggregateFunction(
+            makeASTFunction(std::string{ch_regression_function_name}, std::move(timestamps), std::move(values)),
             timeSeriesTimestampToAST(aggregation_range.start_time, context.timestamp_data_type),
             timeSeriesTimestampToAST(aggregation_range.end_time, context.timestamp_data_type),
             timeSeriesDurationToAST(aggregation_range.step, context.timestamp_data_type),
             timeSeriesDurationToAST(window, context.timestamp_data_type));
+
+        ASTPtr prediction = makeASTFunction(
+            "plus",
+            makeASTFunction("tupleElement", make_intrusive<ASTIdentifier>("r"), make_intrusive<ASTLiteral>(1u)),
+            makeASTFunction(
+                "multiply",
+                makeASTFunction("tupleElement", make_intrusive<ASTIdentifier>("r"), make_intrusive<ASTLiteral>(2u)),
+                make_intrusive<ASTIdentifier>("t")));
+
+        aggregate_values = makeASTFunction(
+            "CAST",
+            makeASTFunction("arrayMap", makeASTLambda({"r", "t"}, std::move(prediction)), std::move(regression), std::move(predict_offset_ast)),
+            make_intrusive<ASTLiteral>(fmt::format("Array(Nullable({}))", context.scalar_data_type->getName())));
     }
     else
     {
