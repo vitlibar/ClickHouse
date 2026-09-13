@@ -9,11 +9,14 @@
 #include <Storages/TimeSeries/PrometheusQueryToSQL/ConverterContext.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/NodeEvaluationRange.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/SelectQueryBuilder.h>
-#include <Storages/TimeSeries/PrometheusQueryToSQL/fixedAtModifier.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/dropMetricName.h>
-#include <Storages/TimeSeries/PrometheusQueryToSQL/getToGridAggregateFunctionArguments.h>
+#include <Storages/TimeSeries/PrometheusQueryToSQL/fixedAtModifier.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/fromFunctionTime.h>
+#include <Storages/TimeSeries/PrometheusQueryToSQL/getToGridAggregateFunctionArguments.h>
 #include <Storages/TimeSeries/timeSeriesTypesToAST.h>
+
+#include <iterator>
+#include <optional>
 
 
 namespace DB::ErrorCodes
@@ -125,6 +128,65 @@ PredictionOffset getPredictionOffset(
     return prediction_offset;
 }
 
+
+/// How a fixed @ modifier shifts the prediction horizons: the horizon of the grid point `i` becomes
+/// `horizon + (shift_at_start + i * step_in_seconds)`, where `shift_at_start` is the distance in seconds from the frozen
+/// timestamp to the first grid point.
+struct HorizonShift
+{
+    Float64 shift_at_start;
+    Float64 step_in_seconds;
+    size_t grid_size;
+};
+
+/// Calculates the predictions `intercept + slope * horizon` from the result of timeSeriesLinearRegressionToGrid.
+ASTPtr makePredictions(ASTPtr && regression, PredictionOffset && prediction_offset, const std::optional<HorizonShift> & horizon_shift)
+{
+    /// The result of timeSeriesLinearRegressionToGrid is the tuple `(intercept, slope)` for every grid point, so:
+    /// arrayMap((r[, t][, i]) -> r.1 + r.2 * <horizon>, <regression>[, <horizons>][, range(<grid_size>)])
+    /// where `t` is the horizon of the grid point if the horizons vary, and `i` is the index of the grid point if the
+    /// horizons are shifted. NULLs (no fit in the window) pass through.
+    Strings lambda_parameters{"r"};
+    ASTs arrays{std::move(regression)};
+
+    ASTPtr horizon;
+    if (prediction_offset.is_constant)
+    {
+        horizon = std::move(prediction_offset.ast);
+    }
+    else
+    {
+        lambda_parameters.push_back("t");
+        arrays.push_back(std::move(prediction_offset.ast));
+        horizon = make_intrusive<ASTIdentifier>("t");
+    }
+
+    if (horizon_shift)
+    {
+        horizon = makeASTFunction(
+            "plus",
+            std::move(horizon),
+            makeASTFunction(
+                "plus",
+                make_intrusive<ASTLiteral>(horizon_shift->shift_at_start),
+                makeASTFunction("multiply", make_intrusive<ASTIdentifier>("i"), make_intrusive<ASTLiteral>(horizon_shift->step_in_seconds))));
+        lambda_parameters.push_back("i");
+        arrays.push_back(makeASTFunction("range", make_intrusive<ASTLiteral>(horizon_shift->grid_size)));
+    }
+
+    ASTPtr prediction = makeASTFunction(
+        "plus",
+        makeASTFunction("tupleElement", make_intrusive<ASTIdentifier>("r"), make_intrusive<ASTLiteral>(1u)),
+        makeASTFunction(
+            "multiply",
+            makeASTFunction("tupleElement", make_intrusive<ASTIdentifier>("r"), make_intrusive<ASTLiteral>(2u)),
+            std::move(horizon)));
+
+    ASTs array_map_arguments{makeASTLambda(lambda_parameters, std::move(prediction))};
+    array_map_arguments.insert(array_map_arguments.end(), std::make_move_iterator(arrays.begin()), std::make_move_iterator(arrays.end()));
+    return makeASTFunction("arrayMap", std::move(array_map_arguments));
+}
+
 }
 
 
@@ -165,46 +227,6 @@ SQLQueryPiece applyFunctionPredictLinear(
     const auto aggregation_range = getRangeAggregationRange(fixed_at_node, node_range, context);
     const size_t result_grid_size = stepsInTimeSeriesRange(start_time, end_time, step);
 
-    if (fixed_at_node)
-    {
-        /// A fixed @ freezes only the sample window, the prediction is still made from the evaluation time: PromQL evaluates
-        /// `predict_linear` at every step even if all its arguments are fixed (see AtModifierUnsafeFunctions in Prometheus).
-        /// The fit is linear, so predicting further ahead by the distance from the frozen timestamp to the step moves the
-        /// origin there exactly. So the horizon of the step `i` becomes `horizon + (<shift_at_start> + i * <step_in_seconds>)`:
-        /// arrayMap(i -> <horizon> + (...), range(<result_grid_size>))          -- constant horizon
-        /// arrayMap((t, i) -> t + (...), <horizons>, range(<result_grid_size>)) -- one horizon per grid point
-        const Float64 shift_at_start = DecimalUtils::convertTo<Float64>(
-            DurationType{start_time.value - aggregation_range.start_time.value}, context.timestamp_scale);
-        const Float64 step_in_seconds = DecimalUtils::convertTo<Float64>(step, context.timestamp_scale);
-
-        auto makeShiftedHorizon = [&](ASTPtr && horizon)
-        {
-            return makeASTFunction(
-                "plus",
-                std::move(horizon),
-                makeASTFunction(
-                    "plus",
-                    make_intrusive<ASTLiteral>(shift_at_start),
-                    makeASTFunction("multiply", make_intrusive<ASTIdentifier>("i"), make_intrusive<ASTLiteral>(step_in_seconds))));
-        };
-        ASTPtr grid_indices = makeASTFunction("range", make_intrusive<ASTLiteral>(result_grid_size));
-
-        if (prediction_offset.is_constant)
-        {
-            prediction_offset.ast = makeASTFunction(
-                "arrayMap", makeASTLambda({"i"}, makeShiftedHorizon(std::move(prediction_offset.ast))), std::move(grid_indices));
-            prediction_offset.is_constant = false;
-        }
-        else
-        {
-            prediction_offset.ast = makeASTFunction(
-                "arrayMap",
-                makeASTLambda({"t", "i"}, makeShiftedHorizon(make_intrusive<ASTIdentifier>("t"))),
-                std::move(prediction_offset.ast),
-                std::move(grid_indices));
-        }
-    }
-
     /// The result is a vector grid (one row per series, the aggregate function is calculated `GROUP BY group`) if the
     /// range vector holds series, and a scalar grid if it was made from a scalar.
     const bool has_group = (argument.store_method == StoreMethod::VECTOR_GRID) || (argument.store_method == StoreMethod::RAW_DATA);
@@ -214,11 +236,6 @@ SQLQueryPiece applyFunctionPredictLinear(
     if (has_group)
         builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Group));
 
-    /// timeSeriesLinearRegressionToGrid returns the tuple `(intercept, slope)` for every grid point, and the prediction
-    /// is calculated as `intercept + slope * horizon`:
-    /// arrayMap(r -> r.1 + r.2 * <horizon>, <regression>)          -- constant horizon
-    /// arrayMap((r, t) -> r.1 + r.2 * t, <regression>, <horizons>) -- one horizon per grid point
-    /// NULLs (no fit in the window) pass through.
     ASTPtr regression = addParametersToAggregateFunction(
         makeASTFunction("timeSeriesLinearRegressionToGrid", std::move(aggregate_function_arguments)),
         timeSeriesTimestampToAST(aggregation_range.start_time, context.timestamp_data_type),
@@ -226,26 +243,25 @@ SQLQueryPiece applyFunctionPredictLinear(
         timeSeriesDurationToAST(aggregation_range.step, context.timestamp_data_type),
         timeSeriesDurationToAST(window, context.timestamp_data_type));
 
-    /// The line fitted to the frozen window is the same at every step, the horizons (shifted above) are not.
+    std::optional<HorizonShift> horizon_shift;
     if (fixed_at_node)
+    {
+        /// The line fitted to the frozen window is the same at every step, so the single result of the aggregation
+        /// is repeated over the grid.
         regression = repeatFixedAtResultOverGrid(std::move(regression), aggregation_range, result_grid_size);
 
-    auto makePrediction = [](ASTPtr && horizon)
-    {
-        return makeASTFunction(
-            "plus",
-            makeASTFunction("tupleElement", make_intrusive<ASTIdentifier>("r"), make_intrusive<ASTLiteral>(1u)),
-            makeASTFunction(
-                "multiply",
-                makeASTFunction("tupleElement", make_intrusive<ASTIdentifier>("r"), make_intrusive<ASTLiteral>(2u)),
-                std::move(horizon)));
-    };
+        /// A fixed @ freezes only the sample window, the prediction is still made from the evaluation time: PromQL evaluates
+        /// `predict_linear` at every step even if all its arguments are fixed (see AtModifierUnsafeFunctions in Prometheus).
+        /// The fit is linear, so predicting further ahead by the distance from the frozen timestamp to the step moves the
+        /// origin there exactly.
+        horizon_shift = HorizonShift{
+            .shift_at_start = DecimalUtils::convertTo<Float64>(
+                DurationType{start_time.value - aggregation_range.start_time.value}, context.timestamp_scale),
+            .step_in_seconds = DecimalUtils::convertTo<Float64>(step, context.timestamp_scale),
+            .grid_size = result_grid_size};
+    }
 
-    ASTPtr aggregate_values;
-    if (prediction_offset.is_constant)
-        aggregate_values = makeASTFunction("arrayMap", makeASTLambda({"r"}, makePrediction(std::move(prediction_offset.ast))), std::move(regression));
-    else
-        aggregate_values = makeASTFunction("arrayMap", makeASTLambda({"r", "t"}, makePrediction(make_intrusive<ASTIdentifier>("t"))), std::move(regression), std::move(prediction_offset.ast));
+    ASTPtr aggregate_values = makePredictions(std::move(regression), std::move(prediction_offset), horizon_shift);
 
     builder.select_list.push_back(std::move(aggregate_values));
     builder.select_list.back()->setAlias(ColumnNames::Values);

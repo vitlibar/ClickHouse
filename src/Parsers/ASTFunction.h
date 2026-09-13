@@ -163,6 +163,7 @@ boost::intrusive_ptr<ASTFunction> makeASTOperator(const String & name, Args &&..
 }
 
 /// Creates an AST for a lambda: `(param_names...) -> body`.
+boost::intrusive_ptr<ASTFunction> makeASTLambda(const Strings & param_names, ASTPtr && body);
 boost::intrusive_ptr<ASTFunction> makeASTLambda(std::initializer_list<String> param_names, ASTPtr && body);
 
 /// Adds a parameters to aggregate function.
