@@ -1,0 +1,17 @@
+-- one quantile level for the whole grid
+[10,15,20]
+[10,20,30]
+[10,15,20]
+-- one quantile level per grid point
+[10,15,30]
+[10,15,30]
+[10,15,20]
+-- the level accepts any numbers: Float32, Float64 and integers
+[10,15,30]
+[10,20,30]
+[10,20,30]
+-- partial states carrying the same level merge
+[10,15,30]
+[10,15,20]
+-- the level must be the same in every row and in every merged state
+-- invalid arguments

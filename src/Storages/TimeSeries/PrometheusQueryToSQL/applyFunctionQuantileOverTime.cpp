@@ -30,21 +30,12 @@ namespace DB::PrometheusQueryToSQL
 namespace
 {
 
-/// The name of the ClickHouse aggregate function that implements `quantile_over_time` on a time grid.
-///
-/// It follows the same convention as the other `timeSeries*ToGrid` aggregates
-/// (see AggregateFunctions/TimeSeries/AggregateFunctionTimeseriesHelpers.cpp):
-///   timeSeriesQuantileToGrid(start_timestamp, end_timestamp, grid_step, staleness_window, phi)(timestamp, value)
-/// It buckets the samples into per-grid-point windows and returns, for each grid point, the
-/// phi-quantile of the values inside that window (NULL if the window is empty).
-///
-/// NOTE: This aggregate function is not part of the upstream ClickHouse `timeSeries*ToGrid` family yet.
-/// It must be registered in AggregateFunctions/TimeSeries (see the "Required shared changes" note in the
-/// task report). The translator layer is written against that contract.
+/// The aggregate function implementing `quantile_over_time` on a time grid:
+///   timeSeriesQuantileToGrid(start_timestamp, end_timestamp, grid_step, staleness_window)(timestamp, value, phi)
+/// For each grid point it returns the phi-quantile of the values inside that window (NULL if the window is empty).
+/// `phi` is either one number or, for a quantile level varying with the evaluation time, an array with one number per
+/// grid point.
 constexpr std::string_view ch_function_name = "timeSeriesQuantileToGrid";
-/// Per-grid-point-varying phi (e.g. `quantile_over_time(scalar(...), v[5m])` with a time-varying
-/// scalar): phi is a third Array(Float64) argument. See AggregateFunctionTimeseriesQuantileVarying.h.
-constexpr std::string_view ch_function_name_varying = "timeSeriesQuantileVaryingToGrid";
 
 /// `quantile_over_time` always drops the metric name (PromQL: function outputs have no `__name__`).
 constexpr bool drop_metric_name = true;
@@ -236,8 +227,8 @@ SQLQueryPiece applyFunctionQuantileOverTime(
     {
         if (fixed_at_node)
         {
-            /// A fixed @ freezes the samples but not phi, so PromQL still evaluates per step; the varying
-            /// aggregate derives its window from each grid point and cannot express a frozen window.
+            /// A fixed @ freezes the samples but not phi, so PromQL still evaluates per step; the aggregate derives its
+            /// window from each grid point and cannot express a frozen window with a per-point quantile level.
             throw Exception(ErrorCodes::NOT_IMPLEMENTED,
                             "Function '{}' does not support a time-varying first argument (the quantile) together with "
                             "a fixed @ modifier on the range vector {}",
@@ -270,39 +261,26 @@ SQLQueryPiece applyFunctionQuantileOverTime(
     if (has_group)
         builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Group));
 
-    /// Constant/single-row phi: the aggregate's 5th parameter. Varying phi: a 3rd argument instead,
-    /// one value per grid point; the edge-case wrapping below also becomes per-point.
-    ASTPtr quantile_grid;
-    ASTPtr result_values;
-    if (varying_phi)
+    /// A varying phi is a grid: an Array of either the scalar type or (for a time() grid kept at full precision) the
+    /// timestamp type, normalized here so the aggregate and the edge-case wrapping below see one type in every case.
+    auto castVaryingPhi = [&]
     {
-        /// The grid is Array of either the scalar or (for a time() grid kept at full precision) the timestamp
-        /// type; normalized here so the aggregate and the edge-case wrapping below see one type in every case.
-        auto castVaryingPhi = [&]
-        {
-            return makeASTFunction(
-                "CAST", make_intrusive<ASTIdentifier>(varying_phi_subquery_name), make_intrusive<ASTLiteral>("Array(Float64)"));
-        };
-        aggregate_function_arguments.push_back(castVaryingPhi());
-        quantile_grid = addParametersToAggregateFunction(
-            makeASTFunction(std::string{ch_function_name_varying}, std::move(aggregate_function_arguments)),
-            timeSeriesTimestampToAST(aggregation_range.start_time, context.timestamp_data_type),
-            timeSeriesTimestampToAST(aggregation_range.end_time, context.timestamp_data_type),
-            timeSeriesDurationToAST(aggregation_range.step, context.timestamp_data_type),
-            timeSeriesDurationToAST(window, context.timestamp_data_type));
-        result_values = wrapWithVaryingPhiEdgeCases(std::move(quantile_grid), castVaryingPhi(), context);
-    }
-    else
-    {
-        quantile_grid = addParametersToAggregateFunction(
-            makeASTFunction(std::string{ch_function_name}, std::move(aggregate_function_arguments)),
-            timeSeriesTimestampToAST(aggregation_range.start_time, context.timestamp_data_type),
-            timeSeriesTimestampToAST(aggregation_range.end_time, context.timestamp_data_type),
-            timeSeriesDurationToAST(aggregation_range.step, context.timestamp_data_type),
-            timeSeriesDurationToAST(window, context.timestamp_data_type),
-            makePhiAST(phi_source, context));
-        result_values = wrapWithPhiEdgeCases(std::move(quantile_grid), phi_source, context);
-    }
+        return makeASTFunction(
+            "CAST", make_intrusive<ASTIdentifier>(varying_phi_subquery_name), make_intrusive<ASTLiteral>("Array(Float64)"));
+    };
+
+    /// <aggregate_function>(<timestamps>, <values>, <phi>) AS values, wrapped to apply the Prometheus edge cases of phi.
+    aggregate_function_arguments.push_back(varying_phi ? castVaryingPhi() : makePhiAST(phi_source, context));
+    ASTPtr quantile_grid = addParametersToAggregateFunction(
+        makeASTFunction(std::string{ch_function_name}, std::move(aggregate_function_arguments)),
+        timeSeriesTimestampToAST(aggregation_range.start_time, context.timestamp_data_type),
+        timeSeriesTimestampToAST(aggregation_range.end_time, context.timestamp_data_type),
+        timeSeriesDurationToAST(aggregation_range.step, context.timestamp_data_type),
+        timeSeriesDurationToAST(window, context.timestamp_data_type));
+
+    ASTPtr result_values = varying_phi
+        ? wrapWithVaryingPhiEdgeCases(std::move(quantile_grid), castVaryingPhi(), context)
+        : wrapWithPhiEdgeCases(std::move(quantile_grid), phi_source, context);
 
     if (fixed_at_node)
         result_values = repeatFixedAtResultOverGrid(

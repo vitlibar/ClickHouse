@@ -60,7 +60,7 @@ SELECT tags, arrayMap(x -> round(x.2, 3), time_series) AS values
 FROM prometheusQueryRange(ts, 'predict_linear(up[3m] @ 1700000000, time())', 1700000100, 1700000400, 100)
 ORDER BY ALL;
 
--- `timeSeriesQuantileVaryingToGrid` derives its window from each grid point and cannot express a frozen
+-- `timeSeriesQuantileToGrid` derives its window from each grid point and cannot express a frozen
 -- window with a per-point quantile level, so this combination is rejected instead of returning sliding-window results.
 SELECT * FROM prometheusQueryRange(ts, 'quantile_over_time(time(), up[3m] @ 1700000000)', 1700000100, 1700000400, 100); -- { serverError NOT_IMPLEMENTED }
 

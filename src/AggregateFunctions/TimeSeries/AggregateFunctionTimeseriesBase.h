@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <bit>
 #include <cstddef>
 #include <cstring>
 #include <limits>
@@ -82,6 +83,14 @@ public:
 
     using Bucket = typename Traits::Bucket;
 
+    /// Some functions take one more argument after the samples which describes the grid rather than a sample (e.g. the
+    /// quantile level of `timeSeriesQuantileToGrid`): either one number used at every grid point or an array with one
+    /// number per grid point. It must be the same in every row: it is captured from the first added row and every other
+    /// row is checked against it. Traits enable it with `has_grid_argument = true` and name it with `grid_argument_name`
+    /// (used in error messages); the aggregator then receives the value for the current grid point as the second
+    /// argument of `getResult`.
+    static constexpr bool has_grid_argument = requires { requires Traits::has_grid_argument; };
+
     String getName() const override
     {
         return Traits::getName();
@@ -97,8 +106,9 @@ public:
             argument_types_,
             parameters_,
             createResultType())
-        , array_of_pairs_argument(argument_types_.size() == 1)
+        , array_of_pairs_argument(argument_types_.size() == (has_grid_argument ? 2 : 1))
         , array_arguments(!array_of_pairs_argument && (argument_types_[1]->getTypeId() == TypeIndex::Array))
+        , grid_argument_position(array_of_pairs_argument ? 1 : 2)
         , step(checkStep(start_timestamp_, end_timestamp_, step_))
         , window(checkWindow(window_))
         , grid_size(gridSize(start_timestamp_, end_timestamp_, step))
@@ -156,6 +166,9 @@ public:
         }
         else
         {
+            if constexpr (has_grid_argument)
+                captureOrCheckGridArgument(place, *columns[grid_argument_position], row_num, row_num + 1);
+
             const auto & timestamp_column = typeid_cast<const ColVecType &>(*columns[0]);
             const auto & value_column = typeid_cast<const ColVecValueType &>(*columns[1]);
             add(place, timestamp_column.getData()[row_num], value_column.getData()[row_num]);
@@ -201,7 +214,12 @@ public:
                 ++run_end;
 
             if (place)
+            {
+                if constexpr (has_grid_argument)
+                    captureOrCheckGridArgument(place + place_offset, *columns[grid_argument_position], i, run_end);
+
                 addSamples<true>(place + place_offset, timestamp_data, value_data, flags, i, run_end);
+            }
 
             i = run_end;
         }
@@ -289,6 +307,18 @@ public:
             auto & bucket = buckets[rhs_bucket.getKey()];
             bucket.merge(rhs_bucket.getMapped());
         }
+
+        if constexpr (has_grid_argument)
+        {
+            auto & grid_argument = data(place)->grid_argument.values;
+            const auto & rhs_grid_argument = data(rhs)->grid_argument.values;
+            if (grid_argument.empty())
+                grid_argument = rhs_grid_argument;
+            else if (!rhs_grid_argument.empty() && !sameGridArgument(grid_argument, rhs_grid_argument))
+                throw Exception(ErrorCodes::BAD_ARGUMENTS,
+                    "Cannot merge states of aggregate function {} created with different values of the argument `{}`",
+                    getName(), Traits::grid_argument_name);
+        }
     }
 
     void serialize(ConstAggregateDataPtr __restrict place, WriteBuffer & buf, std::optional<size_t> /* version */) const override
@@ -302,6 +332,14 @@ public:
         {
             writeBinaryLittleEndian(entry.getKey(), buf);
             entry.getMapped().serialize(buf);
+        }
+
+        if constexpr (has_grid_argument)
+        {
+            const auto & grid_argument = data(place)->grid_argument.values;
+            writeBinaryLittleEndian(static_cast<UInt64>(grid_argument.size()), buf);
+            for (const Float64 value : grid_argument)
+                writeBinaryLittleEndian(value, buf);
         }
     }
 
@@ -343,6 +381,21 @@ public:
 
             /// Validate that each deserialized sample falls into this bucket's timestamp range.
             bucket.checkTimestampsInRange(bucketTimeRange(bucket_index));
+        }
+
+        if constexpr (has_grid_argument)
+        {
+            UInt64 grid_argument_size = 0;
+            readBinaryLittleEndian(grid_argument_size, buf);
+            if (grid_argument_size != 0 && grid_argument_size != 1 && grid_argument_size != grid_size)
+                throw Exception(ErrorCodes::INCORRECT_DATA,
+                    "Cannot deserialize data with {} values of the argument `{}`, expected 0, 1 or {}",
+                    grid_argument_size, Traits::grid_argument_name, grid_size);
+
+            auto & grid_argument = data(place)->grid_argument.values;
+            grid_argument.resize(grid_argument_size);
+            for (auto & value : grid_argument)
+                readBinaryLittleEndian(value, buf);
         }
     }
 
@@ -419,7 +472,10 @@ protected:
                         aggregator.add(it->getMapped(), bucketEndTimestamp(next_bucket));
                 }
                 removeOutOfWindow(aggregator, grid_index);
-                writer.store(grid_index, aggregator.getResult(timestampAtIndex(grid_index)));
+                if constexpr (has_grid_argument)
+                    writer.store(grid_index, aggregator.getResult(timestampAtIndex(grid_index), gridArgumentAt(place, grid_index)));
+                else
+                    writer.store(grid_index, aggregator.getResult(timestampAtIndex(grid_index)));
             }
         }
         else
@@ -438,13 +494,17 @@ protected:
                 for (; pos < ordered_buckets.size() && ordered_buckets[pos].first < window_end; ++pos)
                     aggregator.add(*ordered_buckets[pos].second, bucketEndTimestamp(ordered_buckets[pos].first));
                 removeOutOfWindow(aggregator, grid_index);
-                writer.store(grid_index, aggregator.getResult(timestampAtIndex(grid_index)));
+                if constexpr (has_grid_argument)
+                    writer.store(grid_index, aggregator.getResult(timestampAtIndex(grid_index), gridArgumentAt(place, grid_index)));
+                else
+                    writer.store(grid_index, aggregator.getResult(timestampAtIndex(grid_index)));
             }
         }
     }
 
     const bool array_of_pairs_argument{};   /// Whether samples are passed as a single argument of type Array(Tuple(timestamp, value))
     const bool array_arguments{};           /// Whether timestamp/value arguments are arrays (one row holds a whole series) or scalars
+    const size_t grid_argument_position{};  /// Index of the grid argument (see `has_grid_argument`): right after the samples
     const IntervalType step{};              /// Grid step (0 for a single-point grid). IntervalType represents a time difference between timestamps
     const IntervalType window{};            /// Window size used by derived functions (e.g. for rate and delta calculations)
     const size_t grid_size{};               /// Number of grid points: (end - start) / step + 1
@@ -481,10 +541,23 @@ private:
         std::is_trivially_copyable_v<Bucket> || requires { requires Bucket::is_position_independent; },
         "Bucket must be position independent (memmove-able) to be stored in a HashMap");
 
+    /// The grid argument (see `has_grid_argument`) captured from the first added row: one value if it is the same at every
+    /// grid point (a number, or an array with equal elements), otherwise `grid_size` values. Empty until a row is added.
+    struct GridArgument
+    {
+        VectorWithMemoryTracking<Float64> values;
+    };
+
+    struct NoGridArgument
+    {
+    };
+
     struct State
     {
         /// Maps bucket index to the set of all timestamps and values
         TimeSeriesBucketsMap<Bucket> buckets;
+
+        [[no_unique_address]] std::conditional_t<has_grid_argument, GridArgument, NoGridArgument> grid_argument;
     };
 
     static DataTypePtr createResultType()
@@ -1145,6 +1218,9 @@ private:
         const IColumn ** columns,
         const UInt8 * flags_data) const
     {
+        if constexpr (has_grid_argument)
+            captureOrCheckGridArgument(place, *columns[grid_argument_position], row_begin, row_end);
+
         if (!array_of_pairs_argument && !array_arguments)
         {
             /// Each row holds a single sample.
@@ -1248,6 +1324,116 @@ private:
     const FunctionImpl & derived() const
     {
         return static_cast<const FunctionImpl &>(*this);
+    }
+
+    /// Captures the grid argument from the first added row and checks that the rows `[row_begin, row_end)` carry the
+    /// same value as the captured one.
+    void captureOrCheckGridArgument(AggregateDataPtr __restrict place, const IColumn & column, size_t row_begin, size_t row_end) const
+    {
+        auto & values = data(place)->grid_argument.values;
+        size_t row = row_begin;
+
+        if (values.empty() && row < row_end)
+        {
+            const bool is_array = appendGridArgumentValues(values, column, row);
+            if (is_array && values.size() != grid_size)
+                throw Exception(ErrorCodes::BAD_ARGUMENTS,
+                    "Aggregate function {} requires the array argument `{}` to have one value per grid point ({}), got {} values",
+                    getName(), Traits::grid_argument_name, grid_size, values.size());
+
+            /// An array with the same value at every grid point is kept as that single value.
+            if (std::all_of(values.begin(), values.end(), [&](Float64 value) { return sameFloat64(value, values[0]); }))
+                values.resize(1);
+            ++row;
+        }
+
+        for (; row < row_end; ++row)
+        {
+            if (!sameGridArgument(values, column, row))
+                throw Exception(ErrorCodes::BAD_ARGUMENTS,
+                    "Aggregate function {} requires the same value of the argument `{}` in every row",
+                    getName(), Traits::grid_argument_name);
+        }
+    }
+
+    /// The grid argument's value at grid point `grid_index`. It is 0 if no row has been added, then every window is empty anyway.
+    Float64 gridArgumentAt(ConstAggregateDataPtr __restrict place, size_t grid_index) const
+    {
+        const auto & values = data(place)->grid_argument.values;
+        if (values.empty())
+            return 0;
+        return (values.size() == 1) ? values[0] : values[grid_index];
+    }
+
+    /// Reads one number of the grid argument. Float64 and Float32 are the common cases, other native numbers go through the virtual call.
+    static Float64 gridArgumentValue(const IColumn & column, size_t index)
+    {
+        if (const auto * float64_column = typeid_cast<const ColumnVector<Float64> *>(&column))
+            return float64_column->getData()[index];
+        if (const auto * float32_column = typeid_cast<const ColumnVector<Float32> *>(&column))
+            return float32_column->getData()[index];
+        return column.getFloat64(index);
+    }
+
+    /// Appends the grid argument of row `row` to `values`. Returns whether the argument is an array.
+    static bool appendGridArgumentValues(VectorWithMemoryTracking<Float64> & values, const IColumn & column, size_t row)
+    {
+        if (const auto * array_column = typeid_cast<const ColumnArray *>(&column))
+        {
+            const auto & offsets = array_column->getOffsets();
+            const size_t begin = (row == 0) ? 0 : offsets[row - 1];
+            const size_t end = offsets[row];
+            values.reserve(values.size() + (end - begin));
+            for (size_t i = begin; i < end; ++i)
+                values.push_back(gridArgumentValue(array_column->getData(), i));
+            return true;
+        }
+
+        values.push_back(gridArgumentValue(column, row));
+        return false;
+    }
+
+    /// Bitwise comparison, so that NaN compares equal to itself.
+    static bool sameFloat64(Float64 lhs, Float64 rhs)
+    {
+        return std::bit_cast<UInt64>(lhs) == std::bit_cast<UInt64>(rhs);
+    }
+
+    /// Whether the grid argument of row `row` equals the captured `values` (one value or `grid_size` values).
+    bool sameGridArgument(const VectorWithMemoryTracking<Float64> & values, const IColumn & column, size_t row) const
+    {
+        if (const auto * array_column = typeid_cast<const ColumnArray *>(&column))
+        {
+            const auto & offsets = array_column->getOffsets();
+            const size_t begin = (row == 0) ? 0 : offsets[row - 1];
+            const size_t end = offsets[row];
+            if (end - begin != grid_size)
+                return false;
+
+            const auto & nested_column = array_column->getData();
+            if (values.size() == 1)
+            {
+                for (size_t i = begin; i < end; ++i)
+                    if (!sameFloat64(gridArgumentValue(nested_column, i), values[0]))
+                        return false;
+                return true;
+            }
+
+            if (const auto * float64_column = typeid_cast<const ColumnVector<Float64> *>(&nested_column))
+                return 0 == memcmp(float64_column->getData().data() + begin, values.data(), values.size() * sizeof(Float64));
+
+            for (size_t i = 0; i < values.size(); ++i)
+                if (!sameFloat64(gridArgumentValue(nested_column, begin + i), values[i]))
+                    return false;
+            return true;
+        }
+
+        return (values.size() == 1) && sameFloat64(gridArgumentValue(column, row), values[0]);
+    }
+
+    static bool sameGridArgument(const VectorWithMemoryTracking<Float64> & lhs, const VectorWithMemoryTracking<Float64> & rhs)
+    {
+        return lhs.size() == rhs.size() && std::equal(lhs.begin(), lhs.end(), rhs.begin(), sameFloat64);
     }
 
     /// Drops buckets that have left grid point `grid_index`'s window from the front of the sliding `aggregator`. A bucket
