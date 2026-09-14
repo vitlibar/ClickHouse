@@ -3,63 +3,71 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
-#include <deque>
 #include <limits>
 #include <optional>
 #include <string_view>
 #include <utility>
 
+#include <Common/Exception.h>
 #include <Common/NaNUtils.h>
 #include <Common/VectorWithMemoryTracking.h>
+#include <base/sort.h>
 
 #include <AggregateFunctions/TimeSeries/AggregateFunctionTimeseriesBase.h>
 #include <AggregateFunctions/TimeSeries/AggregateFunctionTimeseriesSamples.h>
+#include <AggregateFunctions/TimeSeries/AggregateFunctionTimeseriesSlidingSum.h>
 
 
 namespace DB
 {
 
-/// R-7 (quantileExactInclusive) quantile of `values`.
-template <typename ValueType>
-std::optional<ValueType> computeTimeseriesQuantile(VectorWithMemoryTracking<ValueType> && values, Float64 phi)
+namespace ErrorCodes
 {
-    if (values.empty())
+    extern const int LOGICAL_ERROR;
+}
+
+/// The order of the values inside a window: NaN samples are kept and ordered before every real value, like Prometheus'
+/// `vectorByValueHeap.Less`. It is a strict weak ordering (all NaNs are equivalent), which plain `<` on floats is not.
+template <typename ValueType>
+bool timeseriesQuantileLess(ValueType lhs, ValueType rhs)
+{
+    if (isNaN(lhs))
+        return !isNaN(rhs);
+    return !isNaN(rhs) && lhs < rhs;
+}
+
+/// R-7 (quantileExactInclusive) quantile of `sorted_values`, which must be ordered by `timeseriesQuantileLess`, with the
+/// Prometheus edge cases of the level: NaN gives NaN, a level below 0 gives -Inf and a level above 1 gives +Inf.
+template <typename ValueType>
+std::optional<ValueType> computeTimeseriesQuantile(const VectorWithMemoryTracking<ValueType> & sorted_values, Float64 phi)
+{
+    if (sorted_values.empty())
         return std::nullopt;
 
-    const size_t n = values.size();
-    if (n == 1)
-        return values[0];
-
-    /// NaN samples are kept and ordered before every real value, like Prometheus' `vectorByValueHeap.Less`.
-    /// Spelled as a strict weak ordering (all NaNs equivalent), which plain `<` on floats is not.
-    std::sort(values.begin(), values.end(), [](ValueType lhs, ValueType rhs)
-    {
-        if (isNaN(lhs))
-            return !isNaN(rhs);
-        return !isNaN(rhs) && lhs < rhs;
-    });
-
-    /// rank = phi * (n - 1), interpolated. Callers wrap the output for out-of-range/NaN phi.
-    Float64 rank = phi * static_cast<Float64>(n - 1);
-    if (std::isnan(rank))
+    if (std::isnan(phi))
         return static_cast<ValueType>(std::numeric_limits<Float64>::quiet_NaN());
-    if (rank < 0.0)
-        rank = 0.0;
-    else if (rank > static_cast<Float64>(n - 1))
-        rank = static_cast<Float64>(n - 1);
+    if (phi < 0.0)
+        return static_cast<ValueType>(-std::numeric_limits<Float64>::infinity());
+    if (phi > 1.0)
+        return static_cast<ValueType>(std::numeric_limits<Float64>::infinity());
 
+    const size_t n = sorted_values.size();
+    if (n == 1)
+        return sorted_values[0];
+
+    /// rank = phi * (n - 1), interpolated between the neighbouring values.
+    const Float64 rank = phi * static_cast<Float64>(n - 1);
     const size_t lower = static_cast<size_t>(std::floor(rank));
     const size_t upper = static_cast<size_t>(std::ceil(rank));
 
     if (lower == upper)
-        return values[lower];
+        return sorted_values[lower];
 
     const Float64 fraction = rank - static_cast<Float64>(lower);
-    const Float64 result = static_cast<Float64>(values[lower])
-        + fraction * (static_cast<Float64>(values[upper]) - static_cast<Float64>(values[lower]));
+    const Float64 result = static_cast<Float64>(sorted_values[lower])
+        + fraction * (static_cast<Float64>(sorted_values[upper]) - static_cast<Float64>(sorted_values[lower]));
     return static_cast<ValueType>(result);
 }
-
 
 template <typename TimestampType_, typename IntervalType_, typename ValueType_>
 struct AggregateFunctionTimeseriesQuantileToGridTraits
@@ -74,51 +82,123 @@ struct AggregateFunctionTimeseriesQuantileToGridTraits
         return "timeSeriesQuantileToGrid";
     }
 
-    /// The quantile level `phi` is one more argument after the samples: one value for the whole grid or one value per
-    /// grid point (see `AggregateFunctionTimeseriesBase::has_grid_argument`).
-    static constexpr bool has_grid_argument = true;
-    static constexpr std::string_view grid_argument_name = "phi";
-
     using Samples = AggregateFunctionTimeseriesSamples<TimestampType, ValueType>;
 
-    /// The bucket stores raw samples: a quantile has no summary to preaggregate.
+    /// The bucket stores raw samples: the timestamps are needed to collapse duplicate timestamps into one sample.
     using Bucket = Samples;
 
-    /// Sliding aggregator: keeps the buckets in the window and computes the phi-quantile (R-7, inclusive) of all their
-    /// values for every grid point. The buckets live in the state's map, which does not change during the finalization,
-    /// so they are referenced, not copied.
+    /// The values of one bucket, or of the whole window, sorted by `timeseriesQuantileLess`. Merging two summaries is
+    /// a merge of two sorted runs, and a merged summary can be taken out again by a pass over both sorted runs, so the
+    /// `SlidingSum` keeps one running summary of the window and every quantile is read from it without sorting.
+    struct Summary
+    {
+        VectorWithMemoryTracking<ValueType> values;
+
+        /// Adds values in any order.
+        void add(VectorWithMemoryTracking<ValueType> && new_values)
+        {
+            ::sort(new_values.begin(), new_values.end(), timeseriesQuantileLess<ValueType>);
+            if (values.empty())
+            {
+                values = std::move(new_values);
+                return;
+            }
+
+            const size_t old_size = values.size();
+            values.insert(values.end(), new_values.begin(), new_values.end());
+            std::inplace_merge(values.begin(), values.begin() + old_size, values.end(), timeseriesQuantileLess<ValueType>);
+        }
+
+        void merge(const Summary & other)
+        {
+            if (other.values.empty())
+                return;
+
+            const size_t old_size = values.size();
+            values.insert(values.end(), other.values.begin(), other.values.end());
+            std::inplace_merge(values.begin(), values.begin() + old_size, values.end(), timeseriesQuantileLess<ValueType>);
+        }
+
+        /// Removes the values of `leaving`, which was merged before: every value of `leaving` drops one equivalent value.
+        void unmerge(const Summary & leaving, const Summary * /*new_first*/)
+        {
+            size_t kept = 0;
+            size_t leaving_index = 0;
+            for (size_t i = 0; i < values.size(); ++i)
+            {
+                if (leaving_index < leaving.values.size() && !timeseriesQuantileLess(values[i], leaving.values[leaving_index]))
+                {
+                    ++leaving_index;
+                    continue;
+                }
+                values[kept++] = values[i];
+            }
+
+            if (leaving_index != leaving.values.size())
+                throw Exception(ErrorCodes::LOGICAL_ERROR, "Cannot remove values from the window of timeSeriesQuantileToGrid: they were not added");
+
+            values.resize(kept);
+        }
+    };
+
+    /// Sliding aggregator: keeps the sorted values of the window and reads the phi-quantile (R-7, inclusive) from them.
     struct Aggregator
     {
-        std::deque<std::pair<TimestampType, const Samples *>> buckets_in_window;
+        AggregateFunctionTimeseriesSlidingSum<TimestampType, Summary> sliding_sum;
+
+        static_assert(decltype(sliding_sum)::is_invertible);
 
         void add(const Samples & samples, TimestampType bucket_end_timestamp)
         {
-            buckets_in_window.emplace_back(bucket_end_timestamp, &samples);
+            VectorWithMemoryTracking<ValueType> values;
+            samples.forEachSample([&values](TimestampType /*timestamp*/, ValueType value)
+            {
+                values.push_back(value);
+            });
+
+            if (values.empty())
+                return;
+
+            Summary summary;
+            summary.add(std::move(values));
+            sliding_sum.add(std::move(summary), bucket_end_timestamp);
         }
 
         void removeBefore(TimestampType cut_off)
         {
-            while (!buckets_in_window.empty() && buckets_in_window.front().first <= cut_off)
-                buckets_in_window.pop_front();
+            sliding_sum.removeBefore(cut_off);
         }
 
         std::optional<ValueType> getResult(TimestampType /*grid_timestamp*/, Float64 phi) const
         {
-            VectorWithMemoryTracking<ValueType> values;
-            for (const auto & [_, samples] : buckets_in_window)
-            {
-                samples->forEachSample([&values](TimestampType /*timestamp*/, ValueType value)
-                {
-                    values.push_back(value);
-                });
-            }
-            return computeTimeseriesQuantile(std::move(values), phi);
+            return computeTimeseriesQuantile(sliding_sum.getCurrentSum().values, phi);
         }
     };
 
     static constexpr UInt16 FORMAT_VERSION = 1;
 };
 
+/// The quantile level `phi` of `timeSeriesQuantileToGrid`: a number for the whole grid or an array with one number per
+/// grid point. It is captured from the first added row and must be the same in every other row.
+class AggregateFunctionTimeseriesQuantileToGridPhi
+{
+public:
+    /// Captures the argument from the first row if nothing has been captured yet, then checks that the rows
+    /// `[row_begin, row_end)` of `column` carry the captured value. `column` holds numbers or arrays of numbers.
+    void captureOrCheck(const IColumn & column, size_t row_begin, size_t row_end, size_t grid_size, std::string_view function_name);
+
+    void merge(const AggregateFunctionTimeseriesQuantileToGridPhi & other, std::string_view function_name);
+
+    void serialize(WriteBuffer & buf) const;
+    void deserialize(ReadBuffer & buf, size_t grid_size);
+
+    /// The level at grid point `grid_index`. It is 0 if no row has been added, then every window is empty anyway.
+    Float64 at(size_t grid_index) const;
+
+private:
+    /// One value if the level is the same at every grid point, `grid_size` values otherwise. Empty until a row is added.
+    VectorWithMemoryTracking<Float64> values;
+};
 
 /// Aggregate function that computes the phi-quantile of time series values on a regular time grid.
 /// Returns the R-7 (inclusive) quantile of all sample values within each grid point's window. The quantile level is the
@@ -140,9 +220,56 @@ public:
     using Base = AggregateFunctionTimeseriesBase<AggregateFunctionTimeseriesQuantileToGrid, Traits>;
     using Base::Base;
 
+    /// The quantile level `phi` is one more argument after the samples, kept in the state.
+    static constexpr size_t num_extra_arguments = 1;
+
+    struct State : Base::State
+    {
+        AggregateFunctionTimeseriesQuantileToGridPhi phi;
+    };
+
     Aggregator createAggregator(size_t /* stack_size_for_two_stacks */) const
     {
         return {};
+    }
+
+    void addExtraArguments(AggregateDataPtr __restrict place, const IColumn ** extra_columns, size_t row_begin, size_t row_end) const
+    {
+        data(place)->phi.captureOrCheck(*extra_columns[0], row_begin, row_end, Base::grid_size, getName());
+    }
+
+    void mergeImpl(AggregateDataPtr __restrict place, ConstAggregateDataPtr rhs, Arena * arena) const override
+    {
+        Base::mergeImpl(place, rhs, arena);
+        data(place)->phi.merge(data(rhs)->phi, getName());
+    }
+
+    void serialize(ConstAggregateDataPtr __restrict place, WriteBuffer & buf, std::optional<size_t> version) const override
+    {
+        Base::serialize(place, buf, version);
+        data(place)->phi.serialize(buf);
+    }
+
+    void deserialize(AggregateDataPtr __restrict place, ReadBuffer & buf, std::optional<size_t> version, Arena * arena) const override
+    {
+        Base::deserialize(place, buf, version, arena);
+        data(place)->phi.deserialize(buf, Base::grid_size);
+    }
+
+    std::optional<ValueType> getGridPointResult(const Aggregator & aggregator, ConstAggregateDataPtr place, size_t grid_index) const
+    {
+        return aggregator.getResult(Base::timestampAtIndex(grid_index), data(place)->phi.at(grid_index));
+    }
+
+private:
+    static const State * data(ConstAggregateDataPtr __restrict place)
+    {
+        return reinterpret_cast<const State *>(place);
+    }
+
+    static State * data(AggregateDataPtr __restrict place)
+    {
+        return reinterpret_cast<State *>(place);
     }
 };
 

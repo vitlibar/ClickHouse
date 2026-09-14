@@ -34,6 +34,14 @@ SELECT timeSeriesQuantileToGrid(100, 120, 10, 30)(timestamp, value::Float32, phi
 SELECT timeSeriesQuantileToGrid(100, 120, 10, 30)(timestamp, value, 1::UInt8) FROM quantile_input;
 SELECT timeSeriesQuantileToGrid(100, 120, 10, 30)(timestamp, value, [0, 1, 1]::Array(UInt64)) FROM quantile_input;
 
+SELECT '-- a level outside [0, 1] gives -Inf or +Inf and a NaN level gives NaN, like in Prometheus';
+SELECT timeSeriesQuantileToGrid(100, 120, 10, 30)(timestamp, value, -0.5) FROM quantile_input;
+SELECT timeSeriesQuantileToGrid(100, 120, 10, 30)(timestamp, value, 1.5) FROM quantile_input;
+SELECT timeSeriesQuantileToGrid(100, 120, 10, 30)(timestamp, value, nan) FROM quantile_input;
+SELECT timeSeriesQuantileToGrid(100, 120, 10, 30)(timestamp, value, [-1., 0.5, 2.]) FROM quantile_input;
+-- A grid point without samples stays NULL whatever the level.
+SELECT timeSeriesQuantileToGrid(100, 140, 20, 30)(timestamp, value, 2) FROM quantile_input;
+
 SELECT '-- partial states carrying the same level merge';
 SELECT timeSeriesQuantileToGridMerge(100, 120, 10, 30)(st) FROM (SELECT timeSeriesQuantileToGridState(100, 120, 10, 30)(timestamp, value, phis) AS st FROM quantile_input GROUP BY grp);
 SELECT timeSeriesQuantileToGridMerge(100, 120, 10, 30)(st) FROM (SELECT timeSeriesQuantileToGridState(100, 120, 10, 30)(timestamp, value, 0.5) AS st FROM quantile_input GROUP BY grp);

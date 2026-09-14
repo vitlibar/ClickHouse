@@ -236,7 +236,7 @@ AggregateFunctionPtr createWithTimestampAndValueTypes(const std::string & name, 
 /// Entry point shared by every timeSeries*ToGrid function: validates the arguments, resolves the value type, and
 /// builds the function through the given factory (a generic lambda templated on timestamp, interval and value types).
 /// `has_grid_argument` is set for functions taking one more argument after the samples, a number or an array of numbers
-/// (see `AggregateFunctionTimeseriesBase::has_grid_argument`).
+/// (see `AggregateFunctionTimeseriesBase::num_extra_arguments`).
 template <typename MakeFunction>
 AggregateFunctionPtr createAggregateFunctionTimeseries(const std::string & name, const DataTypes & argument_types, const Array & parameters, const Settings * settings, MakeFunction && make_function, bool has_grid_argument = false)
 {
@@ -2067,7 +2067,7 @@ timeSeriesPresentToGrid(start_timestamp, end_timestamp, grid_step, staleness)(ti
     FunctionDocumentation::Description description_timeSeriesQuantileToGrid = R"(
 Aggregate function that takes time series data as pairs of timestamps and values and calculates the [PromQL `quantile_over_time`](https://prometheus.io/docs/prometheus/latest/querying/functions/#quantile_over_time) function on a regular time grid described by start timestamp, end timestamp and step. For each point on the grid the samples for calculating the quantile are considered within the specified time window. The quantile is computed using the R-7 (inclusive) method, matching `quantileExactInclusive` for real values. NaN samples are not skipped the way `quantileExactInclusive` skips them: like in Prometheus they are kept and sorted before every real value, so a window of `[1, NaN, 2]` has median `1`, and a window whose samples are all NaN gives NaN.
 
-The quantile level follows the samples as the last argument: either one number used at every grid point, or an array with one number per grid point. It must be the same in every row.
+The quantile level follows the samples as the last argument: either one number used at every grid point, or an array with one number per grid point. It must be the same in every row. Like in Prometheus, a level below 0 gives `-Inf`, a level above 1 gives `+Inf` and a NaN level gives NaN for every grid point whose window has samples.
 
 :::note
 This function is in private preview, enable it by setting `enable_time_series_aggregate_functions=true`.
@@ -2087,7 +2087,7 @@ timeSeriesQuantileToGrid(start_timestamp, end_timestamp, grid_step, staleness)(s
         {"timestamp", "Timestamp of the sample. Can be individual values or arrays.", {"UInt32", "DateTime", "Array(UInt32)", "Array(DateTime)"}},
         {"value", "Value of the time series corresponding to the timestamp. Can be individual values or arrays.", {"Float*", "Array(Float*)"}},
         {"samples", "Samples of the time series passed as an array of tuples `(timestamp, value)`. An alternative to passing the timestamps and the values as two separate arguments.", {"Array(Tuple(T1, T2))"}},
-        {"phi", "Quantile level in the range [0, 1]: either one number for the whole grid or an array with one number per grid point. Must be the same in every row.", {"Float*", "UInt*", "Int*", "Array(Float*)", "Array(UInt*)", "Array(Int*)"}}
+        {"phi", "Quantile level, normally in the range [0, 1]: either one number for the whole grid or an array with one number per grid point. Must be the same in every row.", {"Float*", "UInt*", "Int*", "Array(Float*)", "Array(UInt*)", "Array(Int*)"}}
     };
     FunctionDocumentation::ReturnedValue returned_value_timeSeriesQuantileToGrid = {"Returns the phi-quantile of values on the specified grid. The returned array contains one value for each time grid point. The value is NULL if there are no samples within the window for a particular grid point.", {"Array(Nullable(Float64))"}};
     FunctionDocumentation::Examples examples_timeSeriesQuantileToGrid = {};
