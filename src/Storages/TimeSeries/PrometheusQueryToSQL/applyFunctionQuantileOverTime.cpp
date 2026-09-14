@@ -154,9 +154,10 @@ SQLQueryPiece applyFunctionQuantileOverTime(
     const auto function_name = function_node->function_name;
     checkArgumentTypes(function_name, arguments, context);
 
-    QuantileLevel quantile_level = getQuantileLevel(function_node, arguments, context);
-    if (!quantile_level.ast)
-        return SQLQueryPiece{function_node, ResultType::INSTANT_VECTOR, StoreMethod::EMPTY};
+    auto range_argument = std::move(arguments[1]);
+
+    if (range_argument.store_method == StoreMethod::EMPTY)
+        return SQLQueryPiece{function_node, ResultType::INSTANT_VECTOR, StoreMethod::EMPTY}; /// The range vector is empty, so is the result.
 
     auto node_range = context.node_range_getter.get(function_node);
     if (node_range.empty())
@@ -167,15 +168,15 @@ SQLQueryPiece applyFunctionQuantileOverTime(
     auto step = node_range.step;
     auto window = node_range.window;
 
-    auto argument = std::move(arguments[1]);
+    /// The level goes last: it may register a scalar subquery, which is left unused if the result is found empty above.
+    QuantileLevel quantile_level = getQuantileLevel(function_node, arguments, context);
+    if (!quantile_level.ast)
+        return SQLQueryPiece{function_node, ResultType::INSTANT_VECTOR, StoreMethod::EMPTY};
 
-    if (argument.store_method == StoreMethod::EMPTY)
-        return SQLQueryPiece{function_node, ResultType::INSTANT_VECTOR, StoreMethod::EMPTY}; /// The range vector is empty, so is the result.
-
-    ASTs aggregate_function_arguments = getToGridAggregateFunctionArguments(argument, context);
+    ASTs aggregate_function_arguments = getToGridAggregateFunctionArguments(range_argument, context);
 
     /// A fixed @ on the range vector makes the whole call step-invariant in PromQL, so it is evaluated once.
-    const auto * fixed_at_node = getFixedAtModifier(argument);
+    const auto * fixed_at_node = getFixedAtModifier(range_argument);
     if (fixed_at_node && !quantile_level.is_constant)
     {
         /// A fixed @ freezes the samples but not phi, so PromQL still evaluates per step; the aggregate derives its
@@ -183,13 +184,13 @@ SQLQueryPiece applyFunctionQuantileOverTime(
         throw Exception(ErrorCodes::NOT_IMPLEMENTED,
                         "Function '{}' does not support a time-varying first argument (the quantile) together with "
                         "a fixed @ modifier on the range vector {}",
-                        function_name, getPromQLText(argument, context));
+                        function_name, getPromQLText(range_argument, context));
     }
     const auto aggregation_range = getRangeAggregationRange(fixed_at_node, node_range, context);
 
     /// The result is a vector grid (one row per series, the aggregate function is calculated `GROUP BY group`) if the
     /// range vector holds series, and a scalar grid if it was made from a scalar.
-    const bool has_group = (argument.store_method == StoreMethod::VECTOR_GRID) || (argument.store_method == StoreMethod::RAW_DATA);
+    const bool has_group = (range_argument.store_method == StoreMethod::VECTOR_GRID) || (range_argument.store_method == StoreMethod::RAW_DATA);
 
     SelectQueryBuilder builder;
 
@@ -215,14 +216,14 @@ SQLQueryPiece applyFunctionQuantileOverTime(
     if (has_group)
         builder.group_by.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Group));
 
-    if (argument.select_query)
+    if (range_argument.select_query)
     {
         auto & subqueries = context.subqueries;
-        subqueries.emplace_back(subqueries.size(), std::move(argument.select_query), SQLSubqueryType::TABLE);
+        subqueries.emplace_back(subqueries.size(), std::move(range_argument.select_query), SQLSubqueryType::TABLE);
         builder.from_table = subqueries.back().name;
     }
 
-    SQLQueryPiece res = argument;
+    SQLQueryPiece res = range_argument;
     res.store_method = has_group ? StoreMethod::VECTOR_GRID : StoreMethod::SCALAR_GRID;
     res.scalar_value = {};
     res.node = function_node;

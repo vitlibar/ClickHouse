@@ -202,9 +202,10 @@ SQLQueryPiece applyFunctionPredictLinear(
     const auto function_name = function_node->function_name;
     checkArgumentTypes(function_name, arguments, context);
 
-    PredictionOffset prediction_offset = getPredictionOffset(function_node, arguments, context);
-    if (!prediction_offset.ast)
-        return SQLQueryPiece{function_node, ResultType::INSTANT_VECTOR, StoreMethod::EMPTY};
+    auto range_argument = std::move(arguments[0]);
+
+    if (range_argument.store_method == StoreMethod::EMPTY)
+        return SQLQueryPiece{function_node, ResultType::INSTANT_VECTOR, StoreMethod::EMPTY}; /// The range vector is empty, so is the result.
 
     auto node_range = context.node_range_getter.get(function_node);
     if (node_range.empty())
@@ -215,21 +216,21 @@ SQLQueryPiece applyFunctionPredictLinear(
     auto step = node_range.step;
     auto window = node_range.window;
 
-    auto argument = std::move(arguments[0]);
+    /// The horizon goes last: it may register a scalar subquery, which is left unused if the result is found empty above.
+    PredictionOffset prediction_offset = getPredictionOffset(function_node, arguments, context);
+    if (!prediction_offset.ast)
+        return SQLQueryPiece{function_node, ResultType::INSTANT_VECTOR, StoreMethod::EMPTY};
 
-    if (argument.store_method == StoreMethod::EMPTY)
-        return SQLQueryPiece{function_node, ResultType::INSTANT_VECTOR, StoreMethod::EMPTY}; /// The range vector is empty, so is the result.
-
-    ASTs aggregate_function_arguments = getToGridAggregateFunctionArguments(argument, context);
+    ASTs aggregate_function_arguments = getToGridAggregateFunctionArguments(range_argument, context);
 
     /// A fixed @ on the range vector freezes the sample window at the fixed timestamp.
-    const auto * fixed_at_node = getFixedAtModifier(argument);
+    const auto * fixed_at_node = getFixedAtModifier(range_argument);
     const auto aggregation_range = getRangeAggregationRange(fixed_at_node, node_range, context);
     const size_t result_grid_size = stepsInTimeSeriesRange(start_time, end_time, step);
 
     /// The result is a vector grid (one row per series, the aggregate function is calculated `GROUP BY group`) if the
     /// range vector holds series, and a scalar grid if it was made from a scalar.
-    const bool has_group = (argument.store_method == StoreMethod::VECTOR_GRID) || (argument.store_method == StoreMethod::RAW_DATA);
+    const bool has_group = (range_argument.store_method == StoreMethod::VECTOR_GRID) || (range_argument.store_method == StoreMethod::RAW_DATA);
 
     SelectQueryBuilder builder;
 
@@ -269,14 +270,14 @@ SQLQueryPiece applyFunctionPredictLinear(
     if (has_group)
         builder.group_by.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Group));
 
-    if (argument.select_query)
+    if (range_argument.select_query)
     {
         auto & subqueries = context.subqueries;
-        subqueries.emplace_back(subqueries.size(), std::move(argument.select_query), SQLSubqueryType::TABLE);
+        subqueries.emplace_back(subqueries.size(), std::move(range_argument.select_query), SQLSubqueryType::TABLE);
         builder.from_table = subqueries.back().name;
     }
 
-    SQLQueryPiece res = argument;
+    SQLQueryPiece res = range_argument;
     res.store_method = has_group ? StoreMethod::VECTOR_GRID : StoreMethod::SCALAR_GRID;
     res.scalar_value = {};
     res.node = function_node;
