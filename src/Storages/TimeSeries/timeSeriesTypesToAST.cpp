@@ -77,9 +77,9 @@ ASTPtr timeSeriesDurationToAST(Decimal64 duration, const DataTypePtr & timestamp
 }
 
 
-ASTPtr timeSeriesScalarToAST(Float64 value, const DataTypePtr & scalar_data_type)
+ASTPtr timeSeriesScalarToAST(Float64 value)
 {
-    return timeSeriesScalarASTCast(make_intrusive<ASTLiteral>(value), scalar_data_type);
+    return make_intrusive<ASTLiteral>(value);
 }
 
 
@@ -148,22 +148,15 @@ ASTPtr timeSeriesDurationASTCast(ASTPtr && ast, const DataTypePtr & timestamp_da
 }
 
 
-ASTPtr timeSeriesScalarASTCast(ASTPtr && ast, const DataTypePtr & scalar_data_type)
+ASTPtr timeSeriesASTCast(ASTPtr && ast, const DataTypePtr & data_type)
 {
-    WhichDataType which_data_type{scalar_data_type};
-    if (which_data_type.isFloat64())
-    {
-        return makeASTFunction("toFloat64", std::move(ast));
-    }
-    else if (which_data_type.isFloat32())
-    {
-        return makeASTFunction("toFloat32", std::move(ast));
-    }
-    else
-    {
-        throw Exception(ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT, "Can't cast {} to the scalar type {}",
-                        ast->formatForLogging(), scalar_data_type->getName());
-    }
+    return makeASTFunction("CAST", std::move(ast), make_intrusive<ASTLiteral>(data_type->getName()));
+}
+
+
+ASTPtr timeSeriesScalarASTCast(ASTPtr && ast)
+{
+    return makeASTFunction("toFloat64", std::move(ast));
 }
 
 }

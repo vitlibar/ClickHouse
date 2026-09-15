@@ -1,5 +1,8 @@
 #include <Storages/TimeSeries/PrometheusQueryToSQL/applyFunctionOverRange.h>
 
+#include <DataTypes/DataTypeArray.h>
+#include <DataTypes/DataTypeNullable.h>
+#include <DataTypes/DataTypesNumber.h>
 #include <Parsers/ASTExpressionList.h>
 #include <Parsers/ASTFunction.h>
 #include <Parsers/ASTIdentifier.h>
@@ -52,6 +55,11 @@ namespace
     {
         std::string_view ch_function_name;
         bool drop_metric_name = true;
+
+        /// The aggregate function returns something other than Float64: a value of one of the samples (which can be Float32),
+        /// a timestamp of one of the samples (which has the type of the timestamps in the TimeSeries table, or `result_timestamp_type`),
+        /// or a count (UInt64). Such result must be cast to Float64.
+        bool needs_cast_to_float64 = false;
     };
 
     /// Returns information about how the specified prometheus function is implemented.
@@ -93,36 +101,42 @@ namespace
              {
                  "timeSeriesLastToGrid",
                  /* drop_metric_name = */ false,
+                 /* needs_cast_to_float64 = */ true,
              }},
 
             {"max_over_time",
              {
                  "timeSeriesMaxToGrid",
                  /* drop_metric_name = */ true,
+                 /* needs_cast_to_float64 = */ true,
              }},
 
             {"min_over_time",
              {
                  "timeSeriesMinToGrid",
                  /* drop_metric_name = */ true,
+                 /* needs_cast_to_float64 = */ true,
              }},
 
             {"ts_of_max_over_time",
              {
                  "timeSeriesTimestampOfMaxToGrid",
                  /* drop_metric_name = */ true,
+                 /* needs_cast_to_float64 = */ true,
              }},
 
             {"ts_of_min_over_time",
              {
                  "timeSeriesTimestampOfMinToGrid",
                  /* drop_metric_name = */ true,
+                 /* needs_cast_to_float64 = */ true,
              }},
 
             {"present_over_time",
              {
                  "timeSeriesPresentToGrid",
                  /* drop_metric_name = */ true,
+                 /* needs_cast_to_float64 = */ true,
              }},
 
             {"deriv",
@@ -135,12 +149,14 @@ namespace
              {
                  "timeSeriesChangesToGrid",
                  /* drop_metric_name = */ true,
+                 /* needs_cast_to_float64 = */ true,
              }},
 
             {"resets",
              {
                  "timeSeriesResetsToGrid",
                  /* drop_metric_name = */ true,
+                 /* needs_cast_to_float64 = */ true,
              }},
 
             {"sum_over_time",
@@ -159,6 +175,7 @@ namespace
              {
                  "timeSeriesCountToGrid",
                  /* drop_metric_name = */ true,
+                 /* needs_cast_to_float64 = */ true,
              }},
 
             /// TODO:
@@ -235,10 +252,23 @@ SQLQueryPiece applyFunctionOverRange(
     /// <aggregate_function>(<timestamps>, <values>) AS values
     ASTPtr aggregate_values = addParametersToAggregateFunction(
         makeASTFunction(impl_info->ch_function_name, std::move(aggregate_function_arguments)),
-        timeSeriesTimestampToAST(aggregation_range.start_time, context.timestamp_data_type),
-        timeSeriesTimestampToAST(aggregation_range.end_time, context.timestamp_data_type),
-        timeSeriesDurationToAST(aggregation_range.step, context.timestamp_data_type),
-        timeSeriesDurationToAST(window, context.timestamp_data_type));
+        timeSeriesTimestampToAST(aggregation_range.start_time, context.result_timestamp_type),
+        timeSeriesTimestampToAST(aggregation_range.end_time, context.result_timestamp_type),
+        timeSeriesDurationToAST(aggregation_range.step, context.result_timestamp_type),
+        timeSeriesDurationToAST(window, context.result_timestamp_type));
+
+    if (impl_info->needs_cast_to_float64)
+    {
+        /// CAST(<aggregate_function>(timestamp, value), 'Array(Nullable(Float64))')
+        /// Values of raw data can be Float32 (see the comment for StoreMethod::RAW_DATA), timestamps returned by
+        /// ts_of_max_over_time and ts_of_min_over_time are converted to seconds since 1970-01-01 as Prometheus does,
+        /// counts returned by changes, resets and count_over_time are converted from UInt64, and the flag returned by
+        /// present_over_time is converted from UInt8.
+        /// The cast does nothing if the result is already Float64, and the aggregated grid is much smaller than the raw data.
+        aggregate_values = timeSeriesASTCast(
+            std::move(aggregate_values),
+            std::make_shared<DataTypeArray>(std::make_shared<DataTypeNullable>(std::make_shared<DataTypeFloat64>())));
+    }
 
     if (fixed_at_node)
         aggregate_values = repeatFixedAtResultOverGrid(

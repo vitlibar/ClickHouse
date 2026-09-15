@@ -20,15 +20,15 @@
 namespace DB
 {
 
-template <typename TimestampType_, typename IntervalType_, typename ValueType_, bool is_resets_>
+template <typename TimestampType_, typename ValueType_, bool is_resets_>
 struct AggregateFunctionTimeseriesChangesTraits
 {
     static constexpr bool is_resets = is_resets_;
 
-    using TimestampType = TimestampType_;
-    using IntervalType = IntervalType_;
+    using GridTimestampType = DateTime64;
     using ValueType = ValueType_;
-    using ResultType = ValueType_;
+    using TimestampType = TimestampType_;
+    using ResultType = UInt64;
 
     static String getName()
     {
@@ -91,13 +91,13 @@ struct AggregateFunctionTimeseriesChangesTraits
     /// running sum in O(1) per bucket.
     struct Aggregator
     {
-        AggregateFunctionTimeseriesSlidingSum<TimestampType, Summary> sliding_sum;
+        AggregateFunctionTimeseriesSlidingSum<Summary> sliding_sum;
 
         /// `Summary::merge` is order-dependent (not commutative), so it must take the invertible running-sum path,
         /// not the two-stacks path which combines values out of time order.
         static_assert(decltype(sliding_sum)::is_invertible);
 
-        void add(const Samples & samples, TimestampType bucket_end_timestamp)
+        void add(const Samples & samples, GridTimestampType bucket_end_timestamp)
         {
             /// Preaggregate the bucket's samples (`forEachSample` visits them in ascending timestamp order) into a per-bucket summary.
             Summary summary;
@@ -113,24 +113,24 @@ struct AggregateFunctionTimeseriesChangesTraits
             add(std::move(summary), bucket_end_timestamp);
         }
 
-        void add(Summary summary, TimestampType bucket_end_timestamp)
+        void add(Summary summary, GridTimestampType bucket_end_timestamp)
         {
             if (summary.count == 0)
                 return;
             sliding_sum.add(std::move(summary), bucket_end_timestamp);
         }
 
-        void removeBefore(TimestampType cut_off)
+        void removeBefore(GridTimestampType cut_off)
         {
             sliding_sum.removeBefore(cut_off);
         }
 
-        std::optional<ValueType> getResult(TimestampType /*grid_timestamp*/) const
+        std::optional<ResultType> getResult(GridTimestampType /*grid_timestamp*/) const
         {
             const Summary combined = sliding_sum.getCurrentSum();
             if (combined.count == 0)
                 return std::nullopt;
-            return static_cast<ValueType>(combined.changes);
+            return combined.changes;
         }
     };
 
@@ -141,14 +141,14 @@ struct AggregateFunctionTimeseriesChangesTraits
 };
 
 
-template <typename TimestampType_, typename IntervalType_, typename ValueType_, bool is_resets_>
+template <typename TimestampType_, typename ValueType_, bool is_resets_>
 class AggregateFunctionTimeseriesChanges final :
     public AggregateFunctionTimeseriesBase<
-        AggregateFunctionTimeseriesChanges<TimestampType_, IntervalType_, ValueType_, is_resets_>,
-        AggregateFunctionTimeseriesChangesTraits<TimestampType_, IntervalType_, ValueType_, is_resets_>>
+        AggregateFunctionTimeseriesChanges<TimestampType_, ValueType_, is_resets_>,
+        AggregateFunctionTimeseriesChangesTraits<TimestampType_, ValueType_, is_resets_>>
 {
 public:
-    using Traits = AggregateFunctionTimeseriesChangesTraits<TimestampType_, IntervalType_, ValueType_, is_resets_>;
+    using Traits = AggregateFunctionTimeseriesChangesTraits<TimestampType_, ValueType_, is_resets_>;
 
     static constexpr bool is_resets = Traits::is_resets;
 
@@ -163,12 +163,12 @@ public:
     }
 };
 
-/// Each SQL function as a 3-argument template with its is_resets variant baked in, so registration names the
+/// Each SQL function as a template with its is_resets variant baked in, so registration names the
 /// function directly.
-template <typename TimestampType, typename IntervalType, typename ValueType>
-using AggregateFunctionTimeseriesChangesToGrid = AggregateFunctionTimeseriesChanges<TimestampType, IntervalType, ValueType, false>;
+template <typename TimestampType, typename ValueType>
+using AggregateFunctionTimeseriesChangesToGrid = AggregateFunctionTimeseriesChanges<TimestampType, ValueType, false>;
 
-template <typename TimestampType, typename IntervalType, typename ValueType>
-using AggregateFunctionTimeseriesResetsToGrid = AggregateFunctionTimeseriesChanges<TimestampType, IntervalType, ValueType, true>;
+template <typename TimestampType, typename ValueType>
+using AggregateFunctionTimeseriesResetsToGrid = AggregateFunctionTimeseriesChanges<TimestampType, ValueType, true>;
 
 }

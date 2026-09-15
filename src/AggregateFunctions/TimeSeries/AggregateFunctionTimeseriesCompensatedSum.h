@@ -16,18 +16,18 @@ namespace DB
 /// Traits for `timeSeriesSumToGrid` and `timeSeriesAvgToGrid`, the ClickHouse counterparts of PromQL's
 /// `sum_over_time` and `avg_over_time`. Both keep the same compensated sum per window (in the generic
 /// `AggregateFunctionTimeseriesSlidingSum` container); avg divides it by the count.
-template <typename TimestampType_, typename IntervalType_, typename ValueType_, bool is_avg_>
+template <typename TimestampType_, typename ValueType_, bool is_avg_>
 struct AggregateFunctionTimeseriesCompensatedSumTraits
 {
     static constexpr bool is_avg = is_avg_;
 
-    using TimestampType = TimestampType_;
-    using IntervalType = IntervalType_;
+    using GridTimestampType = DateTime64;
     using ValueType = ValueType_;
+    using TimestampType = TimestampType_;
 
     using Samples = AggregateFunctionTimeseriesSamples<TimestampType, ValueType>;
 
-    using ResultType = ValueType;
+    using ResultType = Float64;
 
     static String getName()
     {
@@ -75,7 +75,7 @@ struct AggregateFunctionTimeseriesCompensatedSumTraits
 
     struct Aggregator
     {
-        AggregateFunctionTimeseriesSlidingSum<TimestampType, Summary> sliding_sum;
+        AggregateFunctionTimeseriesSlidingSum<Summary> sliding_sum;
 
         static_assert(!decltype(sliding_sum)::is_invertible);
 
@@ -84,7 +84,7 @@ struct AggregateFunctionTimeseriesCompensatedSumTraits
         {
         }
 
-        void add(const Samples & samples, TimestampType bucket_end_timestamp)
+        void add(const Samples & samples, GridTimestampType bucket_end_timestamp)
         {
             Summary summary;
             samples.forEachSample([&summary](TimestampType timestamp, ValueType value)
@@ -97,12 +97,12 @@ struct AggregateFunctionTimeseriesCompensatedSumTraits
             sliding_sum.add(std::move(summary), bucket_end_timestamp);
         }
 
-        void removeBefore(TimestampType cut_off)
+        void removeBefore(GridTimestampType cut_off)
         {
             sliding_sum.removeBefore(cut_off);
         }
 
-        std::optional<ResultType> getResult(TimestampType /*grid_timestamp*/) const
+        std::optional<ResultType> getResult(GridTimestampType /*grid_timestamp*/) const
         {
             const Summary combined = sliding_sum.getCurrentSum();
 
@@ -130,14 +130,14 @@ struct AggregateFunctionTimeseriesCompensatedSumTraits
 
 /// Calculates the sum (`is_avg_` = false) or the average (`is_avg_` = true) of time series values on a grid;
 /// the counterparts of PromQL's `sum_over_time` and `avg_over_time`.
-template <typename TimestampType_, typename IntervalType_, typename ValueType_, bool is_avg_>
+template <typename TimestampType_, typename ValueType_, bool is_avg_>
 class AggregateFunctionTimeseriesCompensatedSum final :
     public AggregateFunctionTimeseriesBase<
-        AggregateFunctionTimeseriesCompensatedSum<TimestampType_, IntervalType_, ValueType_, is_avg_>,
-        AggregateFunctionTimeseriesCompensatedSumTraits<TimestampType_, IntervalType_, ValueType_, is_avg_>>
+        AggregateFunctionTimeseriesCompensatedSum<TimestampType_, ValueType_, is_avg_>,
+        AggregateFunctionTimeseriesCompensatedSumTraits<TimestampType_, ValueType_, is_avg_>>
 {
 public:
-    using Traits = AggregateFunctionTimeseriesCompensatedSumTraits<TimestampType_, IntervalType_, ValueType_, is_avg_>;
+    using Traits = AggregateFunctionTimeseriesCompensatedSumTraits<TimestampType_, ValueType_, is_avg_>;
     using Aggregator = typename Traits::Aggregator;
 
     using Base = AggregateFunctionTimeseriesBase<AggregateFunctionTimeseriesCompensatedSum, Traits>;
@@ -149,12 +149,12 @@ public:
     }
 };
 
-/// Each SQL function as a 3-argument template with its is_avg variant baked in, so registration names the
+/// Each SQL function as a template with its is_avg variant baked in, so registration names the
 /// function directly.
-template <typename TimestampType, typename IntervalType, typename ValueType>
-using AggregateFunctionTimeseriesSumToGrid = AggregateFunctionTimeseriesCompensatedSum<TimestampType, IntervalType, ValueType, /* is_avg_ = */ false>;
+template <typename TimestampType, typename ValueType>
+using AggregateFunctionTimeseriesSumToGrid = AggregateFunctionTimeseriesCompensatedSum<TimestampType, ValueType, /* is_avg_ = */ false>;
 
-template <typename TimestampType, typename IntervalType, typename ValueType>
-using AggregateFunctionTimeseriesAvgToGrid = AggregateFunctionTimeseriesCompensatedSum<TimestampType, IntervalType, ValueType, /* is_avg_ = */ true>;
+template <typename TimestampType, typename ValueType>
+using AggregateFunctionTimeseriesAvgToGrid = AggregateFunctionTimeseriesCompensatedSum<TimestampType, ValueType, /* is_avg_ = */ true>;
 
 }

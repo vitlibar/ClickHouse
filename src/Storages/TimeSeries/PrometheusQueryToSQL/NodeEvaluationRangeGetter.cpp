@@ -28,15 +28,8 @@ namespace
 NodeEvaluationRangeGetter::NodeEvaluationRangeGetter(std::shared_ptr<const PrometheusQueryTree> promql_tree_,
                                                      const PrometheusQueryEvaluationSettings & settings_)
     : promql_tree(promql_tree_)
-    , timestamp_data_type(settings_.timestamp_data_type)
-    , timestamp_scale(tryGetDecimalScale(*timestamp_data_type).value_or(0))
+    , timestamp_scale(getDecimalScale(*settings_.timestamp_type))
 {
-    if (promql_tree->getTimestampScale() != timestamp_scale)
-    {
-        throw Exception(ErrorCodes::LOGICAL_ERROR, "Got two different timestamp scales: {} and {}",
-                        promql_tree->getTimestampScale(), timestamp_scale);
-    }
-
     /// By default the lookback period is 5 minutes.
     if (settings_.instant_selector_window)
         instant_selector_window = *settings_.instant_selector_window;

@@ -18,15 +18,16 @@
 namespace DB
 {
 
-template <typename TimestampType_, typename IntervalType_, typename ValueType_, bool is_rate_>
+template <typename TimestampType_, typename ValueType_, bool is_rate_>
 struct AggregateFunctionTimeseriesInstantValueTraits
 {
     static constexpr bool is_rate = is_rate_;
 
-    using TimestampType = TimestampType_;
-    using IntervalType = IntervalType_;
+    using GridTimestampType = DateTime64;
+    using GridIntervalType = Decimal64;
     using ValueType = ValueType_;
-    using ResultType = ValueType_;
+    using TimestampType = TimestampType_;
+    using ResultType = Float64;
 
     static String getName()
     {
@@ -42,50 +43,49 @@ struct AggregateFunctionTimeseriesInstantValueTraits
     struct Aggregator
     {
         Summary latest;
-        TimestampType timestamp_scale_multiplier;
+        Int64 grid_ticks_per_second;
+        Int64 column_to_grid_multiplier;
 
-        explicit Aggregator(TimestampType timestamp_scale_multiplier_)
-            : timestamp_scale_multiplier(timestamp_scale_multiplier_)
+        Aggregator(Int64 grid_ticks_per_second_, Int64 column_to_grid_multiplier_)
+            : grid_ticks_per_second(grid_ticks_per_second_), column_to_grid_multiplier(column_to_grid_multiplier_)
         {
         }
 
-        void add(const Summary & summary, TimestampType /*bucket_end_timestamp*/)
+        void add(const Summary & summary, GridTimestampType /*bucket_end_timestamp*/)
         {
             latest.merge(summary);
         }
 
-        void removeBefore(TimestampType cut_off)
+        void removeBefore(GridTimestampType cut_off)
         {
             /// `timestamps[0]` is the newest sample, `timestamps[1]` the previous one.
-            if (latest.filled >= 1 && latest.timestamps[0] <= cut_off)
+            if (latest.filled >= 1 && static_cast<Int64>(latest.timestamps[0]) * column_to_grid_multiplier <= cut_off)
                 latest.filled = 0;
-            else if (latest.filled == 2 && latest.timestamps[1] <= cut_off)
+            else if (latest.filled == 2 && static_cast<Int64>(latest.timestamps[1]) * column_to_grid_multiplier <= cut_off)
                 latest.filled = 1;
         }
 
-        std::optional<ValueType> getResult(TimestampType /*grid_timestamp*/) const
+        std::optional<ResultType> getResult(GridTimestampType /*grid_timestamp*/) const
         {
             if (latest.filled < 2)
                 return std::nullopt;
 
-            const TimestampType timestamp = latest.timestamps[0];
-            const ValueType value = latest.values[0];
-            const TimestampType previous_timestamp = latest.timestamps[1];
-            const ValueType previous_value = latest.values[1];
+            const Float64 value = static_cast<Float64>(latest.values[0]);
+            const Float64 previous_value = static_cast<Float64>(latest.values[1]);
 
-            const ValueType time_difference = static_cast<ValueType>(timestamp - previous_timestamp);
+            /// The timestamps of the samples have the scale of the input columns. The difference of two timestamps in a window
+            /// fits Int64 at the scale of the grid because the window does.
+            const GridIntervalType time_difference = (static_cast<Int64>(latest.timestamps[0]) - static_cast<Int64>(latest.timestamps[1])) * column_to_grid_multiplier;
             if (time_difference == 0)
                 return std::nullopt;
 
             /// Resets are taken into account for `irate` (counter) but not for `idelta` (gauge).
-            ValueType value_difference = (is_rate && value < previous_value) ? value : (value - previous_value);
-            ValueType result = value_difference;
+            const Float64 value_difference = (is_rate && value < previous_value) ? value : (value - previous_value);
+
             if constexpr (is_rate)
-            {
-                using TimestampScaleMultiplierType = std::conditional_t<std::is_floating_point_v<ValueType>, ValueType, TimestampType>;
-                result = result * static_cast<TimestampScaleMultiplierType>(timestamp_scale_multiplier) / time_difference;
-            }
-            return result;
+                return value_difference * static_cast<Float64>(grid_ticks_per_second) / static_cast<Float64>(time_difference);
+            else
+                return value_difference;
         }
     };
 
@@ -97,18 +97,18 @@ struct AggregateFunctionTimeseriesInstantValueTraits
 
 
 /// Aggregate function to calculate instant values (irate and idelta) of timeseries on the specified grid
-template <typename TimestampType_, typename IntervalType_, typename ValueType_, bool is_rate_>
+template <typename TimestampType_, typename ValueType_, bool is_rate_>
 class AggregateFunctionTimeseriesInstantValue final :
     public AggregateFunctionTimeseriesBase<
-        AggregateFunctionTimeseriesInstantValue<TimestampType_, IntervalType_, ValueType_, is_rate_>,
-        AggregateFunctionTimeseriesInstantValueTraits<TimestampType_, IntervalType_, ValueType_, is_rate_>>
+        AggregateFunctionTimeseriesInstantValue<TimestampType_, ValueType_, is_rate_>,
+        AggregateFunctionTimeseriesInstantValueTraits<TimestampType_, ValueType_, is_rate_>>
 {
 public:
-    using Traits = AggregateFunctionTimeseriesInstantValueTraits<TimestampType_, IntervalType_, ValueType_, is_rate_>;
+    using Traits = AggregateFunctionTimeseriesInstantValueTraits<TimestampType_, ValueType_, is_rate_>;
 
     static constexpr bool is_rate = Traits::is_rate;
 
-    using TimestampType = typename Traits::TimestampType;
+    using GridTimestampType = typename Traits::GridTimestampType;
     using ValueType = typename Traits::ValueType;
 
     using Base = AggregateFunctionTimeseriesBase<AggregateFunctionTimeseriesInstantValue, Traits>;
@@ -116,16 +116,16 @@ public:
 
     typename Traits::Aggregator createAggregator(size_t /* stack_size_for_two_stacks */) const
     {
-        return typename Traits::Aggregator{Base::timestamp_scale_multiplier};
+        return typename Traits::Aggregator{Base::grid_ticks_per_second, Base::column_to_grid_multiplier};
     }
 };
 
-/// Each SQL function as a 3-argument template with its is_rate variant baked in, so registration names the
+/// Each SQL function as a template with its is_rate variant baked in, so registration names the
 /// function directly.
-template <typename TimestampType, typename IntervalType, typename ValueType>
-using AggregateFunctionTimeseriesInstantRateToGrid = AggregateFunctionTimeseriesInstantValue<TimestampType, IntervalType, ValueType, true>;
+template <typename TimestampType, typename ValueType>
+using AggregateFunctionTimeseriesInstantRateToGrid = AggregateFunctionTimeseriesInstantValue<TimestampType, ValueType, true>;
 
-template <typename TimestampType, typename IntervalType, typename ValueType>
-using AggregateFunctionTimeseriesInstantDeltaToGrid = AggregateFunctionTimeseriesInstantValue<TimestampType, IntervalType, ValueType, false>;
+template <typename TimestampType, typename ValueType>
+using AggregateFunctionTimeseriesInstantDeltaToGrid = AggregateFunctionTimeseriesInstantValue<TimestampType, ValueType, false>;
 
 }

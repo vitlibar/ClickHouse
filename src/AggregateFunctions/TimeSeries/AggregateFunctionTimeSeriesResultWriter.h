@@ -4,6 +4,7 @@
 #include <utility>
 
 #include <Columns/ColumnArray.h>
+#include <Columns/ColumnDecimal.h>
 #include <Columns/ColumnNullable.h>
 #include <Columns/ColumnTuple.h>
 #include <Columns/ColumnVector.h>
@@ -20,12 +21,12 @@ namespace DB
 
 /// Writes the result column of a `timeSeries*ToGrid` aggregate function: one row per aggregation state, and each row is
 /// an array with one element per grid point, which is the result for that grid point or NULL if there is no result.
-/// `ResultType` is a number here; the specialization below is for a pair of numbers.
+/// `ResultType` is a number or a DateTime64 here; the specialization below is for a pair of numbers.
 template <typename ResultType>
 class AggregateFunctionTimeSeriesResultWriter
 {
 public:
-    /// Array(Nullable(ResultType))
+    /// Array(Nullable(ResultType)). Not for DateTime64: its data type needs a scale, which the aggregate function derives from its argument.
     static DataTypePtr createResultType()
     {
         return std::make_shared<DataTypeArray>(std::make_shared<DataTypeNullable>(std::make_shared<DataTypeNumber<ResultType>>()));
@@ -34,7 +35,7 @@ public:
     AggregateFunctionTimeSeriesResultWriter(IColumn & column, size_t grid_size_)
         : grid_size(grid_size_)
         , offsets(typeid_cast<ColumnArray &>(column).getOffsets())
-        , data(typeid_cast<ColumnVector<ResultType> &>(typeid_cast<ColumnNullable &>(typeid_cast<ColumnArray &>(column).getData()).getNestedColumn()).getData())
+        , data(typeid_cast<ColumnVectorOrDecimal<ResultType> &>(typeid_cast<ColumnNullable &>(typeid_cast<ColumnArray &>(column).getData()).getNestedColumn()).getData())
         , null_map(typeid_cast<ColumnNullable &>(typeid_cast<ColumnArray &>(column).getData()).getNullMapData())
     {
         chassert(data.size() == null_map.size(), "Sizes of nested column and null map of Nullable column are not equal");
@@ -68,7 +69,7 @@ public:
 private:
     const size_t grid_size;
     ColumnArray::Offsets & offsets;
-    typename ColumnVector<ResultType>::Container & data;
+    typename ColumnVectorOrDecimal<ResultType>::Container & data;
     NullMap & null_map;
     size_t row_begin = 0;
 };

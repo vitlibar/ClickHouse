@@ -9,6 +9,7 @@
 #include <type_traits>
 #include <utility>
 
+#include <base/arithmeticOverflow.h>
 #include <base/sort.h>
 
 #include <libdivide-config.h>
@@ -20,6 +21,7 @@
 #include <Columns/ColumnVector.h>
 #include <DataTypes/DataTypeArray.h>
 #include <DataTypes/DataTypeNullable.h>
+#include <DataTypes/DataTypeTuple.h>
 #include <DataTypes/DataTypesDecimal.h>
 
 #include <AggregateFunctions/IAggregateFunction.h>
@@ -61,6 +63,10 @@ using TimeSeriesBucketsMap = HashMap<UInt64, Bucket, TrivialHash, TimeSeriesBuck
 /// Base class for time series aggregate functions that map values to a grid specified by start timestamp, end timestamp, step and window.
 /// It implements the common logic for handling input data as either scalar timestamps and values or vectors of timestamps and values of
 /// equal sizes and adding the data to the grid buckets. The actual aggregation logic within buckets is implemented in derived classes.
+///
+/// The grid uses DateTime64 timestamps and Decimal64 intervals with the scale `grid_timestamp_scale`, which is not less than the scale
+/// of the timestamps in the input columns (`Traits::TimestampType`). The samples in the buckets keep the type of the input
+/// columns, only the timestamps compared with the grid are converted (see `column_to_grid_multiplier`).
 template <class FunctionImpl, class Traits>
 class AggregateFunctionTimeseriesBase :
     public IAggregateFunctionHelper<AggregateFunctionTimeseriesBase<FunctionImpl, Traits>>
@@ -68,12 +74,18 @@ class AggregateFunctionTimeseriesBase :
 public:
     using Base = IAggregateFunctionHelper<AggregateFunctionTimeseriesBase<FunctionImpl, Traits>>;
 
-    using TimestampType = typename Traits::TimestampType;
-    using IntervalType = typename Traits::IntervalType;
+    /// Types of the timestamps and the intervals of the grid.
+    using GridTimestampType = DateTime64;
+    using GridIntervalType = Decimal64;
     using ValueType = typename Traits::ValueType;
 
+    /// Type of the timestamps in the input columns: DateTime64 with any scale, or UInt32 (DateTime is also stored as UInt32).
+    using TimestampType = typename Traits::TimestampType;
+
     /// The result for one grid point: a number, or a `std::pair` of numbers stored as a tuple whose element names
-    /// the traits define in `getResultTupleElementNames`.
+    /// the traits define in `getResultTupleElementNames`. Functions returning a part of one of the samples as is return
+    /// `ValueType` (last, min, max) or `TimestampType` (ts_of_min, ts_of_max), the counting functions (count, changes, resets)
+    /// return `UInt64`, the other functions calculate their results with double precision and return `Float64`.
     using ResultType = typename Traits::ResultType;
     using ResultWriter = AggregateFunctionTimeSeriesResultWriter<ResultType>;
 
@@ -102,11 +114,12 @@ public:
     bool shouldPrintParametersWithTypes() const override { return true; }
 
     explicit AggregateFunctionTimeseriesBase(const DataTypes & argument_types_, const Array & parameters_,
-        TimestampType start_timestamp_, TimestampType end_timestamp_, IntervalType step_, IntervalType window_, UInt32 timestamp_scale_)
+        GridTimestampType start_timestamp_, GridTimestampType end_timestamp_, GridIntervalType step_, GridIntervalType window_, UInt32 grid_timestamp_scale_,
+        UInt32 column_timestamp_scale_)
         : Base(
             argument_types_,
             parameters_,
-            createResultType())
+            createResultType(argument_types_))
         , array_of_pairs_argument(argument_types_.size() == 1 + FunctionImpl::num_extra_arguments)
         , array_arguments(!array_of_pairs_argument && (argument_types_[1]->getTypeId() == TypeIndex::Array))
         , step(checkStep(start_timestamp_, end_timestamp_, step_))
@@ -114,7 +127,9 @@ public:
         , grid_size(gridSize(start_timestamp_, end_timestamp_, step))
         , start_timestamp(start_timestamp_)
         , end_timestamp(alignedEndTimestamp(start_timestamp_, grid_size, step))
-        , timestamp_scale_multiplier(static_cast<TimestampType>(DecimalUtils::scaleMultiplier<Int64>(timestamp_scale_)))
+        , grid_ticks_per_second(DecimalUtils::scaleMultiplier<Int64>(grid_timestamp_scale_))
+        , column_to_grid_multiplier(columnToGridMultiplier(grid_timestamp_scale_, column_timestamp_scale_))
+        , column_to_grid_divider(column_to_grid_multiplier)
         , window_remainder(windowRemainder(step, window))
         , buckets_per_step(bucketsPerStep(window, window_remainder))
         , buckets_per_window(bucketsPerWindow(step, window, window_remainder))
@@ -359,7 +374,7 @@ public:
             bucket.deserialize(buf);
 
             /// Validate that each deserialized sample falls into this bucket's timestamp range.
-            bucket.checkTimestampsInRange(bucketTimeRange(bucket_index));
+            bucket.checkTimestampsInRange(toColumnTimeRange(bucketTimeRange(bucket_index)));
         }
     }
 
@@ -462,15 +477,17 @@ protected:
 
     const bool array_of_pairs_argument{};   /// Whether samples are passed as a single argument of type Array(Tuple(timestamp, value))
     const bool array_arguments{};           /// Whether timestamp/value arguments are arrays (one row holds a whole series) or scalars
-    const IntervalType step{};              /// Grid step (0 for a single-point grid). IntervalType represents a time difference between timestamps
-    const IntervalType window{};            /// Window size used by derived functions (e.g. for rate and delta calculations)
+    const GridIntervalType step{};              /// Grid step (0 for a single-point grid). GridIntervalType represents a time difference between timestamps
+    const GridIntervalType window{};            /// Window size used by derived functions (e.g. for rate and delta calculations)
     const size_t grid_size{};               /// Number of grid points: (end - start) / step + 1
-    const TimestampType start_timestamp{};  /// First timestamp in the grid
-    const TimestampType end_timestamp{};    /// Last timestamp in the grid. NOTE: It is aligned down by step relative to start_timestamp
-    const TimestampType timestamp_scale_multiplier{};   /// When timestamps are in DateTime64 (which is Decimal with some scale)
-                                                        /// this multiplier is used for calculation rate per second (i.e. it is 1000 for
-                                                        /// milliseconds or 1e6 for microseconds)
-    const IntervalType window_remainder{};  /// (window % step) if (window > step)
+    const GridTimestampType start_timestamp{};  /// First timestamp in the grid
+    const GridTimestampType end_timestamp{};    /// Last timestamp in the grid. NOTE: It is aligned down by step relative to start_timestamp
+    const Int64 grid_ticks_per_second{};            /// 10^grid_timestamp_scale: converts intervals of the grid to seconds, e.g. to calculate rate per second
+                                                    /// (it is 1000 for milliseconds or 1e6 for microseconds)
+    const Int64 column_to_grid_multiplier{};        /// 10^(grid_timestamp_scale - column_timestamp_scale): converts timestamps from the input columns
+                                                    /// to the scale of the grid; 1 if the scales are the same.
+    const libdivide::divider<Int64> column_to_grid_divider{1};   /// Reciprocal of `column_to_grid_multiplier` for `toColumnTimeRange`.
+    const GridIntervalType window_remainder{};  /// (window % step) if (window > step)
     const size_t buckets_per_step{};        /// 2 when window_remainder != 0 (each step is split), else 1; 0 when window == 0
     const size_t buckets_per_window{};      /// Number of buckets tiling each grid point's window (0 when window == 0)
     const size_t buckets_per_first_window{};/// Buckets in grid point #0's window (<= buckets_per_window; leading
@@ -478,14 +495,14 @@ protected:
     const size_t bucket_count{};            /// Number of buckets (0 when window == 0)
 
     /// Bucket #0 properties; every other bucket follows by arithmetic (see `bucketEndTimestamp`).
-    const IntervalType even_bucket_width{};         /// Width of even-indexed buckets
-    const IntervalType odd_bucket_width{};          /// Width of odd-indexed buckets (equals even_bucket_width when buckets_per_step == 1)
-    const IntervalType even_bucket_step{};          /// End-to-end spacing of even-indexed buckets (equals the width unless window < step)
-    const IntervalType odd_bucket_step{};           /// End-to-end spacing of odd-indexed buckets
-    const TimestampType first_bucket_end_time{};    /// End timestamp of bucket #0
-    const IntervalType first_bucket_width{};        /// Width of bucket #0: `even_bucket_width`, shortened when bucket #0
+    const GridIntervalType even_bucket_width{};         /// Width of even-indexed buckets
+    const GridIntervalType odd_bucket_width{};          /// Width of odd-indexed buckets (equals even_bucket_width when buckets_per_step == 1)
+    const GridIntervalType even_bucket_step{};          /// End-to-end spacing of even-indexed buckets (equals the width unless window < step)
+    const GridIntervalType odd_bucket_step{};           /// End-to-end spacing of odd-indexed buckets
+    const GridTimestampType first_bucket_end_time{};    /// End timestamp of bucket #0
+    const GridIntervalType first_bucket_width{};        /// Width of bucket #0: `even_bucket_width`, shortened when bucket #0
                                                     /// is clamped at the type minimum.
-    const TimestampType first_bucket_start_time{};  /// Start (inclusive) of bucket #0.
+    const GridTimestampType first_bucket_start_time{};  /// Start (inclusive) of bucket #0.
                                                     /// Samples before it are out of window for every grid point.
 
     /// Reciprocal of `step` for `classifySample` (`step` is fixed at construction).
@@ -494,16 +511,16 @@ protected:
     /// Compute the grid timestamp for a given grid index, i.e. `start_timestamp + grid_index * step`.
     /// Uses unsigned 64-bit arithmetic internally to avoid signed overflow on extreme inputs
     /// (`start_timestamp` near `INT64_MIN` together with a `step` near `INT64_MAX`). The final
-    /// cast back to `TimestampType` preserves the same bit pattern that the signed accumulator
+    /// cast back to `GridTimestampType` preserves the same bit pattern that the signed accumulator
     /// `grid_timestamp += step` would produce for normal inputs, but does not trigger UBSAN
     /// on the adversarial boundary values generated by the AST fuzzer.
-    TimestampType timestampAtIndex(size_t grid_index) const
+    GridTimestampType timestampAtIndex(size_t grid_index) const
     {
         chassert(grid_index < grid_size);
         const UInt64 start_bits = static_cast<UInt64>(toInt64(start_timestamp));
         const UInt64 step_bits = static_cast<UInt64>(step);
         const UInt64 result_bits = start_bits + static_cast<UInt64>(grid_index) * step_bits;
-        const TimestampType grid_point = static_cast<TimestampType>(static_cast<Int64>(result_bits));
+        const GridTimestampType grid_point = static_cast<GridTimestampType>(static_cast<Int64>(result_bits));
         return grid_point;
     }
 
@@ -536,12 +553,32 @@ private:
         std::is_trivially_copyable_v<Bucket> || requires { requires Bucket::is_position_independent; },
         "Bucket must be position independent (memmove-able) to be stored in a HashMap");
 
-    static DataTypePtr createResultType()
+    static DataTypePtr createResultType(const DataTypes & argument_types)
     {
-        if constexpr (requires { Traits::getResultTupleElementNames(); })
+        if constexpr (std::is_same_v<ResultType, TimestampType>)
+        {
+            /// The timestamps of samples are returned with the type they have in the input columns (ts_of_min, ts_of_max).
+            return std::make_shared<DataTypeArray>(std::make_shared<DataTypeNullable>(getTimestampArgumentType(argument_types)));
+        }
+        else if constexpr (requires { Traits::getResultTupleElementNames(); })
             return ResultWriter::createResultType(Traits::getResultTupleElementNames());
         else
             return ResultWriter::createResultType();
+    }
+
+    /// Returns the data type of the timestamps in the input columns, see getTimeseriesTimestampAndValueTypes() for the allowed argument forms.
+    static DataTypePtr getTimestampArgumentType(const DataTypes & argument_types)
+    {
+        const size_t num_sample_arguments = argument_types.size() - FunctionImpl::num_extra_arguments;
+        if (num_sample_arguments == 1)
+        {
+            /// Array(Tuple(timestamp, value))
+            const auto & array_type = typeid_cast<const DataTypeArray &>(*argument_types[0]);
+            return typeid_cast<const DataTypeTuple &>(*array_type.getNestedType()).getElement(0);
+        }
+        if (argument_types[0]->getTypeId() == TypeIndex::Array)
+            return typeid_cast<const DataTypeArray &>(*argument_types[0]).getNestedType();
+        return argument_types[0];
     }
 
     /// Upper bound on the number of grid points (the output array length) for a single grid.
@@ -572,7 +609,7 @@ private:
 
     /// Validates and normalizes the grid step. For a single-point grid (`start == end`) the step is irrelevant, so it
     /// is normalized to 0 (making each window a single bucket); otherwise it must be positive.
-    static IntervalType checkStep(TimestampType start_timestamp, TimestampType end_timestamp, IntervalType step)
+    static GridIntervalType checkStep(GridTimestampType start_timestamp, GridTimestampType end_timestamp, GridIntervalType step)
     {
         if (start_timestamp == end_timestamp)
             return 0;
@@ -582,7 +619,7 @@ private:
     }
 
     /// Validates the window size.
-    static IntervalType checkWindow(IntervalType window)
+    static GridIntervalType checkWindow(GridIntervalType window)
     {
         if (window < 0)
             throw Exception(ErrorCodes::BAD_ARGUMENTS, "Window should be non-negative");
@@ -590,7 +627,7 @@ private:
     }
 
     /// Calculates number of grid points: (end - start) / step + 1.
-    static size_t gridSize(TimestampType start_timestamp, TimestampType end_timestamp, IntervalType step)
+    static size_t gridSize(GridTimestampType start_timestamp, GridTimestampType end_timestamp, GridIntervalType step)
     {
         if (end_timestamp < start_timestamp)
             throw Exception(ErrorCodes::BAD_ARGUMENTS, "End timestamp is less than start timestamp");
@@ -615,27 +652,27 @@ private:
     }
 
     /// Calculates the grid's end timestamp: `start_timestamp + (grid_size - 1) * step`, aligned down by step.
-    static TimestampType alignedEndTimestamp(TimestampType start_timestamp, size_t grid_size, IntervalType step)
+    static GridTimestampType alignedEndTimestamp(GridTimestampType start_timestamp, size_t grid_size, GridIntervalType step)
     {
         /// Computed in Int128 to stay overflow-safe for extreme inputs (e.g. start near INT64_MIN, large step);
         /// runs once per aggregator.
         const Int128 aligned_end = toInt64(start_timestamp)
             + static_cast<Int128>(grid_size - 1) * static_cast<Int64>(step);
-        return static_cast<TimestampType>(static_cast<Int64>(aligned_end));
+        return static_cast<GridTimestampType>(static_cast<Int64>(aligned_end));
     }
 
     /// Calculates remainder `window % step` which determines a split point for window-aligned buckets.
     /// Returns 0 if no split is needed: when `window <= step`, or when the window is a whole multiple of the step.
-    static IntervalType windowRemainder(IntervalType step, IntervalType window)
+    static GridIntervalType windowRemainder(GridIntervalType step, GridIntervalType window)
     {
         if (step == 0 || window <= step)
             return 0;
-        return static_cast<IntervalType>(window % step);
+        return static_cast<GridIntervalType>(window % step);
     }
 
     /// Number of buckets that tile one step.
     /// Returns 2 when the step is split, else 1, and 0 when window == 0 (so no buckets at all).
-    static size_t bucketsPerStep(IntervalType window, IntervalType window_remainder)
+    static size_t bucketsPerStep(GridIntervalType window, GridIntervalType window_remainder)
     {
         if (window == 0)
             return 0;
@@ -643,7 +680,7 @@ private:
     }
 
     /// Calculates number of buckets that tile a window.
-    static size_t bucketsPerWindow(IntervalType step, IntervalType window, IntervalType window_remainder)
+    static size_t bucketsPerWindow(GridIntervalType step, GridIntervalType window, GridIntervalType window_remainder)
     {
         if (window == 0)
             return 0;  /// window == 0 means no buckets at all.
@@ -662,8 +699,8 @@ private:
     /// Number of buckets in grid point #0's window. Usually `buckets_per_window`, but fewer when `start_timestamp -
     /// window` reaches below the smallest representable timestamp: those leading buckets lie entirely below the type
     /// minimum, so they can never hold a sample and are dropped (which keeps every bucket's end timestamp in range).
-    static size_t bucketsPerFirstWindow(TimestampType start_timestamp, IntervalType step, IntervalType window,
-        IntervalType window_remainder, size_t buckets_per_step, size_t buckets_per_window)
+    static size_t bucketsPerFirstWindow(GridTimestampType start_timestamp, GridIntervalType step, GridIntervalType window,
+        GridIntervalType window_remainder, size_t buckets_per_step, size_t buckets_per_window)
     {
         if (window == 0)
             return 0;  /// window == 0 means no buckets at all.
@@ -696,8 +733,8 @@ private:
     }
 
     /// Width (end - start) of even- or odd-indexed buckets. Static - used once, by the constructor.
-    static IntervalType bucketWidth(bool odd_bucket, IntervalType step, IntervalType window,
-        IntervalType window_remainder, size_t buckets_per_step, size_t buckets_per_first_window)
+    static GridIntervalType bucketWidth(bool odd_bucket, GridIntervalType step, GridIntervalType window,
+        GridIntervalType window_remainder, size_t buckets_per_step, size_t buckets_per_first_window)
     {
         if (window == 0)
         {
@@ -717,8 +754,8 @@ private:
     /// End-to-end spacing of even- or odd-indexed buckets (how far a bucket's end is from the previous one's). Equals
     /// the bucket width, except for one bucket per step with `window < step`, where ends stay spaced by `step` even
     /// though each bucket is narrower. Static - used once, by the constructor.
-    static IntervalType bucketStep(bool odd_bucket, IntervalType step, IntervalType window,
-        IntervalType window_remainder, size_t buckets_per_step, size_t buckets_per_first_window)
+    static GridIntervalType bucketStep(bool odd_bucket, GridIntervalType step, GridIntervalType window,
+        GridIntervalType window_remainder, size_t buckets_per_step, size_t buckets_per_first_window)
     {
         if (window == 0)
             return 0;
@@ -729,8 +766,8 @@ private:
     }
 
     /// End timestamp of bucket #0 (the deepest in-range bucket). Static - used once, by the constructor.
-    static TimestampType firstBucketEndTimestamp(TimestampType start_timestamp, IntervalType step, IntervalType window,
-        IntervalType window_remainder, size_t buckets_per_step, size_t buckets_per_first_window)
+    static GridTimestampType firstBucketEndTimestamp(GridTimestampType start_timestamp, GridIntervalType step, GridIntervalType window,
+        GridIntervalType window_remainder, size_t buckets_per_step, size_t buckets_per_first_window)
     {
         if (window == 0)
         {
@@ -748,14 +785,14 @@ private:
         /// For a split step, bucket #0 ends `window_remainder` before the grid timestamp ("before split") iff
         /// `buckets_per_first_window` is even.
         const bool before_split = (buckets_per_step != 1) && (buckets_per_first_window % 2 == 0);
-        return static_cast<TimestampType>(static_cast<Int64>(
+        return static_cast<GridTimestampType>(static_cast<Int64>(
             before_split ? grid_timestamp - static_cast<Int64>(window_remainder) : grid_timestamp));
     }
 
     /// Width of bucket #0: `even_bucket_width`, shortened when bucket #0's start falls below the smallest
     /// representable timestamp - bucket #0 then covers everything from that minimum up to its end. The
-    /// shortened width fits `IntervalType`: such clamping implies it is not greater than `window`.
-    static IntervalType firstBucketWidth(IntervalType window, IntervalType even_bucket_width, TimestampType first_bucket_end_time)
+    /// shortened width fits `GridIntervalType`: such clamping implies it is not greater than `window`.
+    static GridIntervalType firstBucketWidth(GridIntervalType window, GridIntervalType even_bucket_width, GridTimestampType first_bucket_end_time)
     {
         if (window == 0)
         {
@@ -767,12 +804,12 @@ private:
         /// drops the buckets lying entirely below the type minimum).
         const Int128 min_timestamp = toInt64(minTimestamp());
         const Int128 clamped_width = toInt64(first_bucket_end_time) - min_timestamp + 1;
-        return static_cast<IntervalType>(static_cast<Int64>(
+        return static_cast<GridIntervalType>(static_cast<Int64>(
             std::min(static_cast<Int128>(even_bucket_width), clamped_width)));
     }
 
     /// Calculates the start (inclusive) of bucket #0.
-    static TimestampType firstBucketStartTimestamp(TimestampType first_bucket_end_time, IntervalType first_bucket_width)
+    static GridTimestampType firstBucketStartTimestamp(GridTimestampType first_bucket_end_time, GridIntervalType first_bucket_width)
     {
         if (first_bucket_width == 0)
         {
@@ -782,7 +819,7 @@ private:
         }
         /// The start is always representable (the width is shortened when bucket #0 is clamped at the type minimum),
         /// so computing it as `end - (width - 1)` can't overflow.
-        return static_cast<TimestampType>(toInt64(first_bucket_end_time) - (static_cast<Int64>(first_bucket_width) - 1));
+        return static_cast<GridTimestampType>(toInt64(first_bucket_end_time) - (static_cast<Int64>(first_bucket_width) - 1));
     }
 
     static constexpr size_t NO_BUCKET = -1;
@@ -790,10 +827,10 @@ private:
     /// Closed timestamp range `[start_time, end_time]` of a bucket.
     struct BucketTimeRange
     {
-        TimestampType start_time;
-        TimestampType end_time;
+        GridTimestampType start_time;
+        GridTimestampType end_time;
 
-        bool contains(const TimestampType & timestamp) const
+        bool contains(const GridTimestampType & timestamp) const
         {
             return timestamp >= start_time && timestamp <= end_time;
         }
@@ -814,7 +851,7 @@ private:
     /// for run detection. With `ReturnType == size_t` the range is neither computed nor returned - the
     /// function returns just the bucket index (see `bucketIndexForTimestamp`).
     template <typename ReturnType = SampleClass>
-    ALWAYS_INLINE ReturnType classifySample(const TimestampType timestamp) const
+    ALWAYS_INLINE ReturnType classifySample(const GridTimestampType timestamp) const
     {
         static_assert(std::is_same_v<ReturnType, SampleClass> || std::is_same_v<ReturnType, size_t>);
         constexpr bool return_index = std::is_same_v<ReturnType, size_t>;
@@ -826,7 +863,7 @@ private:
             else if (bucket_count == 0)
                 return {NO_BUCKET, {minTimestamp(), maxTimestamp()}};  /// A grid without buckets (`window == 0`) rejects everything.
             else
-                return {NO_BUCKET, {static_cast<TimestampType>(toInt64(end_timestamp) + 1), maxTimestamp()}};  /// `end < timestamp`, so no overflow
+                return {NO_BUCKET, {static_cast<GridTimestampType>(toInt64(end_timestamp) + 1), maxTimestamp()}};  /// `end < timestamp`, so no overflow
         }
 
         /// A sample before bucket #0's start is out of window for every grid point (samples older than
@@ -839,7 +876,7 @@ private:
             else if (bucket_count == 0)
                 return {NO_BUCKET, {minTimestamp(), maxTimestamp()}};  /// A grid without buckets (`window == 0`) rejects everything.
             else
-                return {NO_BUCKET, {minTimestamp(), static_cast<TimestampType>(toInt64(first_bucket_start_time) - 1)}};  /// The check passed, so no underflow
+                return {NO_BUCKET, {minTimestamp(), static_cast<GridTimestampType>(toInt64(first_bucket_start_time) - 1)}};  /// The check passed, so no underflow
         }
 
         /// All the arithmetic is 64-bit for any grid parameters: a difference of two Int64 timestamps can
@@ -876,8 +913,8 @@ private:
                 else
                 {
                     const Int64 grid_timestamp = ts + static_cast<Int64>(distance_to_grid_point);
-                    return {NO_BUCKET, {static_cast<TimestampType>(grid_timestamp - static_cast<Int64>(step) + 1),
-                        static_cast<TimestampType>(grid_timestamp - static_cast<Int64>(window))}};
+                    return {NO_BUCKET, {static_cast<GridTimestampType>(grid_timestamp - static_cast<Int64>(step) + 1),
+                        static_cast<GridTimestampType>(grid_timestamp - static_cast<Int64>(window))}};
                 }
             }
 
@@ -955,7 +992,7 @@ private:
     /// Returns the index of the bucket a sample at `timestamp` contributes to.
     /// The function returns NO_BUCKET if the specified timestamp can't contribute to any buckets
     /// because it's too early, or too late, or already out of window.
-    size_t ALWAYS_INLINE bucketIndexForTimestamp(const TimestampType timestamp) const
+    size_t ALWAYS_INLINE bucketIndexForTimestamp(const GridTimestampType timestamp) const
     {
         return classifySample<size_t>(timestamp);
     }
@@ -973,26 +1010,26 @@ private:
     /// End timestamp of bucket `bucket_index`: `first_bucket_end_time` plus the end-spacings (`even/odd_bucket_step`)
     /// of buckets 1..bucket_index. Wrapping unsigned arithmetic: the products can overflow for extreme grids, but the
     /// in-range end is recovered modulo 2^64.
-    TimestampType ALWAYS_INLINE bucketEndTimestamp(size_t bucket_index) const
+    GridTimestampType ALWAYS_INLINE bucketEndTimestamp(size_t bucket_index) const
     {
         chassert(bucket_index < bucket_count);
         const UInt64 num_even_buckets = bucket_index / 2;
         const UInt64 num_odd_buckets = bucket_index - num_even_buckets;
         const UInt64 bucket_end_time = static_cast<UInt64>(toInt64(first_bucket_end_time))
             + num_odd_buckets * odd_bucket_step + num_even_buckets * even_bucket_step;
-        return static_cast<TimestampType>(static_cast<Int64>(bucket_end_time));
+        return static_cast<GridTimestampType>(static_cast<Int64>(bucket_end_time));
     }
 
     /// Returns the closed timestamp range of bucket `bucket_index`.
     ALWAYS_INLINE BucketTimeRange bucketTimeRange(size_t bucket_index) const
     {
         chassert(bucket_index < bucket_count);
-        const TimestampType end_time = bucketEndTimestamp(bucket_index);
+        const GridTimestampType end_time = bucketEndTimestamp(bucket_index);
         const Int64 bucket_width = static_cast<Int64>(bucket_index == 0
             ? first_bucket_width
             : ((bucket_index % 2 != 0) ? odd_bucket_width : even_bucket_width));
         /// `end - (width - 1)` is the bucket's start, which is always representable (`width >= 1`), so the arithmetic can't overflow.
-        return {static_cast<TimestampType>(toInt64(end_time) - (bucket_width - 1)), end_time};
+        return {static_cast<GridTimestampType>(toInt64(end_time) - (bucket_width - 1)), end_time};
     }
 
     /// Chooses the two-stacks queue size for a sliding aggregator that combines per-bucket `Traits::Summary`
@@ -1033,7 +1070,7 @@ private:
 
     void ALWAYS_INLINE add(AggregateDataPtr __restrict place, TimestampType timestamp, ValueType value) const
     {
-        const size_t bucket_index = bucketIndexForTimestamp(timestamp);
+        const size_t bucket_index = bucketIndexForTimestamp(toGridTimestamp(timestamp));
         if (bucket_index == NO_BUCKET)
             return;  /// The sample can't contribute to any bucket.
 
@@ -1041,37 +1078,103 @@ private:
         bucket.add(timestamp, value);
     }
 
-    static constexpr ALWAYS_INLINE Int64 toInt64(TimestampType timestamp)
+    static constexpr ALWAYS_INLINE Int64 toInt64(GridTimestampType timestamp)
     {
         return static_cast<Int64>(timestamp);
     }
 
-    /// The smallest representable timestamp.
-    static constexpr TimestampType minTimestamp()
+    static constexpr ALWAYS_INLINE Int64 columnTimestampToInt64(TimestampType timestamp)
     {
-        if constexpr (std::is_unsigned_v<TimestampType>)
+        return static_cast<Int64>(timestamp);
+    }
+
+    /// Returns the multiplier converting timestamps from the input columns to the scale of the grid.
+    static Int64 columnToGridMultiplier(UInt32 grid_timestamp_scale, UInt32 column_timestamp_scale)
+    {
+        if (column_timestamp_scale > grid_timestamp_scale)
+            throw Exception(ErrorCodes::LOGICAL_ERROR, "Scale {} of the timestamps in the input columns is greater than scale {} of the grid",
+                            column_timestamp_scale, grid_timestamp_scale);
+        return DecimalUtils::scaleMultiplier<Int64>(grid_timestamp_scale - column_timestamp_scale);
+    }
+
+    /// Converts a timestamp from the input columns to the scale of the grid. The multiplication ignores an overflow,
+    /// which is possible only for a DateTime64 timestamp near the limits of the type if the scale of the grid is greater
+    /// than the scale of the column; such a timestamp is out of any grid anyway.
+    ALWAYS_INLINE GridTimestampType toGridTimestamp(TimestampType timestamp) const
+    {
+        return GridTimestampType(common::mulIgnoreOverflow(static_cast<Int64>(timestamp), column_to_grid_multiplier));
+    }
+
+    /// Closed range `[start_time, end_time]` of timestamps with the scale of the input columns.
+    struct ColumnTimeRange
+    {
+        Int64 start_time;
+        Int64 end_time;
+
+        bool contains(TimestampType timestamp) const
+        {
+            const Int64 value = columnTimestampToInt64(timestamp);
+            return value >= start_time && value <= end_time;
+        }
+    };
+
+    /// Converts a range of timestamps of the grid to the scale of the input columns, so the samples can be compared with it as they are:
+    /// `lo <= sample * multiplier <= hi` is the same as `ceil(lo / multiplier) <= sample <= floor(hi / multiplier)`.
+    ALWAYS_INLINE ColumnTimeRange toColumnTimeRange(const BucketTimeRange & range) const
+    {
+        Int64 lo = toInt64(range.start_time);
+        Int64 hi = toInt64(range.end_time);
+        if (column_to_grid_multiplier != 1)
+        {
+            lo = divideByColumnToGridMultiplierRoundingUp(lo);
+            hi = divideByColumnToGridMultiplierRoundingDown(hi);
+        }
+        return {lo, hi};
+    }
+
+    /// Divides a timestamp of the grid by `column_to_grid_multiplier` rounding towards negative infinity.
+    ALWAYS_INLINE Int64 divideByColumnToGridMultiplierRoundingDown(Int64 value) const
+    {
+        const Int64 quotient = value / column_to_grid_divider;   /// Rounds towards zero.
+        const Int64 remainder = value - quotient * column_to_grid_multiplier;
+        return (remainder < 0) ? quotient - 1 : quotient;
+    }
+
+    /// Divides a timestamp of the grid by `column_to_grid_multiplier` rounding towards positive infinity.
+    ALWAYS_INLINE Int64 divideByColumnToGridMultiplierRoundingUp(Int64 value) const
+    {
+        const Int64 quotient = value / column_to_grid_divider;   /// Rounds towards zero.
+        const Int64 remainder = value - quotient * column_to_grid_multiplier;
+        return (remainder > 0) ? quotient + 1 : quotient;
+    }
+
+    /// The smallest representable timestamp.
+    static constexpr GridTimestampType minTimestamp()
+    {
+        if constexpr (std::is_unsigned_v<GridTimestampType>)
             return 0;
         else
-            return static_cast<TimestampType>(std::numeric_limits<Int64>::min());
+            return static_cast<GridTimestampType>(std::numeric_limits<Int64>::min());
     }
 
     /// The largest representable timestamp.
-    static constexpr TimestampType maxTimestamp()
+    static constexpr GridTimestampType maxTimestamp()
     {
-        if constexpr (std::is_unsigned_v<TimestampType>)
-            return std::numeric_limits<TimestampType>::max();
+        if constexpr (std::is_unsigned_v<GridTimestampType>)
+            return std::numeric_limits<GridTimestampType>::max();
         else
-            return static_cast<TimestampType>(std::numeric_limits<Int64>::max());
+            return static_cast<GridTimestampType>(std::numeric_limits<Int64>::max());
     }
 
-    /// Returns the number of leading samples of `timestamps[0, count)` with timestamps in `[lo, hi]`.
+    /// Returns the number of leading samples of `timestamps[0, count)` (timestamps from the input columns) with timestamps in `range`.
     /// Checked in blocks so that the loop vectorizes; the samples of a partial block are re-checked one by one.
-    static ALWAYS_INLINE size_t scanSamplesInRange(const TimestampType * __restrict timestamps, size_t count, const BucketTimeRange & range)
+    ALWAYS_INLINE size_t scanSamplesInRange(const TimestampType * __restrict timestamps, size_t count, const BucketTimeRange & range) const
     {
-        /// Converted to Int64 once, outside the loops: comparing `TimestampType` (a `Decimal` for
-        /// `DateTime64`) per sample would call out-of-line comparison operators and prevent vectorization.
-        const Int64 lo = toInt64(range.start_time);
-        const Int64 hi = toInt64(range.end_time);
+        /// The bounds are converted to Int64 with the scale of the input columns once, outside the loops: comparing `Decimal` values
+        /// per sample would call out-of-line comparison operators and prevent vectorization.
+        const ColumnTimeRange column_range = toColumnTimeRange(range);
+        const Int64 lo = column_range.start_time;
+        const Int64 hi = column_range.end_time;
 
         constexpr size_t block_size = 16;
         size_t scanned = 0;
@@ -1080,7 +1183,7 @@ private:
             UInt8 all_in_range = 1;
             for (size_t j = 0; j < block_size; ++j)
             {
-                const Int64 timestamp = toInt64(timestamps[scanned + j]);
+                const Int64 timestamp = columnTimestampToInt64(timestamps[scanned + j]);
                 all_in_range &= static_cast<UInt8>(timestamp >= lo) & static_cast<UInt8>(timestamp <= hi);
             }
             if (!all_in_range)
@@ -1089,7 +1192,7 @@ private:
         }
         while (scanned < count)
         {
-            const Int64 timestamp = toInt64(timestamps[scanned]);
+            const Int64 timestamp = columnTimestampToInt64(timestamps[scanned]);
             if (!(timestamp >= lo && timestamp <= hi))
                 break;
             ++scanned;
@@ -1109,7 +1212,7 @@ private:
         size_t i = row_begin;
         while (i < row_end)
         {
-            const SampleClass sample_class = classifySample(timestamps[i]);
+            const SampleClass sample_class = classifySample(toGridTimestamp(timestamps[i]));
             const size_t run = scanSamplesInRange(timestamps + i, row_end - i, sample_class.time_range);
             /// The classified sample is inside its own range, so `run >= 1`; `max` only guards
             /// against an infinite loop.
@@ -1297,7 +1400,7 @@ private:
         static constexpr Int64 min_timestamp = toInt64(minTimestamp());
         const Int64 grid_timestamp = toInt64(timestampAtIndex(grid_index));
         if (grid_timestamp >= min_timestamp + static_cast<Int64>(window))
-            aggregator.removeBefore(static_cast<TimestampType>(grid_timestamp - static_cast<Int64>(window)));
+            aggregator.removeBefore(static_cast<GridTimestampType>(grid_timestamp - static_cast<Int64>(window)));
     }
 
 };

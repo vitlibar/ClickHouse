@@ -28,23 +28,24 @@ struct PrometheusQueryEvaluationSettings
     using DurationType = Decimal64;
 
     StorageID time_series_storage_id = StorageID::createEmpty();
-
-    /// Data types of the corresponding columns in the TimeSeries table.
-    /// We use these data types for the columns we read from table function prometheusQuery().
-    DataTypePtr timestamp_data_type;
-    DataTypePtr scalar_data_type;
-
-    /// The version of the TimeSeries table.
     UInt64 time_series_version = TimeSeriesVersion::LATEST;
+
+    /// Data type of the timestamp column in the TimeSeries table.
+    DataTypePtr table_timestamp_type;
 
     PrometheusQueryEvaluationMode mode = PrometheusQueryEvaluationMode::QUERY;
 
     /// Specifies that a prometheus query should be evaluated at the current time.
     bool use_current_time = false;
 
+    /// Data type of the timestamps in the result, it's always DateTime64 (usually DateTime64(3)).
+    /// Its scale is the scale of all timestamps and durations in these settings (`start_time`, `end_time`, `step`,
+    /// `instant_selector_window`, `default_subquery_step`) and of the parsed PromQL query.
+    DataTypePtr timestamp_type;
+
     /// Specifies that a prometheus query should be evaluated starting with `start_time` and ending with `end_time`
     /// with a specified `step`.
-    /// The scale of these fields is the same as the scale used in `timestamp_data_type`.
+    /// The scale of these fields is the scale of `timestamp_type`.
     std::optional<TimestampType> start_time;
     std::optional<TimestampType> end_time;
     std::optional<DurationType> step;
