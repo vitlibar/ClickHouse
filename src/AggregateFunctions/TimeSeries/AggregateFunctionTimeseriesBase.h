@@ -85,7 +85,8 @@ public:
     /// The result for one grid point: a number, or a `std::pair` of numbers stored as a tuple whose element names
     /// the traits define in `getResultTupleElementNames`. Functions returning a part of one of the samples as is return
     /// `ValueType` (last, min, max) or `TimestampType` (ts_of_min, ts_of_max), the counting functions (count, changes, resets)
-    /// return `UInt64`, the other functions calculate their results with double precision and return `Float64`.
+    /// return `UInt64`, the presence flag (present) is `UInt8`, the other functions calculate their results with double precision
+    /// and return `Float64`.
     using ResultType = typename Traits::ResultType;
     using ResultWriter = AggregateFunctionTimeSeriesResultWriter<ResultType>;
 
@@ -707,7 +708,7 @@ private:
         if (step == 0)
             return 1;
 
-        const Int128 min_timestamp = toInt64(minTimestamp());
+        const Int128 min_timestamp = toInt64(MIN_GRID_TIMESTAMP);
         const Int128 step_128 = static_cast<Int64>(step);
         /// How far `start_timestamp` sits above the smallest representable timestamp.
         const Int128 headroom = toInt64(start_timestamp) - min_timestamp;
@@ -802,7 +803,7 @@ private:
         /// Every real bucket has a width of at least 1: `even_bucket_width >= 1` (see `bucketWidth`), and
         /// `clamped_width >= 1` because bucket #0's end is always representable (`bucketsPerFirstWindow`
         /// drops the buckets lying entirely below the type minimum).
-        const Int128 min_timestamp = toInt64(minTimestamp());
+        const Int128 min_timestamp = toInt64(MIN_GRID_TIMESTAMP);
         const Int128 clamped_width = toInt64(first_bucket_end_time) - min_timestamp + 1;
         return static_cast<GridIntervalType>(static_cast<Int64>(
             std::min(static_cast<Int128>(even_bucket_width), clamped_width)));
@@ -861,9 +862,9 @@ private:
             if constexpr (return_index)
                 return NO_BUCKET;
             else if (bucket_count == 0)
-                return {NO_BUCKET, {minTimestamp(), maxTimestamp()}};  /// A grid without buckets (`window == 0`) rejects everything.
+                return {NO_BUCKET, {MIN_GRID_TIMESTAMP, MAX_GRID_TIMESTAMP}};  /// A grid without buckets (`window == 0`) rejects everything.
             else
-                return {NO_BUCKET, {static_cast<GridTimestampType>(toInt64(end_timestamp) + 1), maxTimestamp()}};  /// `end < timestamp`, so no overflow
+                return {NO_BUCKET, {static_cast<GridTimestampType>(toInt64(end_timestamp) + 1), MAX_GRID_TIMESTAMP}};  /// `end < timestamp`, so no overflow
         }
 
         /// A sample before bucket #0's start is out of window for every grid point (samples older than
@@ -874,9 +875,9 @@ private:
             if constexpr (return_index)
                 return NO_BUCKET;
             else if (bucket_count == 0)
-                return {NO_BUCKET, {minTimestamp(), maxTimestamp()}};  /// A grid without buckets (`window == 0`) rejects everything.
+                return {NO_BUCKET, {MIN_GRID_TIMESTAMP, MAX_GRID_TIMESTAMP}};  /// A grid without buckets (`window == 0`) rejects everything.
             else
-                return {NO_BUCKET, {minTimestamp(), static_cast<GridTimestampType>(toInt64(first_bucket_start_time) - 1)}};  /// The check passed, so no underflow
+                return {NO_BUCKET, {MIN_GRID_TIMESTAMP, static_cast<GridTimestampType>(toInt64(first_bucket_start_time) - 1)}};  /// The check passed, so no underflow
         }
 
         /// All the arithmetic is 64-bit for any grid parameters: a difference of two Int64 timestamps can
@@ -943,7 +944,7 @@ private:
                 if constexpr (return_index)
                     return NO_BUCKET;
                 else
-                    return {NO_BUCKET, {minTimestamp(), maxTimestamp()}};
+                    return {NO_BUCKET, {MIN_GRID_TIMESTAMP, MAX_GRID_TIMESTAMP}};
             }
 
             /// The sample's grid point is #0, and its bucket is one of the leading buckets: 1 or 2 buckets
@@ -1148,23 +1149,9 @@ private:
         return (remainder > 0) ? quotient + 1 : quotient;
     }
 
-    /// The smallest representable timestamp.
-    static constexpr GridTimestampType minTimestamp()
-    {
-        if constexpr (std::is_unsigned_v<GridTimestampType>)
-            return 0;
-        else
-            return static_cast<GridTimestampType>(std::numeric_limits<Int64>::min());
-    }
-
-    /// The largest representable timestamp.
-    static constexpr GridTimestampType maxTimestamp()
-    {
-        if constexpr (std::is_unsigned_v<GridTimestampType>)
-            return std::numeric_limits<GridTimestampType>::max();
-        else
-            return static_cast<GridTimestampType>(std::numeric_limits<Int64>::max());
-    }
+    /// The smallest and the largest timestamps of the grid.
+    static constexpr GridTimestampType MIN_GRID_TIMESTAMP{std::numeric_limits<Int64>::min()};
+    static constexpr GridTimestampType MAX_GRID_TIMESTAMP{std::numeric_limits<Int64>::max()};
 
     /// Returns the number of leading samples of `timestamps[0, count)` (timestamps from the input columns) with timestamps in `range`.
     /// Checked in blocks so that the loop vectorizes; the samples of a partial block are re-checked one by one.
@@ -1397,7 +1384,7 @@ private:
         /// A cutoff below the smallest representable timestamp can't drop anything and is skipped;
         /// the check is rearranged as `grid_timestamp >= min_timestamp + window` so that neither side can overflow.
         chassert(grid_index < grid_size);
-        static constexpr Int64 min_timestamp = toInt64(minTimestamp());
+        static constexpr Int64 min_timestamp = toInt64(MIN_GRID_TIMESTAMP);
         const Int64 grid_timestamp = toInt64(timestampAtIndex(grid_index));
         if (grid_timestamp >= min_timestamp + static_cast<Int64>(window))
             aggregator.removeBefore(static_cast<GridTimestampType>(grid_timestamp - static_cast<Int64>(window)));

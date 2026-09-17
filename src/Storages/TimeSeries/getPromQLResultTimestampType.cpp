@@ -3,6 +3,8 @@
 #include <DataTypes/DataTypeDateTime64.h>
 #include <DataTypes/DataTypesDecimal.h>
 
+#include <algorithm>
+
 
 namespace DB
 {

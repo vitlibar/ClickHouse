@@ -119,4 +119,13 @@ FROM ts_coarse;
 SELECT 'integer parameters';
 SELECT timeSeriesLastToGrid(1000, 1010, 5, 3)(ts_u32, value), timeSeriesRateToGrid(1000, 1010, 5, 3)(ts_dt, value) FROM ts_coarse;
 
+-- Fractional Float and String parameters are not truncated to whole seconds: the grid has at least millisecond precision.
+SELECT 'fractional Float and String parameters';
+SELECT
+    timeSeriesLastToGrid(toDateTime64(1000.5, 3, 'UTC'), toDateTime64(1010.5, 3, 'UTC'), toDecimal64(2.5, 3), toDecimal64(3.5, 3))(ts_u32, value) AS expected,
+    timeSeriesLastToGrid(1000.5, 1010.5, 2.5, 3.5)(ts_u32, value) = expected,
+    timeSeriesLastToGrid('1000.5', '1010.5', '2.5', '3.5')(ts_dt, value) = expected,
+    timeSeriesLastToGrid('1970-01-01 00:16:40.5', '1970-01-01 00:16:50.5', '2500ms', '3500ms')(ts_dt64_1, value) = expected
+FROM ts_coarse;
+
 DROP TABLE ts_coarse;

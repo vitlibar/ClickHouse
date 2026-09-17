@@ -29,6 +29,13 @@ namespace Setting
     extern const SettingsBool enable_time_series_table;
 }
 
+namespace
+{
+    /// The grid has at least millisecond precision, so fractional parameters are not truncated to whole seconds
+    /// when the timestamps in the input columns have a coarser scale.
+    constexpr UInt32 MIN_PARAMETERS_SCALE = 3;
+}
+
 
 void checkTimeseriesAggregateFunctionsEnabled(const std::string & name, const Settings * settings)
 {
@@ -124,8 +131,9 @@ Float64 extractTimeseriesFloatParameter(const std::string & function_name, const
 
 UInt32 getTimeseriesParametersScale(const Array & parameters)
 {
-    UInt32 scale = 0;
-    for (size_t i = 0; i < 4; ++i)
+    UInt32 scale = MIN_PARAMETERS_SCALE;
+    const size_t num_grid_parameters = std::min<size_t>(parameters.size(), 4);
+    for (size_t i = 0; i < num_grid_parameters; ++i)
     {
         const auto & parameter = parameters[i];
         if (parameter.getType() == Field::Types::Decimal64)

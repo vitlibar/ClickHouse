@@ -12,16 +12,19 @@ DROP TABLE IF EXISTS ts_f32;
 DROP TABLE IF EXISTS ts_dt;
 DROP TABLE IF EXISTS ts_u32;
 DROP TABLE IF EXISTS ts_dt64_4;
+DROP TABLE IF EXISTS ts_dt64_9;
 
 CREATE TABLE ts_f32 (samples Array(Tuple(DateTime64(3, 'UTC'), Float32))) ENGINE = TimeSeries;
 CREATE TABLE ts_dt (samples Array(Tuple(DateTime('UTC'), Float32))) ENGINE = TimeSeries;
 CREATE TABLE ts_u32 (samples Array(Tuple(UInt32, Float64))) ENGINE = TimeSeries;
 CREATE TABLE ts_dt64_4 (samples Array(Tuple(DateTime64(4, 'UTC'), Float32))) ENGINE = TimeSeries;
+CREATE TABLE ts_dt64_9 (samples Array(Tuple(DateTime64(9, 'UTC'), Float64))) ENGINE = TimeSeries;
 
 INSERT INTO ts_f32 (metric_name, tags, samples) VALUES ('up', {'job': 'j'}, [(toDateTime64(1000, 3, 'UTC'), 0.1), (toDateTime64(1015, 3, 'UTC'), 0.2), (toDateTime64(1030, 3, 'UTC'), 0.3)]);
 INSERT INTO ts_dt (metric_name, tags, samples) VALUES ('up', {'job': 'j'}, [(toDateTime(1000, 'UTC'), 0.1), (toDateTime(1015, 'UTC'), 0.2), (toDateTime(1030, 'UTC'), 0.3)]);
 INSERT INTO ts_u32 (metric_name, tags, samples) VALUES ('up', {'job': 'j'}, [(1000, 0.1), (1015, 0.2), (1030, 0.3)]);
 INSERT INTO ts_dt64_4 (metric_name, tags, samples) VALUES ('up', {'job': 'j'}, [(toDateTime64(1000, 4, 'UTC'), 0.1), (toDateTime64(1015, 4, 'UTC'), 0.2), (toDateTime64(1030, 4, 'UTC'), 0.3)]);
+INSERT INTO ts_dt64_9 (metric_name, tags, samples) VALUES ('up', {'job': 'j'}, [(toDateTime64('1970-01-01 00:16:40.000000001', 9, 'UTC'), 0.1), (toDateTime64(1015, 9, 'UTC'), 0.2), (toDateTime64(1030, 9, 'UTC'), 0.3)]);
 
 SELECT '-- Result types do not depend on the types in the table';
 DESCRIBE prometheusQuery(ts_f32, '1 + 2', 1030);
@@ -37,6 +40,8 @@ DESCRIBE prometheusQuery(ts_u32, 'up[1m]', 1030);
 SELECT '-- DateTime64 with a scale greater than 3 keeps the scale';
 DESCRIBE prometheusQuery(ts_dt64_4, 'up', 1030);
 DESCRIBE prometheusQuery(ts_dt64_4, 'up[1m]', 1030);
+DESCRIBE prometheusQuery(ts_dt64_9, 'up', 1030);
+DESCRIBE prometheusQueryRange(ts_dt64_9, 'up', 1000, 1030, 15);
 
 SELECT '-- Float32 values are widened to Float64 exactly';
 SELECT * FROM prometheusQuery(ts_f32, 'up', 1030) FORMAT TSVWithNamesAndTypes;
@@ -71,6 +76,13 @@ SELECT '-- Offsets keep the scale of DateTime64(4)';
 SELECT * FROM prometheusQuery(ts_dt64_4, 'up[1m] offset 1ms', 1030.001) FORMAT TSVWithNamesAndTypes;
 SELECT * FROM prometheusQuery(ts_dt64_4, 'last_over_time(up[1m] offset 1ms)', 1030.001) FORMAT TSVWithNamesAndTypes;
 
+SELECT '-- DateTime64(9) keeps nanoseconds in the results and in the evaluation time';
+SELECT * FROM prometheusQuery(ts_dt64_9, 'up[1m]', 1030) FORMAT TSVWithNamesAndTypes;
+SELECT * FROM prometheusQuery(ts_dt64_9, 'up[1m] offset 1ms', 1030.001) FORMAT TSVWithNamesAndTypes;
+SELECT * FROM prometheusQuery(ts_dt64_9, 'rate(up[1m])', 1030) FORMAT TSVWithNamesAndTypes;
+SELECT * FROM prometheusQuery(ts_dt64_9, 'time()', 1030.25) FORMAT TSVWithNamesAndTypes;
+SELECT * FROM prometheusQueryRange(ts_dt64_9, 'up', 1000, 1030, 15) FORMAT TSVWithNamesAndTypes;
+
 SELECT '-- Functions of the evaluation time';
 SELECT * FROM prometheusQuery(ts_f32, 'time()', 1030.25) FORMAT TSVWithNamesAndTypes;
 SELECT * FROM prometheusQuery(ts_f32, 'minute()', 1030.25) FORMAT TSVWithNamesAndTypes;
@@ -81,3 +93,4 @@ DROP TABLE ts_f32;
 DROP TABLE ts_dt;
 DROP TABLE ts_u32;
 DROP TABLE ts_dt64_4;
+DROP TABLE ts_dt64_9;

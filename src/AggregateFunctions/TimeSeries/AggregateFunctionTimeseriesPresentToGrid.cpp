@@ -33,7 +33,7 @@ timeSeriesPresentToGrid(start_timestamp, end_timestamp, grid_step, staleness)(sa
         {"value", "Value of the time series corresponding to the timestamp. Can be individual values or arrays.", {"Float*", "Array(Float*)"}},
         {"samples", "Samples of the time series passed as an array of tuples `(timestamp, value)`, where the tuple elements have the timestamp and value types listed above. An alternative to passing the timestamps and the values as two separate arguments.", {"Array(Tuple(T1, T2))"}}
     };
-    FunctionDocumentation::ReturnedValue returned_value_timeSeriesPresentToGrid = {"Returns 1 for each grid point whose window contains at least one sample, otherwise NULL. The values are of the same type as `value`.", {"Array(Nullable(UInt8))"}};
+    FunctionDocumentation::ReturnedValue returned_value_timeSeriesPresentToGrid = {"Returns 1 for each grid point whose window contains at least one sample, otherwise NULL.", {"Array(Nullable(UInt8))"}};
     FunctionDocumentation::Examples examples_timeSeriesPresentToGrid = {};
     FunctionDocumentation::IntroducedIn introduced_in_timeSeriesPresentToGrid = {26, 9};
     FunctionDocumentation::Category category_timeSeriesPresentToGrid = FunctionDocumentation::Category::AggregateFunction;

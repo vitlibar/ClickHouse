@@ -41,8 +41,8 @@ Decimal64 extractTimeseriesDurationParameter(const std::string & function_name, 
 /// Extracts a floating-point parameter value from a number (Float, Decimal or integer) or from a string containing a number.
 Float64 extractTimeseriesFloatParameter(const std::string & function_name, const std::string & parameter_name, const Field & parameter_field);
 
-/// Returns the greatest scale among the Decimal parameters of the grid (start, end, step, window).
-/// Parameters of other types (integers, floats, strings) don't affect the scale.
+/// Returns the scale of the grid: the greatest scale among the Decimal parameters of the grid (start, end, step, window),
+/// but at least 3 (milliseconds). Parameters of other types (integers, floats, strings) don't affect the scale.
 UInt32 getTimeseriesParametersScale(const Array & parameters);
 
 /// Validates the argument types of a timeSeries*ToGrid function and returns the timestamp and value types of the samples.
