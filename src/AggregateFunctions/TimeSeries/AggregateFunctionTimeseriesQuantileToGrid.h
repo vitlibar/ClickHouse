@@ -266,7 +266,7 @@ public:
 
     std::optional<ResultType> getGridPointResult(const Aggregator & aggregator, ConstAggregateDataPtr place, size_t grid_index) const
     {
-        return aggregator.getResult(Base::timestampAtIndex(grid_index), data(place)->phi.at(grid_index));
+        return aggregator.getResult(Base::getGridPoint(grid_index), data(place)->phi.at(grid_index));
     }
 
 private:
