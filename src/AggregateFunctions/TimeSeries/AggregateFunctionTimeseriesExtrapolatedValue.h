@@ -25,9 +25,8 @@ struct AggregateFunctionTimeseriesExtrapolatedValueTraits
 {
     static constexpr bool is_rate = is_rate_;
     static constexpr bool check_resets = check_resets_;
-
-    using GridTimestampType = DateTime64;
-    using GridIntervalType = Decimal64;
+    using GridScaleTimestampType = DateTime64;
+    using GridScaleIntervalType = Decimal64;
     using ValueType = ValueType_;
     using TimestampType = TimestampType_;
     using ResultType = Float64;
@@ -103,16 +102,16 @@ struct AggregateFunctionTimeseriesExtrapolatedValueTraits
         /// not the two-stacks path which combines values out of time order.
         static_assert(decltype(sliding_sum)::is_invertible);
 
-        GridIntervalType window;
+        GridScaleIntervalType window;
         Int64 grid_ticks_per_second;
         Int64 column_to_grid_multiplier;
 
-        Aggregator(GridIntervalType window_, Int64 grid_ticks_per_second_, Int64 column_to_grid_multiplier_)
+        Aggregator(GridScaleIntervalType window_, Int64 grid_ticks_per_second_, Int64 column_to_grid_multiplier_)
             : window(window_), grid_ticks_per_second(grid_ticks_per_second_), column_to_grid_multiplier(column_to_grid_multiplier_)
         {
         }
 
-        void add(const Samples & samples, GridTimestampType bucket_end_timestamp)
+        void add(const Samples & samples, GridScaleTimestampType bucket_end_timestamp)
         {
             Summary summary;
             samples.forEachSample([&summary](TimestampType timestamp, ValueType value)
@@ -134,19 +133,19 @@ struct AggregateFunctionTimeseriesExtrapolatedValueTraits
             add(std::move(summary), bucket_end_timestamp);
         }
 
-        void add(Summary summary, GridTimestampType bucket_end_timestamp)
+        void add(Summary summary, GridScaleTimestampType bucket_end_timestamp)
         {
             if (summary.count == 0)
                 return;
             sliding_sum.add(std::move(summary), bucket_end_timestamp);
         }
 
-        void removeBefore(GridTimestampType cut_off)
+        void removeBefore(GridScaleTimestampType cut_off)
         {
             sliding_sum.removeBefore(cut_off);
         }
 
-        std::optional<ResultType> getResult(GridTimestampType grid_timestamp) const
+        std::optional<ResultType> getResult(GridScaleTimestampType grid_timestamp) const
         {
             const Summary combined = sliding_sum.getCurrentSum();
 
@@ -167,7 +166,7 @@ struct AggregateFunctionTimeseriesExtrapolatedValueTraits
 
             /// The timestamps of the samples have the scale of the input columns, the calculations below use the scale of the grid.
             /// The difference of two timestamps in a window fits Int64 at the scale of the grid because the window does.
-            const GridIntervalType time_difference = (last_timestamp - first_timestamp) * column_to_grid_multiplier;
+            const GridScaleIntervalType time_difference = (last_timestamp - first_timestamp) * column_to_grid_multiplier;
             if (time_difference == 0)
                 return std::nullopt;
 
@@ -241,8 +240,7 @@ public:
 
     static constexpr bool is_rate = Traits::is_rate;
     static constexpr bool check_resets = Traits::check_resets;
-
-    using GridTimestampType = typename Traits::GridTimestampType;
+    using GridScaleTimestampType = typename Traits::GridScaleTimestampType;
     using ValueType = typename Traits::ValueType;
     using Aggregator = typename Traits::Aggregator;
 

@@ -20,8 +20,7 @@ template <typename TimestampType_, typename ValueType_, bool is_avg_>
 struct AggregateFunctionTimeseriesCompensatedSumTraits
 {
     static constexpr bool is_avg = is_avg_;
-
-    using GridTimestampType = DateTime64;
+    using GridScaleTimestampType = DateTime64;
     using ValueType = ValueType_;
     using TimestampType = TimestampType_;
 
@@ -84,7 +83,7 @@ struct AggregateFunctionTimeseriesCompensatedSumTraits
         {
         }
 
-        void add(const Samples & samples, GridTimestampType bucket_end_timestamp)
+        void add(const Samples & samples, GridScaleTimestampType bucket_end_timestamp)
         {
             Summary summary;
             samples.forEachSample([&summary](TimestampType timestamp, ValueType value)
@@ -97,12 +96,12 @@ struct AggregateFunctionTimeseriesCompensatedSumTraits
             sliding_sum.add(std::move(summary), bucket_end_timestamp);
         }
 
-        void removeBefore(GridTimestampType cut_off)
+        void removeBefore(GridScaleTimestampType cut_off)
         {
             sliding_sum.removeBefore(cut_off);
         }
 
-        std::optional<ResultType> getResult(GridTimestampType /*grid_timestamp*/) const
+        std::optional<ResultType> getResult(GridScaleTimestampType /*grid_timestamp*/) const
         {
             const Summary combined = sliding_sum.getCurrentSum();
 

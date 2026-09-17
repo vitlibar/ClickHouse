@@ -74,7 +74,7 @@ std::optional<Float64> computeTimeseriesQuantile(const VectorWithMemoryTracking<
 template <typename TimestampType_, typename ValueType_>
 struct AggregateFunctionTimeseriesQuantileToGridTraits
 {
-    using GridTimestampType = DateTime64;
+    using GridScaleTimestampType = DateTime64;
     using TimestampType = TimestampType_;
     using ValueType = ValueType_;
 
@@ -152,7 +152,7 @@ struct AggregateFunctionTimeseriesQuantileToGridTraits
 
         static_assert(decltype(sliding_sum)::is_invertible);
 
-        void add(const Samples & samples, GridTimestampType bucket_end_timestamp)
+        void add(const Samples & samples, GridScaleTimestampType bucket_end_timestamp)
         {
             VectorWithMemoryTracking<ValueType> values;
             samples.forEachSample([&values](TimestampType /*timestamp*/, ValueType value)
@@ -168,12 +168,12 @@ struct AggregateFunctionTimeseriesQuantileToGridTraits
             sliding_sum.add(std::move(summary), bucket_end_timestamp);
         }
 
-        void removeBefore(GridTimestampType cut_off)
+        void removeBefore(GridScaleTimestampType cut_off)
         {
             sliding_sum.removeBefore(cut_off);
         }
 
-        std::optional<ResultType> getResult(GridTimestampType /*grid_timestamp*/, Float64 phi) const
+        std::optional<ResultType> getResult(GridScaleTimestampType /*grid_timestamp*/, Float64 phi) const
         {
             return computeTimeseriesQuantile(sliding_sum.getCurrentSum().values, phi);
         }

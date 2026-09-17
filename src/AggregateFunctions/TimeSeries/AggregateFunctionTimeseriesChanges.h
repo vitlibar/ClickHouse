@@ -24,8 +24,7 @@ template <typename TimestampType_, typename ValueType_, bool is_resets_>
 struct AggregateFunctionTimeseriesChangesTraits
 {
     static constexpr bool is_resets = is_resets_;
-
-    using GridTimestampType = DateTime64;
+    using GridScaleTimestampType = DateTime64;
     using ValueType = ValueType_;
     using TimestampType = TimestampType_;
     using ResultType = UInt64;
@@ -97,7 +96,7 @@ struct AggregateFunctionTimeseriesChangesTraits
         /// not the two-stacks path which combines values out of time order.
         static_assert(decltype(sliding_sum)::is_invertible);
 
-        void add(const Samples & samples, GridTimestampType bucket_end_timestamp)
+        void add(const Samples & samples, GridScaleTimestampType bucket_end_timestamp)
         {
             /// Preaggregate the bucket's samples (`forEachSample` visits them in ascending timestamp order) into a per-bucket summary.
             Summary summary;
@@ -113,19 +112,19 @@ struct AggregateFunctionTimeseriesChangesTraits
             add(std::move(summary), bucket_end_timestamp);
         }
 
-        void add(Summary summary, GridTimestampType bucket_end_timestamp)
+        void add(Summary summary, GridScaleTimestampType bucket_end_timestamp)
         {
             if (summary.count == 0)
                 return;
             sliding_sum.add(std::move(summary), bucket_end_timestamp);
         }
 
-        void removeBefore(GridTimestampType cut_off)
+        void removeBefore(GridScaleTimestampType cut_off)
         {
             sliding_sum.removeBefore(cut_off);
         }
 
-        std::optional<ResultType> getResult(GridTimestampType /*grid_timestamp*/) const
+        std::optional<ResultType> getResult(GridScaleTimestampType /*grid_timestamp*/) const
         {
             const Summary combined = sliding_sum.getCurrentSum();
             if (combined.count == 0)

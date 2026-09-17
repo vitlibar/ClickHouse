@@ -16,7 +16,7 @@ namespace DB
 template <typename TimestampType_, typename ValueType_>
 struct AggregateFunctionTimeseriesCountTraits
 {
-    using GridTimestampType = DateTime64;
+    using GridScaleTimestampType = DateTime64;
     using ValueType = ValueType_;
     using TimestampType = TimestampType_;
 
@@ -53,7 +53,7 @@ struct AggregateFunctionTimeseriesCountTraits
 
         static_assert(decltype(sliding_sum)::is_invertible);
 
-        void add(const Samples & samples, GridTimestampType bucket_end_timestamp)
+        void add(const Samples & samples, GridScaleTimestampType bucket_end_timestamp)
         {
             Summary summary;
             samples.forEachSample([&summary](TimestampType timestamp, ValueType value)
@@ -66,12 +66,12 @@ struct AggregateFunctionTimeseriesCountTraits
             sliding_sum.add(std::move(summary), bucket_end_timestamp);
         }
 
-        void removeBefore(GridTimestampType cut_off)
+        void removeBefore(GridScaleTimestampType cut_off)
         {
             sliding_sum.removeBefore(cut_off);
         }
 
-        std::optional<ResultType> getResult(GridTimestampType /*grid_timestamp*/) const
+        std::optional<ResultType> getResult(GridScaleTimestampType /*grid_timestamp*/) const
         {
             const Summary combined = sliding_sum.getCurrentSum();
 

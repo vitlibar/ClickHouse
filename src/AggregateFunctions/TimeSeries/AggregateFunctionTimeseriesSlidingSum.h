@@ -33,8 +33,8 @@ template <typename SummaryType>
 class AggregateFunctionTimeseriesSlidingSum
 {
 public:
-    /// The timestamps of the grid (see `AggregateFunctionTimeseriesBase`).
-    using GridTimestampType = DateTime64;
+    /// The timestamps with the scale of the grid (see `AggregateFunctionTimeseriesBase`).
+    using GridScaleTimestampType = DateTime64;
 
     /// `SummaryType` is invertible when it can subtract a previously merged value.
     static constexpr bool is_invertible = requires (SummaryType summary, const SummaryType & value)
@@ -56,7 +56,7 @@ public:
         }
     }
 
-    void add(SummaryType && value, GridTimestampType timestamp)
+    void add(SummaryType && value, GridScaleTimestampType timestamp)
     {
         if constexpr (is_invertible)
         {
@@ -77,7 +77,7 @@ public:
         }
     }
 
-    void removeBefore(GridTimestampType cut_off)
+    void removeBefore(GridScaleTimestampType cut_off)
     {
         if constexpr (is_invertible)
         {
@@ -158,7 +158,7 @@ public:
 private:
     struct StackEntry
     {
-        GridTimestampType last_timestamp;
+        GridScaleTimestampType last_timestamp;
         SummaryType single;     /// this value alone
         SummaryType combined;   /// running combine over this stack up to this entry
     };
@@ -168,7 +168,7 @@ private:
     mutable bool current_sum_valid;
     VectorWithMemoryTracking<StackEntry> back_stack;   /// two-stacks: newer values; pushed here
     VectorWithMemoryTracking<StackEntry> front_stack;  /// two-stacks: older values; popped here
-    DequeWithMemoryTracking<std::pair<GridTimestampType, SummaryType>> window;  /// invertible/recompute: in-window values in time order
+    DequeWithMemoryTracking<std::pair<GridScaleTimestampType, SummaryType>> window;  /// invertible/recompute: in-window values in time order
 };
 
 }

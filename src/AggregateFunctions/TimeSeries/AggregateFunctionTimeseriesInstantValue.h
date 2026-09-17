@@ -22,9 +22,8 @@ template <typename TimestampType_, typename ValueType_, bool is_rate_>
 struct AggregateFunctionTimeseriesInstantValueTraits
 {
     static constexpr bool is_rate = is_rate_;
-
-    using GridTimestampType = DateTime64;
-    using GridIntervalType = Decimal64;
+    using GridScaleTimestampType = DateTime64;
+    using GridScaleIntervalType = Decimal64;
     using ValueType = ValueType_;
     using TimestampType = TimestampType_;
     using ResultType = Float64;
@@ -51,12 +50,12 @@ struct AggregateFunctionTimeseriesInstantValueTraits
         {
         }
 
-        void add(const Summary & summary, GridTimestampType /*bucket_end_timestamp*/)
+        void add(const Summary & summary, GridScaleTimestampType /*bucket_end_timestamp*/)
         {
             latest.merge(summary);
         }
 
-        void removeBefore(GridTimestampType cut_off)
+        void removeBefore(GridScaleTimestampType cut_off)
         {
             /// `timestamps[0]` is the newest sample, `timestamps[1]` the previous one.
             if (latest.filled >= 1 && static_cast<Int64>(latest.timestamps[0]) * column_to_grid_multiplier <= cut_off)
@@ -65,7 +64,7 @@ struct AggregateFunctionTimeseriesInstantValueTraits
                 latest.filled = 1;
         }
 
-        std::optional<ResultType> getResult(GridTimestampType /*grid_timestamp*/) const
+        std::optional<ResultType> getResult(GridScaleTimestampType /*grid_timestamp*/) const
         {
             if (latest.filled < 2)
                 return std::nullopt;
@@ -106,8 +105,7 @@ public:
     using Traits = AggregateFunctionTimeseriesInstantValueTraits<TimestampType_, ValueType_, is_rate_>;
 
     static constexpr bool is_rate = Traits::is_rate;
-
-    using GridTimestampType = typename Traits::GridTimestampType;
+    using GridScaleTimestampType = typename Traits::GridScaleTimestampType;
     using ValueType = typename Traits::ValueType;
 
     using Base = AggregateFunctionTimeseriesBase<AggregateFunctionTimeseriesInstantValue, Traits>;

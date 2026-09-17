@@ -24,7 +24,7 @@ namespace ErrorCodes
 template <typename TimestampType_, typename ValueType_>
 struct AggregateFunctionTimeseriesToGridSparseTraits
 {
-    using GridTimestampType = DateTime64;
+    using GridScaleTimestampType = DateTime64;
     using ValueType = ValueType_;
     using TimestampType = TimestampType_;
     using ResultType = ValueType_;
@@ -105,20 +105,20 @@ struct AggregateFunctionTimeseriesToGridSparseTraits
         {
         }
 
-        void add(const Summary & summary, GridTimestampType /*bucket_end_timestamp*/)
+        void add(const Summary & summary, GridScaleTimestampType /*bucket_end_timestamp*/)
         {
             /// Buckets arrive in ascending time order, so a populated bucket's sample is newer than the kept one;
             /// `merge` keeps the newer sample and ignores an empty bucket.
             latest.merge(summary);
         }
 
-        void removeBefore(GridTimestampType cut_off)
+        void removeBefore(GridScaleTimestampType cut_off)
         {
             if (latest.has_value && static_cast<Int64>(latest.first) * column_to_grid_multiplier <= cut_off)
                 latest = Summary{};
         }
 
-        std::optional<ResultType> getResult(GridTimestampType /*grid_timestamp*/) const
+        std::optional<ResultType> getResult(GridScaleTimestampType /*grid_timestamp*/) const
         {
             if (!latest.has_value)
                 return std::nullopt;
