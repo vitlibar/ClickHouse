@@ -24,9 +24,6 @@ enum class PrometheusQueryEvaluationMode
 
 struct PrometheusQueryEvaluationSettings
 {
-    using TimestampType = DateTime64;
-    using DurationType = Decimal64;
-
     StorageID time_series_storage_id = StorageID::createEmpty();
     UInt64 time_series_version = TimeSeriesVersion::LATEST;
 
@@ -38,14 +35,17 @@ struct PrometheusQueryEvaluationSettings
     /// Specifies that a prometheus query should be evaluated at the current time.
     bool use_current_time = false;
 
-    /// Data type of the timestamps in the result, it's always DateTime64 (usually DateTime64(3)).
-    /// Its scale is the scale of all timestamps and durations in these settings (`start_time`, `end_time`, `step`,
-    /// `instant_selector_window`, `default_subquery_step`) and of the parsed PromQL query.
-    DataTypePtr timestamp_type;
+    /// Scale of all timestamps and durations in these settings (`start_time`, `end_time`, `step`, `instant_selector_window`,
+    /// `default_subquery_step`) and of the parsed PromQL query. It's the scale of the timestamps in the results of the query,
+    /// see getPromQLResultTimestampScale().
+    UInt32 time_scale = 3;
+
+    using TimestampType = DateTime64;
+    using DurationType = Decimal64;
 
     /// Specifies that a prometheus query should be evaluated starting with `start_time` and ending with `end_time`
     /// with a specified `step`.
-    /// The scale of these fields is the scale of `timestamp_type`.
+    /// The scale of these fields is `time_scale`.
     std::optional<TimestampType> start_time;
     std::optional<TimestampType> end_time;
     std::optional<DurationType> step;

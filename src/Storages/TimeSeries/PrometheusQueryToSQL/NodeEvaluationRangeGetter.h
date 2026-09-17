@@ -31,8 +31,8 @@ private:
 
     std::shared_ptr<const PrometheusQueryTree> promql_tree;
 
-    /// The scale of all timestamps and durations here, the same as the scale of `PrometheusQueryEvaluationSettings::timestamp_type`.
-    UInt32 timestamp_scale;
+    /// The scale of all timestamps and durations here, the same as `PrometheusQueryEvaluationSettings::time_scale`.
+    UInt32 time_scale;
 
     TimestampType query_start_time{};
     TimestampType query_end_time{};

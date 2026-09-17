@@ -7,6 +7,7 @@
 #include <Storages/ColumnsDescription.h>
 #include <Storages/TimeSeries/PrometheusQueryEvaluationSettings.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/getResultType.h>
+#include <Storages/TimeSeries/getPromQLResultTimestampType.h>
 
 
 namespace DB::PrometheusQueryToSQL
@@ -15,7 +16,7 @@ namespace DB::PrometheusQueryToSQL
 ColumnsDescription getResultColumns(const PrometheusQueryTree & promql_tree, const PrometheusQueryEvaluationSettings & settings)
 {
     auto result_type = getResultType(promql_tree, settings);
-    const auto & timestamp_type = settings.timestamp_type;
+    auto timestamp_type = getPromQLResultTimestampType(settings.table_timestamp_type);
     auto value_type = std::make_shared<DataTypeFloat64>();
 
     ColumnsDescription columns;

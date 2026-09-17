@@ -113,10 +113,9 @@ StoragePrometheusQuery::Configuration StoragePrometheusQuery::getConfiguration(A
     auto table_timestamp_type = splitTimeSeriesType(
         time_series_metadata->columns.get(TimeSeriesColumnNames::getOuterSamples(time_series_version)).type).first;
 
-    auto timestamp_type = getPromQLResultTimestampType(table_timestamp_type);
-    UInt32 timestamp_scale = getDecimalScale(*timestamp_type);
+    UInt32 time_scale = getPromQLResultTimestampScale(table_timestamp_type);
 
-    PrometheusQueryTree promql_query{getStringConstArgument(args[argument_index++], context, "promql_query"), timestamp_scale};
+    PrometheusQueryTree promql_query{getStringConstArgument(args[argument_index++], context, "promql_query"), time_scale};
 
     PrometheusQueryEvaluationMode mode = {};
     DateTime64 start_time;
@@ -130,16 +129,16 @@ StoragePrometheusQuery::Configuration StoragePrometheusQuery::getConfiguration(A
         auto [step_field, step_type] = evaluateConstantExpression(args[argument_index++], context);
 
         mode = PrometheusQueryEvaluationMode::QUERY_RANGE;
-        start_time = parseTimeSeriesTimestamp(start_time_field, start_time_type, timestamp_scale);
-        end_time = parseTimeSeriesTimestamp(end_time_field, end_time_type, timestamp_scale);
-        step = parseTimeSeriesDuration(step_field, step_type, timestamp_scale);
+        start_time = parseTimeSeriesTimestamp(start_time_field, start_time_type, time_scale);
+        end_time = parseTimeSeriesTimestamp(end_time_field, end_time_type, time_scale);
+        step = parseTimeSeriesDuration(step_field, step_type, time_scale);
     }
     else
     {
         auto [time_field, time_type] = evaluateConstantExpression(args[argument_index++], context);
 
         mode = PrometheusQueryEvaluationMode::QUERY;
-        start_time = parseTimeSeriesTimestamp(time_field, time_type, timestamp_scale);
+        start_time = parseTimeSeriesTimestamp(time_field, time_type, time_scale);
         end_time = start_time;
         step = 0;
     }
@@ -152,7 +151,7 @@ StoragePrometheusQuery::Configuration StoragePrometheusQuery::getConfiguration(A
     evaluation_settings.time_series_storage_id = std::move(time_series_storage_id);
     evaluation_settings.time_series_version = time_series_version;
     evaluation_settings.table_timestamp_type = std::move(table_timestamp_type);
-    evaluation_settings.timestamp_type = std::move(timestamp_type);
+    evaluation_settings.time_scale = time_scale;
     evaluation_settings.mode = mode;
     evaluation_settings.start_time = start_time;
     evaluation_settings.end_time = end_time;
