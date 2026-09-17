@@ -219,9 +219,9 @@ timeSeriesQuantileToGrid(start_timestamp, end_timestamp, grid_step, staleness)(s
                         phi_type->getName(), name);
             }
 
-            auto make_function = [&]<typename TimestampType, typename ValueType>(DateTime64 start, DateTime64 end, Decimal64 step, Decimal64 window, UInt32 parameters_scale, UInt32 column_timestamp_scale) -> AggregateFunctionPtr
+            auto make_function = [&]<typename TimestampType, typename ValueType>(DateTime64 start, DateTime64 end, Decimal64 step, Decimal64 window, UInt32 grid_scale, UInt32 column_timestamp_scale) -> AggregateFunctionPtr
             {
-                return std::make_shared<AggregateFunctionTimeseriesQuantileToGrid<TimestampType, ValueType>>(argument_types, parameters, start, end, step, window, parameters_scale, column_timestamp_scale);
+                return std::make_shared<AggregateFunctionTimeseriesQuantileToGrid<TimestampType, ValueType>>(argument_types, parameters, start, end, step, window, grid_scale, column_timestamp_scale);
             };
             return createAggregateFunctionTimeseries(name, argument_types, parameters, settings, make_function,
                 AggregateFunctionTimeseriesQuantileToGrid<DateTime64, Float64>::num_extra_arguments);

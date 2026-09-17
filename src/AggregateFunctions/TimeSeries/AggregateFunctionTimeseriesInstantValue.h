@@ -43,11 +43,11 @@ struct AggregateFunctionTimeseriesInstantValueTraits
     struct Aggregator
     {
         Summary latest;
-        Int64 grid_ticks_per_second;
         Int64 column_to_grid_multiplier;
+        Int64 column_ticks_per_second;
 
-        Aggregator(Int64 grid_ticks_per_second_, Int64 column_to_grid_multiplier_)
-            : grid_ticks_per_second(grid_ticks_per_second_), column_to_grid_multiplier(column_to_grid_multiplier_)
+        Aggregator(Int64 column_to_grid_multiplier_, Int64 column_ticks_per_second_)
+            : column_to_grid_multiplier(column_to_grid_multiplier_), column_ticks_per_second(column_ticks_per_second_)
         {
         }
 
@@ -73,9 +73,8 @@ struct AggregateFunctionTimeseriesInstantValueTraits
             const Float64 value = static_cast<Float64>(latest.values[0]);
             const Float64 previous_value = static_cast<Float64>(latest.values[1]);
 
-            /// The timestamps of the samples have the scale of the input columns. The difference of two timestamps in a window
-            /// fits Int64 at the scale of the grid because the window does.
-            const GridIntervalType time_difference = (static_cast<Int64>(latest.timestamps[0]) - static_cast<Int64>(latest.timestamps[1])) * column_to_grid_multiplier;
+            /// The timestamps of the samples have the scale of the input columns.
+            const Int64 time_difference = static_cast<Int64>(latest.timestamps[0]) - static_cast<Int64>(latest.timestamps[1]);
             if (time_difference == 0)
                 return std::nullopt;
 
@@ -83,7 +82,7 @@ struct AggregateFunctionTimeseriesInstantValueTraits
             const Float64 value_difference = (is_rate && value < previous_value) ? value : (value - previous_value);
 
             if constexpr (is_rate)
-                return value_difference * static_cast<Float64>(grid_ticks_per_second) / static_cast<Float64>(time_difference);
+                return value_difference * static_cast<Float64>(column_ticks_per_second) / static_cast<Float64>(time_difference);
             else
                 return value_difference;
         }
@@ -116,7 +115,7 @@ public:
 
     typename Traits::Aggregator createAggregator(size_t /* stack_size_for_two_stacks */) const
     {
-        return typename Traits::Aggregator{Base::grid_ticks_per_second, Base::column_to_grid_multiplier};
+        return typename Traits::Aggregator{Base::column_to_grid_multiplier, Base::column_ticks_per_second};
     }
 };
 

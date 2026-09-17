@@ -100,9 +100,9 @@ SELECT timeSeriesMaxToGrid(start_ts, end_ts, step_seconds, window_seconds)(times
         {[](const String & name, const DataTypes & argument_types, const Array & parameters, const Settings * settings) -> AggregateFunctionPtr
         {
             assertTimeseriesParametersCount(name, parameters, 4, "start_timestamp, end_timestamp, step, window");
-            auto make_function = [&]<typename TimestampType, typename ValueType>(DateTime64 start, DateTime64 end, Decimal64 step, Decimal64 window, UInt32 parameters_scale, UInt32 column_timestamp_scale) -> AggregateFunctionPtr
+            auto make_function = [&]<typename TimestampType, typename ValueType>(DateTime64 start, DateTime64 end, Decimal64 step, Decimal64 window, UInt32 grid_scale, UInt32 column_timestamp_scale) -> AggregateFunctionPtr
             {
-                return std::make_shared<AggregateFunctionTimeseriesMaxToGrid<TimestampType, ValueType>>(argument_types, parameters, start, end, step, window, parameters_scale, column_timestamp_scale);
+                return std::make_shared<AggregateFunctionTimeseriesMaxToGrid<TimestampType, ValueType>>(argument_types, parameters, start, end, step, window, grid_scale, column_timestamp_scale);
             };
             return createAggregateFunctionTimeseries(name, argument_types, parameters, settings, make_function);
         },
@@ -198,9 +198,9 @@ SELECT timeSeriesTimestampOfMaxToGrid(start_ts, end_ts, step_seconds, window_sec
         {[](const String & name, const DataTypes & argument_types, const Array & parameters, const Settings * settings) -> AggregateFunctionPtr
         {
             assertTimeseriesParametersCount(name, parameters, 4, "start_timestamp, end_timestamp, step, window");
-            auto make_function = [&]<typename TimestampType, typename ValueType>(DateTime64 start, DateTime64 end, Decimal64 step, Decimal64 window, UInt32 parameters_scale, UInt32 column_timestamp_scale) -> AggregateFunctionPtr
+            auto make_function = [&]<typename TimestampType, typename ValueType>(DateTime64 start, DateTime64 end, Decimal64 step, Decimal64 window, UInt32 grid_scale, UInt32 column_timestamp_scale) -> AggregateFunctionPtr
             {
-                return std::make_shared<AggregateFunctionTimeseriesTimestampOfMaxToGrid<TimestampType, ValueType>>(argument_types, parameters, start, end, step, window, parameters_scale, column_timestamp_scale);
+                return std::make_shared<AggregateFunctionTimeseriesTimestampOfMaxToGrid<TimestampType, ValueType>>(argument_types, parameters, start, end, step, window, grid_scale, column_timestamp_scale);
             };
             return createAggregateFunctionTimeseries(name, argument_types, parameters, settings, make_function);
         },

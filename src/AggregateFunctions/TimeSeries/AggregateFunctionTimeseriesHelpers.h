@@ -53,21 +53,21 @@ std::pair<DataTypePtr, DataTypePtr> getTimeseriesTimestampAndValueTypes(const st
 
 /// With the value type and the type of the timestamps in the input columns resolved, parses the grid parameters and builds
 /// the function via the factory. The factory receives the parsed values and is the only place that knows the concrete function.
-/// The grid uses DateTime64 timestamps and Decimal64 intervals with the scale `parameters_scale`, which is not less than the scale
+/// The grid uses DateTime64 timestamps and Decimal64 intervals with the scale `grid_scale`, which is not less than the scale
 /// of the timestamps in the input columns (`column_timestamp_scale`), so the input timestamps are converted to the grid exactly.
 template <
     typename TimestampType,
     typename ValueType,
     typename MakeFunction
 >
-AggregateFunctionPtr createAggregateFunctionTimeseriesWithTypes(const std::string & name, const Array & parameters, UInt32 parameters_scale, UInt32 column_timestamp_scale, MakeFunction && make_function)
+AggregateFunctionPtr createAggregateFunctionTimeseriesWithTypes(const std::string & name, const Array & parameters, UInt32 grid_scale, UInt32 column_timestamp_scale, MakeFunction && make_function)
 {
-    DateTime64 start_timestamp = extractTimeseriesTimestampParameter(name, "start", parameters[0], parameters_scale);
-    DateTime64 end_timestamp = extractTimeseriesTimestampParameter(name, "end", parameters[1], parameters_scale);
-    Decimal64 step = extractTimeseriesDurationParameter(name, "step", parameters[2], parameters_scale);
-    Decimal64 window = extractTimeseriesDurationParameter(name, "window", parameters[3], parameters_scale);
+    DateTime64 start_timestamp = extractTimeseriesTimestampParameter(name, "start", parameters[0], grid_scale);
+    DateTime64 end_timestamp = extractTimeseriesTimestampParameter(name, "end", parameters[1], grid_scale);
+    Decimal64 step = extractTimeseriesDurationParameter(name, "step", parameters[2], grid_scale);
+    Decimal64 window = extractTimeseriesDurationParameter(name, "window", parameters[3], grid_scale);
     return make_function.template operator()<TimestampType, ValueType>(
-        start_timestamp, end_timestamp, step, window, parameters_scale, column_timestamp_scale);
+        start_timestamp, end_timestamp, step, window, grid_scale, column_timestamp_scale);
 }
 
 /// Resolves the type of the timestamps in the input columns and the scale of the grid, then delegates to createAggregateFunctionTimeseriesWithTypes.

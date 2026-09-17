@@ -125,12 +125,12 @@ struct AggregateFunctionTimeseriesLinearRegressionTraits
         TimestampType base;
         Float64 predict_offset;         /// In seconds, can be non-finite.
         Int64 column_to_grid_multiplier;
-        Int64 column_ticks_per_second;  /// 10^(scale of the input columns): converts the slope per tick of the input columns to the slope per second.
+        Int64 column_ticks_per_second;  /// Converts the slope per tick of the input columns to the slope per second.
 
-        Aggregator(size_t stack_size, GridTimestampType grid_start_, Float64 predict_offset_, Int64 grid_ticks_per_second_, Int64 column_to_grid_multiplier_)
+        Aggregator(size_t stack_size, GridTimestampType grid_start_, Float64 predict_offset_, Int64 column_to_grid_multiplier_, Int64 column_ticks_per_second_)
             : sliding_sum(stack_size), base(getBase(grid_start_, column_to_grid_multiplier_))
             , predict_offset(predict_offset_)
-            , column_to_grid_multiplier(column_to_grid_multiplier_), column_ticks_per_second(grid_ticks_per_second_ / column_to_grid_multiplier_)
+            , column_to_grid_multiplier(column_to_grid_multiplier_), column_ticks_per_second(column_ticks_per_second_)
         {
         }
 
@@ -255,16 +255,16 @@ public:
     /// The other functions reach the base constructor via `using Base::Base` above,
     /// it takes the same arguments except predict_offset_.
     explicit AggregateFunctionTimeseriesLinearRegression(const DataTypes & argument_types_, const Array & parameters_,
-        GridTimestampType start_timestamp_, GridTimestampType end_timestamp_, GridIntervalType step_, GridIntervalType window_, UInt32 grid_timestamp_scale_,
+        GridTimestampType start_timestamp_, GridTimestampType end_timestamp_, GridIntervalType step_, GridIntervalType window_, UInt32 grid_scale_,
         UInt32 column_timestamp_scale_, Float64 predict_offset_)
-        : Base(argument_types_, parameters_, start_timestamp_, end_timestamp_, step_, window_, grid_timestamp_scale_, column_timestamp_scale_)
+        : Base(argument_types_, parameters_, start_timestamp_, end_timestamp_, step_, window_, grid_scale_, column_timestamp_scale_)
         , predict_offset(predict_offset_)
     {
     }
 
     Aggregator createAggregator(size_t stack_size_for_two_stacks) const
     {
-        return Aggregator{stack_size_for_two_stacks, Base::start_timestamp, predict_offset, Base::grid_ticks_per_second, Base::column_to_grid_multiplier};
+        return Aggregator{stack_size_for_two_stacks, Base::start_timestamp, predict_offset, Base::column_to_grid_multiplier, Base::column_ticks_per_second};
     }
 
 protected:

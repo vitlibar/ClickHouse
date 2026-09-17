@@ -145,7 +145,7 @@ int mainEntryExampleTimeSeriesToGridTwoStackVsRecompute(int, char **)
     /// one measurement covers both).
     using LinearRegressionTraits = AggregateFunctionTimeseriesLinearRegressionTraits</* TimestampType */ DateTime64, /* ValueType */ Float64, TimeseriesLinearRegressionReturnKind::Slope>;
     runFunction("timeSeriesDerivToGrid", buildDataset<AggregateFunctionTimeseriesSamples<DateTime64, Float64>>(),
-        [](size_t stack_size) { return LinearRegressionTraits::Aggregator{stack_size, /* grid_start */ DateTime64(0), /* predict_offset */ Float64(0), /* grid_ticks_per_second */ 1, /* column_to_grid_multiplier */ 1}; },
+        [](size_t stack_size) { return LinearRegressionTraits::Aggregator{stack_size, /* grid_start */ DateTime64(0), /* predict_offset */ Float64(0), /* column_to_grid_multiplier */ 1, /* column_ticks_per_second */ 1}; },
         checksum);
 
     /// Compensated sum (`timeSeriesSumToGrid` / `timeSeriesAvgToGrid` share the same `Summary`, so one measurement

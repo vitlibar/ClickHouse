@@ -64,7 +64,7 @@ using TimeSeriesBucketsMap = HashMap<UInt64, Bucket, TrivialHash, TimeSeriesBuck
 /// It implements the common logic for handling input data as either scalar timestamps and values or vectors of timestamps and values of
 /// equal sizes and adding the data to the grid buckets. The actual aggregation logic within buckets is implemented in derived classes.
 ///
-/// The grid uses DateTime64 timestamps and Decimal64 intervals with the scale `grid_timestamp_scale`, which is not less than the scale
+/// The grid uses DateTime64 timestamps and Decimal64 intervals with the scale `grid_scale`, which is not less than the scale
 /// of the timestamps in the input columns (`Traits::TimestampType`). The samples in the buckets keep the type of the input
 /// columns, only the timestamps compared with the grid are converted (see `column_to_grid_multiplier`).
 template <class FunctionImpl, class Traits>
@@ -115,7 +115,7 @@ public:
     bool shouldPrintParametersWithTypes() const override { return true; }
 
     explicit AggregateFunctionTimeseriesBase(const DataTypes & argument_types_, const Array & parameters_,
-        GridTimestampType start_timestamp_, GridTimestampType end_timestamp_, GridIntervalType step_, GridIntervalType window_, UInt32 grid_timestamp_scale_,
+        GridTimestampType start_timestamp_, GridTimestampType end_timestamp_, GridIntervalType step_, GridIntervalType window_, UInt32 grid_scale_,
         UInt32 column_timestamp_scale_)
         : Base(
             argument_types_,
@@ -128,8 +128,9 @@ public:
         , grid_size(gridSize(start_timestamp_, end_timestamp_, step))
         , start_timestamp(start_timestamp_)
         , end_timestamp(alignedEndTimestamp(start_timestamp_, grid_size, step))
-        , grid_ticks_per_second(DecimalUtils::scaleMultiplier<Int64>(grid_timestamp_scale_))
-        , column_to_grid_multiplier(columnToGridMultiplier(grid_timestamp_scale_, column_timestamp_scale_))
+        , column_ticks_per_second(DecimalUtils::scaleMultiplier<Int64>(column_timestamp_scale_))
+        , grid_ticks_per_second(DecimalUtils::scaleMultiplier<Int64>(grid_scale_))
+        , column_to_grid_multiplier(columnToGridMultiplier(grid_scale_, column_timestamp_scale_))
         , column_to_grid_divider(column_to_grid_multiplier)
         , window_remainder(windowRemainder(step, window))
         , buckets_per_step(bucketsPerStep(window, window_remainder))
@@ -476,24 +477,25 @@ protected:
         }
     }
 
-    const bool array_of_pairs_argument{};   /// Whether samples are passed as a single argument of type Array(Tuple(timestamp, value))
-    const bool array_arguments{};           /// Whether timestamp/value arguments are arrays (one row holds a whole series) or scalars
+    const bool array_of_pairs_argument{};       /// Whether samples are passed as a single argument of type Array(Tuple(timestamp, value))
+    const bool array_arguments{};               /// Whether timestamp/value arguments are arrays (one row holds a whole series) or scalars
     const GridIntervalType step{};              /// Grid step (0 for a single-point grid). GridIntervalType represents a time difference between timestamps
     const GridIntervalType window{};            /// Window size used by derived functions (e.g. for rate and delta calculations)
-    const size_t grid_size{};               /// Number of grid points: (end - start) / step + 1
+    const size_t grid_size{};                   /// Number of grid points: (end - start) / step + 1
     const GridTimestampType start_timestamp{};  /// First timestamp in the grid
     const GridTimestampType end_timestamp{};    /// Last timestamp in the grid. NOTE: It is aligned down by step relative to start_timestamp
-    const Int64 grid_ticks_per_second{};            /// 10^grid_timestamp_scale: converts intervals of the grid to seconds, e.g. to calculate rate per second
-                                                    /// (it is 1000 for milliseconds or 1e6 for microseconds)
-    const Int64 column_to_grid_multiplier{};        /// 10^(grid_timestamp_scale - column_timestamp_scale): converts timestamps from the input columns
-                                                    /// to the scale of the grid; 1 if the scales are the same.
+    const Int64 column_ticks_per_second{};      /// 10^column_timestamp_scale: converts a difference of two timestamps of the input columns to seconds.
+    const Int64 grid_ticks_per_second{};        /// 10^grid_scale: converts intervals of the grid to seconds, e.g. to calculate rate per second
+                                                /// (it is 1000 for milliseconds or 1e6 for microseconds)
+    const Int64 column_to_grid_multiplier{};    /// 10^(grid_scale - column_timestamp_scale): converts timestamps from the input columns
+                                                /// to the scale of the grid; 1 if the scales are the same.
     const libdivide::divider<Int64> column_to_grid_divider{1};   /// Reciprocal of `column_to_grid_multiplier` for `toColumnTimeRange`.
     const GridIntervalType window_remainder{};  /// (window % step) if (window > step)
-    const size_t buckets_per_step{};        /// 2 when window_remainder != 0 (each step is split), else 1; 0 when window == 0
-    const size_t buckets_per_window{};      /// Number of buckets tiling each grid point's window (0 when window == 0)
-    const size_t buckets_per_first_window{};/// Buckets in grid point #0's window (<= buckets_per_window; leading
-                                            /// buckets that would fall below the type's minimum are dropped)
-    const size_t bucket_count{};            /// Number of buckets (0 when window == 0)
+    const size_t buckets_per_step{};            /// 2 when window_remainder != 0 (each step is split), else 1; 0 when window == 0
+    const size_t buckets_per_window{};          /// Number of buckets tiling each grid point's window (0 when window == 0)
+    const size_t buckets_per_first_window{};    /// Buckets in grid point #0's window (<= buckets_per_window; leading
+                                                /// buckets that would fall below the type's minimum are dropped)
+    const size_t bucket_count{};                /// Number of buckets (0 when window == 0)
 
     /// Bucket #0 properties; every other bucket follows by arithmetic (see `bucketEndTimestamp`).
     const GridIntervalType even_bucket_width{};         /// Width of even-indexed buckets
@@ -502,9 +504,9 @@ protected:
     const GridIntervalType odd_bucket_step{};           /// End-to-end spacing of odd-indexed buckets
     const GridTimestampType first_bucket_end_time{};    /// End timestamp of bucket #0
     const GridIntervalType first_bucket_width{};        /// Width of bucket #0: `even_bucket_width`, shortened when bucket #0
-                                                    /// is clamped at the type minimum.
+                                                        /// is clamped at the type minimum.
     const GridTimestampType first_bucket_start_time{};  /// Start (inclusive) of bucket #0.
-                                                    /// Samples before it are out of window for every grid point.
+                                                        /// Samples before it are out of window for every grid point.
 
     /// Reciprocal of `step` for `classifySample` (`step` is fixed at construction).
     const libdivide::divider<UInt64> step_divider{1};
@@ -660,6 +662,15 @@ private:
         const Int128 aligned_end = toInt64(start_timestamp)
             + static_cast<Int128>(grid_size - 1) * static_cast<Int64>(step);
         return static_cast<GridTimestampType>(static_cast<Int64>(aligned_end));
+    }
+
+    /// Returns the multiplier converting timestamps from the input columns to the scale of the grid.
+    static Int64 columnToGridMultiplier(UInt32 grid_scale, UInt32 column_timestamp_scale)
+    {
+        if (column_timestamp_scale > grid_scale)
+            throw Exception(ErrorCodes::LOGICAL_ERROR, "Scale {} of the timestamps in the input columns is greater than scale {} of the grid",
+                            column_timestamp_scale, grid_scale);
+        return DecimalUtils::scaleMultiplier<Int64>(grid_scale - column_timestamp_scale);
     }
 
     /// Calculates remainder `window % step` which determines a split point for window-aligned buckets.
@@ -1087,15 +1098,6 @@ private:
     static constexpr ALWAYS_INLINE Int64 columnTimestampToInt64(TimestampType timestamp)
     {
         return static_cast<Int64>(timestamp);
-    }
-
-    /// Returns the multiplier converting timestamps from the input columns to the scale of the grid.
-    static Int64 columnToGridMultiplier(UInt32 grid_timestamp_scale, UInt32 column_timestamp_scale)
-    {
-        if (column_timestamp_scale > grid_timestamp_scale)
-            throw Exception(ErrorCodes::LOGICAL_ERROR, "Scale {} of the timestamps in the input columns is greater than scale {} of the grid",
-                            column_timestamp_scale, grid_timestamp_scale);
-        return DecimalUtils::scaleMultiplier<Int64>(grid_timestamp_scale - column_timestamp_scale);
     }
 
     /// Converts a timestamp from the input columns to the scale of the grid. The multiplication ignores an overflow,
