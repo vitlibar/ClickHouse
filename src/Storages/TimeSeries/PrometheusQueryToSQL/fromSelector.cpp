@@ -1,6 +1,5 @@
 #include <Storages/TimeSeries/PrometheusQueryToSQL/fromSelector.h>
 
-#include <Core/DecimalFunctions.h>
 #include <Parsers/ASTFunction.h>
 #include <Parsers/ASTIdentifier.h>
 #include <Parsers/ASTLiteral.h>
@@ -16,28 +15,6 @@ namespace DB::PrometheusQueryToSQL
 
 namespace
 {
-    /// Converts a timestamp from `result_timestamp_scale` to `table_timestamp_scale`.
-    /// If the table scale is less than the result scale then the timestamp is rounded up or down as specified.
-    TimestampType convertToTableScale(TimestampType timestamp, bool round_up, const ConverterContext & context)
-    {
-        if (context.table_timestamp_scale == context.result_timestamp_scale)
-            return timestamp;
-
-        if (context.table_timestamp_scale > context.result_timestamp_scale)
-        {
-            auto multiplier = DecimalUtils::scaleMultiplier<Int64>(context.table_timestamp_scale - context.result_timestamp_scale);
-            return TimestampType{timestamp.value * multiplier};
-        }
-
-        auto divisor = DecimalUtils::scaleMultiplier<Int64>(context.result_timestamp_scale - context.table_timestamp_scale);
-        Int64 quotient = timestamp.value / divisor;
-        Int64 remainder = timestamp.value % divisor;
-        if (round_up && (remainder > 0))
-            ++quotient;
-        else if (!round_up && (remainder < 0))
-            --quotient;
-        return TimestampType{quotient};
-    }
 
     SQLQueryPiece fromRangeSelector(std::string_view instant_selector_text,
                                     const Node * node,
@@ -60,18 +37,18 @@ namespace
         builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Timestamp));
         builder.select_list.push_back(make_intrusive<ASTIdentifier>(ColumnNames::Value));
 
-        /// The range is (start_time - window, end_time] at the result scale. The functions over ranges select samples exactly,
-        /// so if the table scale is smaller we round the bounds outwards to make sure we don't skip any samples.
-        TimestampType min_time = convertToTableScale(node_range.start_time - node_range.window + 1, /* round_up = */ true, context);
-        TimestampType max_time = convertToTableScale(node_range.end_time, /* round_up = */ false, context);
+        /// The range is (start_time - window, end_time] at the result scale. The table function converts the bounds to the scale
+        /// of the table itself, rounding them towards the inside of the range.
+        TimestampType min_time = node_range.start_time - node_range.window + 1;
+        TimestampType max_time = node_range.end_time;
 
         builder.from_table_function = makeASTFunction(
             "timeSeriesSelector",
             make_intrusive<ASTLiteral>(context.time_series_storage_id.getDatabaseName()),
             make_intrusive<ASTLiteral>(context.time_series_storage_id.getTableName()),
             make_intrusive<ASTLiteral>(String{instant_selector_text}),
-            timeSeriesTimestampToAST(min_time, context.table_timestamp_type),
-            timeSeriesTimestampToAST(max_time, context.table_timestamp_type));
+            timeSeriesTimestampToAST(min_time, context.result_timestamp_type),
+            timeSeriesTimestampToAST(max_time, context.result_timestamp_type));
 
         res.select_query = builder.getSelectQuery();
         return res;
