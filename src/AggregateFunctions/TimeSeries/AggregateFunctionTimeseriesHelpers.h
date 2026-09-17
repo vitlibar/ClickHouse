@@ -62,12 +62,12 @@ template <
 >
 AggregateFunctionPtr createAggregateFunctionTimeseriesWithTypes(const std::string & name, const Array & parameters, UInt32 grid_scale, UInt32 column_timestamp_scale, MakeFunction && make_function)
 {
-    DateTime64 start_timestamp = extractTimeseriesTimestampParameter(name, "start", parameters[0], grid_scale);
-    DateTime64 end_timestamp = extractTimeseriesTimestampParameter(name, "end", parameters[1], grid_scale);
-    Decimal64 step = extractTimeseriesDurationParameter(name, "step", parameters[2], grid_scale);
+    DateTime64 grid_start = extractTimeseriesTimestampParameter(name, "start", parameters[0], grid_scale);
+    DateTime64 grid_end = extractTimeseriesTimestampParameter(name, "end", parameters[1], grid_scale);
+    Decimal64 grid_step = extractTimeseriesDurationParameter(name, "step", parameters[2], grid_scale);
     Decimal64 window = extractTimeseriesDurationParameter(name, "window", parameters[3], grid_scale);
     return make_function.template operator()<TimestampType, ValueType>(
-        start_timestamp, end_timestamp, step, window, grid_scale, column_timestamp_scale);
+        grid_start, grid_end, grid_step, window, grid_scale, column_timestamp_scale);
 }
 
 /// Resolves the type of the timestamps in the input columns and the scale of the grid, then delegates to createAggregateFunctionTimeseriesWithTypes.

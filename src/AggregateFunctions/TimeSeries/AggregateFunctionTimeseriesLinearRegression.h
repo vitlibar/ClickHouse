@@ -253,16 +253,16 @@ public:
     /// The other functions reach the base constructor via `using Base::Base` above,
     /// it takes the same arguments except predict_offset_.
     explicit AggregateFunctionTimeseriesLinearRegression(const DataTypes & argument_types_, const Array & parameters_,
-        GridScaleTimestampType start_timestamp_, GridScaleTimestampType end_timestamp_, GridScaleIntervalType step_, GridScaleIntervalType window_, UInt32 grid_scale_,
+        GridScaleTimestampType grid_start_, GridScaleTimestampType grid_end_, GridScaleIntervalType grid_step_, GridScaleIntervalType window_, UInt32 grid_scale_,
         UInt32 column_timestamp_scale_, Float64 predict_offset_)
-        : Base(argument_types_, parameters_, start_timestamp_, end_timestamp_, step_, window_, grid_scale_, column_timestamp_scale_)
+        : Base(argument_types_, parameters_, grid_start_, grid_end_, grid_step_, window_, grid_scale_, column_timestamp_scale_)
         , predict_offset(predict_offset_)
     {
     }
 
     Aggregator createAggregator(size_t stack_size_for_two_stacks) const
     {
-        return Aggregator{stack_size_for_two_stacks, Base::start_timestamp, predict_offset, Base::column_to_grid_multiplier, Base::column_ticks_per_second};
+        return Aggregator{stack_size_for_two_stacks, Base::grid_start, predict_offset, Base::column_to_grid_multiplier, Base::column_ticks_per_second};
     }
 
 protected:
