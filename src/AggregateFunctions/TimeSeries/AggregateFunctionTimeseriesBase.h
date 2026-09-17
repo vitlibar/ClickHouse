@@ -553,12 +553,12 @@ private:
         std::is_trivially_copyable_v<Bucket> || requires { requires Bucket::is_position_independent; },
         "Bucket must be position independent (memmove-able) to be stored in a HashMap");
 
-    static DataTypePtr createResultType(const DataTypes & argument_types)
+    static DataTypePtr createResultType(const DataTypes & argument_types_)
     {
         if constexpr (std::is_same_v<ResultType, TimestampType>)
         {
             /// The timestamps of samples are returned with the type they have in the input columns (ts_of_min, ts_of_max).
-            return std::make_shared<DataTypeArray>(std::make_shared<DataTypeNullable>(getTimestampArgumentType(argument_types)));
+            return std::make_shared<DataTypeArray>(std::make_shared<DataTypeNullable>(getTimestampArgumentType(argument_types_)));
         }
         else if constexpr (requires { Traits::getResultTupleElementNames(); })
             return ResultWriter::createResultType(Traits::getResultTupleElementNames());
@@ -567,18 +567,18 @@ private:
     }
 
     /// Returns the data type of the timestamps in the input columns, see getTimeseriesTimestampAndValueTypes() for the allowed argument forms.
-    static DataTypePtr getTimestampArgumentType(const DataTypes & argument_types)
+    static DataTypePtr getTimestampArgumentType(const DataTypes & argument_types_)
     {
-        const size_t num_sample_arguments = argument_types.size() - FunctionImpl::num_extra_arguments;
+        const size_t num_sample_arguments = argument_types_.size() - FunctionImpl::num_extra_arguments;
         if (num_sample_arguments == 1)
         {
             /// Array(Tuple(timestamp, value))
-            const auto & array_type = typeid_cast<const DataTypeArray &>(*argument_types[0]);
+            const auto & array_type = typeid_cast<const DataTypeArray &>(*argument_types_[0]);
             return typeid_cast<const DataTypeTuple &>(*array_type.getNestedType()).getElement(0);
         }
-        if (argument_types[0]->getTypeId() == TypeIndex::Array)
-            return typeid_cast<const DataTypeArray &>(*argument_types[0]).getNestedType();
-        return argument_types[0];
+        if (argument_types_[0]->getTypeId() == TypeIndex::Array)
+            return typeid_cast<const DataTypeArray &>(*argument_types_[0]).getNestedType();
+        return argument_types_[0];
     }
 
     /// Upper bound on the number of grid points (the output array length) for a single grid.

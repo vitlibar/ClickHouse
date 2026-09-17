@@ -50,7 +50,7 @@ namespace
         SQLQueryPiece res{node, ResultType::RANGE_VECTOR, StoreMethod::RAW_DATA};
 
         /// SELECT timeSeriesIdToGroup(id) AS group, timestamp, value
-        /// FROM timeSeriesSelector(<database>, <table>, <selector>, <min_time>, <max_time>)
+        /// FROM timeSeriesSelector(<database>, <time_series_table>, <selector>, <min_time>, <max_time>)
         SelectQueryBuilder builder;
 
         builder.select_list.push_back(makeASTFunction("timeSeriesIdToGroup", make_intrusive<ASTIdentifier>(ColumnNames::ID)));
