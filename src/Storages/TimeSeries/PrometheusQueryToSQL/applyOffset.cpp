@@ -1,6 +1,7 @@
 #include <Storages/TimeSeries/PrometheusQueryToSQL/applyOffset.h>
 
 #include <Core/DecimalFunctions.h>
+#include <IO/WriteHelpers.h>
 #include <Parsers/ASTFunction.h>
 #include <Parsers/ASTIdentifier.h>
 #include <Parsers/ASTLiteral.h>
@@ -8,10 +9,12 @@
 #include <Storages/TimeSeries/PrometheusQueryToSQL/ConverterContext.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/NodeEvaluationRange.h>
 #include <Storages/TimeSeries/PrometheusQueryToSQL/SelectQueryBuilder.h>
+#include <base/arithmeticOverflow.h>
 
 
 namespace DB::ErrorCodes
 {
+    extern const int BAD_ARGUMENTS;
     extern const int LOGICAL_ERROR;
 }
 
@@ -61,7 +64,12 @@ namespace
                 UInt32 result_scale = context.result_timestamp_scale;
                 chassert(result_scale <= 9); /// Maximum scale for DateTime64 is 9 (nanoseconds).
                 UInt32 interval_scale = (result_scale + 2) / 3 * 3;
-                Int64 offset_in_interval_units = DecimalUtils::convertTo<Decimal64>(interval_scale, offset_value, result_scale).value;
+                Int64 offset_in_interval_units = 0;
+                if (common::mulOverflow(offset_value.value, DecimalUtils::scaleMultiplier<Int64>(interval_scale - result_scale), offset_in_interval_units))
+                {
+                    throw Exception(ErrorCodes::BAD_ARGUMENTS, "Offset {} is too big in expression {}",
+                                    toString(offset_value, result_scale), getPromQLText(expression, context));
+                }
 
                 static const std::string_view to_interval_functions[] = {"toIntervalSecond", "toIntervalMillisecond", "toIntervalMicrosecond", "toIntervalNanosecond"};
                 std::string_view to_interval_function = to_interval_functions[interval_scale / 3];

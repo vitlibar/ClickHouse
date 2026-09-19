@@ -15,3 +15,5 @@
 17	17	17	17	17	17	17	17	17
 11	11
 [NULL,5,5,5,5,5,5,5,5,5,5]
+-- Decimal parameters are converted to the scale of the grid, which is the greatest scale among the parameters
+5

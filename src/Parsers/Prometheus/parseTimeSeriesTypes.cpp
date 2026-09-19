@@ -8,6 +8,7 @@
 #include <DataTypes/DataTypeInterval.h>
 #include <IO/ReadBufferFromString.h>
 #include <IO/ReadHelpers.h>
+#include <IO/WriteHelpers.h>
 #include <Parsers/Prometheus/PrometheusQueryParsingUtil.h>
 
 
@@ -39,6 +40,26 @@ namespace
             throw Exception(ErrorCodes::BAD_ARGUMENTS,
                             "Cannot convert {} to {}: Overflow, the number is too big",
                             int_value, getTypeName<T>());
+        }
+        return result;
+    }
+
+    template <is_decimal T>
+    T getFromDecimal(Int64 decimal_value, UInt32 decimal_scale, UInt32 scale)
+    {
+        T result{};
+        if (scale > decimal_scale)
+        {
+            if (common::mulOverflow(decimal_value, DecimalUtils::scaleMultiplier<T>(scale - decimal_scale), result.value))
+            {
+                throw Exception(ErrorCodes::BAD_ARGUMENTS,
+                                "Cannot convert {} to {}: Overflow, the number is too big",
+                                toString(Decimal64{decimal_value}, decimal_scale), getTypeName<T>());
+            }
+        }
+        else
+        {
+            result.value = decimal_value / DecimalUtils::scaleMultiplier<T>(decimal_scale - scale);
         }
         return result;
     }
@@ -216,12 +237,12 @@ namespace
             case Field::Types::Decimal32:
             {
                 auto decimal32 = field.safeGet<Decimal32>();
-                return DecimalUtils::convertTo<T>(scale, decimal32.getValue(), decimal32.getScale());
+                return getFromDecimal<T>(decimal32.getValue().value, decimal32.getScale(), scale);
             }
             case Field::Types::Decimal64:
             {
                 auto decimal64 = field.safeGet<Decimal64>();
-                return DecimalUtils::convertTo<T>(scale, decimal64.getValue(), decimal64.getScale());
+                return getFromDecimal<T>(decimal64.getValue().value, decimal64.getScale(), scale);
             }
             case Field::Types::String:
             {

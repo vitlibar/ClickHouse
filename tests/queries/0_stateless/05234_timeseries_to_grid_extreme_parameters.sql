@@ -77,4 +77,11 @@ SELECT length(timeSeriesRateToGrid(grid_start, grid_end, 1, grid_window)(timesta
 -- The sample at 1 is in the window of every grid point after it: `timestamp + window` is above the maximum of Int64.
 SELECT timeSeriesResampleToGridWithStaleness(0, 10, 1, 9223372036854775)([toDateTime64(1, 0, 'UTC')], [5.0]);
 
+SELECT '-- Decimal parameters are converted to the scale of the grid, which is the greatest scale among the parameters';
+SELECT length(timeSeriesChangesToGrid(toDecimal32(1000.5, 3), toDecimal32(1010.5, 3), toDecimal64(2.5, 3), toDecimal64(3.5, 9))(timestamp, value)) FROM ts_extreme;
+SELECT timeSeriesChangesToGrid(toDecimal32(1000.5, 3), toDecimal32(1010.5, 3), toDecimal64(2.5, 3), toDecimal64(3.5, 17))(timestamp, value) FROM ts_extreme; -- { serverError BAD_ARGUMENTS }
+SELECT timeSeriesChangesToGrid(0, toDecimal64(9223372036854775, 3), 1, toDecimal64(1, 4))(timestamp, value) FROM ts_extreme; -- { serverError BAD_ARGUMENTS }
+SELECT timeSeriesChangesToGrid(toDecimal64(-9223372036854775, 3), 0, 1, toDecimal64(1, 4))(timestamp, value) FROM ts_extreme; -- { serverError BAD_ARGUMENTS }
+SELECT timeSeriesChangesToGrid(0, 10, toDecimal64(9223372036854775, 3), toDecimal64(1, 4))(timestamp, value) FROM ts_extreme; -- { serverError BAD_ARGUMENTS }
+
 DROP TABLE ts_extreme;
