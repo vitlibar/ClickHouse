@@ -14,14 +14,14 @@ namespace DB
 {
 
 /// `is_stddev_` selects whether the result is the standard deviation (sqrt of the variance) or the variance itself.
-template <typename TimestampType_, typename IntervalType_, typename ValueType_, bool is_stddev_>
+template <typename TimestampType_, typename ValueType_, bool is_stddev_>
 struct AggregateFunctionTimeseriesVarianceOverTimeTraits
 {
     static constexpr bool is_stddev = is_stddev_;
 
-    using TimestampType = TimestampType_;
-    using IntervalType = IntervalType_;
+    using GridScaleTimestampType = DateTime64;
     using ValueType = ValueType_;
+    using TimestampType = TimestampType_;
     /// Population variance/stddev are documented as Float64 regardless of the stored value type,
     /// matching the ordinary varPop/stddevPop family.
     using ResultType = Float64;
@@ -91,13 +91,13 @@ struct AggregateFunctionTimeseriesVarianceOverTimeTraits
     /// the (population) variance or standard deviation from it at each grid point.
     struct Aggregator
     {
-        AggregateFunctionTimeseriesSlidingSum<TimestampType, Summary> sliding_sum;
+        AggregateFunctionTimeseriesSlidingSum<Summary> sliding_sum;
 
         explicit Aggregator(size_t stack_size) : sliding_sum(stack_size)
         {
         }
 
-        void add(const Samples & samples, TimestampType bucket_end_timestamp)
+        void add(const Samples & samples, GridScaleTimestampType bucket_end_timestamp)
         {
             /// Preaggregate the bucket's samples; `forEachSample` visits them with duplicate timestamps already
             /// collapsed, so each timestamp contributes exactly one sample to the moments.
@@ -109,19 +109,19 @@ struct AggregateFunctionTimeseriesVarianceOverTimeTraits
             add(std::move(summary), bucket_end_timestamp);
         }
 
-        void add(Summary summary, TimestampType bucket_end_timestamp)
+        void add(Summary summary, GridScaleTimestampType bucket_end_timestamp)
         {
             if (summary.count == 0)
                 return;
             sliding_sum.add(std::move(summary), bucket_end_timestamp);
         }
 
-        void removeBefore(TimestampType cut_off)
+        void removeBefore(GridScaleTimestampType cut_off)
         {
             sliding_sum.removeBefore(cut_off);
         }
 
-        std::optional<Float64> getResult(TimestampType /*grid_timestamp*/) const
+        std::optional<Float64> getResult(GridScaleTimestampType /*grid_timestamp*/) const
         {
             const Summary combined = sliding_sum.getCurrentSum();
             if (combined.count == 0)
@@ -171,14 +171,14 @@ struct AggregateFunctionTimeseriesVarianceOverTimeTraits
 
 /// Aggregate function to calculate PromQL-like stddev_over_time/stdvar_over_time (population standard
 /// deviation/variance) of timeseries on the specified grid.
-template <typename TimestampType_, typename IntervalType_, typename ValueType_, bool is_stddev_>
+template <typename TimestampType_, typename ValueType_, bool is_stddev_>
 class AggregateFunctionTimeseriesVarianceOverTime final :
     public AggregateFunctionTimeseriesBase<
-        AggregateFunctionTimeseriesVarianceOverTime<TimestampType_, IntervalType_, ValueType_, is_stddev_>,
-        AggregateFunctionTimeseriesVarianceOverTimeTraits<TimestampType_, IntervalType_, ValueType_, is_stddev_>>
+        AggregateFunctionTimeseriesVarianceOverTime<TimestampType_, ValueType_, is_stddev_>,
+        AggregateFunctionTimeseriesVarianceOverTimeTraits<TimestampType_, ValueType_, is_stddev_>>
 {
 public:
-    using Traits = AggregateFunctionTimeseriesVarianceOverTimeTraits<TimestampType_, IntervalType_, ValueType_, is_stddev_>;
+    using Traits = AggregateFunctionTimeseriesVarianceOverTimeTraits<TimestampType_, ValueType_, is_stddev_>;
 
     using Base = AggregateFunctionTimeseriesBase<AggregateFunctionTimeseriesVarianceOverTime, Traits>;
     using Base::Base;
@@ -191,12 +191,12 @@ public:
     static constexpr bool DateTime64Supported = true;
 };
 
-/// Each SQL function as a 3-argument template with its `is_stddev` variant baked in, so registration names the
+/// Each SQL function as a template with its `is_stddev` variant baked in, so registration names the
 /// function directly.
-template <typename TimestampType, typename IntervalType, typename ValueType>
-using AggregateFunctionTimeseriesStddevToGrid = AggregateFunctionTimeseriesVarianceOverTime<TimestampType, IntervalType, ValueType, /* is_stddev = */ true>;
+template <typename TimestampType, typename ValueType>
+using AggregateFunctionTimeseriesStddevToGrid = AggregateFunctionTimeseriesVarianceOverTime<TimestampType, ValueType, /* is_stddev = */ true>;
 
-template <typename TimestampType, typename IntervalType, typename ValueType>
-using AggregateFunctionTimeseriesStdvarToGrid = AggregateFunctionTimeseriesVarianceOverTime<TimestampType, IntervalType, ValueType, /* is_stddev = */ false>;
+template <typename TimestampType, typename ValueType>
+using AggregateFunctionTimeseriesStdvarToGrid = AggregateFunctionTimeseriesVarianceOverTime<TimestampType, ValueType, /* is_stddev = */ false>;
 
 }
