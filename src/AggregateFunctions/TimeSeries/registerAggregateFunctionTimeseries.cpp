@@ -16,7 +16,7 @@ void registerAggregateFunctionTimeseriesMax(AggregateFunctionFactory & factory);
 void registerAggregateFunctionTimeseriesMin(AggregateFunctionFactory & factory);
 void registerAggregateFunctionTimeseriesPresentToGrid(AggregateFunctionFactory & factory);
 void registerAggregateFunctionTimeseriesQuantileToGrid(AggregateFunctionFactory & factory);
-void registerAggregateFunctionTimeseriesVarianceOverTime(AggregateFunctionFactory & factory);
+void registerAggregateFunctionTimeseriesVariance(AggregateFunctionFactory & factory);
 void registerAggregateFunctionLast2Samples(AggregateFunctionFactory & factory);
 void registerAggregateFunctionTimeseriesGroupArray(AggregateFunctionFactory & factory);
 void registerAggregateFunctionTimeSeriesTopKMasks(AggregateFunctionFactory & factory);
@@ -36,7 +36,7 @@ void registerAggregateFunctionTimeseries(AggregateFunctionFactory & factory)
     registerAggregateFunctionTimeseriesMin(factory);
     registerAggregateFunctionTimeseriesPresentToGrid(factory);
     registerAggregateFunctionTimeseriesQuantileToGrid(factory);
-    registerAggregateFunctionTimeseriesVarianceOverTime(factory);
+    registerAggregateFunctionTimeseriesVariance(factory);
     registerAggregateFunctionLast2Samples(factory);
     registerAggregateFunctionTimeseriesGroupArray(factory);
     registerAggregateFunctionTimeSeriesTopKMasks(factory);
