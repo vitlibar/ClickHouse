@@ -72,6 +72,7 @@ namespace ErrorCodes
     extern const int INCORRECT_QUERY;
     extern const int INVALID_SETTING_VALUE;
     extern const int LOGICAL_ERROR;
+    extern const int NOT_IMPLEMENTED;
     extern const int THERE_IS_NO_COLUMN;
 }
 
@@ -2323,6 +2324,10 @@ void normalizeTimeSeriesDefinitionImpl(ASTCreateQuery & create_query, const Norm
     /// as IO interface. They store no data, in fact the data is stored in target or inner columns.
     /// The version is pinned at this point (see above), so the columns are generated the way that version does it.
     {
+        /// The regenerated column list would silently drop them.
+        if (create_query.columns_list && create_query.columns_list->codec_declarations)
+            throw Exception(ErrorCodes::NOT_IMPLEMENTED, "TimeSeries tables don't support codec declarations for subcolumns");
+
         auto new_columns_ast = make_intrusive<ASTColumns>();
         new_columns_ast->set(new_columns_ast->columns,
             InterpreterCreateQuery::formatColumns(generateOuterColumns(

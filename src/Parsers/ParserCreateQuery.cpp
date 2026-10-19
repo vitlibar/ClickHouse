@@ -1,5 +1,6 @@
 #include <IO/ReadHelpers.h>
 #include <Parsers/Access/ParserUserNameWithHost.h>
+#include <Parsers/ASTCodecDeclaration.h>
 #include <Parsers/ASTConstraintDeclaration.h>
 #include <Parsers/ASTCreateQuery.h>
 #include <Parsers/ASTExpressionList.h>
@@ -23,6 +24,7 @@
 #include <Parsers/ParserSetQuery.h>
 #include <Parsers/ParserRefreshStrategy.h>
 #include <Parsers/ParserViewTargets.h>
+#include <Parsers/isCompressionCodec.h>
 #include <Common/typeid_cast.h>
 #include <Poco/String.h>
 #include <Parsers/ASTColumnDeclaration.h>
@@ -424,7 +426,7 @@ bool ParserTablePropertyDeclaration::parseImpl(Pos & pos, ASTPtr & node, Expecte
     ParserConstraintDeclaration constraint_p;
     ParserProjectionDeclaration projection_p;
     ParserForeignKeyDeclaration foreign_key_p;
-    ParserCodecOnlyDeclaration codec_only_p;
+    ParserCodecDeclaration codec_p;
     ParserColumnDeclaration column_p{true, true};
     ParserExpression primary_key_p;
 
@@ -455,12 +457,9 @@ bool ParserTablePropertyDeclaration::parseImpl(Pos & pos, ASTPtr & node, Expecte
         if (!foreign_key_p.parse(pos, new_node, expected))
             return false;
     }
-    else if (codec_only_p.parse(pos, new_node, expected))
-    {
-    }
     else
     {
-        if (!column_p.parse(pos, new_node, expected))
+        if (!codec_p.parse(pos, new_node, expected) && !column_p.parse(pos, new_node, expected))
             return false;
     }
 
@@ -468,24 +467,33 @@ bool ParserTablePropertyDeclaration::parseImpl(Pos & pos, ASTPtr & node, Expecte
     return true;
 }
 
-bool ParserCodecOnlyDeclaration::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
+bool ParserCodecDeclaration::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
 {
-    ParserCompoundColumnDeclaration parser(/* require_type = */ false);
-    ASTPtr declaration_ast;
-    if (!parser.parse(pos, declaration_ast, expected))
+    ParserKeyword s_codec(Keyword::CODEC);
+    ParserCompoundIdentifier name_p;
+    ParserCodec codec_p;
+
+    ASTPtr name;
+    ASTPtr codec;
+
+    if (!s_codec.ignore(pos, expected))
         return false;
 
-    const auto & declaration = declaration_ast->as<ASTColumnDeclaration &>();
-    if (declaration.getType() || !declaration.getCodec()
-        || declaration.getDefaultExpression() || declaration.getComment()
-        || declaration.getStatisticsDesc() || declaration.getTTL()
-        || declaration.getCollation() || declaration.getSettings()
-        || declaration.default_specifier != ColumnDefaultSpecifier::Empty
-        || declaration.null_modifier || declaration.ephemeral_default
-        || declaration.primary_key_specifier)
+    if (!name_p.parse(pos, name, expected))
         return false;
 
-    node = std::move(declaration_ast);
+    if (!codec_p.parse(pos, codec, expected))
+        return false;
+
+    /// "codec Nullable(String)" is a column named `codec`, not a codec declaration.
+    /// A target name without dots may be a data type like here, so in this case we also check
+    /// that the expression in parentheses looks like a codec: there is no codec named "String",
+    /// so this example fails here and the caller parses it as a column.
+    const String target_name = getIdentifierName(name);
+    if (target_name.find('.') == String::npos && !isCompressionCodec(codec))
+        return false;
+
+    node = make_intrusive<ASTCodecDeclaration>(target_name, codec);
     return true;
 }
 
@@ -528,11 +536,6 @@ bool ParserTablePropertiesDeclarationList::parseImpl(Pos & pos, ASTPtr & node, E
     {
         if (auto * cd = elem->as<ASTColumnDeclaration>())
         {
-            if (cd->codec_target && !cd->getType())
-            {
-                codec_declarations->children.push_back(elem);
-                continue;
-            }
             if (cd->primary_key_specifier)
             {
                 if (!primary_key_from_columns)
@@ -548,6 +551,8 @@ bool ParserTablePropertiesDeclarationList::parseImpl(Pos & pos, ASTPtr & node, E
             }
             columns->children.push_back(elem);
         }
+        else if (elem->as<ASTCodecDeclaration>())
+            codec_declarations->children.push_back(elem);
         else if (elem->as<ASTIndexDeclaration>())
             indices->children.push_back(elem);
         else if (elem->as<ASTConstraintDeclaration>())
