@@ -5,6 +5,9 @@
                  interserver connection instead of being served locally, so the query actually
                  crosses the cluster-secret boundary. -->
             <prefer_localhost_replica>0</prefer_localhost_replica>
+            <!-- Queue Distributed inserts in the background, so the forged-insert test exercises the
+                 async replay path (where the serialized ClientInfo has no current_user). -->
+            <distributed_foreground_insert>0</distributed_foreground_insert>
         </default>
     </profiles>
 </clickhouse>

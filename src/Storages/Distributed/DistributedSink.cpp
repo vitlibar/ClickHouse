@@ -89,6 +89,7 @@ namespace DistributedSetting
 
 namespace ErrorCodes
 {
+    extern const int AUTHENTICATION_FAILED;
     extern const int BAD_ARGUMENTS;
     extern const int LOGICAL_ERROR;
     extern const int TIMEOUT_EXCEEDED;
@@ -213,6 +214,21 @@ DistributedSink::DistributedSink(
     const auto & settings = context->getSettingsRef();
     if (settings[Setting::max_distributed_depth] && context->getClientInfo().distributed_depth >= settings[Setting::max_distributed_depth])
         throw Exception(ErrorCodes::TOO_LARGE_DISTRIBUTED_DEPTH, "Maximum distributed depth exceeded");
+
+    /// A shard authenticates as `initial_user` over the cluster secret. The `Connection::sendQuery`
+    /// guard rejects a mismatched `initial_user`, but it skips the check when `current_user` is empty,
+    /// and an async insert is replayed from a serialized `ClientInfo` that has no `current_user`. Refuse
+    /// a forged insert here, before it is queued, while `current_user` is still present.
+    const auto & client_info = context->getClientInfo();
+    if (!cluster->getSecret().empty() && !client_info.current_user.empty()
+        && client_info.initial_user != client_info.current_user)
+    {
+        throw Exception(ErrorCodes::AUTHENTICATION_FAILED,
+            "Refusing to forward an insert over the cluster secret: its initial_user '{}' differs "
+            "from the authenticated user '{}'.",
+            client_info.initial_user, client_info.current_user);
+    }
+
     context->increaseDistributedDepth();
     random_shard_insert = settings[Setting::insert_distributed_one_random_shard] && !storage.has_sharding_key;
 }

@@ -339,3 +339,42 @@ def test_mixed_secret_and_insecure_cluster_rejected(started_cluster):
         node.query("DROP TABLE IF EXISTS default.mixed_inner_dist SYNC")
         node.query("DROP TABLE IF EXISTS default.mixed_data SYNC")
         node.query("DROP USER IF EXISTS mixed_user")
+
+
+def test_forged_secondary_insert_cannot_impersonate_on_secret_cluster(started_cluster):
+    """A user forges a SECONDARY_QUERY INSERT over a secret cluster. An async Distributed insert is
+    replayed from a serialized ClientInfo with no current_user, so the Connection::sendQuery guard
+    would skip it; the DistributedSink guard refuses the forged initial_user before the batch is
+    queued, so the forged identity never writes to the admin-only table."""
+    try:
+        node.query(
+            "CREATE TABLE default.secret_data (secret String) ENGINE = MergeTree ORDER BY secret"
+        )
+        node.query(
+            "CREATE TABLE default.secret_dist AS default.secret_data "
+            "ENGINE = Distributed(secret_cluster, default, secret_data)"
+        )
+        # Only admin may write the underlying table; attacker may only insert into the Distributed one.
+        node.query("CREATE USER admin IDENTIFIED WITH no_password HOST ANY")
+        node.query("GRANT INSERT ON default.secret_data TO admin")
+        node.query("CREATE USER attacker IDENTIFIED WITH no_password HOST ANY")
+        node.query("GRANT INSERT ON default.secret_dist TO attacker")
+
+        # The forged initial_user is rejected whether it impersonates 'admin' or is empty.
+        for forged_initial_user in [b"admin", b""]:
+            response = send_forged_secondary_query(
+                user=b"attacker",
+                password=b"",
+                query="INSERT INTO default.secret_dist SELECT 'PWN'",
+                forged_initial_user=forged_initial_user,
+            )
+            # Refused before the batch is queued, at the DistributedSink boundary.
+            assert b"Refusing to forward an insert over the cluster secret" in response
+
+        # Even after flushing the queue, the forged identity wrote nothing to the admin-only table.
+        node.query("SYSTEM FLUSH DISTRIBUTED default.secret_dist")
+        assert node.query("SELECT count() FROM default.secret_data") == "0\n"
+    finally:
+        node.query("DROP TABLE IF EXISTS default.secret_dist SYNC")
+        node.query("DROP TABLE IF EXISTS default.secret_data SYNC")
+        node.query("DROP USER IF EXISTS attacker, admin")
